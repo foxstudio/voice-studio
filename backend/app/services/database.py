@@ -73,9 +73,17 @@ def db_delete_voice(voice_id: str) -> None:
 
 # ── History ──
 
-def db_list_history() -> list[dict]:
+def db_list_history(limit: int | None = None, offset: int | None = None) -> list[dict]:
     with get_conn() as conn:
-        rows = conn.execute("SELECT data FROM history ORDER BY json_extract(data, '$.created_at') DESC").fetchall()
+        sql = "SELECT data FROM history ORDER BY json_extract(data, '$.created_at') DESC"
+        params: list[int] = []
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        if offset is not None:
+            sql += " OFFSET ?"
+            params.append(offset)
+        rows = conn.execute(sql, params).fetchall()
     return [json.loads(r[0]) for r in rows]
 
 

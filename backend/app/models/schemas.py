@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any, Literal
 from enum import Enum
 from typing import Any
 
@@ -152,7 +153,6 @@ class VoiceAsset(BaseModel):
     reference_audio_ids: list[str] = Field(default_factory=list)
     reference_text: str = ""
     recommended_engine_id: str | None = None
-    reference_audio_ids: list[str] = Field(default_factory=list)
     license_status: LicenseStatus = LicenseStatus.unknown
     quality_status: str = "unchecked"
     quality_notes: str = ""
@@ -175,22 +175,24 @@ class GenerateRequest(BaseModel):
     emotion_mode: EmotionMode = EmotionMode.follow_reference
     emotion_values: dict[str, float] | None = None
     emotion_text: str | None = None
-    emo_alpha: float = 0.6
+    # v2 直接情绪名（优先级高于 emotion_mode）
+    emotion: Literal["happy", "sad", "angry", "afraid", "disgusted", "melancholic", "surprised", "calm"] | None = Field(default=None, description="v2 direct emotion name")
+    emo_alpha: float = Field(default=0.6, ge=0.0, le=0.8, description="Emotion intensity 0.0-0.8")
     # 基础参数
-    speed: float = 1.0
-    temperature: float = 0.8
-    top_p: float = 0.8
-    top_k: int = 30
-    repetition_penalty: float = 10.0
+    speed: float = Field(default=1.0, ge=0.5, le=3.0)
+    temperature: float = Field(default=0.8, ge=0.1, le=2.0)
+    top_p: float = Field(default=0.8, ge=0.0, le=1.0)
+    top_k: int = Field(default=30, ge=1, le=100)
+    repetition_penalty: float = Field(default=10.0, ge=1.0, le=20.0)
     seed: int | None = None
     # 高级参数
     max_mel_tokens: int = 600
-    max_text_tokens_per_segment: int = 120
-    interval_silence: int = 200
+    max_text_tokens_per_segment: int = Field(default=120, ge=10, le=500)
+    interval_silence: int = Field(default=200, ge=0, le=2000)
     segment_overlap_ms: int = 50
     # v2 专属
-    diffusion_steps: int = 25
-    cfg_rate: float = 0.7
+    diffusion_steps: int = Field(default=25, ge=1, le=100)
+    cfg_rate: float = Field(default=0.7, ge=0.0, le=1.0)
     # 输出
     output_format: str = "wav"
 
@@ -198,6 +200,18 @@ class GenerateRequest(BaseModel):
 class GenerateResponse(BaseModel):
     task_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     status: str = "queued"
+
+
+# ── Error ──────────────────────────────────────────────
+
+class ErrorDetail(BaseModel):
+    code: str
+    message: str
+    detail: dict = {}
+
+
+class ErrorResponse(BaseModel):
+    error: ErrorDetail
 
 
 # ── Task ───────────────────────────────────────────────
@@ -237,7 +251,7 @@ class HistoryItem(BaseModel):
     parameter_snapshot: dict[str, Any] = Field(default_factory=dict)
     favorite: bool = False
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-
+    completed_at: str | None = None
 
 # ── Settings ───────────────────────────────────────────
 
@@ -259,6 +273,8 @@ class AppSettings(BaseModel):
 
 # ── Project / Script Studio ────────────────────────────
 
+# TODO(post-phase): not implemented in current scope
+
 class Role(BaseModel):
     role_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     name: str
@@ -269,6 +285,8 @@ class Role(BaseModel):
     default_emotion: str | None = None
     default_speed: float = 1.0
 
+
+# TODO(post-phase): not implemented in current scope
 
 class ScriptSegment(BaseModel):
     segment_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
@@ -285,12 +303,16 @@ class ScriptSegment(BaseModel):
     locked: bool = False
 
 
+# TODO(post-phase): not implemented in current scope
+
 class ProjectCreate(BaseModel):
     name: str
     description: str = ""
     default_engine_id: str | None = None
     default_language: str = "zh"
 
+
+# TODO(post-phase): not implemented in current scope
 
 class Project(BaseModel):
     project_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])

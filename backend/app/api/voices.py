@@ -1,6 +1,7 @@
+from fastapi import APIRouter, HTTPException, UploadFile, File
 """声音资产库 API"""
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from app.models.exceptions import AppException
 
 from app.models.schemas import VoiceAsset, VoiceAssetCreate
 from app.services import voice_store
@@ -22,7 +23,7 @@ async def create_voice(data: VoiceAssetCreate):
 async def get_voice(voice_id: str):
     voice = voice_store.get_voice(voice_id)
     if not voice:
-        raise HTTPException(404, "Voice not found")
+        raise AppException(404, "VOICE_NOT_FOUND", "Voice not found")
     return voice
 
 
@@ -30,7 +31,7 @@ async def get_voice(voice_id: str):
 async def update_voice(voice_id: str, data: VoiceAssetCreate):
     voice = voice_store.update_voice(voice_id, data)
     if not voice:
-        raise HTTPException(404, "Voice not found")
+        raise AppException(404, "VOICE_NOT_FOUND", "Voice not found")
     return voice
 
 
@@ -72,9 +73,9 @@ async def test_generate_voice(voice_id: str):
     """用该声音生成测试语音"""
     voice = voice_store.get_voice(voice_id)
     if not voice:
-        raise HTTPException(404, "Voice not found")
+        raise AppException(404, "VOICE_NOT_FOUND", "Voice not found")
     if not voice.reference_audio_ids:
-        raise HTTPException(400, "该声音没有参考音频")
+        raise AppException(400, "INVALID_REQUEST", "该声音没有参考音频")
     # 提交一个测试生成任务
     from app.services.task_queue import submit
     from app.models.schemas import GenerateRequest

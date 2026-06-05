@@ -7,6 +7,7 @@ import uuid
 
 from fastapi import HTTPException
 
+from app.models.exceptions import AppException
 from app.models.schemas import GenerationTask
 from app.services import engine_registry
 from app.services.settings_store import get as get_settings
@@ -61,10 +62,7 @@ def _build_emotion(params: dict) -> str | dict | None:
 def _get_model(engine_id: str, version: str = "v2"):
     instance = engine_registry.get_engine_instance(engine_id)
     if instance is None:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Engine '{engine_id}' is not loaded. Call POST /api/engines/{engine_id}/start first."
-        )
+        raise AppException(503, "ENGINE_NOT_LOADED", f"Engine '{engine_id}' is not loaded. Call POST /api/engines/{engine_id}/start first.")
     return instance
 
 
@@ -83,10 +81,16 @@ async def synthesize(task: GenerationTask) -> dict:
 
         if version == "v2" and task.engine_id == "indextts":
             # ── IndexTTS v2 ──
-            emotion = _build_emotion(params)
+            if not ref_audio:
+                raise HTTPException(
+                    status_code=400,
+                    detail="REFERENCE_AUDIO_REQUIRED: IndexTTS v2 requires reference audio. Provide voice_id or reference_audio_path."
+                )
+            # 情绪: 优先用直接的 emotion 字段，其次用 _build_emotion
+            emotion = params.get("emotion") or _build_emotion(params)
             model.generate(
                 text=task.input_text,
-                reference_audio=ref_audio or "",
+                reference_audio=ref_audio,
                 output_path=output_path,
                 temperature=params.get("temperature", 0.8),
                 top_p=params.get("top_p", 0.8),
@@ -120,17 +124,17 @@ async def synthesize(task: GenerationTask) -> dict:
                     verbose=False,
                 )
             else:
-                audio = model.generate(text=task.input_text, ref_audio=None)
-                model.save_audio(audio, output_path)
-
+                raise HTTPException(
+                    status_code=400,
+                    detail="REFERENCE_AUDIO_REQUIRED: IndexTTS v1 requires reference audio. Provide voice_id or reference_audio_path."
+                )
         else:
             raise ValueError(f"Unknown engine: {task.engine_id}")
-
         generation_time_ms = int((time.time() - start) * 1000)
         duration_ms = 0
         if os.path.exists(output_path):
             file_size = os.path.getsize(output_path)
-            duration_ms = max(0, int((file_size - 44) / (44100 * 2) * 1000))
+            duration_ms = max(0, int((file_size - 44) / (engine_registry.get_engine_sample_rate(task.engine_id) * 2) * 1000))
 
         return {
             "audio_id": audio_id,
@@ -139,7 +143,7 @@ async def synthesize(task: GenerationTask) -> dict:
         }
 
     except FileNotFoundError as e:
-        raise HTTPException(status_code=503, detail=f"TTS model not available: {e}")
+        raise AppException(503, "SERVICE_UNAVAILABLE", f"TTS model not available: {e}")
     except Exception as e:
         raise RuntimeError(f"TTS generation failed: {e}") from e
 

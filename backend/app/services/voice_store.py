@@ -1,8 +1,10 @@
 """声音资产存储 - SQLite 持久化"""
 
+import logging
 import os
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import UploadFile
 
@@ -10,6 +12,8 @@ from app.models.schemas import VoiceAsset, VoiceAssetCreate
 from app.services import database as db
 
 UPLOAD_DIR = os.path.expanduser("~/VoiceStudio/voices")
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_dir():
@@ -43,6 +47,19 @@ def update_voice(voice_id: str, data: VoiceAssetCreate) -> VoiceAsset | None:
 
 
 def delete_voice(voice_id: str) -> None:
+    voice = db.db_get_voice(voice_id)
+    if voice:
+        for audio_id in voice.get("reference_audio_ids", []):
+            deleted = False
+            for ext in [".wav", ".mp3", ".flac", ".ogg"]:
+                path = Path(UPLOAD_DIR) / f"{audio_id}{ext}"
+                if path.exists():
+                    path.unlink()
+                    logger.info("Deleted voice file: %s (voice_id=%s)", path, voice_id)
+                    deleted = True
+                    break
+            if not deleted:
+                logger.warning("Voice file not found for audio_id=%s (voice_id=%s)", audio_id, voice_id)
     db.db_delete_voice(voice_id)
 
 

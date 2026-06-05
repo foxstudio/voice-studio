@@ -15,6 +15,7 @@ if _project_root not in sys.path:
 
 _lock = threading.Lock()
 _engine_instances: dict[str, object | None] = {}
+_engine_sample_rates: dict[str, int] = {}
 
 MODEL_DIR = os.path.join(_project_root, "models", "mlx-indexTTS-2.0")
 _ENGINES: dict[str, EngineDetail] = {
@@ -59,8 +60,8 @@ def list_engines() -> list[EngineDetail]:
 
 def get_engine(engine_id: str) -> EngineDetail:
     if engine_id not in _ENGINES:
-        from fastapi import HTTPException
-        raise HTTPException(404, f"Engine {engine_id} not found")
+        from app.models.exceptions import AppException
+        raise AppException(404, "ENGINE_NOT_FOUND", f"Engine {engine_id} not found")
     return _ENGINES[engine_id]
 
 
@@ -69,8 +70,8 @@ def get_engine_instance(engine_id: str) -> object | None:
 
 def start_engine(engine_id: str) -> EngineDetail:
     if engine_id not in _ENGINES:
-        from fastapi import HTTPException
-        raise HTTPException(404, f"Engine {engine_id} not found")
+        from app.models.exceptions import AppException
+        raise AppException(404, "ENGINE_NOT_FOUND", f"Engine {engine_id} not found")
 
     detail = _ENGINES[engine_id]
 
@@ -87,8 +88,18 @@ def start_engine(engine_id: str) -> EngineDetail:
         from mlx_indextts.generate_v2 import IndexTTSv2
         instance = IndexTTSv2(MODEL_DIR, device="mps")
 
+        # Read sample_rate from model config.json for accurate duration calculation
+        config_path = os.path.join(MODEL_DIR, "config.json")
+        sample_rate = 22050  # fallback default
+        if os.path.exists(config_path):
+            import json
+            with open(config_path) as f:
+                cfg = json.load(f)
+                sample_rate = cfg.get("sample_rate", 22050)
+
         with _lock:
             _engine_instances[engine_id] = instance
+            _engine_sample_rates[engine_id] = sample_rate
             detail.state.status = EngineStatus.loaded
 
     except Exception as exc:
@@ -100,8 +111,8 @@ def start_engine(engine_id: str) -> EngineDetail:
 
 def stop_engine(engine_id: str) -> EngineDetail:
     if engine_id not in _ENGINES:
-        from fastapi import HTTPException
-        raise HTTPException(404, f"Engine {engine_id} not found")
+        from app.models.exceptions import AppException
+        raise AppException(404, "ENGINE_NOT_FOUND", f"Engine {engine_id} not found")
 
     detail = _ENGINES[engine_id]
 
@@ -113,6 +124,10 @@ def stop_engine(engine_id: str) -> EngineDetail:
     gc.collect()
     return detail
 
+
+def get_engine_sample_rate(engine_id: str) -> int:
+    """Get the sample rate for a loaded engine, read from its model config.json."""
+    return _engine_sample_rates.get(engine_id, 22050)
 def health_check(engine_id: str) -> dict:
     if engine_id not in _ENGINES:
         return {"status": "not_found"}

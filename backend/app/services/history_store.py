@@ -8,8 +8,8 @@ from app.services import database as db
 OUTPUT_DIR = os.path.expanduser("~/VoiceStudio/outputs")
 
 
-def list_history() -> list[HistoryItem]:
-    return [HistoryItem(**d) for d in db.db_list_history()]
+def list_history(limit: int | None = None, offset: int | None = None) -> list[HistoryItem]:
+    return [HistoryItem(**d) for d in db.db_list_history(limit=limit, offset=offset)]
 
 
 def add(item: HistoryItem) -> None:
