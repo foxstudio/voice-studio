@@ -65,16 +65,7 @@ def _get_model(engine_id: str, version: str):
             return _model_cache[cache_key]
 
         if engine_id == "indextts":
-            model_dir = os.path.expanduser("~/VoiceStudio/models/IndexTTS")
-            if not os.path.exists(model_dir):
-                from pathlib import Path
-                for c in [
-                    Path.home() / ".cache" / "huggingface" / "hub" / "models--IndexTeam--IndexTTS",
-                    Path.home() / "models" / "IndexTTS",
-                ]:
-                    if c.exists():
-                        model_dir = str(c)
-                        break
+            model_dir = os.path.join(_project_root, "models", "mlx-indexTTS-2.0")
             if not os.path.exists(model_dir):
                 raise FileNotFoundError(f"Model not found at {model_dir}")
 
