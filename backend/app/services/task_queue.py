@@ -1,4 +1,4 @@
-"""任务队列 - 内存队列 + WebSocket 推送 + SQLite 持久化"""
+"""任务队列 - 内存队列 + WebSocket 推送 + SQLite"""
 
 import asyncio
 import uuid
@@ -42,8 +42,7 @@ def list_tasks() -> list[GenerationTask]:
 
 
 def get_task(task_id: str) -> GenerationTask | None:
-    tasks = db.db_list_tasks()
-    for d in tasks:
+    for d in db.db_list_tasks():
         if d.get("task_id") == task_id:
             return GenerationTask(**d)
     return None
@@ -54,9 +53,8 @@ async def _worker():
     _worker_running = True
     while True:
         task_id = await _queue.get()
-        task_dict = db.db_list_tasks()
         task_data = None
-        for d in task_dict:
+        for d in db.db_list_tasks():
             if d.get("task_id") == task_id:
                 task_data = d
                 break
@@ -86,7 +84,6 @@ async def _worker():
         db.db_save_task(task.model_dump())
         await _broadcast(task)
 
-        # 成功时写入历史
         if task.status == TaskStatus.success:
             voice_name = None
             if task.voice_id:
@@ -98,12 +95,14 @@ async def _worker():
                 result_id=uuid.uuid4().hex[:12],
                 task_id=task.task_id,
                 engine_id=task.engine_id,
+                engine_version=task.engine_version,
                 voice_id=task.voice_id,
                 voice_name=voice_name,
                 input_text=task.input_text,
                 output_audio_id=task.result_audio_id,
                 duration_ms=task.result_duration_ms,
                 generation_time_ms=task.generation_time_ms,
+                parameter_snapshot=task.parameters,
             ))
 
 
@@ -111,17 +110,36 @@ async def submit(req: GenerateRequest) -> str:
     if not _worker_running:
         asyncio.create_task(_worker())
     task_id = uuid.uuid4().hex[:12]
+
+    # 构建完整参数快照
+    params = {
+        "engine_version": req.engine_version.value,
+        "reference_audio_path": req.reference_audio_path,
+        "emotion_mode": req.emotion_mode.value,
+        "emotion_values": req.emotion_values,
+        "emotion_text": req.emotion_text,
+        "emo_alpha": req.emo_alpha,
+        "temperature": req.temperature,
+        "top_p": req.top_p,
+        "top_k": req.top_k,
+        "repetition_penalty": req.repetition_penalty,
+        "speed": req.speed,
+        "seed": req.seed,
+        "max_mel_tokens": req.max_mel_tokens,
+        "max_text_tokens_per_segment": req.max_text_tokens_per_segment,
+        "interval_silence": req.interval_silence,
+        "segment_overlap_ms": req.segment_overlap_ms,
+        "diffusion_steps": req.diffusion_steps,
+        "cfg_rate": req.cfg_rate,
+    }
+
     task = GenerationTask(
         task_id=task_id,
         engine_id=req.engine_id,
+        engine_version=req.engine_version.value,
         voice_id=req.voice_id,
         input_text=req.text,
-        parameters={
-            "temperature": req.temperature,
-            "top_p": req.top_p,
-            "speed": req.speed,
-            "seed": req.seed,
-        },
+        parameters=params,
     )
     task.status = TaskStatus.queued
     db.db_save_task(task.model_dump())

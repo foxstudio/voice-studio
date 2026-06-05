@@ -78,6 +78,25 @@ class SegmentStatus(str, Enum):
     locked = "locked"
 
 
+class EngineVersion(str, Enum):
+    v1 = "v1"
+    v2 = "v2"
+
+
+# ── Emotion ────────────────────────────────────────────
+
+EMOTION_DIMENSIONS = {
+    "happy": "高兴",
+    "angry": "愤怒",
+    "sad": "悲伤",
+    "afraid": "恐惧",
+    "disgusted": "反感",
+    "melancholic": "低落",
+    "surprised": "惊讶",
+    "calm": "自然",
+}
+
+
 # ── Engine ─────────────────────────────────────────────
 
 class EngineManifest(BaseModel):
@@ -92,6 +111,7 @@ class EngineManifest(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
     default_use_case: str = ""
     privacy_level: str = "local_only"
+    available_versions: list[str] = Field(default_factory=list)
 
 
 class EngineState(BaseModel):
@@ -133,7 +153,6 @@ class VoiceAsset(BaseModel):
     quality_status: str = "unchecked"
     quality_notes: str = ""
     favorite: bool = False
-    parameters: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     last_used_at: str | None = None
@@ -144,15 +163,31 @@ class VoiceAsset(BaseModel):
 class GenerateRequest(BaseModel):
     text: str
     engine_id: str = "indextts"
+    engine_version: EngineVersion = EngineVersion.v1
     voice_id: str | None = None
+    reference_audio_path: str | None = None
     language: str = "zh"
+    # 情绪控制（v2 only）
     emotion_mode: EmotionMode = EmotionMode.follow_reference
     emotion_values: dict[str, float] | None = None
     emotion_text: str | None = None
+    emo_alpha: float = 0.6
+    # 基础参数
     speed: float = 1.0
     temperature: float = 0.8
     top_p: float = 0.8
-    seed: int = 0
+    top_k: int = 30
+    repetition_penalty: float = 10.0
+    seed: int | None = None
+    # 高级参数
+    max_mel_tokens: int = 600
+    max_text_tokens_per_segment: int = 120
+    interval_silence: int = 200
+    segment_overlap_ms: int = 50
+    # v2 专属
+    diffusion_steps: int = 25
+    cfg_rate: float = 0.7
+    # 输出
     output_format: str = "wav"
 
 
@@ -167,6 +202,7 @@ class GenerationTask(BaseModel):
     task_id: str
     task_type: str = "single"
     engine_id: str
+    engine_version: str = "v1"
     voice_id: str | None = None
     input_text: str
     status: TaskStatus = TaskStatus.pending
@@ -187,6 +223,7 @@ class HistoryItem(BaseModel):
     result_id: str
     task_id: str
     engine_id: str
+    engine_version: str = "v1"
     voice_id: str | None = None
     voice_name: str | None = None
     input_text: str
@@ -195,7 +232,6 @@ class HistoryItem(BaseModel):
     generation_time_ms: int | None = None
     parameter_snapshot: dict[str, Any] = Field(default_factory=dict)
     favorite: bool = False
-    parameters: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 
@@ -203,6 +239,7 @@ class HistoryItem(BaseModel):
 
 class AppSettings(BaseModel):
     default_engine_id: str = "indextts"
+    default_engine_version: str = "v1"
     default_language: str = "zh"
     default_output_format: str = "wav"
     model_dir: str = "~/VoiceStudio/models"
@@ -261,6 +298,5 @@ class Project(BaseModel):
     roles: list[Role] = Field(default_factory=list)
     segments: list[ScriptSegment] = Field(default_factory=list)
     status: str = "draft"
-    parameters: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
