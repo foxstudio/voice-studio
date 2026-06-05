@@ -42,5 +42,46 @@ async def delete_voice(voice_id: str):
 
 @router.post("/upload")
 async def upload_reference_audio(file: UploadFile = File(...)):
+    """上传参考音频，返回 file_id 和质量检测结果"""
     file_id = await voice_store.upload_audio(file)
-    return {"file_id": file_id, "filename": file.filename}
+
+    # 质量检测
+    from app.services.audio_quality import analyze_audio
+    import os
+    voice_dir = os.path.expanduser("~/VoiceStudio/voices")
+    audio_path = None
+    for ext in [".wav", ".mp3", ".flac", ".ogg"]:
+        candidate = os.path.join(voice_dir, f"{file_id}{ext}")
+        if os.path.exists(candidate):
+            audio_path = candidate
+            break
+
+    quality = None
+    if audio_path:
+        quality = analyze_audio(audio_path)
+
+    return {
+        "file_id": file_id,
+        "filename": file.filename,
+        "quality": quality,
+    }
+
+
+@router.post("/{voice_id}/test-generate")
+async def test_generate_voice(voice_id: str):
+    """用该声音生成测试语音"""
+    voice = voice_store.get_voice(voice_id)
+    if not voice:
+        raise HTTPException(404, "Voice not found")
+    if not voice.reference_audio_ids:
+        raise HTTPException(400, "该声音没有参考音频")
+    # 提交一个测试生成任务
+    from app.services.task_queue import submit
+    from app.models.schemas import GenerateRequest
+    task_id = await submit(GenerateRequest(
+        text="这是一段测试语音。",
+        engine_id="indextts",
+        engine_version="v2",
+        voice_id=voice_id,
+    ))
+    return {"task_id": task_id, "status": "queued"}
