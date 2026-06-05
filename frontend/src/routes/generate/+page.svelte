@@ -132,8 +132,8 @@
       <div class="param-group">
         <label>声音</label>
         <select bind:value={voiceId}>
-          <option value="">-- 选择声音 --</option>
-          {#each voices as v}<option value={v.voice_id}>{v.name}</option>{/each}
+            <option value="">-- 选择声音（需有参考音频） --</option>
+          {#each voices as v}<option value={v.voice_id}>{v.name}{v.reference_audio_ids?.length ? "" : " (无参考音频)"}</option>{/each}
         </select>
       </div>
 

@@ -136,6 +136,7 @@ class VoiceAssetCreate(BaseModel):
     tags: list[str] = Field(default_factory=list)
     reference_text: str = ""
     recommended_engine_id: str | None = None
+    reference_audio_ids: list[str] = Field(default_factory=list)
     license_status: LicenseStatus = LicenseStatus.unknown
 
 
@@ -149,6 +150,7 @@ class VoiceAsset(BaseModel):
     reference_audio_ids: list[str] = Field(default_factory=list)
     reference_text: str = ""
     recommended_engine_id: str | None = None
+    reference_audio_ids: list[str] = Field(default_factory=list)
     license_status: LicenseStatus = LicenseStatus.unknown
     quality_status: str = "unchecked"
     quality_notes: str = ""
