@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+:root {
+  --color-bg: oklch(15% 0.01 260);
+  --color-surface: oklch(20% 0.01 260);
+  --color-surface-2: oklch(26% 0.01 260);
+  --color-border: oklch(32% 0.01 260);
+  --color-text: oklch(92% 0.01 260);
+  --color-text-dim: oklch(60% 0.01 260);
+  --color-accent: oklch(65% 0.22 250);
+  --color-accent-dim: oklch(50% 0.15 250);
+  --color-success: oklch(70% 0.18 150);
+  --color-warning: oklch(75% 0.18 85);
+  --color-danger: oklch(60% 0.22 25);
+
+  --sidebar-w: 240px;
+  --inspector-w: 320px;
+  --player-h: 72px;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+}
+
+/* scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
