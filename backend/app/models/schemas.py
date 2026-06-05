@@ -133,6 +133,7 @@ class VoiceAsset(BaseModel):
     quality_status: str = "unchecked"
     quality_notes: str = ""
     favorite: bool = False
+    parameters: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     last_used_at: str | None = None
@@ -174,6 +175,7 @@ class GenerationTask(BaseModel):
     result_audio_id: str | None = None
     result_duration_ms: int | None = None
     generation_time_ms: int | None = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     started_at: str | None = None
     completed_at: str | None = None
@@ -193,6 +195,7 @@ class HistoryItem(BaseModel):
     generation_time_ms: int | None = None
     parameter_snapshot: dict[str, Any] = Field(default_factory=dict)
     favorite: bool = False
+    parameters: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
 
 
@@ -258,5 +261,6 @@ class Project(BaseModel):
     roles: list[Role] = Field(default_factory=list)
     segments: list[ScriptSegment] = Field(default_factory=list)
     status: str = "draft"
+    parameters: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())

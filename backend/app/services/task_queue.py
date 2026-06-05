@@ -1,4 +1,4 @@
-"""任务队列 - 内存队列 + WebSocket 推送"""
+"""任务队列 - 内存队列 + WebSocket 推送 + SQLite 持久化"""
 
 import asyncio
 import uuid
@@ -6,12 +6,12 @@ from datetime import datetime
 
 from fastapi import WebSocket
 
-from app.models.schemas import GenerateRequest, GenerationTask, TaskStatus
+from app.models.schemas import GenerateRequest, GenerationTask, HistoryItem, TaskStatus
+from app.services import database as db, history_store
 
-_tasks: dict[str, GenerationTask] = {}
-_ws_clients: list[WebSocket] = []
 _queue: asyncio.Queue[str] = asyncio.Queue()
 _worker_running = False
+_ws_clients: list[WebSocket] = []
 
 
 def add_ws_client(ws: WebSocket):
@@ -19,7 +19,6 @@ def add_ws_client(ws: WebSocket):
 
 
 def remove_ws_client(ws: WebSocket):
-    _ws_clients.discard(ws) if hasattr(_ws_clients, "discard") else None
     try:
         _ws_clients.remove(ws)
     except ValueError:
@@ -38,17 +37,40 @@ async def _broadcast(task: GenerationTask):
         _ws_clients.remove(ws)
 
 
+def list_tasks() -> list[GenerationTask]:
+    return [GenerationTask(**d) for d in db.db_list_tasks()]
+
+
+def get_task(task_id: str) -> GenerationTask | None:
+    tasks = db.db_list_tasks()
+    for d in tasks:
+        if d.get("task_id") == task_id:
+            return GenerationTask(**d)
+    return None
+
+
 async def _worker():
     global _worker_running
     _worker_running = True
     while True:
         task_id = await _queue.get()
-        task = _tasks.get(task_id)
-        if not task or task.status == TaskStatus.cancelled:
+        task_dict = db.db_list_tasks()
+        task_data = None
+        for d in task_dict:
+            if d.get("task_id") == task_id:
+                task_data = d
+                break
+        if not task_data:
             continue
+        task = GenerationTask(**task_data)
+        if task.status == TaskStatus.cancelled:
+            continue
+
         task.status = TaskStatus.running
         task.started_at = datetime.now().isoformat()
+        db.db_save_task(task.model_dump())
         await _broadcast(task)
+
         try:
             from app.services.tts_engine import synthesize
             result = await synthesize(task)
@@ -59,8 +81,30 @@ async def _worker():
         except Exception as e:
             task.status = TaskStatus.failed
             task.error_message = str(e)
+
         task.completed_at = datetime.now().isoformat()
+        db.db_save_task(task.model_dump())
         await _broadcast(task)
+
+        # 成功时写入历史
+        if task.status == TaskStatus.success:
+            voice_name = None
+            if task.voice_id:
+                from app.services.voice_store import get_voice
+                v = get_voice(task.voice_id)
+                if v:
+                    voice_name = v.name
+            history_store.add(HistoryItem(
+                result_id=uuid.uuid4().hex[:12],
+                task_id=task.task_id,
+                engine_id=task.engine_id,
+                voice_id=task.voice_id,
+                voice_name=voice_name,
+                input_text=task.input_text,
+                output_audio_id=task.result_audio_id,
+                duration_ms=task.result_duration_ms,
+                generation_time_ms=task.generation_time_ms,
+            ))
 
 
 async def submit(req: GenerateRequest) -> str:
@@ -72,30 +116,29 @@ async def submit(req: GenerateRequest) -> str:
         engine_id=req.engine_id,
         voice_id=req.voice_id,
         input_text=req.text,
+        parameters={
+            "temperature": req.temperature,
+            "top_p": req.top_p,
+            "speed": req.speed,
+            "seed": req.seed,
+        },
     )
-    _tasks[task_id] = task
     task.status = TaskStatus.queued
+    db.db_save_task(task.model_dump())
     await _queue.put(task_id)
     await _broadcast(task)
     return task_id
 
 
-def list_tasks() -> list[GenerationTask]:
-    return list(_tasks.values())
-
-
-def get_task(task_id: str) -> GenerationTask:
-    return _tasks.get(task_id)
-
-
 def cancel_task(task_id: str) -> None:
-    task = _tasks.get(task_id)
+    task = get_task(task_id)
     if task:
         task.status = TaskStatus.cancelled
+        db.db_save_task(task.model_dump())
 
 
 async def retry_task(task_id: str) -> str:
-    old = _tasks.get(task_id)
+    old = get_task(task_id)
     if not old:
         return task_id
     new_req = GenerateRequest(

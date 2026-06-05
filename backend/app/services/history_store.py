@@ -1,31 +1,31 @@
-"""历史记录存储"""
+"""历史记录存储 - SQLite 持久化"""
 
 import os
 
 from app.models.schemas import HistoryItem
+from app.services import database as db
 
-_HISTORY: dict[str, HistoryItem] = {}
+OUTPUT_DIR = os.path.expanduser("~/VoiceStudio/outputs")
 
 
 def list_history() -> list[HistoryItem]:
-    return sorted(_HISTORY.values(), key=lambda h: h.created_at, reverse=True)
+    return [HistoryItem(**d) for d in db.db_list_history()]
 
 
 def add(item: HistoryItem) -> None:
-    _HISTORY[item.result_id] = item
+    db.db_save_history(item.model_dump())
 
 
 def delete(result_id: str) -> None:
-    _HISTORY.pop(result_id, None)
+    db.db_delete_history(result_id)
 
 
 def get_audio_path(result_id: str) -> str | None:
-    item = _HISTORY.get(result_id)
-    if not item or not item.output_audio_id:
-        return None
-    output_dir = os.path.expanduser("~/VoiceStudio/outputs")
-    for ext in [".wav", ".mp3", ".flac"]:
-        path = os.path.join(output_dir, f"{item.output_audio_id}{ext}")
-        if os.path.exists(path):
-            return path
+    item_data = db.db_list_history()
+    for d in item_data:
+        if d.get("result_id") == result_id and d.get("output_audio_id"):
+            for ext in [".wav", ".mp3", ".flac"]:
+                path = os.path.join(OUTPUT_DIR, f"{d['output_audio_id']}{ext}")
+                if os.path.exists(path):
+                    return path
     return None
