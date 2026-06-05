@@ -20,6 +20,8 @@ class EngineType(str, Enum):
 class EngineStatus(str, Enum):
     not_installed = "not_installed"
     stopped = "stopped"
+    loading = "loading"
+    loaded = "loaded"
     starting = "starting"
     running = "running"
     error = "error"

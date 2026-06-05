@@ -18,16 +18,14 @@ async def get_engine(engine_id: str):
     return engine_registry.get_engine(engine_id)
 
 
-@router.post("/{engine_id}/start")
+@router.post("/{engine_id}/start", response_model=EngineDetail)
 async def start_engine(engine_id: str):
-    engine_registry.start_engine(engine_id)
-    return {"status": "starting"}
+    return engine_registry.start_engine(engine_id)
 
 
-@router.post("/{engine_id}/stop")
+@router.post("/{engine_id}/stop", response_model=EngineDetail)
 async def stop_engine(engine_id: str):
-    engine_registry.stop_engine(engine_id)
-    return {"status": "stopped"}
+    return engine_registry.stop_engine(engine_id)
 
 
 @router.post("/{engine_id}/health-check")

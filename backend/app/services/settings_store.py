@@ -12,7 +12,13 @@ def get() -> AppSettings:
     raw = db.db_get_settings()
     if not raw:
         return _DEFAULTS
-    return AppSettings(**raw)
+    parsed = {}
+    for key, value in raw.items():
+        try:
+            parsed[key] = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            parsed[key] = value  # fallback for legacy plain-string values
+    return AppSettings(**parsed)
 
 
 def update(data: AppSettings) -> AppSettings:

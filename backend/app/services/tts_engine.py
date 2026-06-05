@@ -4,17 +4,18 @@ import os
 import sys
 import time
 import uuid
-import threading
+
+from fastapi import HTTPException
 
 from app.models.schemas import GenerationTask
+from app.services import engine_registry
+from app.services.settings_store import get as get_settings
 
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 OUTPUT_DIR = os.path.expanduser("~/VoiceStudio/outputs")
-_model_lock = threading.Lock()
-_model_cache: dict[str, object] = {}
 
 
 def _ensure_dir():
@@ -57,29 +58,14 @@ def _build_emotion(params: dict) -> str | dict | None:
     return None
 
 
-def _get_model(engine_id: str, version: str):
-    """懒加载模型"""
-    cache_key = f"{engine_id}_{version}"
-    with _model_lock:
-        if cache_key in _model_cache:
-            return _model_cache[cache_key]
-
-        if engine_id == "indextts":
-            model_dir = os.path.join(_project_root, "models", "mlx-indexTTS-2.0")
-            if not os.path.exists(model_dir):
-                raise FileNotFoundError(f"Model not found at {model_dir}")
-
-            if version == "v2":
-                from mlx_indextts.generate_v2 import IndexTTSv2
-                model = IndexTTSv2(model_dir)
-            else:
-                from mlx_indextts.generate import IndexTTS
-                model = IndexTTS.load_model(model_dir)
-
-            _model_cache[cache_key] = model
-            return model
-
-        raise ValueError(f"Unknown engine: {engine_id}")
+def _get_model(engine_id: str, version: str = "v2"):
+    instance = engine_registry.get_engine_instance(engine_id)
+    if instance is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Engine '{engine_id}' is not loaded. Call POST /api/engines/{engine_id}/start first."
+        )
+    return instance
 
 
 async def synthesize(task: GenerationTask) -> dict:
@@ -152,19 +138,9 @@ async def synthesize(task: GenerationTask) -> dict:
             "generation_time_ms": generation_time_ms,
         }
 
-    except FileNotFoundError:
-        return await _mock_synthesize(task, audio_id)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=f"TTS model not available: {e}")
     except Exception as e:
         raise RuntimeError(f"TTS generation failed: {e}") from e
 
 
-async def _mock_synthesize(task: GenerationTask, audio_id: str | None = None) -> dict:
-    import asyncio
-    await asyncio.sleep(2)
-    if not audio_id:
-        audio_id = uuid.uuid4().hex[:12]
-    return {
-        "audio_id": audio_id,
-        "duration_ms": len(task.input_text) * 150,
-        "generation_time_ms": 2000,
-    }
