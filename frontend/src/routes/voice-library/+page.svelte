@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api } from '$lib/api';
+  import { listVoices, createVoice, updateVoice, deleteVoice, uploadVoice, testGenerateVoice } from '$lib/api';
   import type { VoiceAsset } from '$lib/api';
   import { Plus, Search, Play, Trash2, Upload, Music, Check, X, Edit3, Send, Filter } from 'lucide-svelte';
 
@@ -27,7 +27,7 @@
   // 编辑表单
   let editVoice: VoiceAsset | null = $state(null);
 
-  $effect(() => { api.get<VoiceAsset[]>('/voices').then(d => voices = d).catch(() => {}); });
+  $effect(() => { listVoices().then(d => voices = d).catch(() => {}); });
 
   const voiceTypes = [
     { value: 'real_person', label: '真人' },
@@ -59,17 +59,17 @@
     try {
       let audioIds: string[] = [];
       if (newAudioFile) {
-        const res = await api.upload('/voices/upload', newAudioFile) as any;
+        const res = await uploadVoice(newAudioFile);
         audioIds = [res.file_id];
         uploadQuality = res.quality;
       }
-      await api.post('/voices', {
+      await createVoice({
         name: newName, description: newDesc, default_language: newLang,
-        voice_type: newType, tags: newTags ? newTags.split(',').map(t => t.trim()) : [],
-        license_status: newAuth, recommended_engine_id: newEngine || null,
+        voice_type: newType as any, tags: newTags ? newTags.split(',').map(t => t.trim()) : [],
+        license_status: newAuth as any, recommended_engine_id: newEngine || null,
         reference_text: newRefText, reference_audio_ids: audioIds,
       });
-      voices = await api.get<VoiceAsset[]>('/voices');
+      voices = await listVoices();
       closeAddModal();
     } catch (e: any) { uploadError = e.message || '创建失败'; }
     finally { uploading = false; }
@@ -77,26 +77,27 @@
 
   async function saveEdit() {
     if (!editVoice) return;
-    await api.patch(`/voices/${editVoice.voice_id}`, {
-      name: editVoice.name, description: editVoice.description,
-      default_language: editVoice.default_language,
-      voice_type: editVoice.voice_type,
-      tags: editVoice.tags,
-      license_status: editVoice.license_status,
-      recommended_engine_id: editVoice.recommended_engine_id,
-      reference_text: editVoice.reference_text,
-    });
-    voices = await api.get<VoiceAsset[]>('/voices');
+    await updateVoice(editVoice.voice_id, {
+        name: editVoice.name, description: editVoice.description,
+        default_language: editVoice.default_language,
+        voice_type: editVoice.voice_type as any,
+        tags: editVoice.tags,
+        license_status: editVoice.license_status as any,
+        recommended_engine_id: editVoice.recommended_engine_id,
+        reference_text: editVoice.reference_text,
+        reference_audio_ids: editVoice.reference_audio_ids,
+      });
+    voices = await listVoices();
     showEditModal = false; editVoice = null;
   }
 
   async function removeVoice(id: string) {
-    await api.delete(`/voices/${id}`);
-    voices = await api.get<VoiceAsset[]>('/voices');
+    await deleteVoice(id);
+    voices = await listVoices();
   }
 
   async function testGenerate(id: string) {
-    await api.post(`/voices/${id}/test-generate`, {});
+    await testGenerateVoice(id);
   }
 
   function closeAddModal() {

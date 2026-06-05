@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api } from '$lib/api';
+  import { getSettings, updateSettings } from '$lib/api';
   import type { AppSettings } from '$lib/api';
   import { Save } from 'lucide-svelte';
 
@@ -12,11 +12,11 @@
   let saved = $state(false);
 
   $effect(() => {
-    api.get<AppSettings>('/settings').then(d => settings = d).catch(() => {});
+    getSettings().then(d => settings = d).catch(() => {});
   });
 
   async function save() {
-    await api.patch<AppSettings>('/settings', settings);
+    await updateSettings(settings);
     saved = true;
     setTimeout(() => saved = false, 2000);
   }

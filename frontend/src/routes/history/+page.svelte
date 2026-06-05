@@ -1,12 +1,12 @@
 <script lang="ts">
-  import { api } from '$lib/api';
+  import { listHistory } from '$lib/api';
   import type { HistoryItem } from '$lib/api';
   import { Play, Download, Star, Trash2 } from 'lucide-svelte';
 
   let items = $state<HistoryItem[]>([]);
 
   $effect(() => {
-    api.get<HistoryItem[]>('/history').then(d => items = d).catch(() => {});
+    listHistory().then(d => items = d).catch(() => {});
   });
 </script>
 

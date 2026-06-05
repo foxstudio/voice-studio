@@ -1,22 +1,22 @@
 <script lang="ts">
-  import { api } from '$lib/api';
+  import { listEngines, startEngine, stopEngine, healthCheckEngine } from '$lib/api';
   import type { EngineDetail } from '$lib/api';
   import { Play, Square, RefreshCw, HardDrive, Globe } from 'lucide-svelte';
 
   let engines = $state<EngineDetail[]>([]);
 
   $effect(() => {
-    api.get<EngineDetail[]>('/engines').then(d => engines = d).catch(() => {});
+    listEngines().then(d => engines = d).catch(() => {});
   });
 
   async function toggleEngine(id: string, running: boolean) {
     const action = running ? 'stop' : 'start';
-    await api.post(`/engines/${id}/${action}`, {});
-    engines = await api.get<EngineDetail[]>('/engines');
+    if (action === 'start') { await startEngine(id); } else { await stopEngine(id); }
+    engines = await listEngines();
   }
 
   async function checkHealth(id: string) {
-    await api.post(`/engines/${id}/health-check`, {});
+    await healthCheckEngine(id);
   }
 
   function statusClass(status: string): string {

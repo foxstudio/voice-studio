@@ -1,12 +1,12 @@
 <script lang="ts">
   import { Cpu, Mic, Play, Plus, ArrowRight } from 'lucide-svelte';
-  import { api } from '$lib/api';
+  import { listEngines } from '$lib/api';
   import type { EngineDetail } from '$lib/api';
 
   let engines = $state<EngineDetail[]>([]);
 
   $effect(() => {
-    api.get<EngineDetail[]>('/engines').then(d => engines = d).catch(() => {});
+    listEngines().then(d => engines = d).catch(() => {});
   });
 
   const quickActions = [

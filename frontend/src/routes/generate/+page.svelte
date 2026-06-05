@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api } from '$lib/api';
+  import { listVoices, uploadVoice, generateAudio, getTask } from '$lib/api';
   import type { VoiceAsset, GenerateResponse, GenerationTask } from '$lib/api';
   import { Play, Upload, ChevronDown, Loader2, Check, X, Wand2, Pause, Music, Smile, Frown, Hash, Scissors, RotateCcw, Star, Download, Send } from 'lucide-svelte';
 
@@ -47,7 +47,7 @@
     const v = params.get('voice');
     if (v) voiceId = v;
   });
-  $effect(() => { api.get<VoiceAsset[]>('/voices').then(d => voices = d).catch(() => {}); });
+  $effect(() => { listVoices().then(d => voices = d).catch(() => {}); });
 
   // 文本增强工具
   function insertTag(tag: string) { text += tag; }
@@ -60,23 +60,12 @@
     if (!text.trim()) return;
     generating = true;
     try {
-      // 如果有直接上传的音频，先上传
-      let refAudioPath: string | undefined;
-      if (directAudioFile && !directAudioId) {
-        const res = await api.upload('/voices/upload', directAudioFile) as any;
-        directAudioId = res.file_id;
-      }
-      // 找到参考音频路径
-      if (voiceId && !refAudioPath) {
-        const v = voices.find(x => x.voice_id === voiceId);
-        if (v?.reference_audio_ids?.length) {
-          refAudioPath = `~/VoiceStudio/voices/${v.reference_audio_ids[0]}`;
-        }
-      }
+      // voice_id is passed directly; backend resolves the file path via voice store
+      // (reference_audio_path is NOT set here — backend's _find_reference_audio handles it)
 
       const body: any = {
         text, engine_id: engineId, engine_version: engineVersion,
-        voice_id: voiceId || undefined, reference_audio_path: refAudioPath,
+        voice_id: voiceId || undefined,
         language, emotion_mode: emotionMode, emo_alpha: emoAlpha,
         speed, temperature, top_p: topP, top_k: topK,
         repetition_penalty: repetitionPenalty,
@@ -88,11 +77,11 @@
       if (emotionMode === 'emotion_vector') body.emotion_values = emotionValues;
       else if (emotionMode === 'emotion_text') body.emotion_text = emotionText;
 
-      const res = await api.post<GenerateResponse>('/generate', body);
+      const res = await generateAudio(body as any);
       // 轮询
       for (let i = 0; i < 120; i++) {
         await new Promise(r => setTimeout(r, 1000));
-        const task = await api.get<GenerationTask>(`/tasks/${res.task_id}`);
+        const task = await getTask(res.task_id);
         if (task.status === 'success' || task.status === 'failed') {
           results = [task, ...results];
           break;
