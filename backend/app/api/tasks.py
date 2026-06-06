@@ -1,6 +1,6 @@
 """任务队列 API"""
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from app.models.schemas import GenerationTask
 from app.services import task_queue
@@ -15,7 +15,10 @@ async def list_tasks():
 
 @router.get("/{task_id}", response_model=GenerationTask)
 async def get_task(task_id: str):
-    return task_queue.get_task(task_id)
+    task = task_queue.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return task
 
 
 @router.post("/{task_id}/cancel")
