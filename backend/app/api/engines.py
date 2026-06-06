@@ -1,5 +1,8 @@
 """引擎中心 API"""
 
+import asyncio
+
+
 from fastapi import APIRouter
 
 from app.models.schemas import EngineDetail, EngineManifest, EngineState
@@ -20,7 +23,7 @@ async def get_engine(engine_id: str):
 
 @router.post("/{engine_id}/start", response_model=EngineDetail)
 async def start_engine(engine_id: str):
-    return engine_registry.start_engine(engine_id)
+    return await asyncio.to_thread(engine_registry.start_engine, engine_id)
 
 
 @router.post("/{engine_id}/stop", response_model=EngineDetail)

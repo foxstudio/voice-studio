@@ -177,6 +177,13 @@ async def _process_one(task_id: str):
 
     # ── Phase 2: 实际推理 ──
     try:
+        # Auto-start engine if needed (safety net)
+        from app.services import engine_registry as _reg
+        engine = _reg.get_engine(task.engine_id)
+        if engine.state.status.value not in ('loaded',):
+            logger.info("task %s: engine %s not loaded, auto-starting", task_id, task.engine_id)
+            _reg.start_engine(task.engine_id)
+
         from app.services.tts_engine import synthesize
         result = await synthesize(task)
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { listVoices, uploadVoice, generateAudio, getTask, subscribeTaskUpdates, listEngines, startEngine } from '$lib/api';
+  import { listVoices, uploadVoice, generateAudio, getTask, subscribeTaskUpdates, listEngines, startEngine, getEngine } from '$lib/api';
   import type { VoiceAsset, GenerateResponse, GenerationTask, Subscription, WsConnectionStatus, EngineDetail } from '$lib/api';
   import { Play, Upload, ChevronDown, Loader2, Check, X, Wand2, Pause, Music, Smile, Frown, Hash, Scissors, RotateCcw, Star, Download, Send } from 'lucide-svelte';
 
@@ -109,8 +109,18 @@
       if (selectedEngine && selectedEngine.state.status !== 'loaded') {
         try {
           await startEngine(engineId);
+          // Poll until engine is loaded (model loading runs in thread, may not be done yet)
+          for (let i = 0; i < 60; i++) {
+            const eng = await getEngine(engineId);
+            if (eng.state.status === 'loaded') break;
+            if (eng.state.status === 'error') throw new Error(eng.state.error_message ?? 'Engine failed to load');
+            await new Promise(r => setTimeout(r, 1000));
+          }
         } catch (e) {
           console.warn('Engine start failed:', e);
+          generating = false;
+          wsStatus = 'idle';
+          return;
         }
       }
 
