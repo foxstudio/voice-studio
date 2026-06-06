@@ -1,6 +1,5 @@
 """TTS 引擎适配 - 调用 mlx_indextts v1/v2 进行推理"""
 
-import asyncio
 
 import os
 import sys
@@ -139,7 +138,7 @@ async def synthesize(task: GenerationTask) -> dict:
             else:
                 raise ValueError(f"Unknown engine: {task.engine_id}")
 
-        await asyncio.to_thread(_run_inference)
+        _run_inference()
         generation_time_ms = int((time.time() - start) * 1000)
         duration_ms = 0
         if os.path.exists(output_path):
