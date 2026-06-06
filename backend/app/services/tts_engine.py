@@ -41,11 +41,10 @@ def _find_reference_audio(voice_id: str | None) -> str | None:
 
 def _resolve_ref_audio(task: GenerationTask) -> str | None:
     """解析参考音频：优先用指定路径，否则从声音资产查找"""
-    ref_path = task.parameters.get("reference_audio_path")
+    ref_path = task.parameters.get("reference_audio_path") or task.parameters.get("ref_audio_path")
     if ref_path and os.path.exists(ref_path):
         return ref_path
     return _find_reference_audio(task.voice_id)
-
 
 def _build_emotion(params: dict) -> str | dict | None:
     """构建情绪参数（v2 专用）"""

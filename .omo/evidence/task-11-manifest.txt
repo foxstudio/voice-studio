@@ -1,0 +1,36 @@
+============================================================
+T11: Manifest Capability Tag Audit - Evidence
+============================================================
+Date: 2026-06-06
+Engines: 3
+
+--- indextts ---
+  name: IndexTTS
+  version: v2
+  sample_rate: 22050
+  privacy_level: local_only
+  capabilities (6): ['local_inference', 'voice_clone', 'multilingual', 'emotion_control', 'pinyin_control', 'long_text']
+  supported_languages (2): ['zh', 'en']
+
+--- omnivoice ---
+  name: OmniVoice
+  version: 0.1.0
+  sample_rate: 24000
+  privacy_level: local_only
+  capabilities (6): ['local_inference', 'voice_clone', 'voice_design', 'multilingual', 'emotion_control', 'nonverbal_tags']
+  supported_languages (7): ['zh', 'en', 'ja', 'ko', 'fr', 'de', 'es']
+
+--- indextts-v1 ---
+  name: IndexTTS
+  version: v1
+  sample_rate: 24000
+  privacy_level: local_only
+  capabilities (3): ['local_inference', 'voice_clone', 'multilingual']
+  supported_languages (2): ['zh', 'en']
+
+VALIDATION RESULTS:
+  indextts (v2): PASS (sr=22050, multilingual=True, emotion_control=True)
+  omnivoice: PASS (sr=24000, emotion_control=True)
+  indextts-v1 (v1): PASS (sr=24000, multilingual=True)
+
+OVERALL: PASS

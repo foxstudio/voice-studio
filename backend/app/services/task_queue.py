@@ -263,6 +263,8 @@ async def submit(req: GenerateRequest) -> str:
     params = {
         "engine_version": req.engine_version.value,
         "reference_audio_path": req.reference_audio_path,
+        "ref_audio_path": req.ref_audio_path,
+        "ref_text": req.ref_text,
         "language": req.language,
         "emotion_mode": req.emotion_mode.value,
         "emotion_values": req.emotion_values,

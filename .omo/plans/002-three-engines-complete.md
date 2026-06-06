@@ -631,7 +631,7 @@ Max Concurrent: 4 (Wave 1 after T1)
   - Files: `backend/app/services/engine_registry.py`
 ### Wave 3: Frontend + Integration
 
-- [ ] 9. 后端 API 路由适配
+- [x] 9. 后端 API 路由适配
 
   **What to do**:
   - 检查 `backend/app/routers/` 或 `backend/app/main.py` 中的 generate 路由
@@ -751,7 +751,7 @@ Max Concurrent: 4 (Wave 1 after T1)
   - Message: `feat(fullstack): engine selector + integration tests`
   - Files: `frontend/src/routes/generate/+page.svelte`
 
-- [ ] 11. manifest 能力标签完善
+- [x] 11. manifest 能力标签完善
 
   **What to do**:
   - 审查 3 个引擎的 manifest，确保 capabilities 标签完整准确
