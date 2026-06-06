@@ -1,10 +1,13 @@
 """TTS 引擎适配 - 调用 mlx_indextts v1/v2 进行推理"""
 
 
+import asyncio
 import os
 import sys
+import threading
 import time
 import uuid
+from concurrent.futures import Future
 
 from fastapi import HTTPException
 
@@ -58,6 +61,20 @@ def _build_emotion(params: dict) -> str | dict | None:
         return params.get("emotion_text")  # str
     return None
 
+
+def _run_in_thread(fn):
+    """Run fn() in a dedicated thread, return a concurrent.futures.Future.
+    Avoids asyncio.to_thread's default ThreadPoolExecutor which deadlocks with MPS."""
+    future: Future = Future()
+    def _worker():
+        try:
+            result = fn()
+            future.set_result(result)
+        except Exception as e:
+            future.set_exception(e)
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    return future
 
 def _get_model(engine_id: str, version: str = "v2"):
     instance = engine_registry.get_engine_instance(engine_id)
@@ -138,7 +155,10 @@ async def synthesize(task: GenerationTask) -> dict:
             else:
                 raise ValueError(f"Unknown engine: {task.engine_id}")
 
-        _run_inference()
+        future = _run_in_thread(_run_inference)
+        while not future.done():
+            await asyncio.sleep(0.1)
+        future.result()  # raises if inference failed
         generation_time_ms = int((time.time() - start) * 1000)
         duration_ms = 0
         if os.path.exists(output_path):
