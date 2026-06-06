@@ -231,6 +231,7 @@ class GenerationTask(BaseModel):
     progress: float = 0.0
     error_message: str | None = None
     result_audio_id: str | None = None
+    result_id: str | None = None
     result_duration_ms: int | None = None
     generation_time_ms: int | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)

@@ -245,8 +245,8 @@
                   <button class="icon-btn" onclick={() => reuseParams(r)} title="复用参数"><RotateCcw size={13} /></button>
                 </div>
               </div>
-              {#if r.status === 'success' && r.result_audio_id}
-                <audio controls src="/api/history/{r.result_audio_id}/audio" class="result-audio"></audio>
+              {#if r.status === 'success' && r.result_id}
+                <audio controls src="/api/history/{r.result_id}/audio" class="result-audio"></audio>
               {/if}
               {#if r.status === 'failed' && r.error_message}
                 <div class="result-error">{r.error_message}</div>

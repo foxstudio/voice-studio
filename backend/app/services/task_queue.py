@@ -201,8 +201,10 @@ async def _process_one(task_id: str):
             task.status = TaskStatus.failed
             task.error_message = f"{type(e).__name__}: {e}"
 
-    # ── Phase 3: 持久化收尾 ──
+    # ── Phase 3: 持久化收尾 + 预生成 result_id ──
     task.completed_at = datetime.now().isoformat()
+    history_result_id = uuid.uuid4().hex[:12] if task.status == TaskStatus.success else None
+    task.result_id = history_result_id
     db.db_save_task(task.model_dump())
     await _broadcast(task)
     _clear_cancel_flag(task_id)
@@ -217,7 +219,7 @@ async def _process_one(task_id: str):
                 voice_name = v.name
         try:
             history_store.add(HistoryItem(
-                result_id=uuid.uuid4().hex[:12],
+                result_id=history_result_id,
                 task_id=task.task_id,
                 engine_id=task.engine_id,
                 engine_version=task.engine_version,
@@ -232,6 +234,7 @@ async def _process_one(task_id: str):
             ))
         except Exception:
             logger.exception("failed to write history for task %s", task_id)
+
 
 
 # ── Cancel flag helpers ────────────────────────────────

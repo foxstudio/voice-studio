@@ -196,6 +196,7 @@ export interface GenerationTask {
   progress: number;
   error_message: string | null;
   result_audio_id: string | null;
+  result_id: string | null;
   result_duration_ms: number | null;
   generation_time_ms: number | null;
   parameters: Record<string, unknown>;
