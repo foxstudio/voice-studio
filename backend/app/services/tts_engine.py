@@ -5,9 +5,8 @@ import os
 import sys
 import time
 import uuid
-import asyncio
-import threading
-import concurrent.futures
+import subprocess
+import json as _json
 
 
 from fastapi import HTTPException
@@ -71,22 +70,6 @@ def _get_model(engine_id: str, version: str = "v2"):
     return instance
 
 
-def _run_inference_thread(fn):
-    """Run fn in a non-daemon thread, return a Future.
-    Non-daemon threads may avoid MPS deadlock that daemon threads trigger."""
-    future = concurrent.futures.Future()
-
-    def worker():
-        try:
-            result = fn()
-            future.set_result(result)
-        except Exception as e:
-            future.set_exception(e)
-
-    t = threading.Thread(target=worker, daemon=False)
-    t.start()
-    return future
-
 
 async def synthesize(task: GenerationTask) -> dict:
     _ensure_dir()
@@ -95,74 +78,93 @@ async def synthesize(task: GenerationTask) -> dict:
 
     try:
         version = task.parameters.get("engine_version", "v1")
-        model = _get_model(task.engine_id, version)
+        _get_model(task.engine_id, version)  # validate engine
         ref_audio = _resolve_ref_audio(task)
         params = task.parameters
 
         start = time.time()
 
-        def _do_inference():
-            if (version == "v2" or version == "indextts") and task.engine_id == "indextts":
-                if not ref_audio:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="REFERENCE_AUDIO_REQUIRED: IndexTTS v2 requires reference audio. Provide voice_id or reference_audio_path."
-                    )
-                emotion = params.get("emotion") or _build_emotion(params)
-                model.generate(
-                    text=task.input_text,
-                    reference_audio=ref_audio,
-                    output_path=output_path,
-                    temperature=params.get("temperature", 0.8),
-                    top_p=params.get("top_p", 0.8),
-                    top_k=params.get("top_k", 30),
-                    repetition_penalty=params.get("repetition_penalty", 10.0),
-                    diffusion_steps=params.get("diffusion_steps", 25),
-                    cfg_rate=params.get("cfg_rate", 0.7),
-                    emotion=emotion,
-                    emo_alpha=params.get("emo_alpha", 0.6),
-                    speed=params.get("speed", 1.0),
-                    max_text_tokens_per_segment=params.get("max_text_tokens_per_segment", 120),
-                    interval_silence=params.get("interval_silence", 200),
-                    seed=params.get("seed")
+        # Build subprocess arguments for isolated inference
+        if (version == "v2" or version == "indextts") and task.engine_id == "indextts":
+            if not ref_audio:
+                raise HTTPException(
+                    status_code=400,
+                    detail="REFERENCE_AUDIO_REQUIRED: IndexTTS v2 requires reference audio. Provide voice_id or reference_audio_path."
                 )
-            elif task.engine_id == "indextts-v1":
-                if not ref_audio:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="REFERENCE_AUDIO_REQUIRED: IndexTTS v1 requires reference audio. Provide voice_id or reference_audio_path."
-                    )
-                model.generate(
-                    text=task.input_text,
-                    ref_audio_path=ref_audio,
-                    output_path=output_path,
-                    temperature=params.get("temperature", 1.0),
-                    speed=params.get("speed", 1.0),
-                    max_mel_tokens=params.get("max_mel_tokens", 600),
-                    max_text_tokens_per_segment=params.get("max_text_tokens_per_segment", 120),
-                    top_p=params.get("top_p", 0.8),
-                    top_k=params.get("top_k", 30),
-                    repetition_penalty=params.get("repetition_penalty", 10.0),
-                    interval_silence=params.get("interval_silence", 200),
-                    seed=params.get("seed")
+            emotion = params.get("emotion") or _build_emotion(params)
+            kwargs = dict(
+                text=task.input_text,
+                reference_audio=ref_audio,
+                output_path=output_path,
+                temperature=params.get("temperature", 0.8),
+                top_p=params.get("top_p", 0.8),
+                top_k=params.get("top_k", 30),
+                repetition_penalty=params.get("repetition_penalty", 10.0),
+                diffusion_steps=params.get("diffusion_steps", 25),
+                cfg_rate=params.get("cfg_rate", 0.7),
+                emotion=emotion,
+                emo_alpha=params.get("emo_alpha", 0.6),
+                speed=params.get("speed", 1.0),
+                max_text_tokens_per_segment=params.get("max_text_tokens_per_segment", 120),
+                interval_silence=params.get("interval_silence", 200),
+                seed=params.get("seed"),
+            )
+            engine_id = "indextts"
+        elif task.engine_id == "indextts-v1":
+            if not ref_audio:
+                raise HTTPException(
+                    status_code=400,
+                    detail="REFERENCE_AUDIO_REQUIRED: IndexTTS v1 requires reference audio. Provide voice_id or reference_audio_path."
                 )
-            elif task.engine_id == "omnivoice":
-                model.generate(
-                    text=task.input_text,
-                    ref_audio_path=ref_audio,
-                    ref_text=params.get("ref_text"),
-                    language=params.get("language", "zh"),
-                    emotion=params.get("emotion"),
-                    speed=params.get("speed", 1.0),
-                    output_path=output_path,
-                )
-            else:
-                raise ValueError(f"Unknown engine: {task.engine_id}")
+            kwargs = dict(
+                text=task.input_text,
+                ref_audio_path=ref_audio,
+                output_path=output_path,
+                temperature=params.get("temperature", 1.0),
+                speed=params.get("speed", 1.0),
+                max_mel_tokens=params.get("max_mel_tokens", 600),
+                max_text_tokens_per_segment=params.get("max_text_tokens_per_segment", 120),
+                top_p=params.get("top_p", 0.8),
+                top_k=params.get("top_k", 30),
+                repetition_penalty=params.get("repetition_penalty", 10.0),
+                interval_silence=params.get("interval_silence", 200),
+                seed=params.get("seed"),
+            )
+            engine_id = "indextts-v1"
+        elif task.engine_id == "omnivoice":
+            kwargs = dict(
+                text=task.input_text,
+                ref_audio_path=ref_audio,
+                ref_text=params.get("ref_text"),
+                language=params.get("language", "zh"),
+                emotion=params.get("emotion"),
+                speed=params.get("speed", 1.0),
+                output_path=output_path,
+            )
+            engine_id = "omnivoice"
+        else:
+            raise ValueError(f"Unknown engine: {task.engine_id}")
 
-        future = _run_inference_thread(_do_inference)
-        while not future.done():
-            await asyncio.sleep(0.1)
-        future.result()
+        # Run inference in isolated subprocess (avoids MPS/PyTorch deadlock in uvicorn)
+        backend_root = os.path.join(_project_root, "backend")
+        subprocess_env = {**os.environ, "PYTHONPATH": backend_root}
+        proc = subprocess.run(
+            [sys.executable, "-m", "app.services.inference_runner"],
+            input=_json.dumps({"engine_id": engine_id, "kwargs": kwargs}),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=_project_root,
+            env=subprocess_env,
+        )
+
+        if proc.returncode != 0:
+            try:
+                err_result = _json.loads(proc.stdout) if proc.stdout else {}
+            except _json.JSONDecodeError:
+                err_result = {}
+            error_msg = err_result.get("error") or (proc.stderr[:500] if proc.stderr else "unknown error")
+            raise RuntimeError(f"Inference subprocess failed ({proc.returncode}): {error_msg}")
 
         generation_time_ms = int((time.time() - start) * 1000)
         duration_ms = 0
