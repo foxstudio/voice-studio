@@ -10,6 +10,8 @@ from app.models.schemas import (
     EngineType,
 )
 
+from app.services.adapters.v1_adapter import V1Adapter
+from app.services.adapters.omnivoice_adapter import OmniVoiceAdapter
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
@@ -84,6 +86,12 @@ _ENGINES: dict[str, EngineDetail] = {
     ),
     }
 
+engine_adapter_map: dict[str, type] = {
+    "indextts-v1": V1Adapter,
+    "omnivoice": OmniVoiceAdapter,
+}
+
+
 
 def list_engines() -> list[EngineDetail]:
     return list(_ENGINES.values())
@@ -113,25 +121,36 @@ def start_engine(engine_id: str) -> EngineDetail:
         detail.state.error_message = None
 
     try:
-        if not os.path.exists(MODEL_DIR):
-            raise FileNotFoundError(f"Model not found at {MODEL_DIR}")
+        if engine_id == "indextts":
+            if not os.path.exists(MODEL_DIR):
+                raise FileNotFoundError(f"Model not found at {MODEL_DIR}")
 
-        from mlx_indextts.generate_v2 import IndexTTSv2
-        instance = IndexTTSv2(MODEL_DIR, device="mps")
+            from mlx_indextts.generate_v2 import IndexTTSv2
+            instance = IndexTTSv2(MODEL_DIR, device="mps")
 
-        # Read sample_rate from model config.json for accurate duration calculation
-        config_path = os.path.join(MODEL_DIR, "config.json")
-        sample_rate = 22050  # fallback default
-        if os.path.exists(config_path):
-            import json
-            with open(config_path) as f:
-                cfg = json.load(f)
-                sample_rate = cfg.get("sample_rate", 22050)
+            # Read sample_rate from model config.json for accurate duration calculation
+            config_path = os.path.join(MODEL_DIR, "config.json")
+            sample_rate = 22050  # fallback default
+            if os.path.exists(config_path):
+                import json
+                with open(config_path) as f:
+                    cfg = json.load(f)
+                    sample_rate = cfg.get("sample_rate", 22050)
 
-        with _lock:
-            _engine_instances[engine_id] = instance
-            _engine_sample_rates[engine_id] = sample_rate
-            detail.state.status = EngineStatus.loaded
+            with _lock:
+                _engine_instances[engine_id] = instance
+                _engine_sample_rates[engine_id] = sample_rate
+                detail.state.status = EngineStatus.loaded
+
+        elif engine_id in engine_adapter_map:
+            adapter_cls = engine_adapter_map[engine_id]
+            adapter = adapter_cls()
+            adapter.health_check()  # validate model availability
+
+            with _lock:
+                _engine_instances[engine_id] = adapter
+                _engine_sample_rates[engine_id] = adapter.manifest["sample_rate"]
+                detail.state.status = EngineStatus.loaded
 
     except Exception as exc:
         with _lock:
@@ -162,6 +181,11 @@ def get_engine_sample_rate(engine_id: str) -> int:
 def health_check(engine_id: str) -> dict:
     if engine_id not in _ENGINES:
         return {"status": "not_found"}
+
+    instance = _engine_instances.get(engine_id)
+    if instance is not None and hasattr(instance, 'health_check'):
+        return instance.health_check()
+
     e = _ENGINES[engine_id]
     return {
         "engine_id": engine_id,

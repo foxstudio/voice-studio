@@ -565,7 +565,7 @@ Max Concurrent: 4 (Wave 1 after T1)
   - Message: `feat(backend): add v1 + omnivoice adapters, refactor registry`
   - Files: `backend/app/models/schemas.py`
 
-- [ ] 8. engine_registry 策略模式重构
+- [x] 8. engine_registry 策略模式重构
 
   **What to do**:
   - 重构 `backend/app/services/engine_registry.py` 为策略/工厂模式
