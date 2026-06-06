@@ -14,7 +14,7 @@
   let engineCapabilities = $derived(selectedEngine?.manifest.capabilities ?? []);
   let showEmotionPanel = $derived(engineCapabilities.includes('emotion_control'));
   let showVoiceDesign = $derived(engineCapabilities.includes('voice_design'));
-  let engineVersion = $derived(engineId === 'indextts-v1' ? 'v1' : 'v2');
+  let engineVersion = $derived(engineId);
   let language = $state('zh');
 
   // 情绪
