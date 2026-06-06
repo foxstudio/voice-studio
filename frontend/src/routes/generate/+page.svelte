@@ -130,6 +130,17 @@
           },
         }
       );
+
+      // Immediate poll — catch tasks that completed before WS connected
+      getTask(res.task_id).then(task => {
+        if (task.status === 'success' || task.status === 'failed') {
+          results = [task, ...results];
+          generating = false;
+          wsSub?.close();
+          wsSub = null;
+          wsStatus = 'idle';
+        }
+      }).catch(() => { /* poll will be handled by WS or fallback */ });
     } catch (e) {
       console.error(e);
       generating = false;
