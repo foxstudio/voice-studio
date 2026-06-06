@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { listVoices, uploadVoice, generateAudio, getTask, subscribeTaskUpdates, listEngines } from '$lib/api';
+  import { listVoices, uploadVoice, generateAudio, getTask, subscribeTaskUpdates, listEngines, startEngine } from '$lib/api';
   import type { VoiceAsset, GenerateResponse, GenerationTask, Subscription, WsConnectionStatus, EngineDetail } from '$lib/api';
   import { Play, Upload, ChevronDown, Loader2, Check, X, Wand2, Pause, Music, Smile, Frown, Hash, Scissors, RotateCcw, Star, Download, Send } from 'lucide-svelte';
 
@@ -104,6 +104,15 @@
       if (emotionMode === 'emotion_vector') body.emotion_values = emotionValues;
       else if (emotionMode === 'emotion_text') body.emotion_text = emotionText;
       if (showVoiceDesign) body.voice_mode = voiceMode;
+
+      // Auto-start engine if not loaded
+      if (selectedEngine && selectedEngine.state.status !== 'loaded') {
+        try {
+          await startEngine(engineId);
+        } catch (e) {
+          console.warn('Engine start failed:', e);
+        }
+      }
 
       const res = await generateAudio(body as any);
 
