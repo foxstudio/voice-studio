@@ -78,7 +78,7 @@ async def synthesize(task: GenerationTask) -> dict:
 
         start = time.time()
 
-        if version == "v2" and task.engine_id == "indextts":
+        if (version == "v2" or version == "indextts") and task.engine_id == "indextts":
             # ── IndexTTS v2 ──
             if not ref_audio:
                 raise HTTPException(
@@ -105,28 +105,38 @@ async def synthesize(task: GenerationTask) -> dict:
                 seed=params.get("seed"),
                 verbose=False,
             )
-        elif task.engine_id == "indextts":
-            # ── IndexTTS v1 ──
-            if ref_audio:
-                model.infer(
-                    audio_prompt=ref_audio,
-                    text=task.input_text,
-                    output_path=output_path,
-                    temperature=params.get("temperature", 1.0),
-                    top_p=params.get("top_p", 0.8),
-                    top_k=params.get("top_k", 30),
-                    repetition_penalty=params.get("repetition_penalty", 10.0),
-                    speed=params.get("speed", 1.0),
-                    max_text_tokens_per_segment=params.get("max_text_tokens_per_segment", 120),
-                    interval_silence=params.get("interval_silence", 200),
-                    seed=params.get("seed"),
-                    verbose=False,
-                )
-            else:
+        elif task.engine_id == "indextts-v1":
+            # ── IndexTTS v1 (adapter) ──
+            if not ref_audio:
                 raise HTTPException(
                     status_code=400,
                     detail="REFERENCE_AUDIO_REQUIRED: IndexTTS v1 requires reference audio. Provide voice_id or reference_audio_path."
                 )
+            result = model.generate(
+                text=task.input_text,
+                ref_audio_path=ref_audio,
+                output_path=output_path,
+                temperature=params.get("temperature", 1.0),
+                speed=params.get("speed", 1.0),
+                max_mel_tokens=params.get("max_mel_tokens", 600),
+                max_text_tokens_per_segment=params.get("max_text_tokens_per_segment", 120),
+                top_p=params.get("top_p", 0.8),
+                top_k=params.get("top_k", 30),
+                repetition_penalty=params.get("repetition_penalty", 10.0),
+                interval_silence=params.get("interval_silence", 200),
+                seed=params.get("seed"),
+            )
+        elif task.engine_id == "omnivoice":
+            # ── OmniVoice (adapter) ──
+            result = model.generate(
+                text=task.input_text,
+                ref_audio_path=ref_audio,
+                ref_text=params.get("ref_text"),
+                language=params.get("language", "zh"),
+                emotion=params.get("emotion"),
+                speed=params.get("speed", 1.0),
+                output_path=output_path,
+            )
         else:
             raise ValueError(f"Unknown engine: {task.engine_id}")
         generation_time_ms = int((time.time() - start) * 1000)

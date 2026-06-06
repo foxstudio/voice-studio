@@ -143,6 +143,8 @@ def start_engine(engine_id: str) -> EngineDetail:
             adapter_cls = engine_adapter_map[engine_id]
             adapter = adapter_cls()
             adapter.health_check()  # validate model availability
+            if hasattr(adapter, 'load'):
+                adapter.load()  # load model weights (V1Adapter needs this; OmniVoice lazy-loads)
 
             with _lock:
                 _engine_instances[engine_id] = adapter

@@ -31,6 +31,8 @@ dependencies = [
     "psutil>=7.2.2",
     "bigvgan>=2.4.1",
     "omnivoice>=0.1.5",
+    "omegaconf>=2.3.0",
+    "einops>=0.8.2",
 ]
 
 [project.optional-dependencies]
@@ -83,3 +85,10 @@ ignore = ["E501"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.4.0",
+]

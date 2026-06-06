@@ -62,8 +62,10 @@ function buildWsUrl(path: string): string {
   if (path.startsWith('ws://') || path.startsWith('wss://')) return path;
   // Browser only — SSR-safe guard
   if (typeof window === 'undefined') return path;
+  // Connect directly to backend (Vite proxy does not reliably forward WS upgrades)
+  const host = window.location.hostname + ':8765';
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${proto}//${window.location.host}${path}`;
+  return `${proto}//${host}${path}`;
 }
 
 function classifyEvent(task: GenerationTask): TaskProgressEvent['type'] {
