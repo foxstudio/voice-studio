@@ -32,3 +32,8 @@ async def stop_engine(engine_id: str):
 async def health_check_engine(engine_id: str):
     result = engine_registry.health_check(engine_id)
     return result
+
+
+@router.post("/{engine_id}/reload", response_model=EngineDetail)
+async def reload_engine(engine_id: str):
+    return engine_registry.reload_engine(engine_id)

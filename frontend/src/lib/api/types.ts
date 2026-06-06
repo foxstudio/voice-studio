@@ -76,6 +76,8 @@ export interface EngineManifest {
   default_use_case: string;
   privacy_level: string;
   available_versions: string[];
+  sample_rate: number | null;
+  max_tokens: number | null;
 }
 
 export interface EngineState {
@@ -237,6 +239,9 @@ export interface AppSettings {
   log_dir: string;
   device: string;
   cloud_enabled: boolean;
+  default_emotion: string;
+  default_emo_alpha: number;
+  theme: string;
 }
 
 // ── Health ──────────────────────────────────────────────

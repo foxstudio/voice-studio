@@ -7,3 +7,5 @@ export * from './engines';
 export * from './settings';
 export * from './history';
 export * from './health';
+
+export * from './websocket';

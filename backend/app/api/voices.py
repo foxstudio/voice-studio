@@ -86,3 +86,22 @@ async def test_generate_voice(voice_id: str):
         voice_id=voice_id,
     ))
     return {"task_id": task_id, "status": "queued"}
+
+@router.get("/{voice_id}/audio/{audio_id}")
+async def get_reference_audio(voice_id: str, audio_id: str):
+    """提供参考音频文件"""
+    import os
+
+    voice = voice_store.get_voice(voice_id)
+    if not voice:
+        raise AppException(404, "VOICE_NOT_FOUND", "Voice not found")
+    if audio_id not in voice.reference_audio_ids:
+        raise AppException(404, "AUDIO_NOT_FOUND", "Audio not found in voice")
+
+    voice_dir = os.path.expanduser("~/VoiceStudio/voices")
+    for ext in [".wav", ".mp3", ".flac", ".ogg"]:
+        path = os.path.join(voice_dir, f"{audio_id}{ext}")
+        if os.path.exists(path):
+            from fastapi.responses import FileResponse
+            return FileResponse(path, media_type=f"audio/{ext[1:]}")
+    raise AppException(404, "AUDIO_FILE_NOT_FOUND", "Audio file not found on disk")

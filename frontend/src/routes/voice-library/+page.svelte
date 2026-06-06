@@ -24,10 +24,22 @@
   let uploading = $state(false);
   let uploadError = $state('');
 
+  // 错误和试听状态
+  let errorMsg = $state('');
+  let playingAudioId = $state<string | null>(null);
+  let audioRef: HTMLAudioElement | null = null;
+
   // 编辑表单
   let editVoice: VoiceAsset | null = $state(null);
 
-  $effect(() => { listVoices().then(d => voices = d).catch(() => {}); });
+  $effect(() => {
+    listVoices()
+      .then(d => { voices = d; errorMsg = ''; })
+      .catch((e: any) => {
+        errorMsg = e.message || '加载声音列表失败';
+        console.error('[voice-library] listVoices failed:', e);
+      });
+  });
 
   const voiceTypes = [
     { value: 'real_person', label: '真人' },
@@ -92,12 +104,35 @@
   }
 
   async function removeVoice(id: string) {
-    await deleteVoice(id);
-    voices = await listVoices();
+    if (!confirm('确定删除该 voice？')) return;
+    try {
+      await deleteVoice(id);
+      errorMsg = '';
+      voices = await listVoices();
+    } catch (e: any) {
+      errorMsg = e.message || '删除失败';
+      console.error('[voice-library] deleteVoice failed:', e);
+    }
   }
 
   async function testGenerate(id: string) {
     await testGenerateVoice(id);
+  }
+
+  function playPreview(voiceId: string, audioId: string) {
+    if (playingAudioId === audioId) {
+      audioRef?.pause();
+      playingAudioId = null;
+      return;
+    }
+    audioRef?.pause();
+    const url = `/api/voices/${voiceId}/audio/${audioId}`;
+    const audio = new Audio(url);
+    audio.onended = () => { playingAudioId = null; };
+    audio.onerror = () => { errorMsg = '播放失败'; playingAudioId = null; };
+    audio.play().catch(() => { errorMsg = '播放失败'; playingAudioId = null; });
+    audioRef = audio;
+    playingAudioId = audioId;
   }
 
   function closeAddModal() {
@@ -126,6 +161,10 @@
       <Plus size={16} /> 新增声音
     </button>
   </div>
+
+  {#if errorMsg}
+    <div class="error-msg"><X size={14} /> {errorMsg}</div>
+  {/if}
 
   <div class="toolbar">
     <div class="search-box">
@@ -182,7 +221,9 @@
 
           <div class="card-actions" onclick={(e) => e.stopPropagation()}>
             {#if voice.reference_audio_ids.length > 0}
-              <button class="btn sm" title="试听"><Play size={12} /> 试听</button>
+              <button class="btn sm" title="试听" onclick={() => playPreview(voice.voice_id, voice.reference_audio_ids[0])}>
+                <Play size={12} /> {playingAudioId === voice.reference_audio_ids[0] ? '播放中' : '试听'}
+              </button>
               <button class="btn sm primary" title="用于生成" onclick={() => gotoGenerateWithVoice(voice.voice_id)}>
                 <Send size={12} /> 使用
               </button>

@@ -20,3 +20,7 @@ export function stopEngine(engineId: string): Promise<EngineDetail> {
 export function healthCheckEngine(engineId: string): Promise<Record<string, unknown>> {
   return api.post<Record<string, unknown>>(`/engines/${engineId}/health-check`, {});
 }
+
+export function reloadEngine(engineId: string): Promise<EngineDetail> {
+  return api.post<EngineDetail>(`/engines/${engineId}/reload`, {});
+}

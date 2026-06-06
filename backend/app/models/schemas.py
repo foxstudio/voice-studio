@@ -116,6 +116,8 @@ class EngineManifest(BaseModel):
     privacy_level: str = "local_only"
     available_versions: list[str] = Field(default_factory=list)
 
+    sample_rate: int | None = Field(default=None, description="Audio sample rate in Hz")
+    max_tokens: int | None = Field(default=None, description="Maximum mel tokens")
 
 class EngineState(BaseModel):
     engine_id: str
@@ -269,6 +271,10 @@ class AppSettings(BaseModel):
     log_dir: str = "~/VoiceStudio/logs"
     device: str = "auto"
     cloud_enabled: bool = False
+    # v2 emotion defaults
+    default_emotion: str = "calm"
+    default_emo_alpha: float = 0.6
+    theme: str = "system"
 
 
 # ── Project / Script Studio ────────────────────────────

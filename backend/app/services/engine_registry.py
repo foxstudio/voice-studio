@@ -7,6 +7,7 @@ import threading
 
 from app.models.schemas import (
     EngineDetail, EngineManifest, EngineState, EngineStatus,
+    EngineType,
 )
 
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -23,15 +24,23 @@ _ENGINES: dict[str, EngineDetail] = {
         manifest=EngineManifest(
             engine_id="indextts",
             name="IndexTTS",
-            display_name="IndexTTS",
+            display_name="IndexTTS v2",
             engine_type="local",
             provider="Index Team",
-            description="中文/英文情绪化语音合成引擎，支持声音克隆",
+            version="v2",
+            description="中文/英文情绪化语音合成引擎（第二代），支持声音克隆与8种情绪控制",
             supported_languages=["zh", "en"],
-            capabilities=["local_inference", "voice_clone", "emotion_reference",
-                          "emotion_vector", "emotion_text", "pinyin_control", "long_text"],
+            capabilities=["local_inference", "voice_clone", "emotion_control",
+                          "emotion_happy", "emotion_sad", "emotion_angry",
+                          "emotion_afraid", "emotion_disgusted", "emotion_melancholic",
+                          "emotion_surprised", "emotion_calm",
+                          "emotion_reference", "emotion_vector", "emotion_text",
+                          "pinyin_control", "long_text"],
+            sample_rate=22050,
+            max_tokens=1815,
             default_use_case="中文/英文情绪化配音",
             privacy_level="local_only",
+            available_versions=["v1", "v2"],
         ),
         state=EngineState(engine_id="indextts", status=EngineStatus.stopped),
     ),
@@ -51,7 +60,29 @@ _ENGINES: dict[str, EngineDetail] = {
         ),
         state=EngineState(engine_id="omnivoice", status=EngineStatus.not_installed),
     ),
-}
+    "indextts-v1": EngineDetail(
+        manifest=EngineManifest(
+            engine_id="indextts-v1",
+            name="IndexTTS",
+            display_name="IndexTTS v1",
+            engine_type=EngineType.local,
+            provider="Index Team",
+            version="v1",
+            description="中文/英文语音合成引擎（第一代），支持声音克隆",
+            supported_languages=["zh", "en"],
+            capabilities=["local_inference", "voice_clone"],
+            sample_rate=24000,
+            max_tokens=800,
+            default_use_case="中文/英文配音",
+            privacy_level="local_only",
+            available_versions=["v1", "v2"],
+        ),
+        state=EngineState(
+            engine_id="indextts-v1",
+            status=EngineStatus.not_installed,
+        ),
+    ),
+    }
 
 
 def list_engines() -> list[EngineDetail]:
@@ -137,3 +168,10 @@ def health_check(engine_id: str) -> dict:
         "status": e.state.status.value,
         "healthy": e.state.status == EngineStatus.loaded,
     }
+
+
+def reload_engine(engine_id: str) -> EngineDetail:
+    """Stop and restart an engine."""
+    stop_engine(engine_id)
+    return start_engine(engine_id)
+

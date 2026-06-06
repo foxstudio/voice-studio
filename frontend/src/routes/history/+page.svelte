@@ -1,13 +1,36 @@
 <script lang="ts">
-  import { listHistory } from '$lib/api';
+  import { listHistory, deleteHistory } from '$lib/api';
   import type { HistoryItem } from '$lib/api';
-  import { Play, Download, Star, Trash2 } from 'lucide-svelte';
+  import { ApiError, NetworkError } from '$lib/api';
+  import { Trash2 } from 'lucide-svelte';
 
   let items = $state<HistoryItem[]>([]);
+  let loading = $state(true);
+  let errorMsg = $state<string | null>(null);
 
   $effect(() => {
-    listHistory().then(d => items = d).catch(() => {});
+    loading = true;
+    errorMsg = null;
+    listHistory()
+      .then(d => items = d)
+      .catch((e: ApiError | NetworkError) => {
+        errorMsg = e.message;
+        console.error('[history] listHistory failed:', e);
+      })
+      .finally(() => loading = false);
   });
+
+  async function handleDelete(resultId: string) {
+    if (!window.confirm('确定要删除这条记录吗？')) return;
+    try {
+      await deleteHistory(resultId);
+      items = items.filter(i => i.result_id !== resultId);
+    } catch (e: unknown) {
+      const msg = e instanceof ApiError || e instanceof NetworkError ? e.message : '删除失败';
+      errorMsg = msg;
+      console.error('[history] deleteHistory failed:', e);
+    }
+  }
 </script>
 
 <svelte:head><title>历史记录 - Voice Studio</title></svelte:head>
@@ -16,7 +39,15 @@
   <h1>历史记录</h1>
   <p class="desc">查看所有生成记录与参数快照</p>
 
-  {#if items.length === 0}
+  {#if loading}
+    <div class="loading">
+      <p>加载中...</p>
+    </div>
+  {:else if errorMsg}
+    <div class="error-banner">
+      <p>加载失败：{errorMsg}</p>
+    </div>
+  {:else if items.length === 0}
     <div class="empty">
       <p>还没有生成记录</p>
       <p class="dim">生成第一条语音后将显示在这里</p>
@@ -29,14 +60,25 @@
             <div class="item-text">{item.input_text}</div>
             <div class="item-meta">
               <span>{item.engine_id}</span>
+              <span>{item.voice_name ?? '—'}</span>
               <span>{item.duration_ms ? `${(item.duration_ms / 1000).toFixed(1)}s` : ''}</span>
               <span>{item.generation_time_ms ? `${item.generation_time_ms}ms` : ''}</span>
+              {#if item.created_at}
+                <span>{new Date(item.created_at).toLocaleString('zh-CN')}</span>
+              {/if}
             </div>
           </div>
           <div class="item-actions">
             {#if item.output_audio_id}
               <audio controls src="/api/history/{item.result_id}/audio" class="audio-mini"></audio>
             {/if}
+            <button
+              class="btn-icon danger"
+              onclick={() => handleDelete(item.result_id)}
+              title="删除"
+            >
+              <Trash2 size={16} />
+            </button>
           </div>
         </div>
       {/each}
@@ -58,4 +100,11 @@
   .item-meta { display: flex; gap: 0.75rem; font-size: 0.75rem; color: var(--color-text-dim); }
   .item-actions { display: flex; align-items: center; gap: 0.5rem; }
   .audio-mini { height: 32px; }
+  .loading { text-align: center; padding: 4rem; color: var(--color-text-dim); }
+  .error-banner { background: var(--color-error-bg, #fee); color: var(--color-error, #c00);
+    padding: 1rem 1.25rem; border-radius: 10px; margin-bottom: 1rem; }
+  .btn-icon { background: none; border: none; cursor: pointer; padding: 0.4rem;
+    border-radius: 6px; display: inline-flex; align-items: center; color: var(--color-text-dim); }
+  .btn-icon.danger:hover { background: var(--color-error-bg, #fee); color: var(--color-error, #c00); }
+
 </style>

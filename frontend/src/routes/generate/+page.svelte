@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { listVoices, uploadVoice, generateAudio, getTask } from '$lib/api';
-  import type { VoiceAsset, GenerateResponse, GenerationTask } from '$lib/api';
+  import { listVoices, uploadVoice, generateAudio, getTask, subscribeTaskUpdates } from '$lib/api';
+  import type { VoiceAsset, GenerateResponse, GenerationTask, Subscription, WsConnectionStatus } from '$lib/api';
   import { Play, Upload, ChevronDown, Loader2, Check, X, Wand2, Pause, Music, Smile, Frown, Hash, Scissors, RotateCcw, Star, Download, Send } from 'lucide-svelte';
 
   // 文本
@@ -37,6 +37,9 @@
   let generating = $state(false);
   let results = $state<GenerationTask[]>([]);
   let voices = $state<VoiceAsset[]>([]);
+  let wsStatus = $state<WsConnectionStatus | 'idle'>('idle');
+  let wsFallbackMessage = $state('');
+  let wsSub: Subscription | null = null;
   let directAudioFile: File | null = $state(null);
   let directAudioId = $state('');
   let isV2 = $derived(engineVersion === 'v2');
@@ -59,6 +62,11 @@
   async function generate() {
     if (!text.trim()) return;
     generating = true;
+    wsStatus = 'connecting';
+    wsFallbackMessage = '';
+    // Close any existing subscription
+    wsSub?.close();
+    wsSub = null;
     try {
       // voice_id is passed directly; backend resolves the file path via voice store
       // (reference_audio_path is NOT set here — backend's _find_reference_audio handles it)
@@ -78,18 +86,65 @@
       else if (emotionMode === 'emotion_text') body.emotion_text = emotionText;
 
       const res = await generateAudio(body as any);
-      // 轮询
-      for (let i = 0; i < 120; i++) {
-        await new Promise(r => setTimeout(r, 1000));
-        const task = await getTask(res.task_id);
+
+      // Subscribe to task progress over WebSocket
+      wsSub = subscribeTaskUpdates(
+        res.task_id,
+        (event): void => {
+          if (event.type === 'done' || event.type === 'error') {
+            results = [event.data, ...results];
+            generating = false;
+            wsSub?.close();
+            wsSub = null;
+            wsStatus = 'idle';
+          }
+        },
+        {
+          onStatusChange: (status): void => {
+            wsStatus = status;
+          },
+          onFallback: (): void => {
+            // WS failed after 3 retries — fall back to polling
+            wsSub = null;
+            startPolling(res.task_id);
+          },
+        }
+      );
+    } catch (e) {
+      console.error(e);
+      generating = false;
+      wsStatus = 'idle';
+    }
+  }
+
+  /** Fallback polling when WebSocket is unavailable. */
+  async function startPolling(taskId: string) {
+    wsFallbackMessage = 'WebSocket 不可用，切换轮询';
+    for (let i = 0; i < 120; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      try {
+        const task = await getTask(taskId);
         if (task.status === 'success' || task.status === 'failed') {
           results = [task, ...results];
-          break;
+          generating = false;
+          wsFallbackMessage = '';
+          return;
         }
+      } catch {
+        // Poll failure — continue retrying
       }
-    } catch (e) { console.error(e); }
-    finally { generating = false; }
+    }
+    generating = false;
+    wsFallbackMessage = '';
   }
+
+  // Clean up WebSocket on unmount
+  $effect(() => {
+    return () => {
+      wsSub?.close();
+      wsSub = null;
+    };
+  });
 
   async function toggleFav(idx: number) {
     results[idx] = {...results[idx], favorite: !results[idx].favorite};
@@ -101,6 +156,17 @@
     engineId = task.engine_id;
     voiceId = task.voice_id || '';
   }
+
+  // ── WS status label ──
+  const wsStatusLabel = $derived.by((): string => {
+    switch (wsStatus) {
+      case 'connecting': return '正在连接…';
+      case 'connected': return '已连接';
+      case 'reconnecting': return '重连中…';
+      case 'fallback': return '已切换至轮询';
+      default: return '';
+    }
+  });
 </script>
 
 <svelte:head><title>单句合成 - Voice Studio</title></svelte:head>
@@ -241,6 +307,12 @@
       <button class="gen-btn" onclick={generate} disabled={generating || !text.trim()}>
         {#if generating}<Loader2 size={16} class="spin" /> 生成中...{:else}<Wand2 size={16} /> 生成语音{/if}
       </button>
+      {#if wsStatus !== 'idle' && wsStatusLabel}
+        <div class="ws-status" class:ws-fallback={wsStatus === 'fallback'}>{wsStatusLabel}</div>
+      {/if}
+      {#if wsFallbackMessage}
+        <div class="ws-fallback-msg">{wsFallbackMessage}</div>
+      {/if}
     </div>
   </div>
 </section>
@@ -289,4 +361,9 @@
   .gen-btn{display:flex;align-items:center;justify-content:center;gap:0.5rem;padding:0.6rem;border-radius:8px;border:none;font-size:0.88rem;font-weight:600;cursor:pointer;background:var(--color-accent);color:white;margin-top:0.4rem}
   .gen-btn:hover{opacity:0.9}.gen-btn:disabled{opacity:0.5;cursor:not-allowed}
   .spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+
+  /* WS connection status */
+  .ws-status{font-size:0.7rem;text-align:center;padding:0.2rem 0.4rem;border-radius:4px;color:var(--color-text-dim)}
+  .ws-status.ws-fallback{color:var(--color-warning);font-weight:600}
+  .ws-fallback-msg{font-size:0.72rem;text-align:center;padding:0.25rem 0.5rem;background:var(--color-warning);color:white;border-radius:6px;margin-top:0.25rem}
 </style>
