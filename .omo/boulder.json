@@ -1,0 +1,115 @@
+{
+  "schema_version": 2,
+  "active_work_id": "002-three-engines-complete-c935c470",
+  "works": {
+    "002-three-engines-complete-c935c470": {
+      "work_id": "002-three-engines-complete-c935c470",
+      "active_plan": "/Users/foxmacstudio/Projects/mlx-indextts/.omo/plans/002-three-engines-complete.md",
+      "plan_name": "002-three-engines-complete",
+      "status": "active",
+      "started_at": "2026-06-06T11:10:42.868Z",
+      "updated_at": "2026-06-06T11:35:59.458Z",
+      "session_ids": [
+        "opencode:ses_16785dc5bffeJOlDv1hmuDhpyV"
+      ],
+      "session_origins": {
+        "opencode:ses_16785dc5bffeJOlDv1hmuDhpyV": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1": {
+          "task_key": "todo:1",
+          "task_label": "1",
+          "task_title": "PyTorch/MLX 共存风险验证 (BLOCKING)",
+          "session_id": "opencode:ses_1635e64e9ffeXe0YBnTF1XBYJ2",
+          "agent": "Sisyphus-Junior",
+          "category": "quick",
+          "updated_at": "2026-06-06T11:16:24.014Z",
+          "started_at": "2026-06-06T11:14:34.829Z",
+          "status": "completed",
+          "ended_at": "2026-06-06T11:16:24.014Z",
+          "elapsed_ms": 109185
+        },
+        "todo:2": {
+          "task_key": "todo:2",
+          "task_label": "2",
+          "task_title": "OmniVoice pip install",
+          "session_id": "opencode:ses_1635998feffevEFrCPrM1C56TL",
+          "agent": "Sisyphus-Junior",
+          "category": "quick",
+          "updated_at": "2026-06-06T11:33:49.457Z",
+          "started_at": "2026-06-06T11:18:06.912Z",
+          "status": "completed",
+          "ended_at": "2026-06-06T11:33:49.457Z",
+          "elapsed_ms": 942545
+        },
+        "todo:4": {
+          "task_key": "todo:4",
+          "task_label": "4",
+          "task_title": "OmniVoice 模型下载验证",
+          "session_id": "opencode:ses_163499975ffe4F1FbsGDiyU6Pw",
+          "agent": "Sisyphus-Junior",
+          "category": "quick",
+          "updated_at": "2026-06-06T11:35:59.458Z",
+          "started_at": "2026-06-06T11:35:59.458Z",
+          "status": "completed",
+          "ended_at": "2026-06-06T11:35:59.458Z",
+          "elapsed_ms": 0
+        }
+      }
+    }
+  },
+  "active_plan": "/Users/foxmacstudio/Projects/mlx-indextts/.omo/plans/002-three-engines-complete.md",
+  "started_at": "2026-06-06T11:10:42.868Z",
+  "status": "active",
+  "updated_at": "2026-06-06T11:35:59.458Z",
+  "session_ids": [
+    "opencode:ses_16785dc5bffeJOlDv1hmuDhpyV"
+  ],
+  "session_origins": {
+    "opencode:ses_16785dc5bffeJOlDv1hmuDhpyV": "direct"
+  },
+  "plan_name": "002-three-engines-complete",
+  "task_sessions": {
+    "todo:1": {
+      "task_key": "todo:1",
+      "task_label": "1",
+      "task_title": "PyTorch/MLX 共存风险验证 (BLOCKING)",
+      "session_id": "opencode:ses_1635e64e9ffeXe0YBnTF1XBYJ2",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-06-06T11:16:24.014Z",
+      "started_at": "2026-06-06T11:14:34.829Z",
+      "status": "completed",
+      "ended_at": "2026-06-06T11:16:24.014Z",
+      "elapsed_ms": 109185
+    },
+    "todo:2": {
+      "task_key": "todo:2",
+      "task_label": "2",
+      "task_title": "OmniVoice pip install",
+      "session_id": "opencode:ses_1635998feffevEFrCPrM1C56TL",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-06-06T11:33:49.457Z",
+      "started_at": "2026-06-06T11:18:06.912Z",
+      "status": "completed",
+      "ended_at": "2026-06-06T11:33:49.457Z",
+      "elapsed_ms": 942545
+    },
+    "todo:4": {
+      "task_key": "todo:4",
+      "task_label": "4",
+      "task_title": "OmniVoice 模型下载验证",
+      "session_id": "opencode:ses_163499975ffe4F1FbsGDiyU6Pw",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-06-06T11:35:59.458Z",
+      "started_at": "2026-06-06T11:35:59.458Z",
+      "status": "completed",
+      "ended_at": "2026-06-06T11:35:59.458Z",
+      "elapsed_ms": 0
+    }
+  },
+  "agent": "atlas"
+}

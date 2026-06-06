@@ -30,6 +30,7 @@ dependencies = [
     "wetext>=0.1.2",
     "psutil>=7.2.2",
     "bigvgan>=2.4.1",
+    "omnivoice>=0.1.5",
 ]
 
 [project.optional-dependencies]
