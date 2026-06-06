@@ -1,0 +1,42 @@
+T12: 三引擎端到端集成测试
+
+改动文件:
+  创建: tests/integration/test_three_engines.py (312行)
+  修复: backend/app/services/tts_engine.py (line 81: version check)
+
+功能:
+  T1 - 引擎注册表 API (5 tests, 始终运行):
+    - list_engines 返回三个引擎
+    - metadata: sample_rate / capabilities / version
+    - get_single_engine / 404 handling
+    - initial_status (not loaded)
+
+  T2 - 引擎生命周期 (3 tests, conditional on model):
+    - start -> loaded -> stop -> stopped
+    - 404 on nonexistent engine
+    - health_check on unloaded engine
+
+  T3 - 生成任务流 (1 test, conditional):
+    - basic generation -> verify duration > 500ms + output file exists
+    - speed control (1.5x)
+    - emotion control (happy)
+    - error: missing reference audio -> failed
+    - error: invalid engine_id -> failed
+    - error: empty text (may pass/fail)
+
+  T4 - 同步 API 端点测试 (1 test):
+    - list_tasks
+    - nonexistent task -> 500 (pre-existing backend behavior)
+
+验证结果:
+  uv run pytest tests/integration/test_three_engines.py -v
+  10 passed, 0 failed in 38.36s
+
+修复的 bug:
+  - tts_engine.py version check: version=="v2" 改为 version in ("v2","indextts")
+    因为 EngineVersion.indextts.value == "indextts", 不是 "v2"
+    不改则 v2 生成进入 v1 代码路径, 调用 model.infer() (不存在的方法)
+
+其他发现 (pre-existing):
+  - GET /api/tasks/nonexistent 返回 500 (ResponseValidationError)
+  - 根因: get_task() return None 但 response_model=GenerationTask
