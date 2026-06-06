@@ -10,8 +10,6 @@ from app.models.schemas import (
     EngineType,
 )
 
-from app.services.adapters.v1_adapter import V1Adapter
-from app.services.adapters.omnivoice_adapter import OmniVoiceAdapter
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
@@ -83,10 +81,6 @@ _ENGINES: dict[str, EngineDetail] = {
     ),
     }
 
-engine_adapter_map: dict[str, type] = {
-    "indextts-v1": V1Adapter,
-    "omnivoice": OmniVoiceAdapter,
-}
 
 
 
@@ -139,18 +133,28 @@ def start_engine(engine_id: str) -> EngineDetail:
                 _engine_sample_rates[engine_id] = sample_rate
                 detail.state.status = EngineStatus.loaded
 
-        elif engine_id in engine_adapter_map:
-            adapter_cls = engine_adapter_map[engine_id]
-            adapter = adapter_cls()
+        elif engine_id == "indextts-v1":
+            from app.services.adapters.v1_adapter import V1Adapter
+            adapter = V1Adapter()
             adapter.health_check()  # validate model availability
             if hasattr(adapter, 'load'):
-                adapter.load()  # load model weights (V1Adapter needs this; OmniVoice lazy-loads)
-
+                adapter.load()
             with _lock:
                 _engine_instances[engine_id] = adapter
                 _engine_sample_rates[engine_id] = adapter.manifest["sample_rate"]
                 detail.state.status = EngineStatus.loaded
-
+        elif engine_id == "omnivoice":
+            from app.services.adapters.omnivoice_adapter import OmniVoiceAdapter
+            adapter = OmniVoiceAdapter()
+            adapter.health_check()  # validate model availability
+            if hasattr(adapter, 'load'):
+                adapter.load()
+            with _lock:
+                _engine_instances[engine_id] = adapter
+                _engine_sample_rates[engine_id] = adapter.manifest["sample_rate"]
+                detail.state.status = EngineStatus.loaded
+        else:
+            raise ValueError(f"Unknown adapter engine: {engine_id}")
     except Exception as exc:
         with _lock:
             detail.state.status = EngineStatus.error
