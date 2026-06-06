@@ -686,7 +686,7 @@ Max Concurrent: 4 (Wave 1 after T1)
   - Message: `feat(fullstack): engine selector + integration tests`
   - Files: `backend/app/routers/` 或 `backend/app/main.py`
 
-- [ ] 10. 前端引擎选择器
+- [x] 10. 前端引擎选择器
 
   **What to do**:
   - 修改 `frontend/src/routes/generate/+page.svelte`
@@ -799,7 +799,7 @@ Max Concurrent: 4 (Wave 1 after T1)
   - Message: `feat(fullstack): engine selector + integration tests`
   - Files: `backend/app/services/engine_registry.py`
 
-- [ ] 12. 三引擎端到端集成测试
+- [x] 12. 三引擎端到端集成测试
 
   **What to do**:
   - 编写集成测试脚本 `tests/integration/test_three_engines.py`

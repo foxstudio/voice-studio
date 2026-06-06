@@ -1,13 +1,20 @@
 <script lang="ts">
-  import { listVoices, uploadVoice, generateAudio, getTask, subscribeTaskUpdates } from '$lib/api';
-  import type { VoiceAsset, GenerateResponse, GenerationTask, Subscription, WsConnectionStatus } from '$lib/api';
+  import { listVoices, uploadVoice, generateAudio, getTask, subscribeTaskUpdates, listEngines } from '$lib/api';
+  import type { VoiceAsset, GenerateResponse, GenerationTask, Subscription, WsConnectionStatus, EngineDetail } from '$lib/api';
   import { Play, Upload, ChevronDown, Loader2, Check, X, Wand2, Pause, Music, Smile, Frown, Hash, Scissors, RotateCcw, Star, Download, Send } from 'lucide-svelte';
 
   // 文本
   let text = $state('');
   let engineId = $state('indextts');
-  let engineVersion = $state('v2');
   let voiceId = $state('');
+
+  // 引擎列表
+  let engines = $state<EngineDetail[]>([]);
+  let selectedEngine = $derived(engines.find(e => e.manifest.engine_id === engineId) ?? null);
+  let engineCapabilities = $derived(selectedEngine?.manifest.capabilities ?? []);
+  let showEmotionPanel = $derived(engineCapabilities.includes('emotion_control'));
+  let showVoiceDesign = $derived(engineCapabilities.includes('voice_design'));
+  let engineVersion = $derived(engineId === 'indextts-v1' ? 'v1' : 'v2');
   let language = $state('zh');
 
   // 情绪
@@ -16,6 +23,9 @@
   let emotionValues = $state<Record<string, number>>({happy:0,angry:0,sad:0,afraid:0,disgusted:0,melancholic:0,surprised:0,calm:0});
   let emotionText = $state('');
   const emotionLabels: Record<string, string> = {happy:'高兴',angry:'愤怒',sad:'悲伤',afraid:'恐惧',disgusted:'反感',melancholic:'低落',surprised:'惊讶',calm:'自然'};
+
+  // OmniVoice
+  let voiceMode = $state('auto');
 
   // 基础参数
   let speed = $state(1.0);
@@ -42,7 +52,6 @@
   let wsSub: Subscription | null = null;
   let directAudioFile: File | null = $state(null);
   let directAudioId = $state('');
-  let isV2 = $derived(engineVersion === 'v2');
 
   // 从 URL 参数获取预选声音
   $effect(() => {
@@ -51,6 +60,16 @@
     if (v) voiceId = v;
   });
   $effect(() => { listVoices().then(d => voices = d).catch(() => {}); });
+
+  // 加载引擎列表
+  $effect(() => {
+    listEngines().then(d => {
+      engines = d;
+      if (d.length > 0 && !d.find(e => e.manifest.engine_id === engineId)) {
+        engineId = d[0].manifest.engine_id;
+      }
+    }).catch(() => {});
+  });
 
   // 文本增强工具
   function insertTag(tag: string) { text += tag; }
@@ -84,6 +103,7 @@
       };
       if (emotionMode === 'emotion_vector') body.emotion_values = emotionValues;
       else if (emotionMode === 'emotion_text') body.emotion_text = emotionText;
+      if (showVoiceDesign) body.voice_mode = voiceMode;
 
       const res = await generateAudio(body as any);
 
@@ -229,11 +249,12 @@
     <!-- 右：参数面板 -->
     <div class="param-panel">
       <div class="param-group">
-        <label>引擎版本</label>
-        <div class="version-toggle">
-          <button class="toggle-btn" class:active={engineVersion === 'v1'} onclick={() => engineVersion = 'v1'}>v1</button>
-          <button class="toggle-btn" class:active={engineVersion === 'v2'} onclick={() => engineVersion = 'v2'}>v2 情绪</button>
-        </div>
+        <label>引擎</label>
+        <select bind:value={engineId}>
+          {#each engines as eng}
+            <option value={eng.manifest.engine_id}>{eng.manifest.display_name}</option>
+          {/each}
+        </select>
       </div>
       <div class="param-group">
         <label>声音</label>
@@ -254,7 +275,7 @@
         <select bind:value={language}><option value="zh">中文</option><option value="en">英文</option></select>
       </div>
 
-      {#if isV2}
+      {#if showEmotionPanel}
         <div class="divider">情绪控制</div>
         <div class="param-group"><label>情绪模式</label>
           <select bind:value={emotionMode}>
@@ -282,6 +303,17 @@
         {/if}
       {/if}
 
+      {#if showVoiceDesign}
+        <div class="divider">语音模式</div>
+        <div class="param-group"><label>语音模式</label>
+          <select bind:value={voiceMode}>
+            <option value="auto">自动</option>
+            <option value="clone">克隆</option>
+            <option value="design">设计</option>
+          </select>
+        </div>
+      {/if}
+
       <div class="divider">基础参数</div>
       <div class="param-group"><label>语速 {speed.toFixed(2)}</label><input type="range" min="0.5" max="2" step="0.05" bind:value={speed} /></div>
       <div class="param-group"><label>Temperature {temperature.toFixed(2)}</label><input type="range" min="0.1" max="2" step="0.05" bind:value={temperature} /></div>
@@ -290,7 +322,7 @@
       <div class="param-group"><label>重复惩罚 {repetitionPenalty.toFixed(1)}</label><input type="range" min="1" max="20" step="0.5" bind:value={repetitionPenalty} /></div>
       <div class="param-group"><label>Seed</label><input type="text" bind:value={seedStr} placeholder="随机" /></div>
 
-      {#if isV2}
+      {#if engineId === 'indextts'}
         <div class="divider">v2 专属</div>
         <div class="param-group"><label>Diffusion Steps {diffusionSteps}</label><input type="range" min="5" max="50" step="1" bind:value={diffusionSteps} /></div>
         <div class="param-group"><label>CFG Rate {cfgRate.toFixed(2)}</label><input type="range" min="0" max="1" step="0.05" bind:value={cfgRate} /></div>
