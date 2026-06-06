@@ -132,16 +132,68 @@ async def synthesize(task: GenerationTask) -> dict:
             )
             engine_id = "indextts-v1"
         elif task.engine_id == "omnivoice":
-            kwargs = dict(
-                text=task.input_text,
-                ref_audio_path=ref_audio,
-                ref_text=params.get("ref_text"),
-                language=params.get("language", "zh"),
-                emotion=params.get("emotion"),
-                speed=params.get("speed", 1.0),
-                output_path=output_path,
+            import requests as _requests
+            import shutil
+
+            gradio_base = "http://127.0.0.1:7861"
+            ref_audio_path = ref_audio
+            language = params.get("language", "zh")
+            ref_text = params.get("ref_text", "")
+            emotion_param = params.get("emotion", "")
+            speed = params.get("speed", 1.0)
+
+            payload = {
+                "data": [
+                    task.input_text,
+                    language,
+                    {"path": ref_audio_path, "meta": {"_type": "gradio.FileData"}} if ref_audio_path else None,
+                    ref_text or "",
+                    emotion_param or "",
+                    32,
+                    2.0,
+                    True,
+                    speed,
+                ]
+            }
+
+            resp = _requests.post(
+                f"{gradio_base}/gradio_api/call/_clone_fn",
+                json=payload,
+                timeout=300
             )
-            engine_id = "omnivoice"
+            resp.raise_for_status()
+            event_id = resp.json()["event_id"]
+
+            result_resp = _requests.get(
+                f"{gradio_base}/gradio_api/call/_clone_fn/{event_id}",
+                timeout=300
+            )
+
+            result_data = None
+            for line in result_resp.text.strip().split("\n"):
+                if line.startswith("data:"):
+                    result_data = _json.loads(line[5:].strip())
+
+            if result_data is None:
+                raise RuntimeError("No data received from Gradio API")
+
+            output_audio_info = result_data[0]
+            if isinstance(output_audio_info, dict) and "path" in output_audio_info:
+                shutil.copy2(output_audio_info["path"], output_path)
+            else:
+                raise RuntimeError(f"Unexpected Gradio output: {output_audio_info}")
+
+            generation_time_ms = int((time.time() - start) * 1000)
+            duration_ms = 0
+            if os.path.exists(output_path):
+                file_size = os.path.getsize(output_path)
+                duration_ms = max(0, int((file_size - 44) / (engine_registry.get_engine_sample_rate(task.engine_id) * 2) * 1000))
+
+            return {
+                "audio_id": audio_id,
+                "duration_ms": duration_ms,
+                "generation_time_ms": generation_time_ms,
+            }
         else:
             raise ValueError(f"Unknown engine: {task.engine_id}")
 
