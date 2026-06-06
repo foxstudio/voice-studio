@@ -82,8 +82,9 @@ class SegmentStatus(str, Enum):
 
 
 class EngineVersion(str, Enum):
-    v1 = "v1"
-    v2 = "v2"
+    indextts_v1 = "indextts-v1"
+    indextts = "indextts"
+    omnivoice = "omnivoice"
 
 
 # ── Emotion ────────────────────────────────────────────
@@ -169,16 +170,18 @@ class VoiceAsset(BaseModel):
 class GenerateRequest(BaseModel):
     text: str
     engine_id: str = "indextts"
-    engine_version: EngineVersion = EngineVersion.v1
+    engine_version: EngineVersion = EngineVersion.indextts
     voice_id: str | None = None
     reference_audio_path: str | None = None
+    ref_audio_path: str | None = None
+    ref_text: str | None = None
     language: str = "zh"
     # 情绪控制（v2 only）
     emotion_mode: EmotionMode = EmotionMode.follow_reference
     emotion_values: dict[str, float] | None = None
     emotion_text: str | None = None
     # v2 直接情绪名（优先级高于 emotion_mode）
-    emotion: Literal["happy", "sad", "angry", "afraid", "disgusted", "melancholic", "surprised", "calm"] | None = Field(default=None, description="v2 direct emotion name")
+    emotion: str | None = Field(default=None, description="Direct emotion name")
     emo_alpha: float = Field(default=0.6, ge=0.0, le=0.8, description="Emotion intensity 0.0-0.8")
     # 基础参数
     speed: float = Field(default=1.0, ge=0.5, le=3.0)
@@ -222,7 +225,7 @@ class GenerationTask(BaseModel):
     task_id: str
     task_type: str = "single"
     engine_id: str
-    engine_version: str = "v1"
+    engine_version: str = "indextts"
     voice_id: str | None = None
     input_text: str
     status: TaskStatus = TaskStatus.pending
@@ -243,7 +246,7 @@ class HistoryItem(BaseModel):
     result_id: str
     task_id: str
     engine_id: str
-    engine_version: str = "v1"
+    engine_version: str = "indextts"
     voice_id: str | None = None
     voice_name: str | None = None
     input_text: str
@@ -259,7 +262,7 @@ class HistoryItem(BaseModel):
 
 class AppSettings(BaseModel):
     default_engine_id: str = "indextts"
-    default_engine_version: str = "v1"
+    default_engine_version: str = "indextts"
     default_language: str = "zh"
     default_output_format: str = "wav"
     model_dir: str = "~/VoiceStudio/models"

@@ -1,0 +1,25 @@
+=== T5: IndexTTS v1 Adapter - Evidence ===
+
+## Files Created/Modified
+- backend/app/services/adapters/__init__.py (updated, 451 bytes)
+- backend/app/services/adapters/v1_adapter.py (new, 18189 bytes)
+- mlx_indextts/convert.py (fixed: config filter, weight split, key remap)
+
+## V1Adapter Interface Tests (ALL PASSED)
+1. manifest: id=indextts-v1, name=IndexTTS 1.5, version=1.5, framework=torch, device=mps, sr=24000, capabilities=['local_inference','voice_clone','pinyin_control']
+2. parameter_schema: 4 params (speed, temperature, max_mel_tokens, ref_audio_path)
+3. runtime_config: sr=24000, device=mps
+4. health_check: healthy=True, model_dir=ok, config_json=ok, safetensors=ok
+5. request_mapper: maps unified schema fields to IndexTTS.infer() kwargs
+6. response_mapper: maps raw result to PRD S8.7 format
+7. error_mapper: maps FileNotFoundError->MODEL_NOT_FOUND, ValueError->INVALID_PARAMETER, RuntimeError->INFERENCE_ERROR
+8. cancel: returns True, get_logs: returns list
+
+## Model Loading Status
+- V1Adapter class: COMPLETE (8/8 interfaces)
+- V1 model loading: pre-existing infrastructure issue
+  - model.safetensors uses unified format; code expects separate gpt/bigvgan files
+  - Key naming mismatch: Sequential wrapping (conv.0.bias vs conv.bias)
+  - BigVGAN filter naming: lowpass.filter vs _filter
+  - Fixed in convert.py: GPTConfig field filtering, weight prefix splitting, conv key remapping
+  - BigVGAN key mapping (887 params vs 998 weights) needs full resolution

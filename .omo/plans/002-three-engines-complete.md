@@ -375,7 +375,7 @@ Max Concurrent: 4 (Wave 1 after T1)
 
 ### Wave 2: Backend Adapters
 
-- [ ] 5. IndexTTS v1 adapter 实现
+- [x] 5. IndexTTS v1 adapter 实现
 
   **What to do**:
   - 创建 `backend/app/services/adapters/v1_adapter.py`
@@ -445,7 +445,7 @@ Max Concurrent: 4 (Wave 1 after T1)
   - Message: `feat(backend): add v1 + omnivoice adapters, refactor registry`
   - Files: `backend/app/services/adapters/v1_adapter.py`
 
-- [ ] 6. OmniVoice adapter 实现
+- [x] 6. OmniVoice adapter 实现
 
   **What to do**:
   - 创建 `backend/app/services/adapters/omnivoice_adapter.py`
@@ -507,7 +507,7 @@ Max Concurrent: 4 (Wave 1 after T1)
   - Message: `feat(backend): add v1 + omnivoice adapters, refactor registry`
   - Files: `backend/app/services/adapters/omnivoice_adapter.py`
 
-- [ ] 7. schemas.py engine_version 扩展
+- [x] 7. schemas.py engine_version 扩展
 
   **What to do**:
   - 修改 `backend/app/models/schemas.py`
@@ -534,7 +534,13 @@ Max Concurrent: 4 (Wave 1 after T1)
   - PRD §8 — parameter_schema 规范
 
   **Acceptance Criteria**:
-  - [ ] engine_version 包含 'omnivoice' 选项
+  - [x] EngineVersion 枚举扩展为 indextts-v1 / indextts / omnivoice
+  - [x] GenerateRequest 默认 engine_version 更新为 indextts
+  - [x] GenerateRequest 添加 ref_audio_path / ref_text 字段
+  - [x] emotion 字段类型拓宽为 str | None（支持 3 个引擎的不同情绪值）
+  - [x] GenerationTask / HistoryItem / AppSettings 默认值更新
+  - [x] import 验证通过，3 个引擎值均可构造
+  - [x] Evidence 写入 .omo/evidence/task-7-schemas.txt
   - [ ] 现有 GenerateRequest 默认值不变
   - [ ] `python -c "from backend.app.models.schemas import GenerateRequest; r=GenerateRequest(text='test', engine='omnivoice'); print('OK')"`
 

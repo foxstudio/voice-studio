@@ -1,0 +1,45 @@
+=== T6 OmniVoice Adapter - Evidence ===
+Timestamp: 2026-06-06
+
+## Smoke Test Results
+
+Model: k2-fsa/OmniVoice (Qwen3-0.6B backbone)
+Device: MPS (Apple Silicon)
+Adapter version: 0.1.5
+
+### Health Check
+- Status: healthy (model cached)
+- Cache: ~/.cache/huggingface/hub/models--k2-fsa--OmniVoice/snapshots/999c332499c708b116876ff5fe1aa5dd15f422ce
+- Size: 3116.1 MB (13 files)
+
+### Model Load Time
+8.8 seconds (first load, weight transfer to MPS)
+
+### Generate Results (auto mode)
+- Text: "Hello world this is OmniVoice"
+- Language: en / Speed: 1.0 / Device: mps
+
+Output:
+- File: .omo/evidence/task-6-omni-adapter-smoke.wav
+- Sample rate: 24000 Hz           [PASS]
+- Duration: 2120 ms               [PASS - >500ms]
+- Peak amplitude: 0.5000          [PASS - >0.01]
+- File size: 99.4 KB
+- Inference time: 1668ms
+- Overall time (incl load): 10.5s
+
+### Audio Assertions (all PASS)
+[PASS] sample_rate == 24000
+[PASS] duration > 500ms (2120ms)
+[PASS] peak > 0.01 (0.5000)
+
+## Known Limitations
+- Voice clone requires openai/whisper-large-v3-turbo ASR (~809MB, not cached)
+- Auto mode (no ref_audio) works fully
+
+## Adapter Interface Verification
+- manifest: id=omnivoice, name=OmniVoice, version=0.1.5, framework=pytorch, device=mps
+- capabilities: [local_inference, voice_clone, multilingual, emotion_control, nonverbal_tags]
+- All 9 PRD 8 methods: manifest / parameter_schema / runtime_config / request_mapper /
+  response_mapper / health_check / generate / cancel / get_logs / error_mapper
+- Error mapper: 9 exception types mapped to PRD 25.1 codes

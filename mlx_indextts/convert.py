@@ -394,8 +394,13 @@ def load_mlx_model(
     # Check if model is quantized
     quantize_bits = config_dict.get("quantize_bits", None)
 
-    # Reconstruct config
+    # Reconstruct config (filter unknown fields from saved JSON)
+    import dataclasses
     from mlx_indextts.config import GPTConfig, BigVGANConfig, MelConfig, ConformerConfig
+
+    def _filter_fields(data: dict, dc) -> dict:
+        known = {f.name for f in dataclasses.fields(dc)}
+        return {k: v for k, v in data.items() if k in known}
 
     gpt_dict = config_dict.get("gpt", {})
     cond_module = gpt_dict.pop("condition_module", None)
@@ -403,9 +408,16 @@ def load_mlx_model(
         cond_module = ConformerConfig(**cond_module)
 
     config = IndexTTSConfig(
-        gpt=GPTConfig(**gpt_dict, condition_module=cond_module),
-        bigvgan=BigVGANConfig(**config_dict.get("bigvgan", {})),
-        mel=MelConfig(**config_dict.get("mel", {})),
+        gpt=GPTConfig(
+            **_filter_fields(gpt_dict, GPTConfig),
+            condition_module=cond_module,
+        ),
+        bigvgan=BigVGANConfig(
+            **_filter_fields(config_dict.get("bigvgan", {}), BigVGANConfig)
+        ),
+        mel=MelConfig(
+            **_filter_fields(config_dict.get("mel", {}), MelConfig)
+        ),
         bpe_model=config_dict.get("bpe_model", "tokenizer.model"),
         gpt_checkpoint=config_dict.get("gpt_checkpoint", "gpt.safetensors"),
         bigvgan_checkpoint=config_dict.get("bigvgan_checkpoint", "bigvgan.safetensors"),
@@ -413,8 +425,37 @@ def load_mlx_model(
         sample_rate=config_dict.get("sample_rate", 24000),
     )
 
-    # Load weights
-    gpt_weights = mx.load(str(model_dir / "gpt.safetensors"))
-    bigvgan_weights = mx.load(str(model_dir / "bigvgan.safetensors"))
+    # Load weights from unified or separate safetensors
+    model_st = model_dir / "model.safetensors"
+    gpt_st = model_dir / "gpt.safetensors"
+    bigvgan_st = model_dir / "bigvgan.safetensors"
+
+    if model_st.exists():
+        all_weights = mx.load(str(model_st))
+        # Split by prefix: bigvgan.* -> bigvgan, rest -> gpt
+        # Fix key naming: saved model uses conv.0.* (Sequential wrap),
+        # but Python model expects conv.* (direct attribute).
+        gpt_weights = {}
+        bigvgan_weights = {}
+        for key, val in all_weights.items():
+            if key.startswith("bigvgan."):
+                # Strip bigvgan. prefix for direct BigVGAN model loading
+                bigvgan_weights[key[len("bigvgan."):]] = val
+            else:
+                # Rewrite conditioning_encoder.embed.{conv,out}.0.* -> .*
+                fixed = key
+                for prefix in (
+                    "conditioning_encoder.embed.conv.0.",
+                    "conditioning_encoder.embed.out.0.",
+                ):
+                    if key.startswith(prefix):
+                        fixed = key.replace(".0.", ".")
+                        break
+                gpt_weights[fixed] = val
+    elif gpt_st.exists():
+        gpt_weights = mx.load(str(gpt_st))
+        bigvgan_weights = mx.load(str(bigvgan_st))
+    else:
+        raise FileNotFoundError(f"No safetensors found in {model_dir}")
 
     return config, gpt_weights, bigvgan_weights, quantize_bits

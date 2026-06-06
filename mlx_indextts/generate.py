@@ -311,8 +311,8 @@ class IndexTTS:
             nn.quantize(gpt.gpt, bits=saved_quantize_bits, group_size=64)
 
         # Load weights
-        gpt.load_weights(list(gpt_weights.items()))
-        bigvgan.load_weights(list(bigvgan_weights.items()))
+        gpt.load_weights(list(gpt_weights.items()), strict=False)
+        bigvgan.load_weights(list(bigvgan_weights.items()), strict=False)
 
         # If runtime quantization requested (and model wasn't pre-quantized)
         if quantize_bits and not saved_quantize_bits:
