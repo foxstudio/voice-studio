@@ -145,19 +145,25 @@ async def synthesize(task: GenerationTask) -> dict:
             payload = {
                 "data": [
                     task.input_text,
-                    language,
-                    {"path": ref_audio_path, "meta": {"_type": "gradio.FileData"}} if ref_audio_path else None,
-                    ref_text or "",
-                    emotion_param or "",
+                    "Auto",
                     32,
                     2.0,
                     True,
                     speed,
+                    None,
+                    True,
+                    True,
+                    "Auto",
+                    "Auto",
+                    "Auto",
+                    "Auto",
+                    "Auto",
+                    "Auto",
                 ]
             }
 
             resp = _requests.post(
-                f"{gradio_base}/gradio_api/call/_clone_fn",
+                f"{gradio_base}/gradio_api/call/_design_fn",
                 json=payload,
                 timeout=300
             )
@@ -165,10 +171,9 @@ async def synthesize(task: GenerationTask) -> dict:
             event_id = resp.json()["event_id"]
 
             result_resp = _requests.get(
-                f"{gradio_base}/gradio_api/call/_clone_fn/{event_id}",
+                f"{gradio_base}/gradio_api/call/_design_fn/{event_id}",
                 timeout=300
             )
-
             result_data = None
             for line in result_resp.text.strip().split("\n"):
                 if line.startswith("data:"):
