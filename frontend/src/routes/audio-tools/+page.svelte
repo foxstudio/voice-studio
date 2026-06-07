@@ -420,6 +420,37 @@
 		return '原生时间戳';
 	}
 
+	function timestampBadgeClass(record: TranscriptionRecord) {
+		if (record.segments.length) return 'ok';
+		return record.has_source_audio ? 'warn' : '';
+	}
+
+	function timestampDetail(record: TranscriptionRecord) {
+		if (record.segments.length) {
+			if (record.timestamp_source_engine_id === 'qwen3-forced-aligner-0.6B') {
+				return '已完成精准 forced align，可直接导出 SRT。';
+			}
+			if (record.timestamp_mode === 'native') {
+				return '引擎原生返回分段时间戳，可导出 SRT。';
+			}
+			if (record.timestamp_source_engine_id === 'qwen3-asr-mlx') {
+				return '已用本地 Qwen 快速补齐时间戳，适合字幕初稿。';
+			}
+			if (record.timestamp_mode === 'supplemented') {
+				return '已补齐时间戳，可导出 SRT。';
+			}
+			return '已有分段时间戳，可导出 SRT。';
+		}
+
+		if (!record.has_source_audio) return '仅有文字稿；没有保留源音频，不能补 SRT。';
+		const preciseIssue = forcedAlignIssue(record);
+		if (timestampStrategy === 'forced_aligner' && preciseIssue) return preciseIssue;
+		if (timestampStrategy === 'forced_aligner') return '保留了源音频，符合当前精准 forced align 条件。';
+		if (timestampStrategy === 'auto') return '保留了源音频，可自动尝试精准对齐，失败时回退本地快速补齐。';
+		if (preciseIssue) return '保留了源音频；当前策略会跳过精准对齐，改用本地快速补齐。';
+		return '保留了源音频，可用本地快速补齐生成字幕时间戳。';
+	}
+
 	function timestampStrategyLabel(strategy: TimestampStrategy) {
 		return {
 			auto: '自动',
@@ -502,21 +533,31 @@
 	async function batchSupplementSelectedTranscriptions() {
 		if (!selectedTranscriptionIds.length) return;
 		const selectedRecords = selectedTranscriptions;
-		const preciseEligibleIds =
+		const recordsNeedingTimestamps = selectedRecords.filter((item) => canSupplement(item));
+		const skippedNonActionable = selectedRecords.length - recordsNeedingTimestamps.length;
+		const eligibleRecords =
 			timestampStrategy === 'forced_aligner'
-				? selectedRecords.filter((item) => !forcedAlignIssue(item)).map((item) => item.transcription_id)
-				: selectedTranscriptionIds;
-		if (timestampStrategy === 'forced_aligner' && !preciseEligibleIds.length) {
-			asrError = '当前选择里没有符合精准 forced align 条件的记录。';
+				? recordsNeedingTimestamps.filter((item) => !forcedAlignIssue(item))
+				: recordsNeedingTimestamps;
+		const skippedPreciseIssue =
+			timestampStrategy === 'forced_aligner'
+				? recordsNeedingTimestamps.length - eligibleRecords.length
+				: 0;
+		if (!eligibleRecords.length) {
+			asrError =
+				timestampStrategy === 'forced_aligner'
+					? '当前选择里没有需要补时间戳且符合精准 forced align 条件的记录。'
+					: '当前选择里没有需要补时间戳且保留源音频的记录。';
 			return;
 		}
 		supplementingTimestamps = true;
 		asrError = '';
 		try {
-			if (timestampStrategy === 'forced_aligner' && preciseEligibleIds.length < selectedTranscriptionIds.length) {
-				asrInfo = `已跳过 ${selectedTranscriptionIds.length - preciseEligibleIds.length} 条不符合精准对齐条件的记录。`;
+			const skippedTotal = skippedNonActionable + skippedPreciseIssue;
+			if (skippedTotal) {
+				asrInfo = `已跳过 ${skippedTotal} 条：已有时间戳、缺少源音频或不符合精准对齐条件。`;
 			}
-			const updated = await Api.batchSupplementTranscriptionTimestamps(preciseEligibleIds, {
+			const updated = await Api.batchSupplementTranscriptionTimestamps(eligibleRecords.map((item) => item.transcription_id), {
 				strategy: timestampStrategy
 			});
 			const preciseCount = updated.filter(
@@ -525,7 +566,7 @@
 			const coarseCount = updated.filter(
 				(item) => item.timestamp_source_engine_id === 'qwen3-asr-mlx'
 			).length;
-			asrInfo = `已更新 ${updated.length} 条转写记录：精准对齐 ${preciseCount} 条，粗补 ${coarseCount} 条`;
+			asrInfo = `已更新 ${updated.length} 条转写记录：精准对齐 ${preciseCount} 条，粗补 ${coarseCount} 条${skippedTotal ? `；跳过 ${skippedTotal} 条` : ''}`;
 			if (transcript) {
 				const found = updated.find((item) => item.transcription_id === transcript?.transcription_id);
 				if (found) transcript = found;
@@ -878,18 +919,16 @@
 						<strong>{transcript.filename}</strong>
 						<div class="row wrap">
 							<span class="badge ok">{transcript.language}</span>
-							<span class="badge">{timestampBadge(transcript)}</span>
+							<span class={`badge ${timestampBadgeClass(transcript)}`}>{timestampBadge(transcript)}</span>
 						</div>
 					</div>
-					{#if transcript.timestamp_source_engine_id}
-						<p class="muted">
-							当前时间戳来源：{transcript.timestamp_source_engine_id === 'qwen3-forced-aligner-0.6B'
-								? 'Qwen forced align 精准对齐'
-								: transcript.timestamp_source_engine_id === 'qwen3-asr-mlx'
-									? '本地 Qwen 快速补齐'
-									: transcript.timestamp_source_engine_id}
-						</p>
-					{/if}
+					<div class="timestamp-note">
+						<span class={`badge ${timestampBadgeClass(transcript)}`}>{timestampBadge(transcript)}</span>
+						<p>{timestampDetail(transcript)}</p>
+						{#if transcript.timestamp_source_engine_id}
+							<small>来源：{transcript.timestamp_source_engine_id}</small>
+						{/if}
+					</div>
 					<div class="row wrap">
 						<a class="btn" href={asrExportHref(transcript.transcription_id, 'txt')}><Download size={15} /> TXT</a>
 						{#if transcript.segments.length}
@@ -910,18 +949,6 @@
 						{/if}
 						<button class="btn" onclick={() => copyTranscript(transcript!.text)}><Copy size={15} /> 复制文字稿</button>
 					</div>
-					{#if !transcript.segments.length}
-						<p class="muted">
-							{#if canSupplement(transcript)}
-								这条记录保留了源音频。当前策略是“{timestampStrategyLabel(timestampStrategy)}”，{timestampStrategyHint()}
-							{:else}
-								当前只有文字稿，暂时还不能补时间戳。
-							{/if}
-						</p>
-						{#if canSupplement(transcript) && forcedAlignIssue(transcript)}
-							<p class="badge">{timestampStrategy === 'forced_aligner' ? forcedAlignIssue(transcript) : '这条记录不适合精准对齐时，会自动回退到本地快速补齐。'}</p>
-						{/if}
-					{/if}
 					{#if copyMessage}<p class="badge ok">{copyMessage}</p>{/if}
 					<div class="field">
 						<label for="import-project">导入脚本项目</label>
@@ -1125,14 +1152,15 @@
 									</div>
 									<span class="badge badge-kind">{engineTypeLabel(item.engine_id)}</span>
 								</div>
-								<div class="row wrap">
-									<span class="muted">
-										{engineMap.get(item.engine_id)?.manifest.display_name ?? item.engine_id}
-										· {item.language}
-										· {timestampBadge(item)}
-										{#if item.segments.length} · {item.segments.length} 段{/if}
-										{#if selectedTaskForRecord(item)?.status} · {asrTaskStatusLabel(selectedTaskForRecord(item)!.status)}{/if}
-									</span>
+								<div class="record-meta">
+									<span>{engineMap.get(item.engine_id)?.manifest.display_name ?? item.engine_id}</span>
+									<span>{item.language}</span>
+									<span class={`badge compact ${timestampBadgeClass(item)}`}>{timestampBadge(item)}</span>
+									{#if item.segments.length}<span>{item.segments.length} 段</span>{/if}
+									{#if selectedTaskForRecord(item)?.status}<span>{asrTaskStatusLabel(selectedTaskForRecord(item)!.status)}</span>{/if}
+								</div>
+								<p class="timestamp-detail">{timestampDetail(item)}</p>
+								<div class="row wrap record-actions">
 									<button class="btn" onclick={() => openTranscription(item.transcription_id)}>查看结果</button>
 									<button class="btn" onclick={() => importTranscriptionIdsToProject([item.transcription_id])} disabled={!selectedImportProject}>
 										<Import size={15} /> 导入
@@ -1154,7 +1182,7 @@
 										<Trash2 size={15} /> 删除
 									</button>
 								</div>
-								<p class="muted">{item.text}</p>
+								<p class="muted transcription-snippet">{item.text}</p>
 							</article>
 						{/each}
 					</div>
@@ -1316,6 +1344,30 @@
 		white-space: pre-wrap;
 	}
 
+	.timestamp-note {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: 6px 8px;
+		align-items: center;
+		padding: 9px 10px;
+		border: 1px solid rgba(255, 255, 255, 0.06);
+		border-radius: 7px;
+		background: rgba(255, 255, 255, 0.025);
+	}
+
+	.timestamp-note p,
+	.timestamp-note small {
+		margin: 0;
+		color: var(--muted);
+		font-size: 12px;
+		line-height: 1.45;
+	}
+
+	.timestamp-note small {
+		grid-column: 2;
+		opacity: 0.82;
+	}
+
 	.transcript-segments {
 		border-top: 1px solid var(--line);
 		padding-top: 12px;
@@ -1360,6 +1412,47 @@
 	.record.active {
 		border-color: var(--accent);
 		box-shadow: inset 0 0 0 1px rgba(79, 156, 249, 0.2);
+	}
+
+	.record-meta {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex-wrap: wrap;
+		color: var(--muted);
+		font-size: 12px;
+	}
+
+	.record-meta > span:not(.badge) {
+		display: inline-flex;
+		align-items: center;
+		min-height: 20px;
+		padding: 1px 0;
+	}
+
+	.badge.compact {
+		padding: 1px 6px;
+		font-size: 11px;
+		line-height: 1.35;
+	}
+
+	.timestamp-detail {
+		color: #b7c1cf;
+		font-size: 12px;
+		line-height: 1.45;
+	}
+
+	.record-actions {
+		gap: 6px;
+	}
+
+	.transcription-snippet {
+		display: -webkit-box;
+		line-clamp: 2;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+		line-height: 1.5;
 	}
 
 	.mode-switch {
