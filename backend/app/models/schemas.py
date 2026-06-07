@@ -310,6 +310,7 @@ class BatchSegmentInput(BaseModel):
     voice_design_prompt: str | None = None
     mimo_voice: str | None = None
     speed: float | None = Field(default=None, ge=0.5, le=3.0)
+    parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 class BatchGenerateRequest(BaseModel):
@@ -403,6 +404,7 @@ class Role(BaseModel):
     default_language: str = "zh"
     default_emotion: str | None = None
     default_speed: float = 1.0
+    default_parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 class SegmentStatus(str, Enum):
@@ -426,12 +428,13 @@ class ScriptSegment(BaseModel):
     engine_id: str | None = None
     language: str = "zh"
     emotion: str | None = None
-    speed: float = 1.0
+    speed: float | None = None
     status: SegmentStatus = SegmentStatus.empty
     result_audio_id: str | None = None
     result_id: str | None = None
     error_message: str | None = None
     locked: bool = False
+    parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProjectCreate(BaseModel):
@@ -453,6 +456,7 @@ class Project(BaseModel):
     name: str
     description: str = ""
     default_engine_id: str | None = "indextts-v2"
+    parameters: dict[str, Any] = Field(default_factory=dict)
     roles: list[Role] = Field(default_factory=list)
     segments: list[ScriptSegment] = Field(default_factory=list)
     created_at: str = Field(default_factory=now_iso)

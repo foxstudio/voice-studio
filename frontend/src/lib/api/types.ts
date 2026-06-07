@@ -203,6 +203,8 @@ export interface BatchSegmentInput {
 	audio?: string | null;
 	engine_id?: string | null;
 	voice_id?: string | null;
+	reference_audio_path?: string | null;
+	ref_text?: string | null;
 	language?: string | null;
 	emotion?: string | null;
 	emotion_text?: string | null;
@@ -210,6 +212,7 @@ export interface BatchSegmentInput {
 	voice_design_prompt?: string | null;
 	mimo_voice?: string | null;
 	speed?: number | null;
+	parameters?: Record<string, unknown>;
 }
 
 export interface BatchTask {
@@ -288,6 +291,7 @@ export interface Role {
 	default_language: string;
 	default_emotion: string | null;
 	default_speed: number;
+	default_parameters: Record<string, unknown>;
 }
 
 export interface ScriptSegment {
@@ -301,12 +305,13 @@ export interface ScriptSegment {
 	engine_id: string | null;
 	language: string;
 	emotion: string | null;
-	speed: number;
+	speed: number | null;
 	status: 'empty' | 'ready' | 'queued' | 'generating' | 'completed' | 'failed' | 'locked';
 	result_audio_id: string | null;
 	result_id: string | null;
 	error_message: string | null;
 	locked: boolean;
+	parameters: Record<string, unknown>;
 }
 
 export interface Project {
@@ -314,6 +319,7 @@ export interface Project {
 	name: string;
 	description: string;
 	default_engine_id: string | null;
+	parameters: Record<string, unknown>;
 	roles: Role[];
 	segments: ScriptSegment[];
 	created_at: string;

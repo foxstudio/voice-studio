@@ -11,8 +11,8 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
-from app.models.schemas import AppSettings  # noqa: E402
-from app.services import batch_queue, community_voice_pack_store, database, settings_store, voice_aliases, voice_store  # noqa: E402
+from app.models.schemas import AppSettings, Project, Role, ScriptSegment  # noqa: E402
+from app.services import batch_queue, community_voice_pack_store, database, settings_store, task_queue, voice_aliases, voice_store  # noqa: E402
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -131,6 +131,41 @@ def test_batch_endpoint_accepts_audio_segments_shape(tmp_path: Path, monkeypatch
     assert fetched.json()["batch_task_id"] == data["batch_task_id"]
 
 
+def test_batch_segment_parameters_are_passed_to_runner(tmp_path: Path):
+    client = _client(tmp_path)
+    req = batch_queue.normalize_payload(
+        {
+            "engine_id": "indextts-v2",
+            "voice_id": "voice-1",
+            "parameters": {"temperature": 0.6, "top_p": 0.7},
+            "segments": [
+                {
+                    "segment_id": "seg-1",
+                    "text": "第一段。",
+                    "speed": 1.1,
+                    "parameters": {"temperature": 0.42, "top_k": 12, "max_text_tokens_per_segment": 80},
+                }
+            ],
+        }
+    )
+    batch = client.post(
+        "/api/batches/generate",
+        json={
+            "engine_id": "indextts-v2",
+            "voice_id": "voice-1",
+            "segments": [{"segment_id": "seg-1", "text": "第一段。"}],
+        },
+    ).json()
+    runner_segments = batch_queue._runner_segments(req, batch_queue.BatchTask(**batch), tmp_path)
+
+    params = runner_segments[0]["parameters"]
+    assert params["temperature"] == 0.42
+    assert "top_p" not in params
+    assert params["top_k"] == 12
+    assert params["max_text_tokens_per_segment"] == 80
+    assert params["speed"] == 1.1
+
+
 def test_project_segments_can_store_imported_transcript_timestamps(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "字幕项目", "description": ""}).json()
@@ -161,6 +196,57 @@ def test_project_segments_can_store_imported_transcript_timestamps(tmp_path: Pat
     saved = resp.json()["segments"][0]
     assert saved["source_start_ms"] == 0
     assert saved["source_end_ms"] == 1800
+
+
+def test_project_segment_parameters_override_role_defaults(tmp_path: Path, monkeypatch):
+    captured = []
+
+    async def fake_submit(req, task_type="single", project_id=None, segment_id=None):
+        captured.append(req)
+        return "task-1"
+
+    monkeypatch.setattr("app.services.task_queue.submit", fake_submit)
+    project = Project(
+        project_id="project-1",
+        name="参数项目",
+        default_engine_id="indextts-v2",
+        parameters={"temperature": 0.6, "top_p": 0.7, "max_text_tokens_per_segment": 120},
+        roles=[
+            Role(
+                role_id="role-1",
+                name="旁白",
+                default_engine_id="indextts-v2",
+                default_voice_id="voice-1",
+                default_emotion="calm",
+                default_speed=0.95,
+                default_parameters={"temperature": 0.5, "emo_alpha": 0.4},
+            )
+        ],
+        segments=[
+            ScriptSegment(
+                segment_id="seg-1",
+                index=0,
+                text="需要生成的段落。",
+                role_id="role-1",
+                parameters={"temperature": 0.33, "style_instruction": "更有故事感", "output_format": "mp3"},
+            )
+        ],
+    )
+
+    import asyncio
+
+    task_ids = asyncio.run(task_queue.submit_project(project))
+
+    assert task_ids == ["task-1"]
+    assert len(captured) == 1
+    req = captured[0]
+    assert req.temperature == 0.33
+    assert req.top_p == 0.7
+    assert req.emo_alpha == 0.4
+    assert req.style_instruction == "更有故事感"
+    assert req.output_format == "mp3"
+    assert req.voice_id == "voice-1"
+    assert req.speed == 0.95
 
 
 def test_project_imports_transcription_segments_and_plain_text(tmp_path: Path):

@@ -204,7 +204,8 @@ def _runner_segments(req: BatchGenerateRequest, batch: BatchTask, output_dir: Pa
     for index, segment in enumerate(req.segments):
         result = batch.segments[index]
         output_path = output_dir / (result.audio or f"{result.segment_id}.{req.output_format}")
-        params = {
+        params = dict(segment.parameters)
+        explicit_params = {
             "speed": segment.speed,
             "emotion": segment.emotion,
             "emotion_text": segment.emotion_text,
@@ -215,6 +216,7 @@ def _runner_segments(req: BatchGenerateRequest, batch: BatchTask, output_dir: Pa
             "reference_audio": segment.reference_audio_path,
             "ref_text": segment.ref_text,
         }
+        params.update({key: value for key, value in explicit_params.items() if value is not None})
         runner_segments.append(
             {
                 "segment_id": result.segment_id,

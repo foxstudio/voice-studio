@@ -162,18 +162,41 @@ async def submit_project(project: Project) -> list[str]:
         if not seg.text.strip() or seg.locked:
             continue
         role = next((r for r in project.roles if r.role_id == seg.role_id), None)
-        req = GenerateRequest(
-            text=seg.text,
-            engine_id=seg.engine_id or (role.default_engine_id if role else None) or project.default_engine_id or "indextts-v2",
-            voice_id=seg.voice_id or (role.default_voice_id if role else None),
-            language=seg.language or (role.default_language if role else "zh"),
-            emotion=seg.emotion or (role.default_emotion if role else None),
-            speed=seg.speed or (role.default_speed if role else 1.0),
-        )
+        req = _request_from_segment(project, seg, role)
         seg.status = SegmentStatus.queued
         task_ids.append(await submit(req, task_type="segment", project_id=project.project_id, segment_id=seg.segment_id))
     project_store.save_project(project)
     return task_ids
+
+
+def _request_from_segment(project: Project, seg: ScriptSegment, role) -> GenerateRequest:
+    values = GenerateRequest(
+        text=seg.text,
+        engine_id=seg.engine_id or (role.default_engine_id if role else None) or project.default_engine_id or "indextts-v2",
+        voice_id=seg.voice_id or (role.default_voice_id if role else None),
+        language=seg.language or (role.default_language if role else "zh"),
+        emotion=seg.emotion or (role.default_emotion if role else None),
+        speed=seg.speed or (role.default_speed if role else 1.0),
+    ).model_dump()
+    merged_params = {
+        **project.parameters,
+        **(role.default_parameters if role else {}),
+        **seg.parameters,
+    }
+    for key, value in merged_params.items():
+        if value is not None:
+            values[key] = value
+    values.update(
+        {
+            "text": seg.text,
+            "engine_id": seg.engine_id or values.get("engine_id") or project.default_engine_id or "indextts-v2",
+            "voice_id": seg.voice_id or values.get("voice_id"),
+            "language": seg.language or values.get("language") or "zh",
+            "emotion": seg.emotion or values.get("emotion"),
+            "speed": seg.speed or values.get("speed") or 1.0,
+        }
+    )
+    return GenerateRequest(**values)
 
 
 def cancel_task(task_id: str) -> dict:
