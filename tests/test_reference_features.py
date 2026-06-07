@@ -161,3 +161,73 @@ def test_project_segments_can_store_imported_transcript_timestamps(tmp_path: Pat
     saved = resp.json()["segments"][0]
     assert saved["source_start_ms"] == 0
     assert saved["source_end_ms"] == 1800
+
+
+def test_project_imports_transcription_segments_and_plain_text(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "转写导入项目", "description": ""}).json()
+
+    timed_id = "timed-asr"
+    plain_id = "plain-asr"
+    database.upsert(
+        "transcriptions",
+        timed_id,
+        {
+            "transcription_id": timed_id,
+            "engine_id": "qwen3-asr-mlx",
+            "filename": "timed.wav",
+            "language": "zh",
+            "text": "第一句。第二句。",
+            "segments": [
+                {"start_ms": 0, "end_ms": 1200, "text": "第一句。", "language": "Chinese"},
+                {"start_ms": 1200, "end_ms": 2400, "text": "第二句。", "language": "Chinese"},
+            ],
+            "has_source_audio": True,
+            "timestamp_mode": "native",
+            "timestamp_source_engine_id": "qwen3-asr-mlx",
+            "duration_ms": 2400,
+            "size_bytes": 10,
+            "usage_seconds": None,
+            "provider_response_id": None,
+            "created_at": "2026-06-08T00:00:00",
+        },
+        "created_at",
+    )
+    database.upsert(
+        "transcriptions",
+        plain_id,
+        {
+            "transcription_id": plain_id,
+            "engine_id": "mimo-v2.5-asr",
+            "filename": "plain.wav",
+            "language": "auto",
+            "text": "第三句。第四句！",
+            "segments": [],
+            "has_source_audio": True,
+            "timestamp_mode": "none",
+            "timestamp_source_engine_id": None,
+            "duration_ms": 1800,
+            "size_bytes": 10,
+            "usage_seconds": None,
+            "provider_response_id": None,
+            "created_at": "2026-06-08T00:01:00",
+        },
+        "created_at",
+    )
+
+    resp = client.post(
+        f"/api/projects/{project['project_id']}/transcriptions/import",
+        json={"transcription_ids": [timed_id, plain_id]},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["imported_count"] == 4
+    assert data["skipped_count"] == 0
+    segments = data["project"]["segments"]
+    assert [segment["text"] for segment in segments] == ["第一句。", "第二句。", "第三句。", "第四句！"]
+    assert segments[0]["source_start_ms"] == 0
+    assert segments[1]["source_end_ms"] == 2400
+    assert segments[2]["source_start_ms"] is None
+    assert segments[2]["language"] == "zh"
+    assert [segment["index"] for segment in segments] == [0, 1, 2, 3]

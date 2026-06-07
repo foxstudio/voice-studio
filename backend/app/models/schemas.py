@@ -440,6 +440,14 @@ class ProjectCreate(BaseModel):
     default_engine_id: str | None = None
 
 
+class ProjectTranscriptionImportRequest(BaseModel):
+    transcription_ids: list[str] = Field(default_factory=list)
+    mode: Literal["append", "replace"] = "append"
+    role_id: str | None = None
+    default_engine_id: str | None = None
+    default_voice_id: str | None = None
+
+
 class Project(BaseModel):
     project_id: str = Field(default_factory=new_id)
     name: str
@@ -449,6 +457,12 @@ class Project(BaseModel):
     segments: list[ScriptSegment] = Field(default_factory=list)
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
+
+
+class ProjectTranscriptionImportResponse(BaseModel):
+    project: Project
+    imported_count: int = 0
+    skipped_count: int = 0
 
 
 class ExportRequest(BaseModel):

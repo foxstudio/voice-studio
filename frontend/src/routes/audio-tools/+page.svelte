@@ -4,7 +4,6 @@
 		EngineDetail,
 		HistoryItem,
 		Project,
-		ScriptSegment,
 		TranscriptionRecord,
 		TranscriptionSegment,
 		TranscriptionTask
@@ -366,47 +365,31 @@
 
 	async function importTranscriptToProject() {
 		if (!transcript || !selectedImportProject) return;
-		const role = selectedImportProject.roles[0];
-		const base = selectedImportProject.segments.length;
-		const language = transcript.language === 'auto' ? 'zh' : transcript.language;
-		const pieces = transcript.segments.length
-			? transcript.segments.map((segment) => ({
-					text: segment.text,
-					source_start_ms: segment.start_ms,
-					source_end_ms: segment.end_ms
-				}))
-			: splitTranscriptText(transcript.text).map((text) => ({
-					text,
-					source_start_ms: null,
-					source_end_ms: null
-				}));
-		const imported: ScriptSegment[] = [
-			...selectedImportProject.segments,
-			...pieces.map((piece, index) => ({
-				segment_id: crypto.randomUUID().slice(0, 12),
-				index: base + index,
-				text: piece.text,
-				source_start_ms: piece.source_start_ms,
-				source_end_ms: piece.source_end_ms,
-				role_id: role?.role_id ?? null,
-				voice_id: role?.default_voice_id ?? null,
-				engine_id:
-					role?.default_engine_id ??
-					selectedImportProject.default_engine_id ??
-					'indextts-v2',
-				language,
-				emotion: role?.default_emotion ?? 'calm',
-				speed: role?.default_speed ?? 1,
-				status: 'ready' as const,
-				result_audio_id: null,
-				result_id: null,
-				error_message: null,
-				locked: false
-			}))
-		];
-		await Api.putSegments(selectedImportProject.project_id, imported);
-		importMessage = `已导入 ${pieces.length} 段到 ${selectedImportProject.name}`;
-		await refresh();
+		await importTranscriptionIdsToProject([transcript.transcription_id]);
+	}
+
+	async function importSelectedTranscriptionsToProject() {
+		if (!selectedTranscriptionIds.length || !selectedImportProject) return;
+		await importTranscriptionIdsToProject(selectedTranscriptionIds);
+	}
+
+	async function importTranscriptionIdsToProject(transcriptionIds: string[]) {
+		if (!selectedImportProject) return;
+		asrError = '';
+		importMessage = '';
+		try {
+			const result = await Api.importTranscriptionsToProject(selectedImportProject.project_id, {
+				transcription_ids: transcriptionIds
+			});
+			importMessage = `已导入 ${result.imported_count} 段到 ${result.project.name}`;
+			if (result.skipped_count) importMessage += `，跳过 ${result.skipped_count} 条`;
+			selectedTranscriptionIds = selectedTranscriptionIds.filter((id) => !transcriptionIds.includes(id));
+			projects = projects.map((project) =>
+				project.project_id === result.project.project_id ? result.project : project
+			);
+		} catch (err) {
+			asrError = err instanceof Error ? err.message : '导入脚本工作台失败';
+		}
 	}
 
 	async function copyTranscript(text: string) {
@@ -565,13 +548,6 @@
 		const minutes = Math.floor(total / 60);
 		const seconds = total % 60;
 		return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-	}
-
-	function splitTranscriptText(text: string) {
-		return text
-			.split(/\n+|(?<=[。！？!?])/)
-			.map((item) => item.trim())
-			.filter(Boolean);
 	}
 
 	function asrTaskStatusLabel(status: string) {
@@ -1108,6 +1084,18 @@
 					</label>
 				</div>
 				<div class="row wrap toolbar-strip">
+					<select class="compact-select" bind:value={importProjectId} disabled={!projects.length} aria-label="导入目标脚本项目">
+						{#if projects.length}
+							{#each projects as project}
+								<option value={project.project_id}>{project.name}</option>
+							{/each}
+						{:else}
+							<option value="">先创建脚本项目</option>
+						{/if}
+					</select>
+					<button class="btn" onclick={importSelectedTranscriptionsToProject} disabled={!selectedTranscriptionIds.length || !selectedImportProject}>
+						<Import size={15} /> 导入所选
+					</button>
 					<button class="btn" onclick={toggleVisibleTranscriptions} disabled={!visibleTranscriptionIds.length}>
 						<CheckSquare2 size={15} /> {allVisibleSelected ? '取消全选当前筛选' : '全选当前筛选'}
 					</button>
@@ -1121,6 +1109,7 @@
 						<CheckSquare2 size={15} /> 清空选择
 					</button>
 				</div>
+				{#if importMessage}<p class="badge ok">{importMessage}</p>{/if}
 				{#if pagedTranscriptions.length}
 					<div class="stack">
 						{#each pagedTranscriptions as item}
@@ -1145,6 +1134,9 @@
 										{#if selectedTaskForRecord(item)?.status} · {asrTaskStatusLabel(selectedTaskForRecord(item)!.status)}{/if}
 									</span>
 									<button class="btn" onclick={() => openTranscription(item.transcription_id)}>查看结果</button>
+									<button class="btn" onclick={() => importTranscriptionIdsToProject([item.transcription_id])} disabled={!selectedImportProject}>
+										<Import size={15} /> 导入
+									</button>
 									<a class="btn" href={asrExportHref(item.transcription_id, 'txt')}><Download size={15} /> TXT</a>
 									{#if item.segments.length}
 										<a class="btn" href={asrExportHref(item.transcription_id, 'srt')}><TextQuote size={15} /> SRT</a>
@@ -1379,6 +1371,12 @@
 	.toolbar-strip {
 		padding-top: 4px;
 		border-top: 1px solid rgba(255, 255, 255, 0.04);
+	}
+
+	.compact-select {
+		width: min(220px, 100%);
+		min-height: 32px;
+		padding-block: 5px;
 	}
 
 	.pagination-row {

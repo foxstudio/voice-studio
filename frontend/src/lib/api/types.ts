@@ -320,6 +320,12 @@ export interface Project {
 	updated_at: string;
 }
 
+export interface ProjectTranscriptionImportResponse {
+	project: Project;
+	imported_count: number;
+	skipped_count: number;
+}
+
 export interface ExportRecord {
 	export_id: string;
 	path: string;

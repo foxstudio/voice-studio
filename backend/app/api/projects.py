@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.models.exceptions import AppException
-from app.models.schemas import Project, ProjectCreate, Role, ScriptSegment
+from app.models.schemas import Project, ProjectCreate, ProjectTranscriptionImportRequest, ProjectTranscriptionImportResponse, Role, ScriptSegment
 from app.services import project_store, task_queue
 
 router = APIRouter()
@@ -49,6 +49,16 @@ async def put_segments(project_id: str, segments: list[ScriptSegment]):
     return project
 
 
+@router.post("/{project_id}/transcriptions/import", response_model=ProjectTranscriptionImportResponse)
+async def import_transcriptions(project_id: str, data: ProjectTranscriptionImportRequest):
+    if not data.transcription_ids:
+        raise AppException(400, "TRANSCRIPTION_IMPORT_EMPTY", "No transcription records selected")
+    result = project_store.import_transcriptions(project_id, data)
+    if not result:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    return result
+
+
 @router.post("/{project_id}/generate")
 async def generate_project(project_id: str):
     project = project_store.get_project(project_id)
@@ -56,4 +66,3 @@ async def generate_project(project_id: str):
         raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
     task_ids = await task_queue.submit_project(project)
     return {"task_ids": task_ids, "status": "queued"}
-

@@ -13,6 +13,7 @@ import type {
 	HistoryItem,
 	PresetTemplate,
 	Project,
+	ProjectTranscriptionImportResponse,
 	Role,
 	ScriptSegment,
 	TranscriptionRecord,
@@ -61,6 +62,10 @@ export const Api = {
 	deleteProject: (id: string) => api.delete<{ status: string }>(`/projects/${id}`),
 	addRole: (id: string, role: Role) => api.post<Project>(`/projects/${id}/roles`, role),
 	putSegments: (id: string, segments: ScriptSegment[]) => api.put<Project>(`/projects/${id}/segments`, segments),
+	importTranscriptionsToProject: (
+		id: string,
+		body: { transcription_ids: string[]; mode?: 'append' | 'replace'; role_id?: string | null; default_engine_id?: string | null; default_voice_id?: string | null }
+	) => api.post<ProjectTranscriptionImportResponse>(`/projects/${id}/transcriptions/import`, body),
 	generateProject: (id: string) => api.post<{ task_ids: string[]; status: string }>(`/projects/${id}/generate`),
 	exports: () => api.get<ExportRecord[]>('/exports'),
 	latestEvaluation: () => api.get<EvaluationReport>('/evaluations/latest'),
