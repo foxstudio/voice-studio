@@ -62,6 +62,7 @@ export interface AppSettings {
 	cache_dir: string;
 	log_dir: string;
 	default_engine_id: string;
+	default_voice_id: string | null;
 	default_language: string;
 	default_output_format: OutputFormat;
 	device: 'auto' | 'mps' | 'cpu';
@@ -69,6 +70,7 @@ export interface AppSettings {
 	mimo_base_url: string;
 	mimo_api_key_configured: boolean;
 	mimo_default_voice: string;
+	mimo_voiceclone_confirm_upload: boolean;
 	default_emotion: string;
 	default_emo_alpha: number;
 	theme: 'system' | 'dark' | 'light';
@@ -86,6 +88,15 @@ export interface VoiceAssetCreate {
 	license_status: string;
 }
 
+export interface VoiceEngineBinding {
+	engine_id: string;
+	mode: 'reference_audio' | 'preset_voice' | 'voice_design' | 'voice_clone';
+	available: boolean;
+	reason: string;
+	external_voice_id: string | null;
+	parameters: Record<string, unknown>;
+}
+
 export interface VoiceAsset extends VoiceAssetCreate {
 	voice_id: string;
 	quality_status: string;
@@ -94,6 +105,7 @@ export interface VoiceAsset extends VoiceAssetCreate {
 	created_at: string;
 	updated_at: string;
 	last_used_at: string | null;
+	engine_bindings: VoiceEngineBinding[];
 }
 
 export interface UploadResult {
@@ -113,6 +125,9 @@ export interface GenerateRequest {
 	emotion?: string | null;
 	emotion_values?: Record<string, number> | null;
 	emotion_text?: string | null;
+	style_instruction?: string | null;
+	voice_design_prompt?: string | null;
+	mimo_voice?: string | null;
 	emo_alpha: number;
 	speed: number;
 	temperature: number;
@@ -145,6 +160,9 @@ export interface BatchSegmentInput {
 	language?: string | null;
 	emotion?: string | null;
 	emotion_text?: string | null;
+	style_instruction?: string | null;
+	voice_design_prompt?: string | null;
+	mimo_voice?: string | null;
 	speed?: number | null;
 }
 

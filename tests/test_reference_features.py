@@ -80,9 +80,17 @@ def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path):
     resp = client.get("/api/engines")
     assert resp.status_code == 200
     by_id = {item["manifest"]["engine_id"]: item["manifest"] for item in resp.json()}
-    assert set(by_id) == {"indextts-v2", "omnivoice", "mimo-v2.5-tts"}
+    assert set(by_id) == {
+        "indextts-v2",
+        "omnivoice",
+        "mimo-v2.5-tts-preset",
+        "mimo-v2.5-tts-voicedesign",
+        "mimo-v2.5-tts-voiceclone",
+        "mimo-v2.5-asr",
+    }
     assert "emotion_control" in by_id["indextts-v2"]["capabilities"]
-    assert by_id["mimo-v2.5-tts"]["engine_type"] == "cloud"
+    assert by_id["mimo-v2.5-tts-preset"]["engine_type"] == "cloud"
+    assert "mimo-v2.5-tts" not in by_id
 
 
 def test_mimo_secret_is_not_returned_in_settings(tmp_path: Path):

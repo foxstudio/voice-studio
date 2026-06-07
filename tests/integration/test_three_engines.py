@@ -3,7 +3,7 @@
 覆盖当前 WebUI 暴露的 TTS 引擎完整 API 层集成验证:
   - indextts-v2  (IndexTTS v2,    22050 Hz, emotion_control)
   - omnivoice    (OmniVoice,       24000 Hz, voice_design)
-  - mimo-v2.5-tts (MiMo Cloud,     Token Plan API)
+  - MiMo V2.5 cloud profiles (preset / voice design / voice clone / ASR)
 
 分层 (T1-T4):
   T1 - 引擎注册表 API (无需模型, 始终运行)
@@ -70,7 +70,14 @@ class TestEngineRegistryAPI:
         resp = client.get("/api/engines")
         assert resp.status_code == 200
         ids = [e["manifest"]["engine_id"] for e in resp.json()]
-        assert ids == ["indextts-v2", "omnivoice", "mimo-v2.5-tts"]
+        assert ids == [
+            "indextts-v2",
+            "omnivoice",
+            "mimo-v2.5-tts-preset",
+            "mimo-v2.5-tts-voicedesign",
+            "mimo-v2.5-tts-voiceclone",
+            "mimo-v2.5-asr",
+        ]
 
     def test_engine_metadata(self):
         resp = client.get("/api/engines")
@@ -90,9 +97,12 @@ class TestEngineRegistryAPI:
         assert "multilingual" in m["capabilities"]
 
         # mimo cloud
-        m = by_id["mimo-v2.5-tts"]
+        m = by_id["mimo-v2.5-tts-preset"]
         assert m["engine_type"] == "cloud"
         assert "cloud_api" in m["capabilities"]
+        assert "preset_voice" in m["capabilities"]
+        assert "voice_design" in by_id["mimo-v2.5-tts-voicedesign"]["capabilities"]
+        assert "voice_clone" in by_id["mimo-v2.5-tts-voiceclone"]["capabilities"]
 
     def test_get_single_engine(self):
         resp = client.get("/api/engines/indextts-v2")
@@ -107,7 +117,7 @@ class TestEngineRegistryAPI:
 
     def test_engine_initial_status(self):
         """Engines should not be 'loaded' initially."""
-        for eid in ("indextts-v2", "omnivoice", "mimo-v2.5-tts"):
+        for eid in ("indextts-v2", "omnivoice", "mimo-v2.5-tts-preset"):
             resp = client.get(f"/api/engines/{eid}")
             assert resp.status_code == 200
             status = resp.json()["state"]["status"]

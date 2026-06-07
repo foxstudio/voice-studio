@@ -131,6 +131,7 @@ class AppSettings(BaseModel):
     cache_dir: str = Field(default_factory=lambda: default_data_subdir("cache"))
     log_dir: str = Field(default_factory=lambda: default_data_subdir("logs"))
     default_engine_id: str = "indextts-v2"
+    default_voice_id: str | None = None
     default_language: str = "zh"
     default_output_format: Literal["wav", "mp3", "flac"] = "wav"
     device: Literal["auto", "mps", "cpu"] = "auto"
@@ -138,6 +139,7 @@ class AppSettings(BaseModel):
     mimo_base_url: str = "https://token-plan-cn.xiaomimimo.com/v1"
     mimo_api_key_configured: bool = False
     mimo_default_voice: str = "mimo_default"
+    mimo_voiceclone_confirm_upload: bool = True
     default_emotion: str = "calm"
     default_emo_alpha: float = 0.6
     theme: Literal["system", "dark", "light"] = "system"
@@ -160,6 +162,15 @@ class VoiceAssetCreate(BaseModel):
     license_status: LicenseStatus = LicenseStatus.unknown
 
 
+class VoiceEngineBinding(BaseModel):
+    engine_id: str
+    mode: Literal["reference_audio", "preset_voice", "voice_design", "voice_clone"]
+    available: bool
+    reason: str = ""
+    external_voice_id: str | None = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
 class VoiceAsset(VoiceAssetCreate):
     voice_id: str = Field(default_factory=new_id)
     quality_status: str = "unchecked"
@@ -168,6 +179,7 @@ class VoiceAsset(VoiceAssetCreate):
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
     last_used_at: str | None = None
+    engine_bindings: list[VoiceEngineBinding] = Field(default_factory=list)
 
 
 class VoiceFile(BaseModel):
@@ -192,6 +204,9 @@ class GenerateRequest(BaseModel):
     emotion: str | None = None
     emotion_values: dict[str, float] | None = None
     emotion_text: str | None = None
+    style_instruction: str | None = None
+    voice_design_prompt: str | None = None
+    mimo_voice: str | None = None
     emo_alpha: float = Field(default=0.6, ge=0, le=1)
     speed: float = Field(default=1.0, ge=0.5, le=3.0)
     temperature: float = Field(default=0.8, ge=0.1, le=2.0)
@@ -226,6 +241,9 @@ class BatchSegmentInput(BaseModel):
     language: str | None = None
     emotion: str | None = None
     emotion_text: str | None = None
+    style_instruction: str | None = None
+    voice_design_prompt: str | None = None
+    mimo_voice: str | None = None
     speed: float | None = Field(default=None, ge=0.5, le=3.0)
 
 

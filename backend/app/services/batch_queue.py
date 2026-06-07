@@ -125,17 +125,23 @@ def _resolve_reference(req: BatchGenerateRequest) -> str | None:
 
 
 def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
-    if req.engine_id == "mimo-v2.5-tts":
+    if req.engine_id in ["mimo-v2.5-tts", "mimo-v2.5-tts-preset", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"]:
         settings = settings_store.get()
         api_key = settings_store.mimo_api_key()
         if not settings.cloud_enabled:
             raise ValueError("MIMO_CLOUD_DISABLED")
         if not api_key:
             raise ValueError("MIMO_API_KEY_MISSING")
+        model = "mimo-v2.5-tts" if req.engine_id in ["mimo-v2.5-tts", "mimo-v2.5-tts-preset"] else req.engine_id
         return {
             "base_url": settings.mimo_base_url,
             "api_key": api_key,
+            "model": model,
             "mimo_voice": req.parameters.get("mimo_voice") or settings.mimo_default_voice,
+            "voice_design_prompt": req.parameters.get("voice_design_prompt"),
+            "reference_audio_path": _resolve_reference(req),
+            "temperature": req.parameters.get("temperature", 0.6),
+            "top_p": req.parameters.get("top_p", 0.95),
         }
 
     ref = _resolve_reference(req)
@@ -182,6 +188,9 @@ def _runner_segments(req: BatchGenerateRequest, batch: BatchTask, output_dir: Pa
             "speed": segment.speed,
             "emotion": segment.emotion,
             "emotion_text": segment.emotion_text,
+            "style_instruction": segment.style_instruction,
+            "voice_design_prompt": segment.voice_design_prompt,
+            "mimo_voice": segment.mimo_voice,
             "language": segment.language,
             "reference_audio": segment.reference_audio_path,
             "ref_text": segment.ref_text,

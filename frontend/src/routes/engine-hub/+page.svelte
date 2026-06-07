@@ -53,8 +53,8 @@
 		</div>
 	</section>
 	<section class="grid">
-		{#each engines as engine}
-			<article class="card stack">
+			{#each engines as engine}
+				<article class="card stack">
 				<div class="row" style="justify-content:space-between">
 					<h2>{engine.manifest.display_name}</h2>
 					<span class="badge" class:ok={engine.state.status === 'loaded'} class:fail={engine.state.status === 'error'}>{engineStatusLabel(engine.state.status)}</span>
@@ -71,11 +71,11 @@
 				<div class="row">
 					{#each engine.manifest.capabilities as cap}<span class="badge">{capabilityLabel(cap)}</span>{/each}
 				</div>
-				<div class="row">
-					{#if engine.state.status === 'loaded'}<button class="btn" onclick={() => stop(engine.manifest.engine_id)}><Square size={15} /> 停止</button>{:else}<button class="btn primary" onclick={() => start(engine.manifest.engine_id)}><Play size={15} /> 启动</button>{/if}
-					<button class="btn" onclick={() => check(engine.manifest.engine_id)}><Activity size={15} /> 检查</button>
-					<button class="btn" onclick={() => diagnose(engine.manifest.engine_id)}><Volume2 size={15} /> 音频诊断</button>
-				</div>
+					<div class="row">
+						{#if engine.state.status === 'loaded'}<button class="btn" onclick={() => stop(engine.manifest.engine_id)}><Square size={15} /> 停止</button>{:else}<button class="btn primary" onclick={() => start(engine.manifest.engine_id)}><Play size={15} /> 启动</button>{/if}
+						<button class="btn" onclick={() => check(engine.manifest.engine_id)}><Activity size={15} /> 检查</button>
+						{#if !engine.manifest.capabilities.includes('speech_recognition')}<button class="btn" onclick={() => diagnose(engine.manifest.engine_id)}><Volume2 size={15} /> 音频诊断</button>{/if}
+					</div>
 				{#if diagnosis[engine.manifest.engine_id]}
 					<div class="diagnosis-box">
 						<span class="badge" class:ok={diagnosis[engine.manifest.engine_id].status === 'passed'} class:fail={diagnosis[engine.manifest.engine_id].status === 'failed'}>{diagnosis[engine.manifest.engine_id].status === 'passed' ? '可听门槛通过' : '诊断失败/需复核'}</span>

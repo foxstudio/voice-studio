@@ -12,6 +12,7 @@
 	let newProjectName = $state('新脚本项目');
 	let roleName = $state('旁白');
 	let bulkText = $state('');
+	const ttsEngines = $derived(engines.filter((engine) => !engine.manifest.capabilities.includes('speech_recognition')));
 
 	async function refresh() {
 		[projects, voices, engines] = await Promise.all([Api.projects(), Api.voices(), Api.engines()]);
@@ -110,7 +111,7 @@
 								<td><textarea bind:value={seg.text} style="min-height:70px"></textarea></td>
 								<td><select bind:value={seg.role_id}><option value={null}>无</option>{#each current.roles as r}<option value={r.role_id}>{r.name}</option>{/each}</select></td>
 								<td><select bind:value={seg.voice_id}><option value={null}>无</option>{#each voices as v}<option value={v.voice_id}>{v.name}</option>{/each}</select></td>
-								<td><select bind:value={seg.engine_id}>{#each engines as e}<option value={e.manifest.engine_id}>{e.manifest.display_name}</option>{/each}</select></td>
+									<td><select bind:value={seg.engine_id}>{#each ttsEngines as e}<option value={e.manifest.engine_id}>{e.manifest.display_name}</option>{/each}</select></td>
 								<td><span class="badge" class:ok={seg.status === 'completed'} class:fail={seg.status === 'failed'}>{segmentStatusLabel(seg.status)}</span></td>
 							</tr>
 						{/each}

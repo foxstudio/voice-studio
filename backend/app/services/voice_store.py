@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-from app.models.schemas import VoiceAsset, VoiceAssetCreate, VoiceFile, now_iso
+from app.models.schemas import LicenseStatus, VoiceAsset, VoiceAssetCreate, VoiceEngineBinding, VoiceFile, now_iso
 from app.services import audio_tools, database as db, settings_store, voice_aliases
 
 
@@ -22,12 +22,14 @@ def _normalize_voice(voice: VoiceAsset) -> VoiceAsset:
     if normalized_name != voice.name:
         voice.name = normalized_name
         save_voice(voice)
+    voice.engine_bindings = _engine_bindings(voice)
     return voice
 
 
 def save_voice(voice: VoiceAsset) -> VoiceAsset:
     voice.updated_at = now_iso()
-    db.upsert("voices", voice.voice_id, voice.model_dump())
+    db.upsert("voices", voice.voice_id, voice.model_dump(exclude={"engine_bindings"}))
+    voice.engine_bindings = _engine_bindings(voice)
     return voice
 
 
@@ -95,3 +97,51 @@ def reference_path(voice_id: str | None) -> str | None:
         return None
     vf = get_file(voice.reference_audio_ids[0])
     return vf.path if vf else None
+
+
+def _engine_bindings(voice: VoiceAsset) -> list[VoiceEngineBinding]:
+    ref = _primary_file(voice)
+    has_ref = ref is not None and Path(ref.path).exists()
+    cloud_allowed = voice.license_status in [LicenseStatus.self_voice, LicenseStatus.authorized, LicenseStatus.company_authorized]
+    clone_reason = ""
+    if not has_ref:
+        clone_reason = "缺少参考音频"
+    elif not cloud_allowed:
+        clone_reason = "授权状态不允许上传云端"
+    elif Path(ref.path).suffix.lower() not in [".wav", ".mp3"]:
+        clone_reason = "MiMo voiceclone 仅支持 wav/mp3"
+    elif ref.size_bytes > 10 * 1024 * 1024:
+        clone_reason = "参考音频超过 MiMo 10MB 限制"
+
+    return [
+        VoiceEngineBinding(
+            engine_id="indextts-v2",
+            mode="reference_audio",
+            available=has_ref,
+            reason="" if has_ref else "IndexTTS v2 需要参考音频",
+        ),
+        VoiceEngineBinding(
+            engine_id="omnivoice",
+            mode="reference_audio",
+            available=has_ref,
+            reason="" if has_ref else "OmniVoice 可无参考音频改用声音设计",
+        ),
+        VoiceEngineBinding(
+            engine_id="mimo-v2.5-tts-preset",
+            mode="preset_voice",
+            available=False,
+            reason="MiMo 预置音色来自官方云端音色目录，不使用本地参考音频",
+        ),
+        VoiceEngineBinding(
+            engine_id="mimo-v2.5-tts-voiceclone",
+            mode="voice_clone",
+            available=has_ref and cloud_allowed and not clone_reason,
+            reason=clone_reason,
+        ),
+    ]
+
+
+def _primary_file(voice: VoiceAsset) -> VoiceFile | None:
+    if not voice.reference_audio_ids:
+        return None
+    return get_file(voice.reference_audio_ids[0])

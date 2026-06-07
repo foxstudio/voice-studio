@@ -129,8 +129,13 @@ def run_mimo_tts(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 api_key=kwargs["api_key"],
                 text=segment["text"],
                 output_path=str(out),
+                model=kwargs.get("model", "mimo-v2.5-tts"),
                 voice=kwargs.get("mimo_voice") or kwargs.get("voice") or "mimo_default",
-                instruction=kwargs.get("emotion_text") or kwargs.get("emotion"),
+                instruction=kwargs.get("style_instruction") or kwargs.get("emotion_text") or kwargs.get("emotion"),
+                voice_design_prompt=kwargs.get("voice_design_prompt"),
+                reference_audio_path=kwargs.get("reference_audio") or kwargs.get("reference_audio_path"),
+                temperature=kwargs.get("temperature"),
+                top_p=kwargs.get("top_p"),
                 audio_format=out.suffix.lstrip(".") or "mp3",
             )
             meta = _audio_meta(str(out), 24000)
@@ -145,6 +150,9 @@ RUNNERS = {
     "indextts-v2": run_indextts_v2,
     "omnivoice": run_omnivoice,
     "mimo-v2.5-tts": run_mimo_tts,
+    "mimo-v2.5-tts-preset": run_mimo_tts,
+    "mimo-v2.5-tts-voicedesign": run_mimo_tts,
+    "mimo-v2.5-tts-voiceclone": run_mimo_tts,
 }
 
 

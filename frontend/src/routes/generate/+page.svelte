@@ -1,18 +1,22 @@
 <script lang="ts">
 	import { Api } from '$lib/api';
-	import type { EngineDetail, GenerationTask, GenerateRequest, PresetTemplate, VoiceAsset } from '$lib/api/types';
+		import type { AppSettings, EngineDetail, GenerationTask, GenerateRequest, PresetTemplate, VoiceAsset } from '$lib/api/types';
 	import { engineStatusLabel, taskStatusLabel } from '$lib/labels';
 	import { Download, Play, RotateCcw, Send, Wand2 } from 'lucide-svelte';
 
 	let engines = $state<EngineDetail[]>([]);
 	let voices = $state<VoiceAsset[]>([]);
 	let presets = $state<PresetTemplate[]>([]);
+	let settings = $state<AppSettings | null>(null);
 	let text = $state('');
 	let engineId = $state('indextts-v2');
 	let voiceId = $state('');
 	let language = $state('zh');
 	let emotion = $state('calm');
 	let voiceDesign = $state('女，青年，中音调');
+	let voiceDesignPrompt = $state('中年男性，声线沉稳偏正式，吐字工整，语速适中。');
+	let styleInstruction = $state('');
+	let mimoVoice = $state('mimo_default');
 	let emoAlpha = $state(0.6);
 	let speed = $state(1.0);
 	let temperature = $state(0.8);
@@ -26,23 +30,59 @@
 	let tasks = $state<GenerationTask[]>([]);
 	let busy = $state(false);
 	let error = $state('');
+	let initialized = $state(false);
+	let lastEngineId = $state('indextts-v2');
 
 	const selected = $derived(engines.find((e) => e.manifest.engine_id === engineId));
+	const ttsEngines = $derived(engines.filter((e) => !e.manifest.capabilities.includes('speech_recognition')));
 	const selectedVoice = $derived(voices.find((v) => v.voice_id === voiceId) ?? null);
 	const supportsEmotion = $derived(Boolean(selected?.manifest.capabilities.includes('emotion_control')));
 	const isIndexTTS = $derived(engineId === 'indextts-v2');
 	const isOmniVoice = $derived(engineId === 'omnivoice');
+	const isMimoPreset = $derived(engineId === 'mimo-v2.5-tts-preset');
+	const isMimoDesign = $derived(engineId === 'mimo-v2.5-tts-voicedesign');
+	const isMimoClone = $derived(engineId === 'mimo-v2.5-tts-voiceclone');
+	const isMimo = $derived(engineId.startsWith('mimo-v2.5'));
+	const mimoVoiceOptions = $derived(selected?.manifest.parameter_schema.find((p) => p.key === 'mimo_voice')?.options ?? []);
+	const voiceChoices = $derived(
+		isMimoClone
+			? voices.filter((voice) => voice.engine_bindings?.some((binding) => binding.engine_id === 'mimo-v2.5-tts-voiceclone' && binding.available))
+			: voices
+	);
 
 	$effect(() => {
-		Promise.all([Api.engines(), Api.voices(), Api.tasks(), Api.presets()]).then(([e, v, t, p]) => {
+		Promise.all([Api.engines(), Api.voices(), Api.tasks(), Api.presets(), Api.settings()]).then(([e, v, t, p, s]) => {
 			engines = e;
 			voices = v;
 			tasks = t.slice(0, 8);
 			presets = p;
+			settings = s;
 			const params = new URLSearchParams(location.search);
 			const vId = params.get('voice');
-			if (vId) voiceId = vId;
+			if (!initialized) {
+				const defaultEngine = e.find((engine) => engine.manifest.engine_id === s.default_engine_id && !engine.manifest.capabilities.includes('speech_recognition'));
+				engineId = defaultEngine?.manifest.engine_id || engineId;
+				voiceId = vId || s.default_voice_id || '';
+				language = s.default_language || language;
+				initialized = true;
+			} else if (vId) {
+				voiceId = vId;
+			}
 		});
+	});
+
+	$effect(() => {
+		if (engineId !== lastEngineId) {
+			if (engineId.startsWith('mimo-v2.5')) {
+				temperature = 0.6;
+				topP = 0.95;
+			} else {
+				temperature = 0.8;
+				topP = 0.8;
+			}
+			if (!isMimoClone && !isIndexTTS && !isOmniVoice) voiceId = '';
+			lastEngineId = engineId;
+		}
 	});
 
 	function requestBody(): GenerateRequest {
@@ -52,11 +92,14 @@
 			voice_id: voiceId || null,
 			ref_text: selectedVoice?.reference_text || null,
 			language,
-			emotion_mode: supportsEmotion ? 'emotion_vector' : 'follow_reference',
-			emotion: supportsEmotion ? emotion : null,
-			emotion_text: isOmniVoice && !voiceId ? voiceDesign : null,
-			emo_alpha: emoAlpha,
-			speed,
+				emotion_mode: supportsEmotion ? 'emotion_vector' : 'follow_reference',
+				emotion: supportsEmotion ? emotion : null,
+				emotion_text: isOmniVoice && !voiceId ? voiceDesign : null,
+				style_instruction: isMimo ? styleInstruction || null : null,
+				voice_design_prompt: isMimoDesign ? voiceDesignPrompt : null,
+				mimo_voice: isMimoPreset ? mimoVoice : null,
+				emo_alpha: emoAlpha,
+				speed,
 			temperature,
 			top_p: topP,
 			top_k: topK,
@@ -98,14 +141,19 @@
 		}
 	}
 
-	async function generate() {
-		if (!text.trim()) return;
-		error = '';
-		busy = true;
-		try {
-			const eng = engines.find((e) => e.manifest.engine_id === engineId);
-			if (eng && eng.state.status !== 'loaded') await Api.startEngine(engineId);
-			const res = await Api.generate(requestBody());
+		async function generate() {
+			if (!text.trim()) return;
+			error = '';
+			busy = true;
+			try {
+				if (isMimoClone && settings?.mimo_voiceclone_confirm_upload) {
+					const name = selectedVoice?.name ?? '当前参考音色';
+					const ok = window.confirm(`MiMo 音色复刻会把「${name}」的本次参考音频发送到小米云端用于生成。继续吗？`);
+					if (!ok) return;
+				}
+				const eng = engines.find((e) => e.manifest.engine_id === engineId);
+				if (eng && eng.state.status !== 'loaded') await Api.startEngine(engineId);
+				const res = await Api.generate(requestBody());
 			await poll(res.task_id);
 		} catch (e) {
 			error = (e as Error).message;
@@ -164,10 +212,33 @@
 		</section>
 		<aside class="panel stack">
 			<h2><Play size={16} /> 参数</h2>
-			<div class="field"><label for="engine">引擎</label><select id="engine" bind:value={engineId}>{#each engines as e}<option value={e.manifest.engine_id}>{e.manifest.display_name} · {engineStatusLabel(e.state.status)}</option>{/each}</select></div>
-			<div class="field"><label for="voice">声音</label><select id="voice" bind:value={voiceId}><option value="">未选择</option>{#each voices as v}<option value={v.voice_id}>{v.name}</option>{/each}</select></div>
-			<div class="field"><label for="language">语言</label><select id="language" bind:value={language}><option value="zh">中文</option><option value="en">英文</option><option value="auto">自动</option></select></div>
-			{#if supportsEmotion}
+				<div class="field"><label for="engine">引擎</label><select id="engine" bind:value={engineId}>{#each ttsEngines as e}<option value={e.manifest.engine_id}>{e.manifest.display_name} · {engineStatusLabel(e.state.status)}</option>{/each}</select></div>
+				{#if !isMimoPreset && !isMimoDesign}
+					<div class="field">
+						<label for="voice">声音</label>
+						<select id="voice" bind:value={voiceId}>
+							<option value="">未选择</option>
+							{#each voiceChoices as v}<option value={v.voice_id}>{v.name}</option>{/each}
+						</select>
+						{#if isMimoClone}<small>只显示已授权且可上传云端复刻的本地参考音色。</small>{/if}
+					</div>
+				{/if}
+				{#if isMimoPreset}
+					<div class="field">
+						<label for="mimo-voice">MiMo 官方音色</label>
+						<select id="mimo-voice" bind:value={mimoVoice}>{#each mimoVoiceOptions as option}<option value={option.value}>{option.label}</option>{/each}</select>
+					</div>
+				{/if}
+				<div class="field"><label for="language">语言</label><select id="language" bind:value={language}><option value="zh">中文</option><option value="en">英文</option><option value="auto">自动</option></select></div>
+				{#if isMimo}
+					{#if isMimoDesign}
+						<div class="field"><label for="voice-design-prompt">音色描述</label><textarea id="voice-design-prompt" bind:value={voiceDesignPrompt}></textarea><small>描述这副声音本身，例如年龄、性别、质感、语速和情绪底色。</small></div>
+					{:else}
+						<div class="field"><label for="style-instruction">风格指令</label><textarea id="style-instruction" bind:value={styleInstruction} placeholder="例如：语速稍慢，语气温柔，像知识视频旁白。"></textarea></div>
+					{/if}
+					{#if isMimoClone && settings?.mimo_voiceclone_confirm_upload}<small>生成前会再次提醒：本次参考音频将发送到 MiMo 云端。</small>{/if}
+				{/if}
+				{#if supportsEmotion}
 				<div class="field"><label for="emotion">情绪</label><select id="emotion" bind:value={emotion}><option value="calm">自然 calm</option><option value="happy">高兴 happy</option><option value="sad">悲伤 sad</option><option value="angry">愤怒 angry</option><option value="afraid">恐惧 afraid</option><option value="disgusted">反感 disgusted</option><option value="melancholic">低落 melancholic</option><option value="surprised">惊讶 surprised</option></select><small>控制语气倾向；正式产出建议先用自然或低强度情绪。</small></div>
 				{#if isIndexTTS}<div class="field"><label for="emo-alpha">情绪强度 {emoAlpha.toFixed(2)}</label><input id="emo-alpha" type="range" min="0" max="1" step="0.05" bind:value={emoAlpha} /><small>数值越高，表演感越强；长文本通常不宜过高。</small></div>{/if}
 			{/if}
@@ -183,7 +254,7 @@
 					</select>
 				</div>
 			{/if}
-			<div class="field"><label for="speed">语速 {speed.toFixed(2)}</label><input id="speed" type="range" min="0.5" max="2" step="0.05" bind:value={speed} /><small>低于 1 更稳更慢，高于 1 更适合短视频快讲。</small></div>
+				{#if !isMimo}<div class="field"><label for="speed">语速 {speed.toFixed(2)}</label><input id="speed" type="range" min="0.5" max="2" step="0.05" bind:value={speed} /><small>低于 1 更稳更慢，高于 1 更适合短视频快讲。</small></div>{/if}
 			<div class="field"><label for="temp">随机性 Temperature {temperature.toFixed(2)}</label><input id="temp" type="range" min="0.1" max="2" step="0.05" bind:value={temperature} /><small>越低越稳定，越高变化越多，也更可能口齿漂移。</small></div>
 			<div class="field"><label for="top-p">采样范围 Top-P {topP.toFixed(2)}</label><input id="top-p" type="range" min="0" max="1" step="0.05" bind:value={topP} /><small>限制模型从多大概率范围里选声音片段；默认 0.8 较稳。</small></div>
 			<div class="field"><label for="top-k">候选数量 Top-K {topK}</label><input id="top-k" type="range" min="1" max="100" step="1" bind:value={topK} /><small>每一步最多保留多少候选；过大更自由，过小更保守。</small></div>

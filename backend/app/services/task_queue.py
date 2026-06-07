@@ -159,20 +159,26 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
     ref_text = req.ref_text or (voice.reference_text if voice else None)
     if req.engine_id == "indextts-v2" and not ref:
         raise ValueError("REFERENCE_AUDIO_REQUIRED")
-    if req.engine_id == "mimo-v2.5-tts":
+    if req.engine_id in ["mimo-v2.5-tts", "mimo-v2.5-tts-preset", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"]:
         settings = settings_store.get()
         api_key = settings_store.mimo_api_key()
         if not settings.cloud_enabled:
             raise ValueError("MIMO_CLOUD_DISABLED")
         if not api_key:
             raise ValueError("MIMO_API_KEY_MISSING")
+        model = "mimo-v2.5-tts" if req.engine_id in ["mimo-v2.5-tts", "mimo-v2.5-tts-preset"] else req.engine_id
         return {
             "text": req.text,
             "output_path": output_path,
             "base_url": settings.mimo_base_url,
             "api_key": api_key,
-            "voice": req.emotion_text or settings.mimo_default_voice,
-            "instruction": req.emotion if req.emotion else req.emotion_text,
+            "model": model,
+            "voice": req.mimo_voice or settings.mimo_default_voice,
+            "instruction": req.style_instruction or req.emotion_text or req.emotion,
+            "voice_design_prompt": req.voice_design_prompt or req.style_instruction or req.emotion_text,
+            "reference_audio_path": ref,
+            "temperature": req.temperature,
+            "top_p": req.top_p,
         }
     model_dir = str(settings_store.model_path(req.engine_id))
     common = {

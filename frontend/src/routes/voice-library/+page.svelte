@@ -98,6 +98,15 @@
 		return '';
 	}
 
+	function bindingLabel(engineId: string) {
+		return {
+			'indextts-v2': 'IndexTTS',
+			omnivoice: 'OmniVoice',
+			'mimo-v2.5-tts-preset': 'MiMo 预置',
+			'mimo-v2.5-tts-voiceclone': 'MiMo 复刻'
+		}[engineId] ?? engineId;
+	}
+
 	const help = [
 		{ title: '什么是“可导入参考音色”', body: '这里的官方参考音色还没有真正进入你的音色库，像素材候选。点“导入”后，它会下载到本地，变成下面音色库里的声音，之后才能在单条生成或批处理里选择。' },
 		{ title: '音色库怎么用', body: '音色库里的声音主要作为声音克隆参考。IndexTTS v2 通常需要选择一个参考声音；OmniVoice 可以选择参考声音，也可以不选，改用声音设计标签。' },
@@ -142,11 +151,16 @@
 					<div class="row" style="justify-content:space-between"><h2>{voice.name}</h2><span class="badge license" class:ok={voice.license_status === 'self_voice'}>{licenseLabel(voice.license_status)}</span></div>
 					<p class="muted">{voice.description || '暂无描述'}</p>
 					<div class="row">{#each voice.tags as tag}<span class={`badge ${tagClass(tag)}`}>{tag.startsWith('seed:') ? `来源：${tag.replace('seed:', '')}` : tag}</span>{/each}</div>
-					<div class="row">
-						<span class="badge">参考音频：{voice.reference_audio_ids.length} 个</span>
-						<span class="badge engine">推荐引擎：{voice.recommended_engine_id ?? '自动引擎'}</span>
-						<span class="text-pop" data-text={voice.reference_text || '暂无参考文本'}><FileText size={15} /> 文本</span>
-					</div>
+						<div class="row">
+							<span class="badge">参考音频：{voice.reference_audio_ids.length} 个</span>
+							<span class="badge engine">推荐引擎：{voice.recommended_engine_id ?? '自动引擎'}</span>
+							<span class="text-pop" data-text={voice.reference_text || '暂无参考文本'}><FileText size={15} /> 文本</span>
+						</div>
+						<div class="row">
+							{#each voice.engine_bindings.filter((binding) => binding.engine_id !== 'mimo-v2.5-tts-preset') as binding}
+								<span class="badge" class:ok={binding.available} class:warn={!binding.available} title={binding.reason}>{bindingLabel(binding.engine_id)}</span>
+							{/each}
+						</div>
 					{#if voice.reference_audio_ids[0]}
 						<audio class="audio" controls src={`/api/voices/${voice.voice_id}/audio/${voice.reference_audio_ids[0]}`}></audio>
 					{/if}
@@ -170,7 +184,7 @@
 			<div class="field"><label for="voice-tags">标签</label><input id="voice-tags" bind:value={tags} placeholder="温柔, 女声" /></div>
 			<div class="field"><label for="voice-ref">参考文本</label><input id="voice-ref" bind:value={referenceText} /></div>
 			<div class="field"><label for="voice-license">授权</label><select id="voice-license" bind:value={license}><option value="unknown">未知</option><option value="self_voice">本人声音</option><option value="authorized">已授权</option><option value="test_only">仅测试</option></select></div>
-			<div class="field"><label for="voice-engine">推荐引擎</label><select id="voice-engine" bind:value={engine}><option value="indextts-v2">IndexTTS v2</option><option value="omnivoice">OmniVoice</option><option value="mimo-v2.5-tts">MiMo V2.5 TTS</option></select></div>
+				<div class="field"><label for="voice-engine">推荐引擎</label><select id="voice-engine" bind:value={engine}><option value="indextts-v2">IndexTTS v2</option><option value="omnivoice">OmniVoice</option><option value="mimo-v2.5-tts-voiceclone">MiMo V2.5 VoiceClone</option></select></div>
 			<div class="field"><label for="voice-file">{editingVoice ? '追加参考音频' : '参考音频'}</label><input id="voice-file" type="file" accept="audio/*" onchange={(e) => (file = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)} /></div>
 			{#if uploadMessage}<p class="muted"><Check size={13} /> {uploadMessage}</p>{/if}
 			<button class="btn primary" disabled={!name.trim()} onclick={saveVoice}><Upload size={15} /> {editingVoice ? '保存修改' : '保存声音'}</button>

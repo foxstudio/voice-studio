@@ -110,6 +110,9 @@ RUNNERS = {
     "indextts-v2": run_indextts_v2,
     "omnivoice": run_omnivoice,
     "mimo-v2.5-tts": run_mimo_tts,
+    "mimo-v2.5-tts-preset": run_mimo_tts,
+    "mimo-v2.5-tts-voicedesign": run_mimo_tts,
+    "mimo-v2.5-tts-voiceclone": run_mimo_tts,
 }
 
 

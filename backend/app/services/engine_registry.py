@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.models.schemas import EngineDetail, EngineManifest, EngineState, EngineStatus, ParameterSchema
-from app.services import settings_store
+from app.services import mimo_client, settings_store
 from app.services.paths import PROJECT_ROOT
 
 
@@ -85,27 +85,100 @@ _ENGINES: dict[str, EngineDetail] = {
         ),
         state=EngineState(engine_id="omnivoice", status=EngineStatus.stopped),
     ),
-    "mimo-v2.5-tts": EngineDetail(
+    "mimo-v2.5-tts-preset": EngineDetail(
         manifest=EngineManifest(
-            engine_id="mimo-v2.5-tts",
-            display_name="MiMo V2.5 TTS",
+            engine_id="mimo-v2.5-tts-preset",
+            display_name="MiMo V2.5 TTS Preset",
             engine_type="cloud",
             provider="Xiaomi MiMo",
             version="2.5",
-            description="小米 MiMo Token Plan 云端语音合成，支持预置音色、声音设计和声音复刻扩展",
+            description="小米 MiMo Token Plan 云端语音合成，使用官方预置精品音色，支持自然语言风格控制和唱歌标签",
             supported_languages=["zh", "en"],
-            capabilities=["cloud_api", "preset_voice", "voice_clone", "voice_design", "emotion_control"],
-            default_use_case="云端中文口播、批量视频旁白和声音设计",
+            capabilities=["cloud_api", "preset_voice", "natural_language_control", "audio_tags", "singing"],
+            default_use_case="云端中文/英文口播、唱歌和官方预置音色快速合成",
             privacy_level="cloud_required",
             parameter_schema=[
-                ParameterSchema(key="mimo_voice", label="MiMo 音色", type="text", default="mimo_default"),
-                ParameterSchema(key="emotion_text", label="声音描述/指令", type="textarea", default="", capability="voice_design"),
-                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05),
+                ParameterSchema(
+                    key="mimo_voice",
+                    label="MiMo 官方音色",
+                    type="select",
+                    default="mimo_default",
+                    options=[{"label": item["label"], "value": item["voice_id"]} for item in mimo_client.MIMO_PRESET_VOICES],
+                    required=True,
+                    capability="preset_voice",
+                ),
+                ParameterSchema(key="style_instruction", label="风格指令", type="textarea", default="", capability="natural_language_control"),
+                ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.6, min=0, max=1.5, step=0.05, level="advanced"),
+                ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.95, min=0.01, max=1.0, step=0.01, level="advanced"),
             ],
         ),
-        state=EngineState(engine_id="mimo-v2.5-tts", status=EngineStatus.stopped),
+        state=EngineState(engine_id="mimo-v2.5-tts-preset", status=EngineStatus.stopped),
+    ),
+    "mimo-v2.5-tts-voicedesign": EngineDetail(
+        manifest=EngineManifest(
+            engine_id="mimo-v2.5-tts-voicedesign",
+            display_name="MiMo V2.5 TTS VoiceDesign",
+            engine_type="cloud",
+            provider="Xiaomi MiMo",
+            version="2.5",
+            description="小米 MiMo 文本音色设计，根据一段音色描述生成全新声音",
+            supported_languages=["zh", "en"],
+            capabilities=["cloud_api", "voice_design", "natural_language_control"],
+            default_use_case="探索角色音色、一次性生成定制声音样本",
+            privacy_level="cloud_required",
+            parameter_schema=[
+                ParameterSchema(key="voice_design_prompt", label="音色描述", type="textarea", default="", required=True, capability="voice_design"),
+                ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.6, min=0, max=1.5, step=0.05, level="advanced"),
+                ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.95, min=0.01, max=1.0, step=0.01, level="advanced"),
+            ],
+        ),
+        state=EngineState(engine_id="mimo-v2.5-tts-voicedesign", status=EngineStatus.stopped),
+    ),
+    "mimo-v2.5-tts-voiceclone": EngineDetail(
+        manifest=EngineManifest(
+            engine_id="mimo-v2.5-tts-voiceclone",
+            display_name="MiMo V2.5 TTS VoiceClone",
+            engine_type="cloud",
+            provider="Xiaomi MiMo",
+            version="2.5",
+            description="小米 MiMo 音色复刻，生成时上传本次选择的 wav/mp3 参考音频样本",
+            supported_languages=["zh", "en"],
+            capabilities=["cloud_api", "voice_clone", "natural_language_control", "audio_tags"],
+            default_use_case="使用已授权的本地参考音色做云端复刻合成",
+            privacy_level="cloud_required",
+            parameter_schema=[
+                ParameterSchema(key="style_instruction", label="风格指令", type="textarea", default="", capability="natural_language_control"),
+                ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.6, min=0, max=1.5, step=0.05, level="advanced"),
+                ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.95, min=0.01, max=1.0, step=0.01, level="advanced"),
+            ],
+        ),
+        state=EngineState(engine_id="mimo-v2.5-tts-voiceclone", status=EngineStatus.stopped),
+    ),
+    "mimo-v2.5-asr": EngineDetail(
+        manifest=EngineManifest(
+            engine_id="mimo-v2.5-asr",
+            display_name="MiMo V2.5 ASR",
+            engine_type="cloud",
+            provider="Xiaomi MiMo",
+            version="2.5",
+            description="小米 MiMo 云端语音识别，将 wav/mp3 音频转写为文本",
+            supported_languages=["auto", "zh", "en"],
+            capabilities=["cloud_api", "speech_recognition", "transcription"],
+            default_use_case="会议、录音和素材音频转文字",
+            privacy_level="cloud_required",
+            parameter_schema=[
+                ParameterSchema(key="language", label="识别语言", type="select", default="auto", options=[{"label": x, "value": x} for x in ["auto", "zh", "en"]]),
+            ],
+        ),
+        state=EngineState(engine_id="mimo-v2.5-asr", status=EngineStatus.stopped),
     ),
 }
+
+_ALIASES = {"mimo-v2.5-tts": "mimo-v2.5-tts-preset"}
+
+
+def _resolve_engine_id(engine_id: str) -> str:
+    return _ALIASES.get(engine_id, engine_id)
 
 
 def list_engines() -> list[EngineDetail]:
@@ -113,10 +186,11 @@ def list_engines() -> list[EngineDetail]:
 
 
 def get_engine(engine_id: str) -> EngineDetail | None:
-    return _ENGINES.get(engine_id)
+    return _ENGINES.get(_resolve_engine_id(engine_id))
 
 
 def health_check(engine_id: str) -> dict[str, Any]:
+    engine_id = _resolve_engine_id(engine_id)
     detail = _ENGINES.get(engine_id)
     if not detail:
         return {"healthy": False, "status": "not_found"}
@@ -131,7 +205,7 @@ def health_check(engine_id: str) -> dict[str, Any]:
             "model_path": str(model_dir),
             "missing": missing,
         }
-    if engine_id == "mimo-v2.5-tts":
+    if engine_id.startswith("mimo-v2.5-tts") or engine_id == "mimo-v2.5-asr":
         settings = settings_store.get()
         if not settings.cloud_enabled:
             return {"healthy": False, "status": "cloud_disabled", "detail": "云端引擎未启用"}
@@ -147,6 +221,7 @@ def health_check(engine_id: str) -> dict[str, Any]:
 
 
 def start_engine(engine_id: str) -> EngineDetail:
+    engine_id = _resolve_engine_id(engine_id)
     detail = _ENGINES[engine_id]
     detail.state.status = EngineStatus.loading
     hc = health_check(engine_id)
@@ -162,6 +237,7 @@ def start_engine(engine_id: str) -> EngineDetail:
 
 
 def stop_engine(engine_id: str) -> EngineDetail:
+    engine_id = _resolve_engine_id(engine_id)
     detail = _ENGINES[engine_id]
     detail.state.status = EngineStatus.stopped
     detail.state.error_message = None
@@ -169,6 +245,7 @@ def stop_engine(engine_id: str) -> EngineDetail:
 
 
 def ensure_loaded(engine_id: str) -> None:
+    engine_id = _resolve_engine_id(engine_id)
     detail = _ENGINES.get(engine_id)
     if not detail:
         raise ValueError(f"Unknown engine: {engine_id}")
