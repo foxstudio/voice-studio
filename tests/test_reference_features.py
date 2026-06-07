@@ -11,7 +11,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
-from app.models.schemas import AppSettings, Project, Role, ScriptSegment  # noqa: E402
+from app.models.schemas import AppSettings, EngineAudioDiagnosisRequest, Project, Role, ScriptSegment  # noqa: E402
 from app.services import batch_queue, community_voice_pack_store, database, settings_store, task_queue, voice_aliases, voice_store  # noqa: E402
 
 
@@ -42,8 +42,15 @@ def test_presets_are_available_and_apply_to_main_engines(tmp_path: Path):
     assert "idx2_long_text_editing" in ids
     assert {preset["engine_id"] for preset in presets} <= {"indextts-v2", "omnivoice"}
     default = next(p for p in presets if p["preset_id"] == "idx2_default_narration")
-    assert default["parameters"]["emotion"] == "calm"
+    assert default["name"] == "贴近参考音色"
+    assert default["parameters"]["emotion"] is None
+    assert default["parameters"]["emo_alpha"] == 0.0
     assert default["parameters"]["temperature"] == 0.8
+
+
+def test_engine_audio_diagnosis_defaults_follow_reference_emotion():
+    req = EngineAudioDiagnosisRequest()
+    assert req.emotion is None
 
 
 def test_voice_seed_catalog_contains_official_index_examples(tmp_path: Path):

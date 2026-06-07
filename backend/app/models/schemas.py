@@ -563,5 +563,5 @@ class EngineAudioDiagnosisRequest(BaseModel):
     reference_audio_path: str | None = None
     voice_id: str | None = None
     language: str = "zh"
-    emotion: str | None = "calm"
+    emotion: str | None = None
     emotion_text: str | None = "女，青年，中音调"

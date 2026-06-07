@@ -68,7 +68,7 @@
 				<option value="">未选择，OmniVoice 可无参考诊断</option>
 				{#each voices as voice}<option value={voice.voice_id}>{voice.name}</option>{/each}
 			</select>
-			<span class="muted">IndexTTS v2 诊断需要参考音色；OmniVoice 可用声音设计做无参考诊断。</span>
+			<span class="muted">IndexTTS v2 诊断默认跟随参考音色；OmniVoice 可用声音设计做无参考诊断。</span>
 		</div>
 	</section>
 	<section class="panel stack" style="margin-bottom:16px">

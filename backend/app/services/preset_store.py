@@ -19,14 +19,14 @@ _COMMON = {
 PRESETS: list[PresetTemplate] = [
     PresetTemplate(
         preset_id="idx2_default_narration",
-        name="默认自然旁白",
+        name="贴近参考音色",
         scene="课程 / 口播 / 批量生成",
-        description="最稳的 IndexTTS v2 基线参数，适合大多数中文旁白。",
+        description="不额外叠加情绪向量，优先贴近参考音色本身。",
         engine_id="indextts-v2",
         sample_text="大家好，欢迎来到本期内容。今天我们用一组标准样本，测试本地语音工作站的合成效果。",
-        parameters={**_COMMON, "emotion": "calm", "emo_alpha": 0.6, "speed": 1.0, "temperature": 0.8, "max_text_tokens_per_segment": 120, "interval_silence": 200},
-        source_test_id="idx2_baseline_calm",
-        tags=["稳定", "旁白", "主力"],
+        parameters={**_COMMON, "emotion": None, "emo_alpha": 0.0, "speed": 1.0, "temperature": 0.8, "max_text_tokens_per_segment": 120, "interval_silence": 200},
+        source_test_id="idx2_reference_follow",
+        tags=["贴近参考", "旁白", "主力"],
     ),
     PresetTemplate(
         preset_id="idx2_happy_light",
