@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -21,8 +22,9 @@ from app.models.schemas import (
 from app.services import database as db, engine_registry, settings_store, voice_store
 from app.services.paths import PROJECT_ROOT, expand_path
 
-_queue: asyncio.Queue[str] = asyncio.Queue()
-_started = False
+_queue: asyncio.Queue[str] | None = None
+_worker_task: asyncio.Task[None] | None = None
+_worker_loop: asyncio.AbstractEventLoop | None = None
 _lock = threading.Lock()
 
 
@@ -41,12 +43,28 @@ def list_batches() -> list[BatchTask]:
 
 
 def start_worker() -> None:
-    global _started
+    global _queue, _worker_loop, _worker_task
+    loop = asyncio.get_running_loop()
     with _lock:
-        if _started:
+        if _worker_task and not _worker_task.done() and _worker_loop is loop:
             return
-        asyncio.get_event_loop().create_task(_worker())
-        _started = True
+        if _worker_task and not _worker_task.done():
+            _worker_task.cancel()
+        _queue = asyncio.Queue()
+        _worker_loop = loop
+        _worker_task = loop.create_task(_worker(_queue))
+
+
+async def shutdown() -> None:
+    global _queue, _worker_loop, _worker_task
+    task = _worker_task
+    _queue = None
+    _worker_loop = None
+    _worker_task = None
+    if task and not task.done():
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 def normalize_payload(payload: Any) -> BatchGenerateRequest:
@@ -113,6 +131,8 @@ async def submit(payload: Any) -> BatchTask:
         parameters=req.model_dump(),
     )
     _save(batch)
+    if _queue is None:
+        globals()["_queue"] = asyncio.Queue()
     await _queue.put(batch.batch_task_id)
     return batch
 
@@ -237,9 +257,9 @@ def run_batch(req: BatchGenerateRequest, batch: BatchTask) -> dict[str, Any]:
     return json.loads(stdout.splitlines()[-1])
 
 
-async def _worker() -> None:
+async def _worker(queue: asyncio.Queue[str]) -> None:
     while True:
-        batch_id = await _queue.get()
+        batch_id = await queue.get()
         batch = get_batch(batch_id)
         if not batch:
             continue

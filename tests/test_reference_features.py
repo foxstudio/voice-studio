@@ -87,10 +87,12 @@ def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path):
         "mimo-v2.5-tts-voicedesign",
         "mimo-v2.5-tts-voiceclone",
         "mimo-v2.5-asr",
+        "qwen3-asr-mlx",
     }
     assert "emotion_control" in by_id["indextts-v2"]["capabilities"]
     assert by_id["mimo-v2.5-tts-preset"]["engine_type"] == "cloud"
     assert "mimo-v2.5-tts" not in by_id
+    assert "speech_recognition" in by_id["qwen3-asr-mlx"]["capabilities"]
 
 
 def test_mimo_secret_is_not_returned_in_settings(tmp_path: Path):
@@ -127,3 +129,35 @@ def test_batch_endpoint_accepts_audio_segments_shape(tmp_path: Path, monkeypatch
     fetched = client.get(f"/api/batches/{data['batch_task_id']}")
     assert fetched.status_code == 200
     assert fetched.json()["batch_task_id"] == data["batch_task_id"]
+
+
+def test_project_segments_can_store_imported_transcript_timestamps(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "字幕项目", "description": ""}).json()
+    resp = client.put(
+        f"/api/projects/{project['project_id']}/segments",
+        json=[
+            {
+                "segment_id": "seg-1",
+                "index": 0,
+                "text": "第一句。",
+                "source_start_ms": 0,
+                "source_end_ms": 1800,
+                "role_id": None,
+                "voice_id": None,
+                "engine_id": "indextts-v2",
+                "language": "zh",
+                "emotion": "calm",
+                "speed": 1,
+                "status": "ready",
+                "result_audio_id": None,
+                "result_id": None,
+                "error_message": None,
+                "locked": False,
+            }
+        ],
+    )
+    assert resp.status_code == 200
+    saved = resp.json()["segments"][0]
+    assert saved["source_start_ms"] == 0
+    assert saved["source_end_ms"] == 1800

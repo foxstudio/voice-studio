@@ -29,7 +29,11 @@ if _backend_dir not in sys.path:
 
 from app.main import app
 
-client = TestClient(app)
+
+@pytest.fixture
+def client():
+    with TestClient(app) as test_client:
+        yield test_client
 
 # ── Model / asset detection ────────────────────────────────
 PROJECT_ROOT = os.path.abspath(os.path.join(_backend_dir, ".."))
@@ -66,7 +70,7 @@ REF_AUDIO = _find_reference_audio()
 class TestEngineRegistryAPI:
     """引擎注册表 API: 列表 / 元数据 / 单查 / 404."""
 
-    def test_list_engines_returns_current_engines(self):
+    def test_list_engines_returns_current_engines(self, client):
         resp = client.get("/api/engines")
         assert resp.status_code == 200
         ids = [e["manifest"]["engine_id"] for e in resp.json()]
@@ -77,9 +81,10 @@ class TestEngineRegistryAPI:
             "mimo-v2.5-tts-voicedesign",
             "mimo-v2.5-tts-voiceclone",
             "mimo-v2.5-asr",
+            "qwen3-asr-mlx",
         ]
 
-    def test_engine_metadata(self):
+    def test_engine_metadata(self, client):
         resp = client.get("/api/engines")
         by_id = {e["manifest"]["engine_id"]: e["manifest"] for e in resp.json()}
 
@@ -103,19 +108,20 @@ class TestEngineRegistryAPI:
         assert "preset_voice" in m["capabilities"]
         assert "voice_design" in by_id["mimo-v2.5-tts-voicedesign"]["capabilities"]
         assert "voice_clone" in by_id["mimo-v2.5-tts-voiceclone"]["capabilities"]
+        assert "speech_recognition" in by_id["qwen3-asr-mlx"]["capabilities"]
 
-    def test_get_single_engine(self):
+    def test_get_single_engine(self, client):
         resp = client.get("/api/engines/indextts-v2")
         assert resp.status_code == 200
         data = resp.json()
         assert data["manifest"]["engine_id"] == "indextts-v2"
         assert data["manifest"]["sample_rate"] == 22050
 
-    def test_get_engine_not_found(self):
+    def test_get_engine_not_found(self, client):
         resp = client.get("/api/engines/nonexistent")
         assert resp.status_code == 404
 
-    def test_engine_initial_status(self):
+    def test_engine_initial_status(self, client):
         """Engines should not be 'loaded' initially."""
         for eid in ("indextts-v2", "omnivoice", "mimo-v2.5-tts-preset"):
             resp = client.get(f"/api/engines/{eid}")
@@ -131,7 +137,7 @@ class TestEngineRegistryAPI:
 class TestEngineLifecycle:
     """start/stop 引擎生命周期. indextts-v2 requires model files."""
 
-    def test_start_stop_indextts_v2(self):
+    def test_start_stop_indextts_v2(self, client):
         """start -> loaded -> stop -> stopped."""
         if not HAS_V2_MODEL:
             pytest.skip(f"IndexTTS v2 model not found: {MODEL_DIR_V2}")
@@ -144,11 +150,11 @@ class TestEngineLifecycle:
         assert resp.status_code == 200
         assert resp.json()["state"]["status"] == "stopped"
 
-    def test_start_engine_not_found(self):
+    def test_start_engine_not_found(self, client):
         resp = client.post("/api/engines/nonexistent/start")
         assert resp.status_code == 404
 
-    def test_health_check_not_loaded(self):
+    def test_health_check_not_loaded(self, client):
         """Unstarted engine health_check reports non-loaded status."""
         resp = client.post("/api/engines/indextts-v2/health-check")
         assert resp.status_code == 200
@@ -294,7 +300,7 @@ class TestGenerationFlow:
 # T4 - Sync API endpoint tests  (无需 event loop)
 # ════════════════════════════════════════════════════════════
 
-def test_task_api_endpoints():
+def test_task_api_endpoints(client):
     """任务列表 & 不存在任务 (同步, 无需 event loop).
 
     注意: GET /api/tasks/nonexistent 返回 None 时 FastAPI

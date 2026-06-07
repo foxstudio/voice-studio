@@ -31,6 +31,6 @@ export const api = {
 		const form = new FormData();
 		form.append('file', file);
 		return fetch(`/api${path}`, { method: 'POST', body: form }).then(parse<T>);
-	}
+	},
+	postForm: <T>(path: string, form: FormData) => fetch(`/api${path}`, { method: 'POST', body: form }).then(parse<T>)
 };
-

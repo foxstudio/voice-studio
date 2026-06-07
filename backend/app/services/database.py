@@ -55,6 +55,17 @@ CREATE TABLE IF NOT EXISTS exports (
     data TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS transcriptions (
+    transcription_id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS asr_tasks (
+    task_id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS batches (
     batch_task_id TEXT PRIMARY KEY,
     data TEXT NOT NULL,
@@ -109,6 +120,9 @@ def upsert(table: str, key: str, data: dict[str, Any], time_field: str = "update
     elif table == "exports":
         id_field = "export_id"
         time_field = "created_at"
+    elif table == "asr_tasks":
+        id_field = "task_id"
+        time_field = "created_at"
     elif table == "batches":
         id_field = "batch_task_id"
         time_field = "created_at"
@@ -121,6 +135,11 @@ def upsert(table: str, key: str, data: dict[str, Any], time_field: str = "update
         elif table == "batches":
             db.execute(
                 "INSERT OR REPLACE INTO batches (batch_task_id, data, created_at, status) VALUES (?, ?, ?, ?)",
+                (key, _dump(data), data.get("created_at", ""), data.get("status", "")),
+            )
+        elif table == "asr_tasks":
+            db.execute(
+                "INSERT OR REPLACE INTO asr_tasks (task_id, data, created_at, status) VALUES (?, ?, ?, ?)",
                 (key, _dump(data), data.get("created_at", ""), data.get("status", "")),
             )
         else:

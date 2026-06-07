@@ -48,6 +48,8 @@
 			segment_id: crypto.randomUUID().slice(0, 12),
 			index: base + i,
 			text: line,
+			source_start_ms: null,
+			source_end_ms: null,
 			role_id: role?.role_id ?? null,
 			voice_id: role?.default_voice_id ?? null,
 			engine_id: role?.default_engine_id ?? 'indextts-v2',
@@ -103,12 +105,13 @@
 			{#if current}
 				<h2>{current.name}</h2>
 				<table class="table">
-					<thead><tr><th>#</th><th>文本</th><th>角色</th><th>声音</th><th>引擎</th><th>状态</th></tr></thead>
+					<thead><tr><th>#</th><th>文本</th><th>来源时间</th><th>角色</th><th>声音</th><th>引擎</th><th>状态</th></tr></thead>
 					<tbody>
 						{#each current.segments as seg}
 							<tr>
 								<td>{seg.index + 1}</td>
 								<td><textarea bind:value={seg.text} style="min-height:70px"></textarea></td>
+								<td>{#if seg.source_start_ms !== null && seg.source_end_ms !== null}<span class="badge">{Math.floor(seg.source_start_ms / 1000 / 60)}:{Math.floor(seg.source_start_ms / 1000 % 60).toString().padStart(2, '0')} - {Math.floor(seg.source_end_ms / 1000 / 60)}:{Math.floor(seg.source_end_ms / 1000 % 60).toString().padStart(2, '0')}</span>{:else}<span class="muted">-</span>{/if}</td>
 								<td><select bind:value={seg.role_id}><option value={null}>无</option>{#each current.roles as r}<option value={r.role_id}>{r.name}</option>{/each}</select></td>
 								<td><select bind:value={seg.voice_id}><option value={null}>无</option>{#each voices as v}<option value={v.voice_id}>{v.name}</option>{/each}</select></td>
 									<td><select bind:value={seg.engine_id}>{#each ttsEngines as e}<option value={e.manifest.engine_id}>{e.manifest.display_name}</option>{/each}</select></td>

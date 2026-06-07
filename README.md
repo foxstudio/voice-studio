@@ -31,6 +31,9 @@ uv sync
 
 # With model conversion support (requires torch)
 uv sync --extra convert
+
+# With local ASR support (Qwen3-ASR MLX via mlx-audio)
+uv sync --extra asr
 ```
 
 ## Quick Start
@@ -131,6 +134,22 @@ the voice-cloning workflow used by v1.5 and adds emotion control, longer text
 handling, and the S2Mel/BigVGAN2 pipeline. Legacy v1.5 source files may remain
 for conversion or benchmark reference, but the WebUI and API no longer expose it
 as a production engine.
+
+For speech recognition, Voice Studio now separates cloud and local engines:
+
+- `mimo-v2.5-asr`: Xiaomi MiMo cloud speech recognition
+- `qwen3-asr-mlx`: local Qwen3-ASR MLX slot, backed by `mlx-audio` when installed
+
+The local Qwen engine checks model files and runtime availability in Engine Hub
+before you run a transcription job.
+
+Current subtitle policy:
+
+- MiMo public ASR is treated as transcript-first
+- Qwen local ASR provides native segment timestamps and SRT export
+- MiMo transcript records that retain their source audio can now call
+  `POST /api/asr/{transcription_id}/timestamps` to supplement timestamps locally
+  through the Qwen path and unlock SRT export
 
 ## Supported Emotions (v2.0)
 

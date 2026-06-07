@@ -14,6 +14,8 @@ import type {
 	Project,
 	Role,
 	ScriptSegment,
+	TranscriptionRecord,
+	TranscriptionTask,
 	UploadResult,
 	VoiceAsset,
 	VoiceAssetCreate,
@@ -59,6 +61,34 @@ export const Api = {
 	exports: () => api.get<ExportRecord[]>('/exports'),
 	latestEvaluation: () => api.get<EvaluationReport>('/evaluations/latest'),
 	createExport: (body: { result_ids?: string[]; audio_ids?: string[]; project_id?: string | null; format: string; silence_ms: number; normalize: boolean }) => api.post<ExportRecord>('/exports', body),
+	transcribeAudio: (file: File, language: 'auto' | 'zh' | 'en' = 'auto', engineId = 'mimo-v2.5-asr') => {
+		const form = new FormData();
+		form.append('file', file);
+		form.append('language', language);
+		form.append('engine_id', engineId);
+		return api.postForm<TranscriptionRecord>('/asr/transcribe', form);
+	},
+	createTranscriptionTask: (file: File, language: 'auto' | 'zh' | 'en' = 'auto', engineId = 'mimo-v2.5-asr') => {
+		const form = new FormData();
+		form.append('file', file);
+		form.append('language', language);
+		form.append('engine_id', engineId);
+		return api.postForm<TranscriptionTask>('/asr/tasks', form);
+	},
+	transcription: (transcriptionId: string) => api.get<TranscriptionRecord>(`/asr/${transcriptionId}`),
+	supplementTranscriptionTimestamps: (
+		transcriptionId: string,
+		body: { strategy?: 'auto' | 'forced_aligner' | 'qwen3-asr-mlx'; overwrite?: boolean } = {}
+	) => api.post<TranscriptionRecord>(`/asr/${transcriptionId}/timestamps`, body),
+	batchSupplementTranscriptionTimestamps: (
+		transcriptionIds: string[],
+		body: { strategy?: 'auto' | 'forced_aligner' | 'qwen3-asr-mlx'; overwrite?: boolean } = {}
+	) => api.post<TranscriptionRecord[]>('/asr/timestamps/batch', { transcription_ids: transcriptionIds, ...body }),
+	deleteTranscription: (transcriptionId: string) => api.delete<{ status: string; transcription_id: string }>(`/asr/${transcriptionId}`),
+	batchDeleteTranscriptions: (transcriptionIds: string[]) => api.post<{ status: string; deleted_ids: string[] }>('/asr/batch-delete', { transcription_ids: transcriptionIds }),
+	transcriptionTasks: () => api.get<TranscriptionTask[]>('/asr/tasks'),
+	transcriptionTask: (taskId: string) => api.get<TranscriptionTask>(`/asr/tasks/${taskId}`),
+	transcriptionHistory: () => api.get<TranscriptionRecord[]>('/asr/history'),
 	splitText: (text: string) => api.post<{ segments: string[] }>('/text-tools/split', { text }),
 	cleanText: (text: string) => api.post<{ text: string }>('/text-tools/clean', { text }),
 	normalizeNumbers: (text: string) => api.post<{ text: string }>('/text-tools/normalize-numbers', { text })

@@ -42,6 +42,25 @@ def _audio_data(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _message_text(payload: dict[str, Any]) -> str | None:
+    choices = payload.get("choices") or []
+    for choice in choices:
+        message = choice.get("message") or {}
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                elif isinstance(item, str):
+                    parts.append(item)
+            if parts:
+                return "".join(parts)
+    return None
+
+
 def audio_file_data_url(path: str, *, error_prefix: str = "MIMO_VOICECLONE") -> str:
     audio_path = Path(path)
     if not audio_path.exists():
@@ -177,3 +196,25 @@ def generate_tts(
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(base64.b64decode(data))
     return {"output_path": str(path)}
+
+
+def transcribe_audio(
+    *,
+    base_url: str,
+    api_key: str,
+    audio_path: str,
+    language: str = "auto",
+    timeout: int = 120,
+) -> dict[str, Any]:
+    body = build_asr_payload(audio_path, language=language)
+    payload = _post_chat_completion(base_url=base_url, api_key=api_key, body=body, timeout=timeout)
+    text = _message_text(payload)
+    if not text:
+        raise RuntimeError("MiMo ASR 未返回可识别的文本内容")
+    usage = payload.get("usage") or {}
+    return {
+        "text": text,
+        "usage_seconds": usage.get("seconds"),
+        "provider_response_id": payload.get("id"),
+        "raw_response": payload,
+    }

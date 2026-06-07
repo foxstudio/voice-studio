@@ -50,6 +50,12 @@ class TaskStatus(str, Enum):
     retrying = "retrying"
 
 
+class TimestampMode(str, Enum):
+    none = "none"
+    native = "native"
+    supplemented = "supplemented"
+
+
 class VoiceType(str, Enum):
     real_person = "real_person"
     virtual_character = "virtual_character"
@@ -191,6 +197,65 @@ class VoiceFile(BaseModel):
     sample_rate: int | None = None
     size_bytes: int = 0
     created_at: str = Field(default_factory=now_iso)
+
+
+class TranscriptionSegment(BaseModel):
+    start_ms: int
+    end_ms: int
+    text: str
+    language: str | None = None
+
+
+class TranscriptionRecord(BaseModel):
+    transcription_id: str = Field(default_factory=new_id)
+    engine_id: str = "mimo-v2.5-asr"
+    filename: str
+    language: Literal["auto", "zh", "en"] = "auto"
+    text: str
+    segments: list[TranscriptionSegment] = Field(default_factory=list)
+    has_source_audio: bool = False
+    timestamp_mode: TimestampMode = TimestampMode.none
+    timestamp_source_engine_id: str | None = None
+    duration_ms: int | None = None
+    size_bytes: int = 0
+    usage_seconds: int | None = None
+    provider_response_id: str | None = None
+    created_at: str = Field(default_factory=now_iso)
+
+
+class TranscriptionTask(BaseModel):
+    task_id: str = Field(default_factory=new_id)
+    engine_id: str = "mimo-v2.5-asr"
+    filename: str
+    language: Literal["auto", "zh", "en"] = "auto"
+    status: TaskStatus = TaskStatus.queued
+    text: str | None = None
+    segments: list[TranscriptionSegment] = Field(default_factory=list)
+    has_source_audio: bool = False
+    timestamp_mode: TimestampMode = TimestampMode.none
+    timestamp_source_engine_id: str | None = None
+    transcription_id: str | None = None
+    error_message: str | None = None
+    duration_ms: int | None = None
+    size_bytes: int = 0
+    usage_seconds: int | None = None
+    provider_response_id: str | None = None
+    created_at: str = Field(default_factory=now_iso)
+    started_at: str | None = None
+    completed_at: str | None = None
+
+
+class TimestampSupplementRequest(BaseModel):
+    strategy: Literal["auto", "forced_aligner", "qwen3-asr-mlx"] = "auto"
+    overwrite: bool = False
+
+
+class TranscriptionBatchDeleteRequest(BaseModel):
+    transcription_ids: list[str] = Field(default_factory=list)
+
+
+class TranscriptionBatchSupplementRequest(TimestampSupplementRequest):
+    transcription_ids: list[str] = Field(default_factory=list)
 
 
 class GenerateRequest(BaseModel):
@@ -354,6 +419,8 @@ class ScriptSegment(BaseModel):
     segment_id: str = Field(default_factory=new_id)
     index: int
     text: str = ""
+    source_start_ms: int | None = None
+    source_end_ms: int | None = None
     role_id: str | None = None
     voice_id: str | None = None
     engine_id: str | None = None

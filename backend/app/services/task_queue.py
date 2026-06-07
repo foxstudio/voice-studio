@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Iterable
 
@@ -19,8 +21,9 @@ from app.models.schemas import (
 )
 from app.services import audio_tools, database as db, engine_registry, history_store, project_store, settings_store, voice_store
 
-_queue: asyncio.Queue[str] = asyncio.Queue()
-_started = False
+_queue: asyncio.Queue[str] | None = None
+_worker_task: asyncio.Task[None] | None = None
+_worker_loop: asyncio.AbstractEventLoop | None = None
 _lock = threading.Lock()
 _cancelled: set[str] = set()
 _clients: list[WebSocket] = []
@@ -53,6 +56,16 @@ async def _broadcast(task: GenerationTask) -> None:
             _clients.remove(ws)
 
 
+def _broadcast_from_thread(task: GenerationTask) -> None:
+    loop = _worker_loop
+    if not loop or loop.is_closed():
+        return
+    try:
+        asyncio.run_coroutine_threadsafe(_broadcast(task), loop)
+    except Exception:
+        return
+
+
 def add_ws_client(ws: WebSocket) -> None:
     _clients.append(ws)
 
@@ -63,12 +76,30 @@ def remove_ws_client(ws: WebSocket) -> None:
 
 
 def start_worker() -> None:
-    global _started
+    global _queue, _worker_loop, _worker_task
+    loop = asyncio.get_running_loop()
     with _lock:
-        if _started:
+        if _worker_task and not _worker_task.done() and _worker_loop is loop:
             return
-        asyncio.get_event_loop().create_task(_worker())
-        _started = True
+        if _worker_task and not _worker_task.done():
+            _worker_task.cancel()
+        _queue = asyncio.Queue()
+        _worker_loop = loop
+        _worker_task = loop.create_task(_worker(_queue))
+
+
+async def shutdown() -> None:
+    global _queue, _worker_loop, _worker_task
+    task = _worker_task
+    _queue = None
+    _worker_loop = None
+    _worker_task = None
+    _cancelled.clear()
+    _clients.clear()
+    if task and not task.done():
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 async def submit(req: GenerateRequest, task_type: str = "single", project_id: str | None = None, segment_id: str | None = None) -> str:
@@ -84,6 +115,8 @@ async def submit(req: GenerateRequest, task_type: str = "single", project_id: st
         parameters=req.model_dump(),
     )
     _save(task)
+    if _queue is None:
+        globals()["_queue"] = asyncio.Queue()
     await _queue.put(task.task_id)
     await _broadcast(task)
     return task.task_id
@@ -128,9 +161,9 @@ async def retry_task(task_id: str) -> str:
     return await submit(GenerateRequest(**old.parameters), old.task_type, old.project_id, old.segment_id)
 
 
-async def _worker() -> None:
+async def _worker(queue: asyncio.Queue[str]) -> None:
     while True:
-        task_id = await _queue.get()
+        task_id = await queue.get()
         task = get_task(task_id)
         if not task or task.status == TaskStatus.cancelled:
             continue
@@ -217,20 +250,57 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
 async def _process(task: GenerationTask) -> None:
     task.status = TaskStatus.running
     task.started_at = now_iso()
-    task.progress = 0.2
+    task.progress = 0.12
     _save(task)
     await _broadcast(task)
     try:
         req = GenerateRequest(**task.parameters)
         engine_registry.ensure_loaded(req.engine_id)
+        task.progress = 0.24
+        _save(task)
+        await _broadcast(task)
         settings_store.ensure_directories()
         audio_id = task.task_id
         wav_path = settings_store.output_dir() / f"{audio_id}.wav"
-        result = await asyncio.to_thread(engine_registry.run_isolated, req.engine_id, _kwargs(req, str(wav_path)))
+        progress_state = {"last_sent_at": 0.0, "last_value": task.progress}
+
+        def progress_tick(elapsed_seconds: float) -> None:
+            ramp_seconds = {
+                "omnivoice": 300.0,
+                "indextts-v2": 180.0,
+                "mimo-v2.5-tts-preset": 120.0,
+                "mimo-v2.5-tts-voicedesign": 120.0,
+                "mimo-v2.5-tts-voiceclone": 120.0,
+            }.get(req.engine_id, 180.0)
+            next_value = min(0.92, 0.24 + min(1.0, elapsed_seconds / ramp_seconds) * 0.66)
+            now = time.monotonic()
+            if next_value <= progress_state["last_value"] + 0.01 and now - progress_state["last_sent_at"] < 2.0:
+                return
+            task.progress = next_value
+            progress_state["last_value"] = next_value
+            progress_state["last_sent_at"] = now
+            _save(task)
+            _broadcast_from_thread(task)
+
+        timeout_seconds = {
+            "omnivoice": 600,
+            "indextts-v2": 420,
+        }.get(req.engine_id, 300)
+        result = await asyncio.to_thread(
+            engine_registry.run_isolated,
+            req.engine_id,
+            _kwargs(req, str(wav_path)),
+            timeout_seconds,
+            lambda: task.task_id in _cancelled,
+            progress_tick,
+        )
         if task.task_id in _cancelled:
             task.status = TaskStatus.cancelled
             task.error_message = "cancelled by user"
         else:
+            task.progress = 0.96
+            _save(task)
+            await _broadcast(task)
             final_path = Path(result["output_path"])
             if req.output_format != "wav":
                 converted = settings_store.output_dir() / f"{audio_id}.{req.output_format}"

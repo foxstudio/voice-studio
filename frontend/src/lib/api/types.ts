@@ -114,6 +114,52 @@ export interface UploadResult {
 	quality: { passed: boolean; warnings: string[] };
 }
 
+export interface TranscriptionSegment {
+	start_ms: number;
+	end_ms: number;
+	text: string;
+	language: string | null;
+}
+
+export interface TranscriptionRecord {
+	transcription_id: string;
+	engine_id: string;
+	filename: string;
+	language: 'auto' | 'zh' | 'en';
+	text: string;
+	segments: TranscriptionSegment[];
+	has_source_audio: boolean;
+	timestamp_mode: 'none' | 'native' | 'supplemented';
+	timestamp_source_engine_id: string | null;
+	duration_ms: number | null;
+	size_bytes: number;
+	usage_seconds: number | null;
+	provider_response_id: string | null;
+	created_at: string;
+}
+
+export interface TranscriptionTask {
+	task_id: string;
+	engine_id: string;
+	filename: string;
+	language: 'auto' | 'zh' | 'en';
+	status: TaskStatus;
+	text: string | null;
+	segments: TranscriptionSegment[];
+	has_source_audio: boolean;
+	timestamp_mode: 'none' | 'native' | 'supplemented';
+	timestamp_source_engine_id: string | null;
+	transcription_id: string | null;
+	error_message: string | null;
+	duration_ms: number | null;
+	size_bytes: number;
+	usage_seconds: number | null;
+	provider_response_id: string | null;
+	created_at: string;
+	started_at: string | null;
+	completed_at: string | null;
+}
+
 export interface GenerateRequest {
 	text: string;
 	engine_id: string;
@@ -248,6 +294,8 @@ export interface ScriptSegment {
 	segment_id: string;
 	index: number;
 	text: string;
+	source_start_ms: number | null;
+	source_end_ms: number | null;
 	role_id: string | null;
 	voice_id: string | null;
 	engine_id: string | null;

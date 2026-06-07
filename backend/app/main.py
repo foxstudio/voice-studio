@@ -7,9 +7,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import audio_tools, batches, engines, evaluations, exports, generate, history, presets, projects, settings, tasks, text_tools, voice_seeds, voices
+from app.api import asr, audio_tools, batches, engines, evaluations, exports, generate, history, presets, projects, settings, tasks, text_tools, voice_seeds, voices
 from app.models.exceptions import AppException
-from app.services import engine_registry, settings_store
+from app.services import asr_tasks, batch_queue, engine_registry, qwen_forced_aligner, settings_store, task_queue
 
 START = time.monotonic()
 app = FastAPI(title="Voice Studio", version="1.0.0")
@@ -35,12 +35,21 @@ app.include_router(presets.router, prefix="/api/presets", tags=["presets"])
 app.include_router(voice_seeds.router, prefix="/api/voice-seeds", tags=["voice-seeds"])
 app.include_router(text_tools.router, prefix="/api/text-tools", tags=["text-tools"])
 app.include_router(audio_tools.router, prefix="/api/audio-tools", tags=["audio-tools"])
+app.include_router(asr.router, prefix="/api/asr", tags=["asr"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 
 
 @app.on_event("startup")
 async def startup():
     settings_store.ensure_directories()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    await asr_tasks.shutdown()
+    await task_queue.shutdown()
+    await batch_queue.shutdown()
+    qwen_forced_aligner.shutdown()
 
 
 @app.exception_handler(AppException)

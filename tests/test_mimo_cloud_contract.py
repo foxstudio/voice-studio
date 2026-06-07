@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,7 @@ if str(BACKEND) not in sys.path:
 
 from app.main import app  # noqa: E402
 from app.models.schemas import AppSettings, VoiceAssetCreate  # noqa: E402
-from app.services import database, mimo_client, settings_store, voice_store  # noqa: E402
+from app.services import database, engine_registry, mimo_client, qwen_forced_aligner, settings_store, voice_store  # noqa: E402
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -47,6 +48,7 @@ def test_mimo_engines_are_split_and_legacy_id_is_hidden(tmp_path: Path):
         "mimo-v2.5-tts-voicedesign",
         "mimo-v2.5-tts-voiceclone",
         "mimo-v2.5-asr",
+        "qwen3-asr-mlx",
     } <= set(by_id)
 
     preset = by_id["mimo-v2.5-tts-preset"]
@@ -62,6 +64,11 @@ def test_mimo_engines_are_split_and_legacy_id_is_hidden(tmp_path: Path):
     clone = by_id["mimo-v2.5-tts-voiceclone"]
     assert "voice_clone" in clone["capabilities"]
     assert "preset_voice" not in clone["capabilities"]
+
+    qwen = by_id["qwen3-asr-mlx"]
+    assert qwen["engine_type"] == "local"
+    assert "speech_recognition" in qwen["capabilities"]
+    assert "transcription" in qwen["capabilities"]
 
 
 def test_settings_include_default_voice_and_cloud_upload_confirmation(tmp_path: Path):
@@ -152,6 +159,371 @@ def test_asr_payload_accepts_wav_mp3_and_language_options(tmp_path: Path):
 
     with pytest.raises(ValueError, match="MIMO_ASR_LANGUAGE_UNSUPPORTED"):
         mimo_client.build_asr_payload(str(audio), language="ja")
+
+
+def test_asr_transcribe_endpoint_returns_transcript_and_stores_history(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    client.patch("/api/settings/mimo-secret", json={"api_key": "secret-token"})
+
+    def fake_transcribe_audio(**kwargs):
+        assert kwargs["language"] == "zh"
+        assert kwargs["audio_path"].endswith(".wav")
+        return {
+            "text": "今天下午三点开会。",
+            "segments": [],
+            "usage_seconds": 4,
+            "provider_response_id": "mimo-asr-123",
+        }
+
+    monkeypatch.setattr(mimo_client, "transcribe_audio", fake_transcribe_audio)
+
+    resp = client.post(
+        "/api/asr/transcribe",
+        data={"language": "zh"},
+        files={"file": ("meeting.wav", b"RIFF" + b"\0" * 128, "audio/wav")},
+    )
+    assert resp.status_code == 200
+    record = resp.json()
+    assert record["engine_id"] == "mimo-v2.5-asr"
+    assert record["filename"] == "meeting.wav"
+    assert record["language"] == "zh"
+    assert record["text"] == "今天下午三点开会。"
+    assert record["has_source_audio"] is True
+    assert record["timestamp_mode"] == "none"
+    assert record["provider_response_id"] == "mimo-asr-123"
+
+    stored = database.get_one("transcriptions", "transcription_id", record["transcription_id"])
+    assert stored is not None
+    assert Path(stored["source_audio_path"]).exists()
+
+    history = client.get("/api/asr/history")
+    assert history.status_code == 200
+    entries = history.json()
+    assert len(entries) == 1
+    assert entries[0]["transcription_id"] == record["transcription_id"]
+    assert entries[0]["text"] == "今天下午三点开会。"
+
+
+def test_asr_transcribe_endpoint_dispatches_selected_engine(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+
+    monkeypatch.setattr(
+        engine_registry,
+        "health_check",
+        lambda engine_id: {"healthy": True, "status": "ready", "engine_id": engine_id},
+    )
+
+    import app.services.qwen_mlx_asr as qwen_mlx_asr  # noqa: E402
+
+    def fake_local_transcribe(*, audio_path: str, language: str, model_path: str):
+        assert audio_path.endswith(".wav")
+        assert language == "zh"
+        assert Path(model_path).name in {"qwen3-asr-mlx", "mlx-community_Qwen3-ASR-1.7B-8bit"}
+        return {
+            "text": "这是本地 Qwen3-ASR 结果。",
+            "segments": [
+                {"start_ms": 0, "end_ms": 1350, "text": "这是本地", "language": "Chinese"},
+                {"start_ms": 1350, "end_ms": 2600, "text": "Qwen3-ASR 结果。", "language": "Chinese"},
+            ],
+            "usage_seconds": None,
+            "provider_response_id": None,
+        }
+
+    monkeypatch.setattr(qwen_mlx_asr, "transcribe_audio", fake_local_transcribe)
+
+    resp = client.post(
+        "/api/asr/transcribe",
+        data={"language": "zh", "engine_id": "qwen3-asr-mlx"},
+        files={"file": ("meeting.wav", b"RIFF" + b"\0" * 128, "audio/wav")},
+    )
+    assert resp.status_code == 200
+    record = resp.json()
+    assert record["engine_id"] == "qwen3-asr-mlx"
+    assert record["text"] == "这是本地 Qwen3-ASR 结果。"
+    assert len(record["segments"]) == 2
+    assert record["timestamp_mode"] == "native"
+    assert record["timestamp_source_engine_id"] == "qwen3-asr-mlx"
+
+    srt = client.get(f"/api/asr/{record['transcription_id']}/export", params={"format": "srt"})
+    assert srt.status_code == 200
+    assert "00:00:00,000 --> 00:00:01,350" in srt.text
+    assert "Qwen3-ASR 结果。" in srt.text
+
+
+def test_mimo_transcription_srt_export_is_rejected_without_segments(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    client.patch("/api/settings/mimo-secret", json={"api_key": "secret-token"})
+
+    monkeypatch.setattr(
+        mimo_client,
+        "transcribe_audio",
+        lambda **kwargs: {
+            "text": "只有纯文本。",
+            "segments": [],
+            "usage_seconds": 1,
+            "provider_response_id": "mimo-asr-no-srt",
+        },
+    )
+
+    resp = client.post(
+        "/api/asr/transcribe",
+        data={"language": "zh"},
+        files={"file": ("meeting.wav", b"RIFF" + b"\0" * 128, "audio/wav")},
+    )
+    assert resp.status_code == 200
+    record = resp.json()
+
+    srt = client.get(f"/api/asr/{record['transcription_id']}/export", params={"format": "srt"})
+    assert srt.status_code == 400
+    assert srt.json()["error"]["code"] == "ASR_SRT_UNAVAILABLE"
+
+
+def test_mimo_transcription_can_supplement_timestamps_with_forced_aligner_first(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    client.patch("/api/settings/mimo-secret", json={"api_key": "secret-token"})
+
+    monkeypatch.setattr(
+        mimo_client,
+        "transcribe_audio",
+        lambda **kwargs: {
+            "text": "第一句。第二句更长一点。",
+            "segments": [],
+            "usage_seconds": 1,
+            "provider_response_id": "mimo-asr-need-align",
+        },
+    )
+    monkeypatch.setattr(
+        qwen_forced_aligner,
+        "align_audio",
+        lambda **kwargs: [
+            {"text": "第", "start_time": 0.0, "end_time": 0.3},
+            {"text": "一", "start_time": 0.3, "end_time": 0.6},
+            {"text": "句", "start_time": 0.6, "end_time": 1.0},
+            {"text": "第", "start_time": 1.2, "end_time": 1.5},
+            {"text": "二", "start_time": 1.5, "end_time": 1.8},
+            {"text": "句", "start_time": 1.8, "end_time": 2.1},
+            {"text": "更", "start_time": 2.1, "end_time": 2.4},
+            {"text": "长", "start_time": 2.4, "end_time": 2.7},
+            {"text": "一", "start_time": 2.7, "end_time": 3.0},
+            {"text": "点", "start_time": 3.0, "end_time": 3.3},
+        ],
+    )
+
+    resp = client.post(
+        "/api/asr/transcribe",
+        data={"language": "zh"},
+        files={"file": ("meeting.wav", b"RIFF" + b"\0" * 128, "audio/wav")},
+    )
+    assert resp.status_code == 200
+    record = resp.json()
+    assert record["segments"] == []
+
+    aligned = client.post(f"/api/asr/{record['transcription_id']}/timestamps", json={})
+    assert aligned.status_code == 200
+    updated = aligned.json()
+    assert updated["timestamp_mode"] == "supplemented"
+    assert updated["timestamp_source_engine_id"] == "qwen3-forced-aligner-0.6B"
+    assert len(updated["segments"]) == 2
+    assert updated["segments"][0]["text"] == "第一句。"
+    assert updated["segments"][1]["text"] == "第二句更长一点。"
+    assert updated["segments"][0]["end_ms"] == 1000
+    assert updated["segments"][1]["start_ms"] == 1200
+
+    srt = client.get(f"/api/asr/{record['transcription_id']}/export", params={"format": "srt"})
+    assert srt.status_code == 200
+    assert "00:00:00,000 --> 00:00:01,000" in srt.text
+    assert "第二句更长一点。" in srt.text
+
+
+def test_timestamp_supplement_falls_back_to_coarse_qwen_when_forced_aligner_unavailable(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    client.patch("/api/settings/mimo-secret", json={"api_key": "secret-token"})
+
+    monkeypatch.setattr(
+        mimo_client,
+        "transcribe_audio",
+        lambda **kwargs: {
+            "text": "第一句。第二句更长一点。",
+            "segments": [],
+            "usage_seconds": 1,
+            "provider_response_id": "mimo-asr-need-align-fallback",
+        },
+    )
+    monkeypatch.setattr(
+        qwen_forced_aligner,
+        "align_audio",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("forced align unavailable")),
+    )
+    monkeypatch.setattr(
+        engine_registry,
+        "health_check",
+        lambda engine_id: {"healthy": True, "status": "ready", "engine_id": engine_id},
+    )
+
+    import app.services.qwen_mlx_asr as qwen_mlx_asr  # noqa: E402
+
+    monkeypatch.setattr(
+        qwen_mlx_asr,
+        "transcribe_audio",
+        lambda **kwargs: {
+            "text": "本地转写参考文本",
+            "segments": [
+                {"start_ms": 0, "end_ms": 1200, "text": "本地第一段", "language": "Chinese"},
+                {"start_ms": 1200, "end_ms": 3100, "text": "本地第二段", "language": "Chinese"},
+            ],
+            "usage_seconds": None,
+            "provider_response_id": None,
+        },
+    )
+
+    resp = client.post(
+        "/api/asr/transcribe",
+        data={"language": "zh"},
+        files={"file": ("meeting.wav", b"RIFF" + b"\0" * 128, "audio/wav")},
+    )
+    assert resp.status_code == 200
+    record = resp.json()
+
+    aligned = client.post(f"/api/asr/{record['transcription_id']}/timestamps", json={})
+    assert aligned.status_code == 200
+    updated = aligned.json()
+    assert updated["timestamp_source_engine_id"] == "qwen3-asr-mlx"
+    assert len(updated["segments"]) == 2
+
+
+def test_batch_timestamp_supplement_and_batch_delete_work_for_transcriptions(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    client.patch("/api/settings/mimo-secret", json={"api_key": "secret-token"})
+
+    monkeypatch.setattr(
+        mimo_client,
+        "transcribe_audio",
+        lambda **kwargs: {
+            "text": "第一句。第二句。",
+            "segments": [],
+            "usage_seconds": 1,
+            "provider_response_id": "mimo-asr-batch",
+        },
+    )
+    monkeypatch.setattr(
+        qwen_forced_aligner,
+        "align_audio",
+        lambda **kwargs: [
+            {"text": "第", "start_time": 0.0, "end_time": 0.2},
+            {"text": "一", "start_time": 0.2, "end_time": 0.4},
+            {"text": "句", "start_time": 0.4, "end_time": 0.8},
+            {"text": "第", "start_time": 1.0, "end_time": 1.2},
+            {"text": "二", "start_time": 1.2, "end_time": 1.4},
+            {"text": "句", "start_time": 1.4, "end_time": 1.8},
+        ],
+    )
+
+    created: list[dict] = []
+    for index in range(2):
+        resp = client.post(
+            "/api/asr/transcribe",
+            data={"language": "zh"},
+            files={"file": (f"meeting-{index}.wav", b"RIFF" + b"\0" * 128, "audio/wav")},
+        )
+        assert resp.status_code == 200
+        created.append(resp.json())
+
+    source_paths = [
+        Path(database.get_one("transcriptions", "transcription_id", item["transcription_id"])["source_audio_path"])
+        for item in created
+    ]
+    assert all(path.exists() for path in source_paths)
+
+    batch_aligned = client.post(
+        "/api/asr/timestamps/batch",
+        json={"transcription_ids": [item["transcription_id"] for item in created], "strategy": "auto"},
+    )
+    assert batch_aligned.status_code == 200
+    aligned_items = batch_aligned.json()
+    assert len(aligned_items) == 2
+    assert all(item["timestamp_source_engine_id"] == "qwen3-forced-aligner-0.6B" for item in aligned_items)
+    assert all(len(item["segments"]) == 2 for item in aligned_items)
+
+    batch_deleted = client.post(
+        "/api/asr/batch-delete",
+        json={"transcription_ids": [item["transcription_id"] for item in created]},
+    )
+    assert batch_deleted.status_code == 200
+    assert set(batch_deleted.json()["deleted_ids"]) == {item["transcription_id"] for item in created}
+    assert all(database.get_one("transcriptions", "transcription_id", item["transcription_id"]) is None for item in created)
+    assert all(not path.exists() for path in source_paths)
+
+
+def test_async_asr_task_endpoint_completes_and_persists_history(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    client.patch("/api/settings/mimo-secret", json={"api_key": "secret-token"})
+
+    monkeypatch.setattr(
+        mimo_client,
+        "transcribe_audio",
+        lambda **kwargs: {
+            "text": "这是异步转写结果。",
+            "segments": [],
+            "usage_seconds": 2,
+            "provider_response_id": "mimo-asr-task-1",
+        },
+    )
+
+    resp = client.post(
+        "/api/asr/tasks",
+        data={"language": "zh"},
+        files={"file": ("clip.wav", b"RIFF" + b"\0" * 128, "audio/wav")},
+    )
+    assert resp.status_code == 200
+    task = resp.json()
+    assert task["status"] == "queued"
+
+    deadline = time.time() + 3
+    final = None
+    while time.time() < deadline:
+        poll = client.get(f"/api/asr/tasks/{task['task_id']}")
+        assert poll.status_code == 200
+        final = poll.json()
+        if final["status"] in {"success", "failed"}:
+            break
+        time.sleep(0.05)
+
+    assert final is not None
+    assert final["status"] == "success"
+    assert final["text"] == "这是异步转写结果。"
+    assert final["provider_response_id"] == "mimo-asr-task-1"
+    assert final["transcription_id"] is not None
+
+    history = client.get("/api/asr/history")
+    assert history.status_code == 200
+    assert any(item["transcription_id"] == final["transcription_id"] for item in history.json())
+
+
+def test_qwen3_asr_health_reports_runtime_missing_when_model_exists(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    model_dir = tmp_path / "qwen3-asr-mlx"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    for name in [
+        "config.json",
+        "preprocessor_config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "model.safetensors",
+    ]:
+        (model_dir / name).write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(settings_store, "model_path", lambda engine_id: model_dir)
+    import app.services.qwen_mlx_asr as qwen_mlx_asr  # noqa: E402
+
+    monkeypatch.setattr(qwen_mlx_asr, "runtime_available", lambda: (False, "mlx-audio is not installed"))
+
+    resp = client.post("/api/engines/qwen3-asr-mlx/health-check")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["healthy"] is False
+    assert data["status"] == "runtime_missing"
+    assert data["model_path"] == str(model_dir)
+    assert "mlx-audio" in data["detail"]
 
 
 def test_voice_assets_report_engine_bindings(tmp_path: Path):

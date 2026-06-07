@@ -12,7 +12,7 @@
 		{ href: '/script-studio', label: '脚本工作台', icon: BookOpenText },
 		{ href: '/eval-reference', label: '评测参考', icon: ChartNoAxesColumn },
 		{ href: '/text-tools', label: '文本工具', icon: Wand2 },
-		{ href: '/audio-tools', label: '音频工具', icon: FileAudio },
+		{ href: '/audio-tools', label: '音频与转写', icon: FileAudio },
 		{ href: '/tasks', label: '任务队列', icon: ListChecks },
 		{ href: '/history', label: '历史记录', icon: History },
 		{ href: '/settings', label: '设置', icon: Settings }

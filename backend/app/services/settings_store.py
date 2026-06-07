@@ -57,11 +57,24 @@ def ensure_directories(settings: AppSettings | None = None) -> None:
 
 
 def model_path(engine_id: str) -> Path:
+    for candidate in model_candidates(engine_id):
+        if candidate.exists():
+            return candidate
+    return model_candidates(engine_id)[0]
+
+
+def model_candidates(engine_id: str) -> list[Path]:
     s = get()
     base = expand_path(s.model_dir, PROJECT_ROOT)
     if engine_id == "indextts-v2":
-        return base / "mlx-indexTTS-2.0"
-    return base / engine_id
+        return [base / "mlx-indexTTS-2.0"]
+    if engine_id == "qwen3-asr-mlx":
+        return [
+            base / "qwen3-asr-mlx",
+            base / "mlx-community_Qwen3-ASR-1.7B-8bit",
+            expand_path("~/Documents/Voxt Modles/mlx-audio/mlx-community_Qwen3-ASR-1.7B-8bit"),
+        ]
+    return [base / engine_id]
 
 
 def voice_dir() -> Path:
@@ -74,3 +87,7 @@ def output_dir() -> Path:
 
 def export_dir() -> Path:
     return expand_path(get().export_dir)
+
+
+def cache_dir() -> Path:
+    return expand_path(get().cache_dir)

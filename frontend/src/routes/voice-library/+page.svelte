@@ -2,8 +2,9 @@
 	import { Api } from '$lib/api';
 	import type { VoiceAsset, VoiceSeed } from '$lib/api/types';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
-	import { Check, Download, FileText, Pencil, Play, Plus, Trash2, Upload, X } from 'lucide-svelte';
+	import { Check, Download, FileText, Pencil, Play, Plus, Search, Trash2, Upload, X } from 'lucide-svelte';
 	import { licenseLabel } from '$lib/labels';
+	import { onMount } from 'svelte';
 
 	let voices = $state<VoiceAsset[]>([]);
 	let seeds = $state<VoiceSeed[]>([]);
@@ -17,11 +18,18 @@
 	let uploadMessage = $state('');
 	let importing = $state('');
 	let editingVoice = $state<VoiceAsset | null>(null);
+	let voiceQuery = $state('');
+	let voiceEngineFilter = $state('all');
+	let voiceLicenseFilter = $state('all');
+	let voiceSort = $state<'updated' | 'name'>('updated');
+	let seedQuery = $state('');
 
 	async function refresh() {
 		[voices, seeds] = await Promise.all([Api.voices(), Api.voiceSeeds()]);
 	}
-	$effect(() => { refresh(); });
+	onMount(() => {
+		refresh();
+	});
 
 	function resetForm() {
 		name = '';
@@ -107,6 +115,50 @@
 		}[engineId] ?? engineId;
 	}
 
+	function engineKind(engineId: string | null | undefined) {
+		if (!engineId) return 'local';
+		return engineId.startsWith('mimo-') ? 'cloud' : 'local';
+	}
+
+	function voiceCardKind(voice: VoiceAsset) {
+		return engineKind(voice.recommended_engine_id);
+	}
+
+	function seedCardKind(seed: VoiceSeed) {
+		return engineKind(seed.recommended_engine_id);
+	}
+
+	const filteredVoices = $derived.by(() => {
+		const query = voiceQuery.trim().toLowerCase();
+		return [...voices]
+			.filter((voice) => {
+				if (voiceEngineFilter !== 'all' && !voice.engine_bindings?.some((binding) => binding.engine_id === voiceEngineFilter && binding.available)) return false;
+				if (voiceLicenseFilter !== 'all' && voice.license_status !== voiceLicenseFilter) return false;
+				if (!query) return true;
+				return (
+					voice.name.toLowerCase().includes(query) ||
+					voice.description.toLowerCase().includes(query) ||
+					voice.tags.join(' ').toLowerCase().includes(query)
+				);
+			})
+			.sort((a, b) => {
+				if (voiceSort === 'name') return a.name.localeCompare(b.name, 'zh-Hans-CN');
+				return b.updated_at.localeCompare(a.updated_at);
+			});
+	});
+
+	const filteredSeeds = $derived.by(() => {
+		const query = seedQuery.trim().toLowerCase();
+		return seeds.filter((seed) => {
+			if (!query) return true;
+			return (
+				seed.name.toLowerCase().includes(query) ||
+				seed.description.toLowerCase().includes(query) ||
+				seed.tags.join(' ').toLowerCase().includes(query)
+			);
+		});
+	});
+
 	const help = [
 		{ title: '什么是“可导入参考音色”', body: '这里的官方参考音色还没有真正进入你的音色库，像素材候选。点“导入”后，它会下载到本地，变成下面音色库里的声音，之后才能在单条生成或批处理里选择。' },
 		{ title: '音色库怎么用', body: '音色库里的声音主要作为声音克隆参考。IndexTTS v2 通常需要选择一个参考声音；OmniVoice 可以选择参考声音，也可以不选，改用声音设计标签。' },
@@ -118,17 +170,33 @@
 <svelte:head><title>音色库 - 声音工作台</title></svelte:head>
 
 <main class="page">
-	<div class="page-head"><div><h1>音色库</h1><p class="muted">导入、管理、试听和授权标记参考声音</p></div><HelpDrawer title="音色库" sections={help} /></div>
+	<div class="page-head"><div><h1>音色库</h1><p class="muted">导入、管理、试听和授权标记参考声音；内容多起来时也能按来源、授权和可用引擎查找。</p></div><HelpDrawer title="音色库" sections={help} /></div>
 	<section class="panel stack" style="margin-bottom:16px">
-		<div class="row" style="justify-content:space-between"><h2>官方参考音色（可导入）</h2><span class="muted">还未进入音色库的官方参考声音；导入后才能选择使用</span></div>
+		<div class="row" style="justify-content:space-between">
+			<h2>官方参考音色（可导入）</h2>
+			<div class="row">
+				<span class="badge">{filteredSeeds.length} 条</span>
+				<span class="muted">还未进入音色库的官方参考声音；导入后才能选择使用</span>
+			</div>
+		</div>
+		<div class="toolbar-grid">
+			<label class="field">
+				<span>搜索官方参考音色</span>
+				<div class="search-field">
+					<Search size={15} />
+					<input bind:value={seedQuery} placeholder="名称、描述、标签" />
+				</div>
+			</label>
+		</div>
 		<div class="seed-grid">
-			{#each seeds as seed}
-				<article class="seed">
+			{#each filteredSeeds as seed}
+				<article class={`seed engine-surface ${seedCardKind(seed) === 'cloud' ? 'engine-cloud' : 'engine-local'}`}>
 					<div class="row" style="justify-content:space-between"><strong>{seed.name}</strong><span class="badge license">{licenseLabel(seed.license_status)}</span></div>
 					<p>{seed.description}</p>
 					<div class="row">{#each seed.tags as tag}<span class={`badge ${tagClass(tag)}`}>{tag}</span>{/each}</div>
 					<div class="row">
 						<span class="badge source">来源：{seed.source}</span>
+						<span class="badge badge-kind">{seedCardKind(seed) === 'cloud' ? '云端' : '本地'}</span>
 						<span class="badge engine">引擎：{seed.recommended_engine_id}</span>
 						<span class="text-pop" data-text={seed.reference_text}><FileText size={15} /> 文本</span>
 					</div>
@@ -141,23 +209,69 @@
 						<button class="btn" disabled={Boolean(importing)} onclick={() => importSeed(seed.seed_id)}><Download size={15} /> {importing === seed.seed_id ? '导入中' : '导入'}</button>
 					{/if}
 				</article>
+			{:else}
+				<div class="empty">当前筛选下没有可导入的官方参考音色</div>
 			{/each}
 		</div>
 	</section>
 	<div class="workbench">
-		<section class="grid">
-			{#each voices as voice}
-				<article class="card stack">
+		<section class="stack">
+			<section class="panel stack library-toolbar">
+				<div class="row" style="justify-content:space-between">
+					<h2>本地音色库</h2>
+					<span class="muted">{filteredVoices.length} 条</span>
+				</div>
+				<div class="toolbar-grid voice-toolbar">
+					<label class="field">
+						<span>搜索</span>
+						<div class="search-field">
+							<Search size={15} />
+							<input bind:value={voiceQuery} placeholder="名称、描述、标签" />
+						</div>
+					</label>
+					<label class="field">
+						<span>可用引擎</span>
+						<select bind:value={voiceEngineFilter}>
+							<option value="all">全部</option>
+							<option value="indextts-v2">IndexTTS v2</option>
+							<option value="omnivoice">OmniVoice</option>
+							<option value="mimo-v2.5-tts-voiceclone">MiMo VoiceClone</option>
+						</select>
+					</label>
+					<label class="field">
+						<span>授权</span>
+						<select bind:value={voiceLicenseFilter}>
+							<option value="all">全部</option>
+							<option value="self_voice">本人声音</option>
+							<option value="authorized">已授权</option>
+							<option value="test_only">仅测试</option>
+							<option value="unknown">未知</option>
+						</select>
+					</label>
+					<label class="field">
+						<span>排序</span>
+						<select bind:value={voiceSort}>
+							<option value="updated">最近更新</option>
+							<option value="name">名称</option>
+						</select>
+					</label>
+				</div>
+			</section>
+
+			<section class="grid voice-grid">
+			{#each filteredVoices as voice}
+				<article class={`card stack engine-surface ${voiceCardKind(voice) === 'cloud' ? 'engine-cloud' : 'engine-local'}`}>
 					<div class="row" style="justify-content:space-between"><h2>{voice.name}</h2><span class="badge license" class:ok={voice.license_status === 'self_voice'}>{licenseLabel(voice.license_status)}</span></div>
 					<p class="muted">{voice.description || '暂无描述'}</p>
 					<div class="row">{#each voice.tags as tag}<span class={`badge ${tagClass(tag)}`}>{tag.startsWith('seed:') ? `来源：${tag.replace('seed:', '')}` : tag}</span>{/each}</div>
 						<div class="row">
 							<span class="badge">参考音频：{voice.reference_audio_ids.length} 个</span>
+							<span class="badge badge-kind">{voiceCardKind(voice) === 'cloud' ? '云端' : '本地'}</span>
 							<span class="badge engine">推荐引擎：{voice.recommended_engine_id ?? '自动引擎'}</span>
 							<span class="text-pop" data-text={voice.reference_text || '暂无参考文本'}><FileText size={15} /> 文本</span>
 						</div>
 						<div class="row">
-							{#each voice.engine_bindings.filter((binding) => binding.engine_id !== 'mimo-v2.5-tts-preset') as binding}
+							{#each (voice.engine_bindings ?? []).filter((binding) => binding.engine_id !== 'mimo-v2.5-tts-preset') as binding}
 								<span class="badge" class:ok={binding.available} class:warn={!binding.available} title={binding.reason}>{bindingLabel(binding.engine_id)}</span>
 							{/each}
 						</div>
@@ -173,6 +287,7 @@
 			{:else}
 				<div class="empty">还没有声音资产</div>
 			{/each}
+			</section>
 		</section>
 		<aside class="panel stack">
 			<div class="row" style="justify-content:space-between">
@@ -199,6 +314,44 @@
 		gap: 10px;
 	}
 
+	.toolbar-grid {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: 12px;
+		align-items: end;
+	}
+
+	.search-field {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		border: 1px solid var(--line);
+		border-radius: 6px;
+		padding: 0 10px;
+		background: #0f1216;
+	}
+
+	.search-field input {
+		border: 0;
+		background: transparent;
+		width: 100%;
+		min-height: 34px;
+		color: inherit;
+		outline: none;
+	}
+
+	.library-toolbar {
+		padding-bottom: 12px;
+	}
+
+	.voice-toolbar {
+		grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(150px, 0.8fr));
+	}
+
+	.voice-grid {
+		grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+	}
+
 	.seed {
 		border: 1px solid var(--line);
 		border-radius: 8px;
@@ -215,37 +368,17 @@
 		font-size: 13px;
 	}
 
-	.text-pop {
-		position: relative;
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		border: 1px solid var(--line);
-		border-radius: 999px;
-		padding: 3px 8px;
-		color: #cbd4df;
-		background: #1c2026;
-		font-size: 12px;
-		cursor: help;
+	@media (max-width: 1100px) {
+		.toolbar-grid,
+		.voice-toolbar {
+			grid-template-columns: 1fr 1fr;
+		}
 	}
 
-	.text-pop:hover::after,
-	.text-pop:focus-within::after {
-		content: attr(data-text);
-		position: absolute;
-		left: 0;
-		bottom: calc(100% + 8px);
-		width: min(340px, 80vw);
-		max-height: 160px;
-		overflow: auto;
-		white-space: normal;
-		line-height: 1.55;
-		padding: 10px;
-		border-radius: 7px;
-		border: 1px solid var(--line);
-		background: #101215;
-		color: var(--text);
-		box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
-		z-index: 3;
+	@media (max-width: 720px) {
+		.toolbar-grid,
+		.voice-toolbar {
+			grid-template-columns: 1fr;
+		}
 	}
 </style>

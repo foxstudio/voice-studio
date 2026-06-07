@@ -4,10 +4,10 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.models.schemas import EngineDetail, EngineManifest, EngineState, EngineStatus, ParameterSchema
-from app.services import mimo_client, settings_store
+from app.services import mimo_client, qwen_mlx_asr, settings_store
 from app.services.paths import PROJECT_ROOT
 
 
@@ -172,6 +172,22 @@ _ENGINES: dict[str, EngineDetail] = {
         ),
         state=EngineState(engine_id="mimo-v2.5-asr", status=EngineStatus.stopped),
     ),
+    "qwen3-asr-mlx": EngineDetail(
+        manifest=EngineManifest(
+            engine_id="qwen3-asr-mlx",
+            display_name="Qwen3-ASR MLX",
+            provider="Qwen + MLX Community",
+            version="1.7B 8-bit",
+            description="本地 MLX 语音识别，优先对接 Qwen3-ASR 1.7B 量化模型，预留后续更完整的离线转写能力",
+            supported_languages=["auto", "zh", "en"],
+            capabilities=["local_inference", "speech_recognition", "transcription", "language_identification"],
+            default_use_case="离线音频转写与云端 ASR 备选",
+            parameter_schema=[
+                ParameterSchema(key="language", label="识别语言", type="select", default="auto", options=[{"label": x, "value": x} for x in ["auto", "zh", "en"]]),
+            ],
+        ),
+        state=EngineState(engine_id="qwen3-asr-mlx", status=EngineStatus.stopped),
+    ),
 }
 
 _ALIASES = {"mimo-v2.5-tts": "mimo-v2.5-tts-preset"}
@@ -187,6 +203,10 @@ def list_engines() -> list[EngineDetail]:
 
 def get_engine(engine_id: str) -> EngineDetail | None:
     return _ENGINES.get(_resolve_engine_id(engine_id))
+
+
+def _mlx_audio_runtime_available() -> tuple[bool, str | None]:
+    return qwen_mlx_asr.runtime_available()
 
 
 def health_check(engine_id: str) -> dict[str, Any]:
@@ -212,6 +232,14 @@ def health_check(engine_id: str) -> dict[str, Any]:
         if not settings.mimo_api_key_configured:
             return {"healthy": False, "status": "api_key_missing", "detail": "MiMo Token Plan API Key 未配置"}
         return {"healthy": True, "status": "configured", "base_url": settings.mimo_base_url}
+    if engine_id == "qwen3-asr-mlx":
+        model_path = settings_store.model_path(engine_id)
+        health = qwen_mlx_asr.model_health(model_path)
+        if health.get("status") == "runtime_missing":
+            ok, detail = _mlx_audio_runtime_available()
+            health["healthy"] = ok
+            health["detail"] = f"mlx-audio runtime is unavailable: {detail}" if detail else health.get("detail")
+        return health
     try:
         import omnivoice  # noqa: F401
 
@@ -255,25 +283,60 @@ def ensure_loaded(engine_id: str) -> None:
         raise RuntimeError(detail.state.error_message or f"Engine {engine_id} is not available")
 
 
-def run_isolated(engine_id: str, kwargs: dict[str, Any], timeout: int = 900) -> dict[str, Any]:
+def run_isolated(
+    engine_id: str,
+    kwargs: dict[str, Any],
+    timeout: int = 900,
+    cancel_check: Callable[[], bool] | None = None,
+    on_tick: Callable[[float], None] | None = None,
+) -> dict[str, Any]:
     payload = __import__("json").dumps({"engine_id": engine_id, "kwargs": kwargs}, ensure_ascii=False)
     env = {"PYTHONPATH": f"{PROJECT_ROOT / 'backend'}:{PROJECT_ROOT}", **__import__("os").environ}
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         [sys.executable, "-m", "app.services.inference_runner"],
-        input=payload,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        capture_output=True,
-        timeout=timeout,
         cwd=str(PROJECT_ROOT),
         env=env,
     )
-    stdout = (proc.stdout or "").strip()
+
+    assert proc.stdin is not None
+    proc.stdin.write(payload)
+    proc.stdin.close()
+    proc.stdin = None
+
+    started_at = time.monotonic()
+    while proc.poll() is None:
+        elapsed = time.monotonic() - started_at
+        if cancel_check and cancel_check():
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            raise RuntimeError("Generation cancelled")
+        if elapsed > timeout:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            raise RuntimeError(f"Inference timed out after {timeout}s")
+        if on_tick:
+            on_tick(elapsed)
+        time.sleep(0.5)
+
+    stdout, stderr = proc.communicate()
+    stdout = (stdout or "").strip()
+    stderr = (stderr or "").strip()
     if proc.returncode != 0:
         try:
             error = __import__("json").loads(stdout.splitlines()[-1] if stdout else "{}")
         except Exception:
             error = {}
-        raise RuntimeError(error.get("error") or proc.stderr[-1200:] or "Inference subprocess failed")
+        raise RuntimeError(error.get("error") or stderr[-1200:] or "Inference subprocess failed")
     if not stdout:
         raise RuntimeError("Inference subprocess returned no output")
     return __import__("json").loads(stdout.splitlines()[-1])
