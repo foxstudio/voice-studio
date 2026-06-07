@@ -20,9 +20,9 @@
 	}
 </script>
 
-<svelte:head><title>任务队列 - 声音工作台</title></svelte:head>
+<svelte:head><title>任务中心 - 声音工作台</title></svelte:head>
 <main class="page">
-	<div class="page-head"><div><h1>任务队列</h1><p class="muted">查看、取消、重试生成任务</p></div><button class="btn" onclick={refresh}><RotateCcw size={15} /> 刷新</button></div>
+	<div class="page-head"><div><h1>任务中心</h1><p class="muted">查看、取消、重试生成任务</p></div><button class="btn" onclick={refresh}><RotateCcw size={15} /> 刷新</button></div>
 	<section class="panel">
 		<table class="table">
 			<thead><tr><th>任务</th><th>类型</th><th>引擎</th><th>文本</th><th>状态</th><th>进度</th><th>耗时</th><th>操作</th></tr></thead>

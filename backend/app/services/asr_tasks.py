@@ -29,6 +29,20 @@ def list_tasks() -> list[TranscriptionTask]:
     return [TranscriptionTask(**item) for item in db.list_all("asr_tasks", "created_at")]
 
 
+def delete_task(task_id: str) -> dict[str, str]:
+    data = db.get_one("asr_tasks", "task_id", task_id)
+    if not data:
+        return {"task_id": task_id, "status": "not_found"}
+    task = TranscriptionTask(**data)
+    if task.status in [TaskStatus.pending, TaskStatus.queued, TaskStatus.running, TaskStatus.retrying, TaskStatus.postprocessing]:
+        return {"task_id": task_id, "status": "active_task"}
+    upload_path = data.get("upload_path")
+    if upload_path:
+        Path(upload_path).unlink(missing_ok=True)
+    db.delete_one("asr_tasks", "task_id", task_id)
+    return {"task_id": task_id, "status": "deleted"}
+
+
 def start_worker() -> None:
     global _queue, _worker_thread
     with _lock:

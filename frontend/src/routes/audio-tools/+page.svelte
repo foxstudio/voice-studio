@@ -11,6 +11,8 @@
 	} from '$lib/api/types';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
 	import {
+		ChevronLeft,
+		ChevronRight,
 		CheckSquare2,
 		Copy,
 		Download,
@@ -41,6 +43,9 @@
 		url: string;
 	};
 
+	type TimestampStrategy = 'auto' | 'forced_aligner' | 'qwen3-asr-mlx';
+	type AsrTaskTab = 'all' | 'active' | 'success' | 'failed';
+
 	let history = $state<HistoryItem[]>([]);
 	let transcriptions = $state<TranscriptionRecord[]>([]);
 	let transcriptionTasks = $state<TranscriptionTask[]>([]);
@@ -70,11 +75,17 @@
 	let importProjectId = $state<string>('');
 	let importMessage = $state('');
 	let copyMessage = $state('');
+	let timestampStrategy = $state<TimestampStrategy>('auto');
 
 	let transcriptionQuery = $state('');
 	let transcriptionEngineFilter = $state('all');
 	let transcriptionTimestampFilter = $state<'all' | 'with_timestamps' | 'text_only'>('all');
 	let selectedTranscriptionIds = $state<string[]>([]);
+	let transcriptionPage = $state(1);
+	let transcriptionPageSize = $state(8);
+	let taskStatusTab = $state<AsrTaskTab>('all');
+	let taskPage = $state(1);
+	let taskPageSize = $state(6);
 
 	const asrEngines = $derived(engines.filter((engine) => engine.manifest.capabilities.includes('speech_recognition')));
 	const selectedAsrEngine = $derived(
@@ -92,7 +103,31 @@
 		)
 	);
 	const recommendAsync = $derived(asrFiles.reduce((total, file) => total + file.size, 0) >= 5 * 1024 * 1024 || asrFiles.length > 1);
-	const recentTasks = $derived(transcriptionTasks.slice(0, 8));
+	const taskCounts = $derived.by(() => ({
+		all: transcriptionTasks.length,
+		active: transcriptionTasks.filter((task) =>
+			['pending', 'queued', 'running', 'retrying', 'postprocessing'].includes(task.status)
+		).length,
+		success: transcriptionTasks.filter((task) => task.status === 'success').length,
+		failed: transcriptionTasks.filter((task) =>
+			['failed', 'cancelled'].includes(task.status)
+		).length
+	}));
+	const visibleTasks = $derived.by(() => {
+		return transcriptionTasks.filter((task) => {
+			if (taskStatusTab === 'active') {
+				return ['pending', 'queued', 'running', 'retrying', 'postprocessing'].includes(task.status);
+			}
+			if (taskStatusTab === 'success') return task.status === 'success';
+			if (taskStatusTab === 'failed') return ['failed', 'cancelled'].includes(task.status);
+			return true;
+		});
+	});
+	const taskPageCount = $derived(Math.max(1, Math.ceil(visibleTasks.length / taskPageSize)));
+	const pagedTasks = $derived.by(() => {
+		const start = (taskPage - 1) * taskPageSize;
+		return visibleTasks.slice(start, start + taskPageSize);
+	});
 	const selectedImportProject = $derived(projects.find((project) => project.project_id === importProjectId) ?? null);
 	const selectedTranscriptions = $derived(
 		transcriptions.filter((item) => selectedTranscriptionIds.includes(item.transcription_id))
@@ -110,6 +145,13 @@
 				item.engine_id.toLowerCase().includes(query)
 			);
 		});
+	});
+	const transcriptionPageCount = $derived(
+		Math.max(1, Math.ceil(visibleTranscriptions.length / transcriptionPageSize))
+	);
+	const pagedTranscriptions = $derived.by(() => {
+		const start = (transcriptionPage - 1) * transcriptionPageSize;
+		return visibleTranscriptions.slice(start, start + transcriptionPageSize);
 	});
 	const visibleTranscriptionIds = $derived(visibleTranscriptions.map((item) => item.transcription_id));
 	const allVisibleSelected = $derived(
@@ -166,6 +208,11 @@
 			clearInterval(id);
 			revokeFilePreviews();
 		};
+	});
+
+	$effect(() => {
+		if (taskPage > taskPageCount) taskPage = taskPageCount;
+		if (transcriptionPage > transcriptionPageCount) transcriptionPage = transcriptionPageCount;
 	});
 
 	async function merge() {
@@ -287,13 +334,16 @@
 		importMessage = '';
 		try {
 			const updated = await Api.supplementTranscriptionTimestamps(record.transcription_id, {
-				strategy: 'auto'
+				strategy: timestampStrategy
 			});
 			transcript = updated;
 			selectedTranscriptionId = updated.transcription_id;
-			asrInfo = updated.timestamp_source_engine_id === 'qwen3-forced-aligner-0.6B'
-				? '已完成精准强制对齐，现在可以导出 SRT。'
-				: '已用本地 Qwen 补时间戳，现在可以导出 SRT。';
+			asrInfo =
+				updated.timestamp_source_engine_id === 'qwen3-forced-aligner-0.6B'
+					? '已完成精准强制对齐，现在可以导出 SRT。'
+					: updated.timestamp_source_engine_id === 'qwen3-asr-mlx'
+						? '已用本地 Qwen 快速补时间戳，现在可以导出 SRT。'
+						: '已补充时间戳，现在可以导出 SRT。';
 			await refresh();
 			scrollToResult();
 		} catch (err) {
@@ -376,6 +426,22 @@
 		return '原生时间戳';
 	}
 
+	function timestampStrategyLabel(strategy: TimestampStrategy) {
+		return {
+			auto: '自动',
+			forced_aligner: '精准 forced align',
+			'qwen3-asr-mlx': '本地快速补齐'
+		}[strategy];
+	}
+
+	function timestampStrategyHint() {
+		return {
+			auto: '优先尝试精准 forced align，不可用时自动回退到本地快速补齐。',
+			forced_aligner: '只走精准 forced align；若模型不可用、音频过长或对齐失败，会直接报错。',
+			'qwen3-asr-mlx': '直接用本地 Qwen 重新跑时间戳，速度更稳，但句级边界会更粗。'
+		}[timestampStrategy];
+	}
+
 	function toggleTranscriptionSelection(transcriptionId: string, checked: boolean) {
 		selectedTranscriptionIds = checked
 			? [...selectedTranscriptionIds, transcriptionId]
@@ -426,7 +492,7 @@
 		asrError = '';
 		try {
 			const updated = await Api.batchSupplementTranscriptionTimestamps(selectedTranscriptionIds, {
-				strategy: 'auto'
+				strategy: timestampStrategy
 			});
 			const preciseCount = updated.filter(
 				(item) => item.timestamp_source_engine_id === 'qwen3-forced-aligner-0.6B'
@@ -479,6 +545,27 @@
 		}[status] ?? status;
 	}
 
+	function canDeleteTask(task: TranscriptionTask) {
+		return !['pending', 'queued', 'running', 'retrying', 'postprocessing'].includes(task.status);
+	}
+
+	async function deleteTranscriptionTask(taskId: string) {
+		if (!window.confirm('删除这条转写任务记录？已生成的转写结果不会被一并删除。')) return;
+		await Api.deleteTranscriptionTask(taskId);
+		if (activeTaskId === taskId) activeTaskId = null;
+		await refresh();
+	}
+
+	function taskPageJump(delta: number) {
+		const next = taskPage + delta;
+		taskPage = Math.min(taskPageCount, Math.max(1, next));
+	}
+
+	function transcriptionPageJump(delta: number) {
+		const next = transcriptionPage + delta;
+		transcriptionPage = Math.min(transcriptionPageCount, Math.max(1, next));
+	}
+
 	function selectedTaskForRecord(record: TranscriptionRecord) {
 		return transcriptionTasks.find((task) => task.transcription_id === record.transcription_id);
 	}
@@ -512,16 +599,16 @@
 	];
 </script>
 
-<svelte:head><title>音频与转写 - 声音工作台</title></svelte:head>
+<svelte:head><title>语音转写 - 声音工作台</title></svelte:head>
 
 <main class="page">
 	<div class="page-head">
 		<div>
-			<h1>音频与转写</h1>
+			<h1>语音转写</h1>
 			<p class="muted">先转写，再导字幕、导脚本；历史音频合并放在下面，避免一进来就被旧记录淹没。</p>
 		</div>
 		<div class="row">
-			<HelpDrawer title="音频与转写" sections={help} />
+			<HelpDrawer title="语音转写" sections={help} />
 			<button class="btn" onclick={refresh}><RefreshCw size={15} /> 刷新</button>
 		</div>
 	</div>
@@ -638,6 +725,16 @@
 				</div>
 			</div>
 
+			<div class="field">
+				<label for="timestamp-strategy">补时间戳策略</label>
+				<select id="timestamp-strategy" bind:value={timestampStrategy}>
+					<option value="auto">自动：优先精准，失败时回退</option>
+					<option value="forced_aligner">精准 forced align</option>
+					<option value="qwen3-asr-mlx">本地快速补齐</option>
+				</select>
+				<small>{timestampStrategyHint()}</small>
+			</div>
+
 			{#if recommendAsync}
 				<p class="badge">当前文件数或体积较大，建议走异步任务。</p>
 			{/if}
@@ -696,6 +793,15 @@
 							<span class="badge">{timestampBadge(transcript)}</span>
 						</div>
 					</div>
+					{#if transcript.timestamp_source_engine_id}
+						<p class="muted">
+							当前时间戳来源：{transcript.timestamp_source_engine_id === 'qwen3-forced-aligner-0.6B'
+								? 'Qwen forced align 精准对齐'
+								: transcript.timestamp_source_engine_id === 'qwen3-asr-mlx'
+									? '本地 Qwen 快速补齐'
+									: transcript.timestamp_source_engine_id}
+						</p>
+					{/if}
 					<div class="row wrap">
 						<a class="btn" href={asrExportHref(transcript.transcription_id, 'txt')}><Download size={15} /> TXT</a>
 						{#if transcript.segments.length}
@@ -710,7 +816,7 @@
 									{:else}
 										<RefreshCw size={15} />
 									{/if}
-									精准补时间戳
+									按“{timestampStrategyLabel(timestampStrategy)}”补时间戳
 								</button>
 							{/if}
 						{/if}
@@ -719,7 +825,7 @@
 					{#if !transcript.segments.length}
 						<p class="muted">
 							{#if canSupplement(transcript)}
-								这条记录保留了源音频，会优先走本地 forced align 精准补时间戳；如果当前精对齐不可用，再回退到本地粗补。
+								这条记录保留了源音频。当前策略是“{timestampStrategyLabel(timestampStrategy)}”，{timestampStrategyHint()}
 							{:else}
 								当前只有文字稿，暂时还不能补时间戳。
 							{/if}
@@ -772,11 +878,28 @@
 			<section class="panel stack">
 				<div class="row" style="justify-content:space-between">
 					<h2>转写任务</h2>
-					<button class="btn" onclick={refresh}><RefreshCw size={15} /> 刷新</button>
+					<div class="row">
+						<span class="muted">{visibleTasks.length} 条</span>
+						<button class="btn" onclick={refresh}><RefreshCw size={15} /> 刷新</button>
+					</div>
 				</div>
-				{#if recentTasks.length}
+				<div class="mode-switch" role="tablist" aria-label="转写任务筛选">
+					<button class:active={taskStatusTab === 'all'} type="button" class="btn" onclick={() => { taskStatusTab = 'all'; taskPage = 1; }}>
+						全部 {taskCounts.all}
+					</button>
+					<button class:active={taskStatusTab === 'active'} type="button" class="btn" onclick={() => { taskStatusTab = 'active'; taskPage = 1; }}>
+						进行中 {taskCounts.active}
+					</button>
+					<button class:active={taskStatusTab === 'success'} type="button" class="btn" onclick={() => { taskStatusTab = 'success'; taskPage = 1; }}>
+						成功 {taskCounts.success}
+					</button>
+					<button class:active={taskStatusTab === 'failed'} type="button" class="btn" onclick={() => { taskStatusTab = 'failed'; taskPage = 1; }}>
+						异常 {taskCounts.failed}
+					</button>
+				</div>
+				{#if pagedTasks.length}
 					<div class="stack">
-						{#each recentTasks as task}
+						{#each pagedTasks as task}
 							<article class:active={task.task_id === activeTaskId} class={`record engine-surface ${engineKind(task.engine_id) === 'cloud' ? 'engine-cloud' : 'engine-local'}`}>
 								<div class="row" style="justify-content:space-between">
 									<strong>{task.filename}</strong>
@@ -795,12 +918,28 @@
 									{:else}
 										<p class="muted">等待完成后可查看结果。</p>
 									{/if}
+									{#if canDeleteTask(task)}
+										<button class="btn danger" onclick={() => deleteTranscriptionTask(task.task_id)}>
+											<Trash2 size={15} /> 删除任务
+										</button>
+									{/if}
 								</div>
 							</article>
 						{/each}
 					</div>
+					{#if taskPageCount > 1}
+						<div class="pagination-row">
+							<button class="btn" onclick={() => taskPageJump(-1)} disabled={taskPage <= 1}>
+								<ChevronLeft size={15} /> 上一页
+							</button>
+							<span class="muted">第 {taskPage} / {taskPageCount} 页</span>
+							<button class="btn" onclick={() => taskPageJump(1)} disabled={taskPage >= taskPageCount}>
+								下一页 <ChevronRight size={15} />
+							</button>
+						</div>
+					{/if}
 				{:else}
-					<div class="empty">还没有异步转写任务</div>
+					<div class="empty">当前筛选下没有转写任务</div>
 				{/if}
 			</section>
 
@@ -819,12 +958,12 @@
 						<span>搜索</span>
 						<div class="search-field">
 							<Search size={15} />
-							<input bind:value={transcriptionQuery} placeholder="文件名、文本、引擎" />
+							<input bind:value={transcriptionQuery} placeholder="文件名、文本、引擎" oninput={() => (transcriptionPage = 1)} />
 						</div>
 					</label>
 					<label class="field">
 						<span>引擎</span>
-						<select bind:value={transcriptionEngineFilter}>
+						<select bind:value={transcriptionEngineFilter} onchange={() => (transcriptionPage = 1)}>
 							<option value="all">全部</option>
 							{#each asrEngines as engine}
 								<option value={engine.manifest.engine_id}>{engine.manifest.display_name}</option>
@@ -833,7 +972,7 @@
 					</label>
 					<label class="field">
 						<span>时间戳</span>
-						<select bind:value={transcriptionTimestampFilter}>
+						<select bind:value={transcriptionTimestampFilter} onchange={() => (transcriptionPage = 1)}>
 							<option value="all">全部</option>
 							<option value="with_timestamps">有时间戳</option>
 							<option value="text_only">仅文字稿</option>
@@ -845,7 +984,7 @@
 						<CheckSquare2 size={15} /> {allVisibleSelected ? '取消全选当前筛选' : '全选当前筛选'}
 					</button>
 					<button class="btn" onclick={batchSupplementSelectedTranscriptions} disabled={!selectedTranscriptionIds.length || supplementingTimestamps}>
-						<RefreshCw size={15} /> 批量补时间戳
+						<RefreshCw size={15} /> 按“{timestampStrategyLabel(timestampStrategy)}”批量补时间戳
 					</button>
 					<button class="btn danger" onclick={batchDeleteSelectedTranscriptions} disabled={!selectedTranscriptionIds.length}>
 						<Trash2 size={15} /> 批量删除
@@ -854,9 +993,9 @@
 						<CheckSquare2 size={15} /> 清空选择
 					</button>
 				</div>
-				{#if visibleTranscriptions.length}
+				{#if pagedTranscriptions.length}
 					<div class="stack">
-						{#each visibleTranscriptions as item}
+						{#each pagedTranscriptions as item}
 							<article class:active={item.transcription_id === selectedTranscriptionId} class={`record engine-surface ${engineKind(item.engine_id) === 'cloud' ? 'engine-cloud' : 'engine-local'}`}>
 								<div class="row" style="justify-content:space-between">
 									<div class="row">
@@ -899,6 +1038,17 @@
 							</article>
 						{/each}
 					</div>
+					{#if transcriptionPageCount > 1}
+						<div class="pagination-row">
+							<button class="btn" onclick={() => transcriptionPageJump(-1)} disabled={transcriptionPage <= 1}>
+								<ChevronLeft size={15} /> 上一页
+							</button>
+							<span class="muted">第 {transcriptionPage} / {transcriptionPageCount} 页</span>
+							<button class="btn" onclick={() => transcriptionPageJump(1)} disabled={transcriptionPage >= transcriptionPageCount}>
+								下一页 <ChevronRight size={15} />
+							</button>
+						</div>
+					{/if}
 				{:else}
 					<div class="empty">当前筛选下没有转写记录</div>
 				{/if}
@@ -1103,6 +1253,14 @@
 		border-top: 1px solid rgba(255, 255, 255, 0.04);
 	}
 
+	.pagination-row {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 12px;
+		padding-top: 4px;
+	}
+
 	.mode-switch .btn.active {
 		background: var(--accent);
 		border-color: var(--accent);
@@ -1148,6 +1306,11 @@
 	}
 
 	@media (max-width: 760px) {
+		.pagination-row {
+			flex-direction: column;
+			align-items: flex-start;
+		}
+
 		.audio-table,
 		.audio-table thead,
 		.audio-table tbody,

@@ -32,6 +32,16 @@ async def retry_task(task_id: str):
     return {"task_id": await task_queue.retry_task(task_id), "status": "queued"}
 
 
+@router.delete("/{task_id}")
+async def delete_task(task_id: str):
+    result = task_queue.delete_task(task_id)
+    if result["status"] == "not_found":
+        raise AppException(404, "TASK_NOT_FOUND", "Task not found")
+    if result["status"] == "active_task":
+        raise AppException(409, "TASK_ACTIVE", "Task is still active")
+    return result
+
+
 @router.websocket("/ws")
 async def websocket(ws: WebSocket):
     await ws.accept()
@@ -41,4 +51,3 @@ async def websocket(ws: WebSocket):
             await ws.receive_text()
     except WebSocketDisconnect:
         task_queue.remove_ws_client(ws)
-

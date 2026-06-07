@@ -14,7 +14,9 @@
 		Api.health()
 			.then((h) => {
 				status = h.status;
-				engines = h.engines;
+				engines = Object.fromEntries(
+					Object.entries(h.engines).filter(([, state]) => state === 'loaded')
+				);
 			})
 			.catch(() => {
 				status = 'offline';

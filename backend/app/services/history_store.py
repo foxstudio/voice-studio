@@ -22,6 +22,11 @@ def get(result_id: str) -> HistoryItem | None:
 
 
 def delete(result_id: str) -> None:
+    item = get(result_id)
+    if item and item.output_path:
+        path = Path(item.output_path)
+        if path.exists():
+            path.unlink(missing_ok=True)
     db.delete_one("history", "result_id", result_id)
 
 
@@ -31,4 +36,3 @@ def audio_path(result_id: str) -> Path | None:
         return None
     path = Path(item.output_path)
     return path if path.exists() else None
-

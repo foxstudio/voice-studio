@@ -88,6 +88,16 @@ async def get_transcription_task(task_id: str):
     return task
 
 
+@router.delete("/tasks/{task_id}")
+async def delete_transcription_task(task_id: str):
+    result = asr_tasks.delete_task(task_id)
+    if result["status"] == "not_found":
+        raise AppException(404, "ASR_TASK_NOT_FOUND", "ASR task not found")
+    if result["status"] == "active_task":
+        raise AppException(409, "ASR_TASK_ACTIVE", "ASR task is still active")
+    return result
+
+
 @router.get("/{transcription_id}", response_model=TranscriptionRecord)
 async def get_transcription(transcription_id: str):
     data = db.get_one("transcriptions", "transcription_id", transcription_id)

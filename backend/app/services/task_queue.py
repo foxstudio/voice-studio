@@ -154,6 +154,19 @@ def cancel_task(task_id: str) -> dict:
     return {"task_id": task_id, "status": task.status}
 
 
+def delete_task(task_id: str) -> dict:
+    task = get_task(task_id)
+    if not task:
+        return {"task_id": task_id, "status": "not_found"}
+    if task.status in [TaskStatus.pending, TaskStatus.queued, TaskStatus.running, TaskStatus.postprocessing]:
+        return {"task_id": task_id, "status": "active_task"}
+    if task.result_id:
+        history_store.delete(task.result_id)
+    db.delete_one("tasks", "task_id", task_id)
+    _cancelled.discard(task_id)
+    return {"task_id": task_id, "status": "deleted"}
+
+
 async def retry_task(task_id: str) -> str:
     old = get_task(task_id)
     if not old:
@@ -177,10 +190,10 @@ def _resolve_reference(req: GenerateRequest) -> str | None:
 
 
 def _emotion(req: GenerateRequest):
-    if req.emotion:
-        return req.emotion
+    if req.emotion_mode == "follow_reference":
+        return None
     if req.emotion_mode == "emotion_vector":
-        return req.emotion_values
+        return req.emotion_values if req.emotion_values else req.emotion
     if req.emotion_mode == "emotion_text":
         return req.emotion_text
     return None

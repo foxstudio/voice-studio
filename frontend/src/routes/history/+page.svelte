@@ -94,11 +94,11 @@
 	}
 </script>
 
-<svelte:head><title>历史记录 - 声音工作台</title></svelte:head>
+<svelte:head><title>生成记录 - 声音工作台</title></svelte:head>
 <main class="page">
 	<div class="page-head">
 		<div>
-			<h1>历史记录</h1>
+			<h1>生成记录</h1>
 			<p class="muted">按文本、引擎和时长回看生成结果；内容多起来时也能快速筛选和批量清理。</p>
 		</div>
 	</div>
@@ -222,11 +222,30 @@
 	.history-card {
 		gap: 10px;
 		padding: 10px;
+		min-width: 0;
 	}
 
 	.history-title {
 		display: block;
 		max-width: min(100%, 320px);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.history-card .row,
+	.history-card .audio {
+		min-width: 0;
+	}
+
+	.history-card .audio {
+		display: block;
+		width: 100%;
+		max-width: 100%;
+	}
+
+	.history-card .badge {
+		max-width: 100%;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;

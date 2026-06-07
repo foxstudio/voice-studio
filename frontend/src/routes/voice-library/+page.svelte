@@ -167,10 +167,10 @@
 	];
 </script>
 
-<svelte:head><title>音色库 - 声音工作台</title></svelte:head>
+<svelte:head><title>音色管理 - 声音工作台</title></svelte:head>
 
 <main class="page">
-	<div class="page-head"><div><h1>音色库</h1><p class="muted">导入、管理、试听和授权标记参考声音；内容多起来时也能按来源、授权和可用引擎查找。</p></div><HelpDrawer title="音色库" sections={help} /></div>
+	<div class="page-head"><div><h1>音色管理</h1><p class="muted">导入、管理、试听和授权标记参考声音；内容多起来时也能按来源、授权和可用引擎查找。</p></div><HelpDrawer title="音色管理" sections={help} /></div>
 	<section class="panel stack" style="margin-bottom:16px">
 		<div class="row" style="justify-content:space-between">
 			<h2>官方参考音色（可导入）</h2>

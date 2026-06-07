@@ -1,20 +1,18 @@
 <script lang="ts">
-	import { AudioLines, BookOpenText, ChartNoAxesColumn, ChevronsLeft, ChevronsRight, Clock3, FileAudio, Gauge, History, Library, ListChecks, Settings, SlidersHorizontal, Wand2 } from 'lucide-svelte';
+	import { AudioLines, BookOpenText, ChartNoAxesColumn, ChevronsLeft, ChevronsRight, Clock3, FileAudio, Gauge, Library, ListChecks, Settings, SlidersHorizontal } from 'lucide-svelte';
 	import { page } from '$app/state';
 
 	let { collapsed = false, onToggle = () => {} }: { collapsed?: boolean; onToggle?: () => void } = $props();
 
 	const items = [
 		{ href: '/', label: '总览', icon: Gauge },
-		{ href: '/engine-hub', label: '引擎中心', icon: SlidersHorizontal },
-		{ href: '/voice-library', label: '音色库', icon: Library },
-		{ href: '/generate', label: '单条生成', icon: AudioLines },
-		{ href: '/script-studio', label: '脚本工作台', icon: BookOpenText },
-		{ href: '/eval-reference', label: '评测参考', icon: ChartNoAxesColumn },
-		{ href: '/text-tools', label: '文本工具', icon: Wand2 },
-		{ href: '/audio-tools', label: '音频与转写', icon: FileAudio },
-		{ href: '/tasks', label: '任务队列', icon: ListChecks },
-		{ href: '/history', label: '历史记录', icon: History },
+		{ href: '/engine-hub', label: '引擎管理', icon: SlidersHorizontal },
+		{ href: '/voice-library', label: '音色管理', icon: Library },
+		{ href: '/generate', label: '语音合成', icon: AudioLines },
+		{ href: '/script-studio', label: '脚本与批量', icon: BookOpenText },
+		{ href: '/eval-reference', label: '参数参考', icon: ChartNoAxesColumn },
+		{ href: '/audio-tools', label: '语音转写', icon: FileAudio },
+		{ href: '/tasks', label: '任务中心', icon: ListChecks },
 		{ href: '/settings', label: '设置', icon: Settings }
 	];
 </script>

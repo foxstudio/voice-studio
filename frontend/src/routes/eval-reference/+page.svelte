@@ -66,15 +66,15 @@
 	];
 </script>
 
-<svelte:head><title>评测参考 - 声音工作台</title></svelte:head>
+<svelte:head><title>参数参考 - 声音工作台</title></svelte:head>
 
 <main class="page">
 	<div class="page-head">
 		<div>
-			<h1>评测参考</h1>
+			<h1>参数参考</h1>
 			<p class="muted">试听成功样本，理解哪些参数适合旁白、快讲、长文本和情绪表达</p>
 		</div>
-		<div class="row"><HelpDrawer title="评测参考" sections={help} /><button class="btn" onclick={loadReport} disabled={loading}><RefreshCw size={16} /> 刷新</button></div>
+		<div class="row"><HelpDrawer title="参数参考" sections={help} /><button class="btn" onclick={loadReport} disabled={loading}><RefreshCw size={16} /> 刷新</button></div>
 	</div>
 
 	{#if loading}

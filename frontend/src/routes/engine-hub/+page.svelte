@@ -56,10 +56,10 @@
 	}
 </script>
 
-<svelte:head><title>引擎中心 - 声音工作台</title></svelte:head>
+<svelte:head><title>引擎管理 - 声音工作台</title></svelte:head>
 
 <main class="page">
-	<div class="page-head"><div><h1>引擎中心</h1><p class="muted">本地引擎生命周期、能力标签、版本差异和音频诊断</p></div><button class="btn" onclick={refresh}><RotateCcw size={16} /> 刷新</button></div>
+	<div class="page-head"><div><h1>引擎管理</h1><p class="muted">本地引擎生命周期、能力标签、版本差异和音频诊断</p></div><button class="btn" onclick={refresh}><RotateCcw size={16} /> 刷新</button></div>
 	{#if message}<div class="panel muted">{message}</div>{/if}
 	<section class="panel stack" style="margin-bottom:16px">
 		<h2>音频诊断参考音色</h2>

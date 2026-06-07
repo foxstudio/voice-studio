@@ -83,12 +83,12 @@
 	];
 </script>
 
-<svelte:head><title>脚本工作台 - 声音工作台</title></svelte:head>
+<svelte:head><title>脚本与批量 - 声音工作台</title></svelte:head>
 
 <main class="page">
 	<div class="page-head">
-		<div><h1>脚本工作台</h1><p class="muted">多段落、多角色、批量配音和 agent 批处理入口</p></div>
-		<div class="row"><HelpDrawer title="脚本工作台" sections={help} /><button class="btn primary" onclick={generateProject} disabled={!current}><Send size={15} /> 批量生成</button></div>
+		<div><h1>脚本与批量</h1><p class="muted">多段落、多角色、批量配音和 agent 批处理入口</p></div>
+		<div class="row"><HelpDrawer title="脚本与批量" sections={help} /><button class="btn primary" onclick={generateProject} disabled={!current}><Send size={15} /> 批量生成</button></div>
 	</div>
 	<div class="workbench">
 		<section class="panel stack">

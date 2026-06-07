@@ -26,7 +26,7 @@ export function taskStatusLabel(status: TaskStatus | string) {
 
 export function taskTypeLabel(type: string) {
 	return {
-		single: '单条生成',
+		single: '语音合成',
 		segment: '段落生成',
 		batch: '批量生成',
 		export: '导出'

@@ -56,9 +56,9 @@
 			<div class="row" style="justify-content:space-between"><h2>快速入口</h2><a class="btn" href="/voice-library"><Plus size={15} /> 声音</a></div>
 			<div class="stack">
 				<a class="card row" href="/engine-hub">配置本地引擎 <ArrowRight size={16} /></a>
+				<a class="card row" href="/generate#records">查看结果与记录 <ArrowRight size={16} /></a>
 				<a class="card row" href="/script-studio">创建脚本项目 <ArrowRight size={16} /></a>
-				<a class="card row" href="/eval-reference">查看评测参考 <ArrowRight size={16} /></a>
-				<a class="card row" href="/history">打开生成历史 <ArrowRight size={16} /></a>
+				<a class="card row" href="/eval-reference">查看参数参考 <ArrowRight size={16} /></a>
 			</div>
 		</section>
 	</div>
