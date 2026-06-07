@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -292,6 +294,9 @@ def run_isolated(
 ) -> dict[str, Any]:
     payload = __import__("json").dumps({"engine_id": engine_id, "kwargs": kwargs}, ensure_ascii=False)
     env = {"PYTHONPATH": f"{PROJECT_ROOT / 'backend'}:{PROJECT_ROOT}", **__import__("os").environ}
+    popen_kwargs: dict[str, Any] = {}
+    if hasattr(os, "setsid"):
+        popen_kwargs["preexec_fn"] = os.setsid
     proc = subprocess.Popen(
         [sys.executable, "-m", "app.services.inference_runner"],
         stdin=subprocess.PIPE,
@@ -300,6 +305,7 @@ def run_isolated(
         text=True,
         cwd=str(PROJECT_ROOT),
         env=env,
+        **popen_kwargs,
     )
 
     assert proc.stdin is not None
@@ -311,18 +317,10 @@ def run_isolated(
     while proc.poll() is None:
         elapsed = time.monotonic() - started_at
         if cancel_check and cancel_check():
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            _terminate_process(proc)
             raise RuntimeError("Generation cancelled")
         if elapsed > timeout:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            _terminate_process(proc)
             raise RuntimeError(f"Inference timed out after {timeout}s")
         if on_tick:
             on_tick(elapsed)
@@ -340,3 +338,23 @@ def run_isolated(
     if not stdout:
         raise RuntimeError("Inference subprocess returned no output")
     return __import__("json").loads(stdout.splitlines()[-1])
+
+
+def _terminate_process(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        if hasattr(os, "getpgid"):
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        else:
+            proc.terminate()
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            if hasattr(os, "getpgid"):
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            else:
+                proc.kill()
+        except Exception:
+            proc.kill()
+        proc.wait(timeout=5)

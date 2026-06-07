@@ -66,10 +66,18 @@ def run_omnivoice(**kwargs):
     language = kwargs.pop("language", "auto")
     instruction = kwargs.pop("emotion_text", None) or kwargs.pop("emotion", None)
     speed = kwargs.pop("speed", 1.0)
+    device = kwargs.pop("device", "mps")
+    diffusion_steps = kwargs.pop("diffusion_steps", None) or kwargs.pop("num_step", None)
     start = time.perf_counter()
     from omnivoice import OmniVoice
 
-    model = OmniVoice.from_pretrained("k2-fsa/OmniVoice", device_map=kwargs.pop("device", "mps"))
+    load_kwargs = {"device_map": device}
+    if str(device).startswith("mps"):
+        import torch
+
+        load_kwargs["attn_implementation"] = "eager"
+        load_kwargs["dtype"] = torch.float32
+    model = OmniVoice.from_pretrained("k2-fsa/OmniVoice", **load_kwargs)
     gen_kwargs = {"text": text}
     if language and language != "auto":
         gen_kwargs["language"] = language
@@ -81,6 +89,8 @@ def run_omnivoice(**kwargs):
         gen_kwargs["instruct"] = instruction
     if speed != 1.0:
         gen_kwargs["speed"] = speed
+    if diffusion_steps:
+        gen_kwargs["num_step"] = int(diffusion_steps)
     result = model.generate(**gen_kwargs)
     if isinstance(result, (str, Path)):
         shutil.copy2(str(result), output_path)

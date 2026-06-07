@@ -68,3 +68,15 @@ def test_get_task_keeps_fresh_running_task_active(fake_task_db):
     assert task is not None
     assert task.status == TaskStatus.running
     assert task.completed_at is None
+
+
+def test_cancel_running_task_marks_it_cancelled(fake_task_db):
+    fake_task_db.upsert("tasks", "task-1", task_row("task-1", timedelta(minutes=2)))
+
+    result = task_queue.cancel_task("task-1")
+
+    task = task_queue.get_task("task-1")
+    assert result == {"task_id": "task-1", "status": "cancelled"}
+    assert task is not None
+    assert task.status == TaskStatus.cancelled
+    assert task.completed_at

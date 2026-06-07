@@ -181,11 +181,12 @@ def cancel_task(task_id: str) -> dict:
     if not task:
         return {"task_id": task_id, "status": "not_found"}
     _cancelled.add(task_id)
-    if task.status in [TaskStatus.pending, TaskStatus.queued]:
+    if _task_is_active(task.status):
         task.status = TaskStatus.cancelled
         task.completed_at = now_iso()
+        task.error_message = "已取消"
         _save(task)
-    return {"task_id": task_id, "status": task.status}
+    return {"task_id": task_id, "status": task.status.value}
 
 
 def delete_task(task_id: str) -> dict:
@@ -291,6 +292,8 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
             "emotion": req.emotion,
             "emotion_text": req.emotion_text,
         })
+        if req.engine_id == "omnivoice":
+            common["diffusion_steps"] = req.diffusion_steps or 16
     return common
 
 
@@ -373,10 +376,14 @@ async def _process(task: GenerationTask) -> None:
             if task.project_id and task.segment_id:
                 project_store.update_segment_result(task.project_id, task.segment_id, audio_id, hist.result_id, SegmentStatus.completed)
     except Exception as exc:
-        task.status = TaskStatus.failed
-        task.error_message = str(exc)
-        if task.project_id and task.segment_id:
-            project_store.update_segment_result(task.project_id, task.segment_id, None, None, SegmentStatus.failed, str(exc))
+        if task.task_id in _cancelled or str(exc) == "Generation cancelled":
+            task.status = TaskStatus.cancelled
+            task.error_message = "已取消"
+        else:
+            task.status = TaskStatus.failed
+            task.error_message = str(exc)
+            if task.project_id and task.segment_id:
+                project_store.update_segment_result(task.project_id, task.segment_id, None, None, SegmentStatus.failed, str(exc))
     task.completed_at = now_iso()
     _save(task)
     await _broadcast(task)
