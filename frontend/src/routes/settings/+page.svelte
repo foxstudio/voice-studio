@@ -1,197 +1,73 @@
 <script lang="ts">
-  import { getSettings, updateSettings } from '$lib/api';
-  import { ApiError, NetworkError } from '$lib/api';
-  import type { AppSettings } from '$lib/api';
-  import { Save } from 'lucide-svelte';
+	import { Api } from '$lib/api';
+	import type { AppSettings } from '$lib/api/types';
+	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
+	import { Save } from 'lucide-svelte';
 
-  let settings = $state<AppSettings | null>(null);
-  let loading = $state(true);
-  let error = $state<string | null>(null);
-  let saved = $state(false);
-  let saveError = $state<string | null>(null);
+	let settings = $state<AppSettings | null>(null);
+	let saved = $state('');
+	let mimoApiKey = $state('');
+	let clearMimoKey = $state(false);
+	$effect(() => { Api.settings().then((s) => (settings = s)); });
+	async function save() {
+		if (!settings) return;
+		settings = await Api.saveSettings(settings);
+		if (mimoApiKey.trim() || clearMimoKey) {
+			settings = await Api.saveMimoSecret({ api_key: mimoApiKey.trim() || null, clear: clearMimoKey });
+			mimoApiKey = '';
+			clearMimoKey = false;
+		}
+		saved = '已保存';
+		setTimeout(() => (saved = ''), 1600);
+	}
 
-  const EMOTION_LABELS: Record<string, string> = {
-    happy: '高兴', sad: '悲伤', angry: '愤怒', afraid: '恐惧',
-    disgusted: '反感', melancholic: '低落', surprised: '惊讶', calm: '自然',
-  };
-
-  const THEME_LABELS: Record<string, string> = {
-    light: '浅色', dark: '深色', system: '跟随系统',
-  };
-
-  async function load() {
-    loading = true;
-    error = null;
-    try {
-      settings = await getSettings();
-    } catch (e: unknown) {
-      if (e instanceof ApiError || e instanceof NetworkError) {
-        error = e.message;
-      } else {
-        error = '加载设置失败';
-      }
-      console.error('[settings] getSettings failed:', e);
-    } finally {
-      loading = false;
-    }
-  }
-
-  // Load on mount
-  $effect(() => { load(); });
-
-  async function save() {
-    if (!settings) return;
-    saveError = null;
-    try {
-      const result = await updateSettings(settings);
-      settings = result;
-      saved = true;
-      setTimeout(() => saved = false, 2000);
-    } catch (e: unknown) {
-      if (e instanceof ApiError) {
-        saveError = `保存失败: ${e.message}`;
-      } else if (e instanceof NetworkError) {
-        saveError = `网络错误: ${e.message}`;
-      } else {
-        saveError = '保存设置失败';
-      }
-      console.error('[settings] updateSettings failed:', e);
-    }
-  }
+	const help = [
+		{ title: 'MiMo Token Plan 怎么用', body: '先开启云端引擎，再填写 Token Plan 专属 base URL 和 API Key。保存后，引擎中心会显示 MiMo TTS；没有 key 时会提示不可用，不影响本地 IndexTTS 和 OmniVoice。' },
+		{ title: '密钥安全', body: 'API Key 只保存在本地后端设置表里，前端只显示是否已配置，不会把 key 回填到输入框。需要换 key 时直接填新的；需要删除时勾选清除。' },
+		{ title: '目录设置', body: '声音目录保存参考音频，输出目录保存生成结果，批处理默认会在输出目录下创建 batches 子目录。视频项目批量合成时可以单独指定 presentation/public/audio。' }
+	];
 </script>
 
-<section>
-  <h1>设置</h1>
-
-  {#if loading}
-    <div class="loading">加载中…</div>
-  {:else if error}
-    <div class="error-card">
-      <p class="error-msg">加载失败: {error}</p>
-      <button class="btn" onclick={load}>重试</button>
-    </div>
-  {:else if settings}
-    <div class="settings-grid">
-      <div class="setting-group">
-        <h2>通用</h2>
-        <label>引擎版本
-          <select bind:value={settings.default_engine_version}>
-            <option value="v1">IndexTTS v1</option>
-            <option value="v2">IndexTTS v2</option>
-          </select>
-        </label>
-        <label>默认语言
-          <select bind:value={settings.default_language}>
-            <option value="zh">中文</option>
-            <option value="en">英文</option>
-          </select>
-        </label>
-        <label>默认情感
-          <select bind:value={settings.default_emotion}>
-            {#each Object.entries(EMOTION_LABELS) as [val, label]}
-              <option value={val}>{label}</option>
-            {/each}
-          </select>
-        </label>
-        <label>情感强度
-          <div class="range-row">
-            <input type="range" min="0" max="0.8" step="0.05" bind:value={settings.default_emo_alpha} />
-            <span class="range-value">{settings.default_emo_alpha.toFixed(2)}</span>
-          </div>
-        </label>
-        <label>主题
-          <select bind:value={settings.theme}>
-            {#each Object.entries(THEME_LABELS) as [val, label]}
-              <option value={val}>{label}</option>
-            {/each}
-          </select>
-        </label>
-        <label>默认输出格式
-          <select bind:value={settings.default_output_format}>
-            <option value="wav">WAV</option>
-            <option value="mp3">MP3</option>
-          </select>
-        </label>
-        <label>推理设备
-          <select bind:value={settings.device}>
-            <option value="auto">自动</option>
-            <option value="gpu">GPU</option>
-            <option value="cpu">CPU</option>
-          </select>
-        </label>
-      </div>
-
-      <div class="setting-group">
-        <h2>目录</h2>
-        <label>模型目录 <input type="text" bind:value={settings.model_dir} /></label>
-        <label>声音目录 <input type="text" bind:value={settings.voice_dir} /></label>
-        <label>输出目录 <input type="text" bind:value={settings.output_dir} /></label>
-        <label>导出目录 <input type="text" bind:value={settings.export_dir} /></label>
-        <label>项目目录 <input type="text" bind:value={settings.project_dir} /></label>
-      </div>
-
-      <div class="setting-group">
-        <h2>其他</h2>
-        <label class="toggle-label">
-          <span>启用云端引擎</span>
-          <input type="checkbox" bind:checked={settings.cloud_enabled} />
-        </label>
-        <p class="dim">启用后，部分文本和音频将发送到第三方服务</p>
-      </div>
-    </div>
-
-    <div class="actions">
-      {#if saveError}
-        <div class="toast toast-error">{saveError}</div>
-      {/if}
-      {#if saved}
-        <div class="toast toast-success">已保存</div>
-      {/if}
-      <button class="btn primary" onclick={save}>
-        <Save size={14} /> 保存设置
-      </button>
-    </div>
-  {/if}
-</section>
-
-<style>
-  h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 2rem; }
-
-  .loading { color: var(--color-text-dim); padding: 2rem 0; }
-  .error-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 12px; padding: 2rem; max-width: 400px; }
-  .error-msg { color: #ef4444; margin: 0 0 1rem; font-size: 0.9rem; }
-
-  .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; max-width: 900px; }
-
-  .setting-group {
-    background: var(--color-surface); border: 1px solid var(--color-border);
-    border-radius: 12px; padding: 1.5rem;
-  }
-  .setting-group h2 { font-size: 0.8rem; font-weight: 600; text-transform: uppercase;
-    letter-spacing: 0.05em; color: var(--color-text-dim); margin: 0 0 1rem; }
-  .setting-group label { display: block; margin-bottom: 1rem; font-size: 0.85rem; color: var(--color-text-dim); }
-  .setting-group input[type="text"], .setting-group select {
-    display: block; width: 100%; margin-top: 0.35rem; padding: 0.45rem 0.75rem;
-    background: var(--color-surface-2); border: 1px solid var(--color-border);
-    border-radius: 6px; color: var(--color-text); font-size: 0.85rem; outline: none;
-  }
-  .setting-group input:focus, .setting-group select:focus { border-color: var(--color-accent); }
-
-  .range-row { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.35rem; }
-  .range-row input[type="range"] { flex: 1; accent-color: var(--color-accent); }
-  .range-value { min-width: 2.5rem; text-align: right; font-size: 0.85rem; color: var(--color-text); }
-
-  .toggle-label { display: flex !important; justify-content: space-between; align-items: center; }
-  .dim { font-size: 0.8rem; color: var(--color-text-dim); margin: -0.5rem 0 0; }
-
-  .actions { margin-top: 2rem; max-width: 900px; display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; }
-
-  .toast { padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.85rem; font-weight: 500; }
-  .toast-success { background: #14532d; color: #86efac; border: 1px solid #22c55e; }
-  .toast-error { background: #450a0a; color: #fca5a5; border: 1px solid #ef4444; }
-
-  .btn { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1.25rem;
-    border-radius: 8px; border: none; font-size: 0.85rem; font-weight: 600; cursor: pointer; }
-  .btn.primary { background: var(--color-accent); color: white; }
-  .btn.primary:hover { filter: brightness(1.1); }
-</style>
+<svelte:head><title>设置 - 声音工作台</title></svelte:head>
+<main class="page">
+	<div class="page-head">
+		<div><h1>设置</h1><p class="muted">模型、输出、缓存、本地/云端策略和默认参数</p></div>
+		<div class="row"><HelpDrawer title="设置" sections={help} /><button class="btn primary" onclick={save} disabled={!settings}><Save size={15} /> 保存</button></div>
+	</div>
+	{#if settings}
+		<div class="split">
+			<section class="panel stack">
+				<h2>默认行为</h2>
+				<div class="field"><label for="default-engine">默认引擎</label><select id="default-engine" bind:value={settings.default_engine_id}><option value="indextts-v2">IndexTTS v2</option><option value="omnivoice">OmniVoice</option><option value="mimo-v2.5-tts">MiMo V2.5 TTS</option></select></div>
+				<div class="field"><label for="default-lang">默认语言</label><select id="default-lang" bind:value={settings.default_language}><option value="zh">中文</option><option value="en">英文</option><option value="auto">自动</option></select></div>
+				<div class="field"><label for="default-format">默认格式</label><select id="default-format" bind:value={settings.default_output_format}><option value="wav">WAV</option><option value="mp3">MP3</option><option value="flac">FLAC</option></select></div>
+				<div class="field"><label for="device">设备</label><select id="device" bind:value={settings.device}><option value="auto">自动</option><option value="mps">Apple 芯片 MPS</option><option value="cpu">CPU</option></select></div>
+				<div class="field"><label for="cloud"><input id="cloud" type="checkbox" bind:checked={settings.cloud_enabled} /> 启用云端引擎</label></div>
+			</section>
+			<section class="panel stack">
+				<h2>MiMo Token Plan</h2>
+				<div class="field"><label for="mimo-base">专属 Base URL</label><input id="mimo-base" bind:value={settings.mimo_base_url} /></div>
+				<div class="field"><label for="mimo-voice">默认 MiMo 音色</label><input id="mimo-voice" bind:value={settings.mimo_default_voice} placeholder="例如 mimo_default 或官方音色名" /></div>
+				<div class="field">
+					<label for="mimo-key">API Key（不会回显）</label>
+					<input id="mimo-key" type="password" bind:value={mimoApiKey} placeholder={settings.mimo_api_key_configured ? '已配置；填写新 key 可覆盖' : '未配置'} />
+				</div>
+				<label for="mimo-clear"><input id="mimo-clear" type="checkbox" bind:checked={clearMimoKey} /> 清除已保存的 MiMo API Key</label>
+				<span class="badge" class:ok={settings.mimo_api_key_configured} class:warn={!settings.mimo_api_key_configured}>{settings.mimo_api_key_configured ? 'MiMo Key 已配置' : 'MiMo Key 未配置'}</span>
+				<p class="muted">Token Plan 专属入口默认使用 https://token-plan-cn.xiaomimimo.com/v1。</p>
+			</section>
+			<section class="panel stack">
+				<h2>目录</h2>
+				<div class="field"><label for="data-dir">数据目录</label><input id="data-dir" bind:value={settings.data_dir} /></div>
+				<div class="field"><label for="model-dir">模型目录</label><input id="model-dir" bind:value={settings.model_dir} /></div>
+				<div class="field"><label for="voice-dir">声音目录</label><input id="voice-dir" bind:value={settings.voice_dir} /></div>
+				<div class="field"><label for="output-dir">输出目录</label><input id="output-dir" bind:value={settings.output_dir} /></div>
+				<div class="field"><label for="export-dir">导出目录</label><input id="export-dir" bind:value={settings.export_dir} /></div>
+				<div class="field"><label for="project-dir">项目目录</label><input id="project-dir" bind:value={settings.project_dir} /></div>
+			</section>
+		</div>
+		{#if saved}<p class="badge ok">{saved}</p>{/if}
+	{:else}
+		<div class="empty">加载设置中</div>
+	{/if}
+</main>

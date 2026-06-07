@@ -1,203 +1,202 @@
-"""引擎注册表 — 管理所有 TTS 引擎的生命周期"""
+from __future__ import annotations
 
-import gc
-import os
+import subprocess
 import sys
-import threading
+import time
+from pathlib import Path
+from typing import Any
 
-from app.models.schemas import (
-    EngineDetail, EngineManifest, EngineState, EngineStatus,
-    EngineType,
-)
+from app.models.schemas import EngineDetail, EngineManifest, EngineState, EngineStatus, ParameterSchema
+from app.services import settings_store
+from app.services.paths import PROJECT_ROOT
 
-_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
 
-from app.services.adapters.v1_adapter import V1Adapter
-from app.services.adapters.omnivoice_adapter import OmniVoiceAdapter
-_lock = threading.Lock()
-_engine_instances: dict[str, object | None] = {}
-_engine_sample_rates: dict[str, int] = {}
+_EMOTION_OPTIONS = [
+    {"label": "自然 calm", "value": "calm"},
+    {"label": "高兴 happy", "value": "happy"},
+    {"label": "悲伤 sad", "value": "sad"},
+    {"label": "愤怒 angry", "value": "angry"},
+    {"label": "恐惧 afraid", "value": "afraid"},
+    {"label": "反感 disgusted", "value": "disgusted"},
+    {"label": "低落 melancholic", "value": "melancholic"},
+    {"label": "惊讶 surprised", "value": "surprised"},
+]
 
-MODEL_DIR = os.path.join(_project_root, "models", "mlx-indexTTS-2.0")
+
+def _common_params(v2: bool = False) -> list[ParameterSchema]:
+    params = [
+        ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05),
+        ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.8 if v2 else 1.0, min=0.1, max=2.0, step=0.05),
+        ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.8, min=0, max=1, step=0.05, level="advanced"),
+        ParameterSchema(key="top_k", label="候选数量 Top-K", type="slider", default=30, min=1, max=100, step=1, level="advanced"),
+        ParameterSchema(key="max_text_tokens_per_segment", label="分段 Token", type="slider", default=120, min=20, max=500, step=10, level="advanced"),
+        ParameterSchema(key="interval_silence", label="段间静默 ms", type="slider", default=200, min=0, max=2000, step=50, level="advanced"),
+    ]
+    if v2:
+        params.extend([
+            ParameterSchema(
+                key="emotion",
+                label="情绪",
+                type="select",
+                default="calm",
+                options=_EMOTION_OPTIONS,
+                capability="emotion_control",
+            ),
+            ParameterSchema(key="emo_alpha", label="情绪强度", type="slider", default=0.6, min=0, max=1, step=0.05, capability="emotion_control"),
+            ParameterSchema(key="diffusion_steps", label="扩散步数 Diffusion Steps", type="slider", default=25, min=5, max=60, step=1, level="advanced"),
+            ParameterSchema(key="cfg_rate", label="引导强度 CFG Rate", type="slider", default=0.7, min=0, max=1, step=0.05, level="advanced"),
+        ])
+    return params
+
+
 _ENGINES: dict[str, EngineDetail] = {
-    "indextts": EngineDetail(
+    "indextts-v2": EngineDetail(
         manifest=EngineManifest(
-            engine_id="indextts",
-            name="IndexTTS",
+            engine_id="indextts-v2",
             display_name="IndexTTS v2",
-            engine_type="local",
             provider="Index Team",
-            version="v2",
-            description="中文/英文情绪化语音合成引擎（第二代），支持声音克隆与8种情绪控制",
+            version="2.0",
+            description="本地 MLX 情绪化语音合成，支持声音克隆和 8 种情绪控制",
             supported_languages=["zh", "en"],
-            capabilities=["local_inference", "voice_clone", "multilingual",
-                          "emotion_control", "pinyin_control", "long_text"],
+            capabilities=["local_inference", "voice_clone", "emotion_control", "long_text", "pinyin_control"],
             sample_rate=22050,
             max_tokens=1815,
             default_use_case="中文/英文情绪化配音",
-            privacy_level="local_only",
-            available_versions=["v1", "v2"],
+            parameter_schema=_common_params(v2=True),
         ),
-        state=EngineState(engine_id="indextts", status=EngineStatus.stopped),
+        state=EngineState(engine_id="indextts-v2", status=EngineStatus.stopped),
     ),
     "omnivoice": EngineDetail(
         manifest=EngineManifest(
             engine_id="omnivoice",
-            name="OmniVoice",
             display_name="OmniVoice",
-            engine_type="local",
-            provider="OmniVoice Team",
-            description="600+ 语言零样本 TTS，支持声音克隆与声音设计",
-            supported_languages=["zh", "en", "ja", "ko", "fr", "de", "es"],
-            capabilities=["local_inference", "voice_clone", "voice_design",
-                          "multilingual", "emotion_control", "nonverbal_tags"],
+            provider="k2-fsa",
+            version="0.1.5",
+            description="600+ 语言本地声音克隆 / 声音设计引擎",
+            supported_languages=["auto", "zh", "en", "ja", "ko", "fr", "de", "es"],
+            capabilities=["local_inference", "voice_clone", "voice_design", "multilingual", "nonverbal_tags", "pinyin_control"],
             sample_rate=24000,
-            default_use_case="多语言语音生成与声音设计",
-            privacy_level="local_only",
+            default_use_case="多语言克隆与声音设计",
+            parameter_schema=[
+                ParameterSchema(key="language", label="语言", type="select", default="auto", options=[{"label": x, "value": x} for x in ["auto", "zh", "en", "ja", "ko", "fr", "de", "es"]]),
+                ParameterSchema(key="emotion_text", label="声音描述/指令", type="textarea", default="", capability="voice_design"),
+                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05),
+            ],
         ),
-        state=EngineState(engine_id="omnivoice", status=EngineStatus.not_installed),
+        state=EngineState(engine_id="omnivoice", status=EngineStatus.stopped),
     ),
-    "indextts-v1": EngineDetail(
+    "mimo-v2.5-tts": EngineDetail(
         manifest=EngineManifest(
-            engine_id="indextts-v1",
-            name="IndexTTS",
-            display_name="IndexTTS v1",
-            engine_type=EngineType.local,
-            provider="Index Team",
-            version="v1",
-            description="中文/英文语音合成引擎（第一代），支持声音克隆",
+            engine_id="mimo-v2.5-tts",
+            display_name="MiMo V2.5 TTS",
+            engine_type="cloud",
+            provider="Xiaomi MiMo",
+            version="2.5",
+            description="小米 MiMo Token Plan 云端语音合成，支持预置音色、声音设计和声音复刻扩展",
             supported_languages=["zh", "en"],
-            capabilities=["local_inference", "voice_clone", "multilingual"],
-            sample_rate=24000,
-            max_tokens=800,
-            default_use_case="中文/英文配音",
-            privacy_level="local_only",
-            available_versions=["v1", "v2"],
+            capabilities=["cloud_api", "preset_voice", "voice_clone", "voice_design", "emotion_control"],
+            default_use_case="云端中文口播、批量视频旁白和声音设计",
+            privacy_level="cloud_required",
+            parameter_schema=[
+                ParameterSchema(key="mimo_voice", label="MiMo 音色", type="text", default="mimo_default"),
+                ParameterSchema(key="emotion_text", label="声音描述/指令", type="textarea", default="", capability="voice_design"),
+                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05),
+            ],
         ),
-        state=EngineState(
-            engine_id="indextts-v1",
-            status=EngineStatus.not_installed,
-        ),
+        state=EngineState(engine_id="mimo-v2.5-tts", status=EngineStatus.stopped),
     ),
-    }
-
-
-engine_adapter_map: dict[str, type] = {
-    "indextts-v1": V1Adapter,
-    "omnivoice": OmniVoiceAdapter,
 }
-
-
 
 
 def list_engines() -> list[EngineDetail]:
     return list(_ENGINES.values())
 
 
-def get_engine(engine_id: str) -> EngineDetail:
-    if engine_id not in _ENGINES:
-        from app.models.exceptions import AppException
-        raise AppException(404, "ENGINE_NOT_FOUND", f"Engine {engine_id} not found")
-    return _ENGINES[engine_id]
+def get_engine(engine_id: str) -> EngineDetail | None:
+    return _ENGINES.get(engine_id)
 
 
-def get_engine_instance(engine_id: str) -> object | None:
-    return _engine_instances.get(engine_id)
+def health_check(engine_id: str) -> dict[str, Any]:
+    detail = _ENGINES.get(engine_id)
+    if not detail:
+        return {"healthy": False, "status": "not_found"}
+    if engine_id.startswith("indextts"):
+        model_dir = settings_store.model_path(engine_id)
+        required = ["tokenizer.model"]
+        required.append("gpt.safetensors")
+        missing = [name for name in required if not (model_dir / name).exists()]
+        return {
+            "healthy": not missing,
+            "status": "ok" if not missing else "model_missing",
+            "model_path": str(model_dir),
+            "missing": missing,
+        }
+    if engine_id == "mimo-v2.5-tts":
+        settings = settings_store.get()
+        if not settings.cloud_enabled:
+            return {"healthy": False, "status": "cloud_disabled", "detail": "云端引擎未启用"}
+        if not settings.mimo_api_key_configured:
+            return {"healthy": False, "status": "api_key_missing", "detail": "MiMo Token Plan API Key 未配置"}
+        return {"healthy": True, "status": "configured", "base_url": settings.mimo_base_url}
+    try:
+        import omnivoice  # noqa: F401
+
+        return {"healthy": True, "status": "package_available", "model_id": "k2-fsa/OmniVoice"}
+    except Exception as exc:
+        return {"healthy": False, "status": "package_missing", "detail": str(exc)}
+
 
 def start_engine(engine_id: str) -> EngineDetail:
-    if engine_id not in _ENGINES:
-        from app.models.exceptions import AppException
-        raise AppException(404, "ENGINE_NOT_FOUND", f"Engine {engine_id} not found")
-
     detail = _ENGINES[engine_id]
-
-    with _lock:
-        if detail.state.status == EngineStatus.loaded and _engine_instances.get(engine_id) is not None:
-            return detail
-        detail.state.status = EngineStatus.loading
-        detail.state.error_message = None
-
-    try:
-        if engine_id == "indextts":
-            if not os.path.exists(MODEL_DIR):
-                raise FileNotFoundError(f"Model not found at {MODEL_DIR}")
-
-            from mlx_indextts.generate_v2 import IndexTTSv2
-            instance = IndexTTSv2(MODEL_DIR, device="mps")
-
-            # Read sample_rate from model config.json for accurate duration calculation
-            config_path = os.path.join(MODEL_DIR, "config.json")
-            sample_rate = 22050  # fallback default
-            if os.path.exists(config_path):
-                import json
-                with open(config_path) as f:
-                    cfg = json.load(f)
-                    sample_rate = cfg.get("sample_rate", 22050)
-
-            with _lock:
-                _engine_instances[engine_id] = instance
-                _engine_sample_rates[engine_id] = sample_rate
-                detail.state.status = EngineStatus.loaded
-
-        elif engine_id in engine_adapter_map:
-            adapter_cls = engine_adapter_map[engine_id]
-            adapter = adapter_cls()
-            hc = adapter.health_check()
-            if not hc.get("healthy"):
-                raise RuntimeError(f"Engine {engine_id} health check failed: {hc.get('detail', 'unknown')}")
-
-            with _lock:
-                _engine_instances[engine_id] = adapter  # Store adapter (model loads lazily in subprocess)
-                _engine_sample_rates[engine_id] = adapter.manifest["sample_rate"]
-                detail.state.status = EngineStatus.loaded
-        else:
-            raise ValueError(f"Unknown adapter engine: {engine_id}")
-    except Exception as exc:
-        with _lock:
-            detail.state.status = EngineStatus.error
-            detail.state.error_message = str(exc)
-
+    detail.state.status = EngineStatus.loading
+    hc = health_check(engine_id)
+    if not hc.get("healthy"):
+        detail.state.status = EngineStatus.error
+        detail.state.error_message = str(hc)
+        return detail
+    detail.state.status = EngineStatus.loaded
+    detail.state.model_path = hc.get("model_path") or hc.get("base_url")
+    detail.state.error_message = None
+    detail.state.loaded_at = time.strftime("%Y-%m-%dT%H:%M:%S")
     return detail
+
 
 def stop_engine(engine_id: str) -> EngineDetail:
-    if engine_id not in _ENGINES:
-        from app.models.exceptions import AppException
-        raise AppException(404, "ENGINE_NOT_FOUND", f"Engine {engine_id} not found")
-
     detail = _ENGINES[engine_id]
-
-    with _lock:
-        _engine_instances[engine_id] = None
-        detail.state.status = EngineStatus.stopped
-        detail.state.error_message = None
-
-    gc.collect()
+    detail.state.status = EngineStatus.stopped
+    detail.state.error_message = None
     return detail
 
 
-def get_engine_sample_rate(engine_id: str) -> int:
-    """Get the sample rate for a loaded engine, read from its model config.json."""
-    return _engine_sample_rates.get(engine_id, 22050)
-def health_check(engine_id: str) -> dict:
-    if engine_id not in _ENGINES:
-        return {"status": "not_found"}
-
-    instance = _engine_instances.get(engine_id)
-    if instance is not None and hasattr(instance, 'health_check'):
-        return instance.health_check()
-
-    e = _ENGINES[engine_id]
-    return {
-        "engine_id": engine_id,
-        "status": e.state.status.value,
-        "healthy": e.state.status == EngineStatus.loaded,
-    }
+def ensure_loaded(engine_id: str) -> None:
+    detail = _ENGINES.get(engine_id)
+    if not detail:
+        raise ValueError(f"Unknown engine: {engine_id}")
+    if detail.state.status != EngineStatus.loaded:
+        start_engine(engine_id)
+    if detail.state.status != EngineStatus.loaded:
+        raise RuntimeError(detail.state.error_message or f"Engine {engine_id} is not available")
 
 
-def reload_engine(engine_id: str) -> EngineDetail:
-    """Stop and restart an engine."""
-    stop_engine(engine_id)
-    return start_engine(engine_id)
-
+def run_isolated(engine_id: str, kwargs: dict[str, Any], timeout: int = 900) -> dict[str, Any]:
+    payload = __import__("json").dumps({"engine_id": engine_id, "kwargs": kwargs}, ensure_ascii=False)
+    env = {"PYTHONPATH": f"{PROJECT_ROOT / 'backend'}:{PROJECT_ROOT}", **__import__("os").environ}
+    proc = subprocess.run(
+        [sys.executable, "-m", "app.services.inference_runner"],
+        input=payload,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        cwd=str(PROJECT_ROOT),
+        env=env,
+    )
+    stdout = (proc.stdout or "").strip()
+    if proc.returncode != 0:
+        try:
+            error = __import__("json").loads(stdout.splitlines()[-1] if stdout else "{}")
+        except Exception:
+            error = {}
+        raise RuntimeError(error.get("error") or proc.stderr[-1200:] or "Inference subprocess failed")
+    if not stdout:
+        raise RuntimeError("Inference subprocess returned no output")
+    return __import__("json").loads(stdout.splitlines()[-1])

@@ -1,74 +1,97 @@
-"""声音资产存储 - SQLite 持久化"""
+from __future__ import annotations
 
-import logging
-import os
-import uuid
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import UploadFile
 
-from app.models.schemas import VoiceAsset, VoiceAssetCreate
-from app.services import database as db
-
-UPLOAD_DIR = os.path.expanduser("~/VoiceStudio/voices")
-
-logger = logging.getLogger(__name__)
-
-
-def _ensure_dir():
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
+from app.models.schemas import VoiceAsset, VoiceAssetCreate, VoiceFile, now_iso
+from app.services import audio_tools, database as db, settings_store, voice_aliases
 
 
 def list_voices() -> list[VoiceAsset]:
-    return [VoiceAsset(**d) for d in db.db_list_voices()]
+    return [_normalize_voice(VoiceAsset(**d)) for d in db.list_all("voices", "updated_at")]
 
 
 def get_voice(voice_id: str) -> VoiceAsset | None:
-    d = db.db_get_voice(voice_id)
-    return VoiceAsset(**d) if d else None
+    data = db.get_one("voices", "voice_id", voice_id)
+    return _normalize_voice(VoiceAsset(**data)) if data else None
+
+
+def _normalize_voice(voice: VoiceAsset) -> VoiceAsset:
+    normalized_name = voice_aliases.normalized_seed_voice_name(voice.name, voice.tags)
+    if normalized_name != voice.name:
+        voice.name = normalized_name
+        save_voice(voice)
+    return voice
+
+
+def save_voice(voice: VoiceAsset) -> VoiceAsset:
+    voice.updated_at = now_iso()
+    db.upsert("voices", voice.voice_id, voice.model_dump())
+    return voice
 
 
 def create_voice(data: VoiceAssetCreate) -> VoiceAsset:
-    voice = VoiceAsset(**data.model_dump())
-    db.db_save_voice(voice.model_dump())
-    return voice
+    return save_voice(VoiceAsset(**data.model_dump()))
 
 
 def update_voice(voice_id: str, data: VoiceAssetCreate) -> VoiceAsset | None:
-    existing = db.db_get_voice(voice_id)
-    if not existing:
+    old = get_voice(voice_id)
+    if not old:
         return None
-    merged = {**existing, **data.model_dump(), "voice_id": voice_id,
-              "updated_at": datetime.now().isoformat()}
-    voice = VoiceAsset(**merged)
-    db.db_save_voice(voice.model_dump())
-    return voice
+    merged = old.model_dump()
+    merged.update(data.model_dump())
+    merged["voice_id"] = voice_id
+    return save_voice(VoiceAsset(**merged))
 
 
 def delete_voice(voice_id: str) -> None:
-    voice = db.db_get_voice(voice_id)
+    voice = get_voice(voice_id)
     if voice:
-        for audio_id in voice.get("reference_audio_ids", []):
-            deleted = False
-            for ext in [".wav", ".mp3", ".flac", ".ogg"]:
-                path = Path(UPLOAD_DIR) / f"{audio_id}{ext}"
-                if path.exists():
-                    path.unlink()
-                    logger.info("Deleted voice file: %s (voice_id=%s)", path, voice_id)
-                    deleted = True
-                    break
-            if not deleted:
-                logger.warning("Voice file not found for audio_id=%s (voice_id=%s)", audio_id, voice_id)
-    db.db_delete_voice(voice_id)
+        for file_id in voice.reference_audio_ids:
+            vf = get_file(file_id)
+            if vf:
+                Path(vf.path).unlink(missing_ok=True)
+                db.delete_one("voice_files", "file_id", file_id)
+    db.delete_one("voices", "voice_id", voice_id)
 
 
-async def upload_audio(file: UploadFile) -> str:
-    _ensure_dir()
-    file_id = uuid.uuid4().hex[:12]
-    ext = os.path.splitext(file.filename or "audio.wav")[1]
-    dest = os.path.join(UPLOAD_DIR, f"{file_id}{ext}")
-    with open(dest, "wb") as f:
-        content = await file.read()
-        f.write(content)
-    return file_id
+def get_file(file_id: str) -> VoiceFile | None:
+    data = db.get_one("voice_files", "file_id", file_id)
+    return VoiceFile(**data) if data else None
+
+
+async def upload_audio(file: UploadFile) -> dict:
+    settings_store.ensure_directories()
+    suffix = Path(file.filename or "voice.wav").suffix or ".wav"
+    vf = VoiceFile(original_name=file.filename or "voice.wav", path="")
+    path = settings_store.voice_dir() / f"{vf.file_id}{suffix.lower()}"
+    content = await file.read()
+    path.write_bytes(content)
+    vf.path = str(path)
+    vf.mime_type = file.content_type or "audio/wav"
+    vf.size_bytes = len(content)
+    quality = {"passed": True, "warnings": []}
+    try:
+        meta = audio_tools.probe_audio(path)
+        vf.duration_ms = meta["duration_ms"]
+        vf.sample_rate = meta["sample_rate"]
+        if vf.duration_ms < 2000:
+            quality["passed"] = False
+            quality["warnings"].append("参考音频短于 2 秒")
+        if vf.duration_ms > 30000:
+            quality["warnings"].append("参考音频超过 30 秒，可能影响推理速度")
+    except Exception as exc:
+        quality = {"passed": False, "warnings": [f"无法读取音频: {exc}"]}
+    db.upsert("voice_files", vf.file_id, vf.model_dump())
+    return {"file_id": vf.file_id, "filename": vf.original_name, "quality": quality}
+
+
+def reference_path(voice_id: str | None) -> str | None:
+    if not voice_id:
+        return None
+    voice = get_voice(voice_id)
+    if not voice or not voice.reference_audio_ids:
+        return None
+    vf = get_file(voice.reference_audio_ids[0])
+    return vf.path if vf else None

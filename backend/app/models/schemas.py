@@ -1,16 +1,29 @@
-"""Voice Studio Pydantic 数据模型"""
-
 from __future__ import annotations
 
 import uuid
+import os
 from datetime import datetime
-from typing import Any, Literal
 from enum import Enum
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
-# ── Enums ──────────────────────────────────────────────
+def new_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def default_data_dir() -> str:
+    return os.environ.get("VOICE_STUDIO_DATA_DIR", "~/VoiceStudio")
+
+
+def default_data_subdir(name: str) -> str:
+    return os.environ.get(f"VOICE_STUDIO_{name.upper()}_DIR", f"{default_data_dir()}/{name}")
+
 
 class EngineType(str, Enum):
     local = "local"
@@ -22,9 +35,19 @@ class EngineStatus(str, Enum):
     stopped = "stopped"
     loading = "loading"
     loaded = "loaded"
-    starting = "starting"
     running = "running"
     error = "error"
+
+
+class TaskStatus(str, Enum):
+    pending = "pending"
+    queued = "queued"
+    running = "running"
+    postprocessing = "postprocessing"
+    success = "success"
+    failed = "failed"
+    cancelled = "cancelled"
+    retrying = "retrying"
 
 
 class VoiceType(str, Enum):
@@ -46,84 +69,51 @@ class LicenseStatus(str, Enum):
     commercial_forbidden = "commercial_forbidden"
 
 
-class TaskStatus(str, Enum):
-    pending = "pending"
-    queued = "queued"
-    running = "running"
-    postprocessing = "postprocessing"
-    success = "success"
-    failed = "failed"
-    cancelled = "cancelled"
-    retrying = "retrying"
-
-
 class EmotionMode(str, Enum):
     follow_reference = "follow_reference"
-    emotion_reference = "emotion_reference"
     emotion_vector = "emotion_vector"
     emotion_text = "emotion_text"
 
 
-class VoiceMode(str, Enum):
-    clone = "clone"
-    design = "design"
-    auto = "auto"
+EMOTIONS = ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surprised", "calm"]
 
 
-class SegmentStatus(str, Enum):
-    empty = "empty"
-    ready = "ready"
-    queued = "queued"
-    generating = "generating"
-    completed = "completed"
-    failed = "failed"
-    locked = "locked"
+class ParameterSchema(BaseModel):
+    key: str
+    label: str
+    type: Literal["text", "textarea", "number", "slider", "select", "toggle", "file"]
+    level: Literal["basic", "advanced", "developer"] = "basic"
+    default: Any = None
+    min: float | None = None
+    max: float | None = None
+    step: float | None = None
+    options: list[dict[str, str]] = Field(default_factory=list)
+    required: bool = False
+    capability: str | None = None
 
-
-class EngineVersion(str, Enum):
-    indextts_v1 = "indextts-v1"
-    indextts = "indextts"
-    omnivoice = "omnivoice"
-
-
-# ── Emotion ────────────────────────────────────────────
-
-EMOTION_DIMENSIONS = {
-    "happy": "高兴",
-    "angry": "愤怒",
-    "sad": "悲伤",
-    "afraid": "恐惧",
-    "disgusted": "反感",
-    "melancholic": "低落",
-    "surprised": "惊讶",
-    "calm": "自然",
-}
-
-
-# ── Engine ─────────────────────────────────────────────
 
 class EngineManifest(BaseModel):
     engine_id: str
-    name: str
     display_name: str
     engine_type: EngineType = EngineType.local
     provider: str = ""
-    version: str = "0.1.0"
+    version: str = ""
     description: str = ""
-    supported_languages: list[str] = Field(default_factory=lambda: ["zh", "en"])
+    supported_languages: list[str] = Field(default_factory=list)
     capabilities: list[str] = Field(default_factory=list)
-    default_use_case: str = ""
+    sample_rate: int | None = None
+    max_tokens: int | None = None
     privacy_level: str = "local_only"
-    available_versions: list[str] = Field(default_factory=list)
+    default_use_case: str = ""
+    parameter_schema: list[ParameterSchema] = Field(default_factory=list)
 
-    sample_rate: int | None = Field(default=None, description="Audio sample rate in Hz")
-    max_tokens: int | None = Field(default=None, description="Maximum mel tokens")
 
 class EngineState(BaseModel):
     engine_id: str
     status: EngineStatus = EngineStatus.stopped
     model_path: str | None = None
     error_message: str | None = None
+    loaded_at: str | None = None
 
 
 class EngineDetail(BaseModel):
@@ -131,7 +121,32 @@ class EngineDetail(BaseModel):
     state: EngineState
 
 
-# ── Voice Asset ────────────────────────────────────────
+class AppSettings(BaseModel):
+    data_dir: str = Field(default_factory=default_data_dir)
+    model_dir: str = "models"
+    voice_dir: str = Field(default_factory=lambda: default_data_subdir("voices"))
+    output_dir: str = Field(default_factory=lambda: default_data_subdir("outputs"))
+    export_dir: str = Field(default_factory=lambda: default_data_subdir("exports"))
+    project_dir: str = Field(default_factory=lambda: default_data_subdir("projects"))
+    cache_dir: str = Field(default_factory=lambda: default_data_subdir("cache"))
+    log_dir: str = Field(default_factory=lambda: default_data_subdir("logs"))
+    default_engine_id: str = "indextts-v2"
+    default_language: str = "zh"
+    default_output_format: Literal["wav", "mp3", "flac"] = "wav"
+    device: Literal["auto", "mps", "cpu"] = "auto"
+    cloud_enabled: bool = False
+    mimo_base_url: str = "https://token-plan-cn.xiaomimimo.com/v1"
+    mimo_api_key_configured: bool = False
+    mimo_default_voice: str = "mimo_default"
+    default_emotion: str = "calm"
+    default_emo_alpha: float = 0.6
+    theme: Literal["system", "dark", "light"] = "system"
+
+
+class MimoSecretUpdate(BaseModel):
+    api_key: str | None = None
+    clear: bool = False
+
 
 class VoiceAssetCreate(BaseModel):
     name: str
@@ -145,87 +160,124 @@ class VoiceAssetCreate(BaseModel):
     license_status: LicenseStatus = LicenseStatus.unknown
 
 
-class VoiceAsset(BaseModel):
-    voice_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
-    name: str
-    voice_type: VoiceType = VoiceType.test_sample
-    description: str = ""
-    default_language: str = "zh"
-    tags: list[str] = Field(default_factory=list)
-    reference_audio_ids: list[str] = Field(default_factory=list)
-    reference_text: str = ""
-    recommended_engine_id: str | None = None
-    license_status: LicenseStatus = LicenseStatus.unknown
+class VoiceAsset(VoiceAssetCreate):
+    voice_id: str = Field(default_factory=new_id)
     quality_status: str = "unchecked"
     quality_notes: str = ""
     favorite: bool = False
-    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-    updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    created_at: str = Field(default_factory=now_iso)
+    updated_at: str = Field(default_factory=now_iso)
     last_used_at: str | None = None
 
 
-# ── Generate ───────────────────────────────────────────
+class VoiceFile(BaseModel):
+    file_id: str = Field(default_factory=new_id)
+    original_name: str
+    path: str
+    mime_type: str = "audio/wav"
+    duration_ms: int | None = None
+    sample_rate: int | None = None
+    size_bytes: int = 0
+    created_at: str = Field(default_factory=now_iso)
+
 
 class GenerateRequest(BaseModel):
     text: str
-    engine_id: str = "indextts"
-    engine_version: EngineVersion = EngineVersion.indextts
+    engine_id: str = "indextts-v2"
     voice_id: str | None = None
     reference_audio_path: str | None = None
-    ref_audio_path: str | None = None
     ref_text: str | None = None
     language: str = "zh"
-    # 情绪控制（v2 only）
     emotion_mode: EmotionMode = EmotionMode.follow_reference
+    emotion: str | None = None
     emotion_values: dict[str, float] | None = None
     emotion_text: str | None = None
-    # v2 直接情绪名（优先级高于 emotion_mode）
-    emotion: str | None = Field(default=None, description="Direct emotion name")
-    emo_alpha: float = Field(default=0.6, ge=0.0, le=0.8, description="Emotion intensity 0.0-0.8")
-    # 基础参数
+    emo_alpha: float = Field(default=0.6, ge=0, le=1)
     speed: float = Field(default=1.0, ge=0.5, le=3.0)
     temperature: float = Field(default=0.8, ge=0.1, le=2.0)
     top_p: float = Field(default=0.8, ge=0.0, le=1.0)
     top_k: int = Field(default=30, ge=1, le=100)
     repetition_penalty: float = Field(default=10.0, ge=1.0, le=20.0)
     seed: int | None = None
-    # 高级参数
-    max_mel_tokens: int = 600
+    max_mel_tokens: int = Field(default=800, ge=100, le=2500)
     max_text_tokens_per_segment: int = Field(default=120, ge=10, le=500)
     interval_silence: int = Field(default=200, ge=0, le=2000)
-    segment_overlap_ms: int = 50
-    # v2 专属
+    segment_overlap_ms: int = Field(default=50, ge=0, le=500)
     diffusion_steps: int = Field(default=25, ge=1, le=100)
     cfg_rate: float = Field(default=0.7, ge=0.0, le=1.0)
-    # 输出
-    output_format: str = "wav"
+    output_format: Literal["wav", "mp3", "flac"] = "wav"
 
 
 class GenerateResponse(BaseModel):
-    task_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
-    status: str = "queued"
+    task_id: str
+    status: TaskStatus = TaskStatus.queued
 
 
-# ── Error ──────────────────────────────────────────────
+class BatchSegmentInput(BaseModel):
+    segment_id: str | None = None
+    chapter: str | None = None
+    step: int | None = None
+    text: str
+    audio: str | None = None
+    engine_id: str | None = None
+    voice_id: str | None = None
+    reference_audio_path: str | None = None
+    ref_text: str | None = None
+    language: str | None = None
+    emotion: str | None = None
+    emotion_text: str | None = None
+    speed: float | None = Field(default=None, ge=0.5, le=3.0)
 
-class ErrorDetail(BaseModel):
-    code: str
-    message: str
-    detail: dict = {}
+
+class BatchGenerateRequest(BaseModel):
+    project_name: str = "批量语音项目"
+    engine_id: str = "indextts-v2"
+    voice_id: str | None = None
+    reference_audio_path: str | None = None
+    ref_text: str | None = None
+    language: str = "zh"
+    output_dir: str | None = None
+    output_format: Literal["wav", "mp3", "flac"] = "mp3"
+    segments: list[BatchSegmentInput]
+    parameters: dict[str, Any] = Field(default_factory=dict)
 
 
-class ErrorResponse(BaseModel):
-    error: ErrorDetail
+class BatchSegmentResult(BaseModel):
+    segment_id: str
+    chapter: str | None = None
+    step: int | None = None
+    text: str
+    audio: str | None = None
+    output_path: str | None = None
+    duration_ms: int | None = None
+    status: TaskStatus = TaskStatus.pending
+    error_message: str | None = None
 
 
-# ── Task ───────────────────────────────────────────────
+class BatchTask(BaseModel):
+    batch_task_id: str = Field(default_factory=new_id)
+    project_name: str = "批量语音项目"
+    engine_id: str = "indextts-v2"
+    voice_id: str | None = None
+    output_dir: str | None = None
+    output_format: str = "mp3"
+    status: TaskStatus = TaskStatus.pending
+    progress: float = 0.0
+    error_message: str | None = None
+    segments: list[BatchSegmentResult] = Field(default_factory=list)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(default_factory=now_iso)
+    started_at: str | None = None
+    completed_at: str | None = None
+
 
 class GenerationTask(BaseModel):
-    task_id: str
-    task_type: str = "single"
+    task_id: str = Field(default_factory=new_id)
+    task_type: Literal["single", "segment", "batch", "export"] = "single"
     engine_id: str
-    engine_version: str = "indextts"
     voice_id: str | None = None
+    project_id: str | None = None
+    segment_id: str | None = None
     input_text: str
     status: TaskStatus = TaskStatus.pending
     progress: float = 0.0
@@ -235,103 +287,148 @@ class GenerationTask(BaseModel):
     result_duration_ms: int | None = None
     generation_time_ms: int | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
-    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    logs: list[str] = Field(default_factory=list)
+    created_at: str = Field(default_factory=now_iso)
     started_at: str | None = None
     completed_at: str | None = None
 
 
-# ── History ────────────────────────────────────────────
-
 class HistoryItem(BaseModel):
-    result_id: str
+    result_id: str = Field(default_factory=new_id)
     task_id: str
     engine_id: str
-    engine_version: str = "indextts"
     voice_id: str | None = None
     voice_name: str | None = None
+    project_id: str | None = None
+    segment_id: str | None = None
     input_text: str
     output_audio_id: str | None = None
+    output_path: str | None = None
     duration_ms: int | None = None
     generation_time_ms: int | None = None
     parameter_snapshot: dict[str, Any] = Field(default_factory=dict)
     favorite: bool = False
-    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-    completed_at: str | None = None
+    created_at: str = Field(default_factory=now_iso)
 
-# ── Settings ───────────────────────────────────────────
-
-class AppSettings(BaseModel):
-    default_engine_id: str = "indextts"
-    default_engine_version: str = "indextts"
-    default_language: str = "zh"
-    default_output_format: str = "wav"
-    model_dir: str = "~/VoiceStudio/models"
-    voice_dir: str = "~/VoiceStudio/voices"
-    output_dir: str = "~/VoiceStudio/outputs"
-    export_dir: str = "~/VoiceStudio/exports"
-    project_dir: str = "~/VoiceStudio/projects"
-    cache_dir: str = "~/VoiceStudio/cache"
-    log_dir: str = "~/VoiceStudio/logs"
-    device: str = "auto"
-    cloud_enabled: bool = False
-    # v2 emotion defaults
-    default_emotion: str = "calm"
-    default_emo_alpha: float = 0.6
-    theme: str = "system"
-
-
-# ── Project / Script Studio ────────────────────────────
-
-# TODO(post-phase): not implemented in current scope
 
 class Role(BaseModel):
-    role_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    role_id: str = Field(default_factory=new_id)
     name: str
     color: str = "#3B82F6"
     default_voice_id: str | None = None
     default_engine_id: str | None = None
-    default_language: str | None = None
+    default_language: str = "zh"
     default_emotion: str | None = None
     default_speed: float = 1.0
 
 
-# TODO(post-phase): not implemented in current scope
+class SegmentStatus(str, Enum):
+    empty = "empty"
+    ready = "ready"
+    queued = "queued"
+    generating = "generating"
+    completed = "completed"
+    failed = "failed"
+    locked = "locked"
+
 
 class ScriptSegment(BaseModel):
-    segment_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    segment_id: str = Field(default_factory=new_id)
     index: int
     text: str = ""
     role_id: str | None = None
     voice_id: str | None = None
     engine_id: str | None = None
-    language: str | None = None
-    emotion_mode: EmotionMode | None = None
+    language: str = "zh"
+    emotion: str | None = None
     speed: float = 1.0
     status: SegmentStatus = SegmentStatus.empty
     result_audio_id: str | None = None
+    result_id: str | None = None
+    error_message: str | None = None
     locked: bool = False
 
-
-# TODO(post-phase): not implemented in current scope
 
 class ProjectCreate(BaseModel):
     name: str
     description: str = ""
     default_engine_id: str | None = None
-    default_language: str = "zh"
 
-
-# TODO(post-phase): not implemented in current scope
 
 class Project(BaseModel):
-    project_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    project_id: str = Field(default_factory=new_id)
     name: str
     description: str = ""
-    default_engine_id: str | None = None
-    default_voice_id: str | None = None
-    default_language: str = "zh"
+    default_engine_id: str | None = "indextts-v2"
     roles: list[Role] = Field(default_factory=list)
     segments: list[ScriptSegment] = Field(default_factory=list)
-    status: str = "draft"
-    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
-    updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    created_at: str = Field(default_factory=now_iso)
+    updated_at: str = Field(default_factory=now_iso)
+
+
+class ExportRequest(BaseModel):
+    result_ids: list[str] = Field(default_factory=list)
+    audio_ids: list[str] = Field(default_factory=list)
+    project_id: str | None = None
+    format: Literal["wav", "mp3", "flac"] = "wav"
+    silence_ms: int = Field(default=300, ge=0, le=5000)
+    normalize: bool = False
+
+
+class ExportRecord(BaseModel):
+    export_id: str = Field(default_factory=new_id)
+    path: str
+    format: str
+    source_count: int
+    created_at: str = Field(default_factory=now_iso)
+
+
+class AudioQualityResult(BaseModel):
+    duration_ms: int = 0
+    sample_rate: int = 0
+    peak: float = 0.0
+    rms: float = 0.0
+    silence_ratio: float = 1.0
+    size_bytes: int = 0
+    passed: bool = False
+    warnings: list[str] = Field(default_factory=list)
+
+
+class PresetTemplate(BaseModel):
+    preset_id: str
+    name: str
+    scene: str
+    description: str
+    engine_id: str
+    sample_text: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    source_test_id: str | None = None
+    recommended_voice_type: str = "reference_voice"
+    tags: list[str] = Field(default_factory=list)
+
+
+class VoiceSeed(BaseModel):
+    seed_id: str
+    name: str
+    description: str = ""
+    source: str
+    download_url: str
+    recommended_engine_id: str = "indextts-v2"
+    reference_text: str = ""
+    tags: list[str] = Field(default_factory=list)
+    license_status: LicenseStatus = LicenseStatus.test_only
+    imported_voice_id: str | None = None
+    quality: AudioQualityResult | None = None
+
+
+class VoiceSeedImportRequest(BaseModel):
+    seed_id: str
+
+
+class EngineAudioDiagnosisRequest(BaseModel):
+    text: str = "这是本地引擎音频诊断测试，用来确认生成结果是否清晰可听。"
+    reference_audio_path: str | None = None
+    voice_id: str | None = None
+    language: str = "zh"
+    emotion: str | None = "calm"
+    emotion_text: str | None = "女，青年，中音调"

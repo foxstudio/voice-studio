@@ -4,11 +4,11 @@ IndexTTS for Apple Silicon using MLX. Zero-shot text-to-speech with voice clonin
 
 ## Features
 
-- Run IndexTTS 1.5/2.0 natively on Apple Silicon
+- Run IndexTTS 2.0 natively on Apple Silicon
 - RTF ~0.5 (2x faster than real-time on M2 Max)
 - Voice cloning from reference audio
 - **v2.0**: Emotion control (8 emotions)
-- Auto-detect model version (1.5/2.0)
+- Voice Studio WebUI uses IndexTTS v2 as the main local engine
 
 ## Requirements
 
@@ -38,11 +38,6 @@ uv sync --extra convert
 ### 1. Convert Model (auto-detects version)
 
 ```bash
-# Convert IndexTTS 1.5
-uv run mlx-indextts convert \
-    --model-dir /path/to/indexTTS-1.5 \
-    -o models/mlx-indexTTS-1.5
-
 # Convert IndexTTS 2.0
 uv run mlx-indextts convert \
     --model-dir /path/to/indexTTS-2 \
@@ -52,13 +47,6 @@ uv run mlx-indextts convert \
 ### 2. Generate Speech (auto-detects version)
 
 ```bash
-# v1.5
-uv run mlx-indextts generate \
-    -m models/mlx-indexTTS-1.5 \
-    -r reference.wav \
-    -t "你好，这是一个语音合成测试。" \
-    -o output.wav
-
 # v2.0
 uv run mlx-indextts generate \
     -m models/mlx-indexTTS-2.0 \
@@ -80,12 +68,6 @@ uv run mlx-indextts generate \
 Pre-compute speaker conditioning to skip audio preprocessing on subsequent generations.
 
 ```bash
-# v1.5
-uv run mlx-indextts speaker \
-    -m models/mlx-indexTTS-1.5 \
-    -r reference.wav \
-    -o speaker_v15.npz
-
 # v2.0
 uv run mlx-indextts speaker \
     -m models/mlx-indexTTS-2.0 \
@@ -100,18 +82,9 @@ uv run mlx-indextts generate \
     -o output.wav
 ```
 
-**Note**: v1.5 and v2.0 speaker files are incompatible - each version requires its own .npz file.
-
 ## Python API
 
 ```python
-# v1.5
-from mlx_indextts.generate import IndexTTS
-
-tts = IndexTTS.load_model("models/mlx-indexTTS-1.5")
-audio = tts.generate(text="你好", ref_audio="reference.wav")
-tts.save_audio(audio, "output.wav")
-
 # v2.0
 from mlx_indextts.generate_v2 import IndexTTSv2
 
@@ -137,8 +110,8 @@ Required:
   -o, --output       Output file
 
 Common options:
-  --max-tokens       Max mel tokens (default: 800 for v1.5, 1500 for v2.0)
-  --temperature      Sampling temperature (default: 1.0 for v1.5, 0.8 for v2.0)
+  --max-tokens       Max mel tokens (default: 1500 for v2.0)
+  --temperature      Sampling temperature (default: 0.8 for v2.0)
   --seed, -s         Random seed for reproducibility
   -v, --verbose      Verbose output
   -p, --play         Play audio after generation
@@ -151,18 +124,13 @@ v2.0 only:
   --cfg-rate         CFG rate (default: 0.7)
 ```
 
-## Version Comparison
+## Current Engine Policy
 
-| Feature | v1.5 | v2.0 |
-|---------|------|------|
-| Sample rate | 24000 Hz | 22050 Hz |
-| Max tokens | 800 | 1815 |
-| Default temperature | 1.0 | 0.8 |
-| Emotion control | ❌ | ✅ 8 emotions |
-| S2Mel (CFM) | ❌ | ✅ |
-| BigVGAN | Custom | nvidia pretrained |
-| Runtime quantization | ✅ | ✅ |
-| Speaker pre-compute | ✅ | ✅ |
+Voice Studio exposes IndexTTS v2 as the main IndexTTS engine. IndexTTS v2 covers
+the voice-cloning workflow used by v1.5 and adds emotion control, longer text
+handling, and the S2Mel/BigVGAN2 pipeline. Legacy v1.5 source files may remain
+for conversion or benchmark reference, but the WebUI and API no longer expose it
+as a production engine.
 
 ## Supported Emotions (v2.0)
 
@@ -181,11 +149,11 @@ Mixed emotions: `--emotion "happy:0.6,sad:0.4"`
 
 ## Performance
 
-| Metric | v1.5 | v2.0 |
-|--------|------|------|
-| RTF (M2 Max) | ~0.5 | ~1.3 |
-| Load time (.wav) | ~0.3s | ~9s |
-| Load time (.npz) | ~0.3s | ~1.5s |
+| Metric | v2.0 |
+|--------|------|
+| RTF (M2 Max) | ~1.3 |
+| Load time (.wav) | ~9s |
+| Load time (.npz) | ~1.5s |
 
 ## License
 

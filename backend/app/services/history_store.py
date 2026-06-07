@@ -1,31 +1,34 @@
-"""历史记录存储 - SQLite 持久化"""
+from __future__ import annotations
 
-import os
+from pathlib import Path
 
 from app.models.schemas import HistoryItem
 from app.services import database as db
 
-OUTPUT_DIR = os.path.expanduser("~/VoiceStudio/outputs")
+
+def add(item: HistoryItem) -> HistoryItem:
+    db.upsert("history", item.result_id, item.model_dump())
+    return item
 
 
-def list_history(limit: int | None = None, offset: int | None = None) -> list[HistoryItem]:
-    return [HistoryItem(**d) for d in db.db_list_history(limit=limit, offset=offset)]
+def list_history(limit: int = 100, offset: int = 0) -> list[HistoryItem]:
+    rows = db.list_all("history", "created_at")
+    return [HistoryItem(**d) for d in rows[offset : offset + limit]]
 
 
-def add(item: HistoryItem) -> None:
-    db.db_save_history(item.model_dump())
+def get(result_id: str) -> HistoryItem | None:
+    data = db.get_one("history", "result_id", result_id)
+    return HistoryItem(**data) if data else None
 
 
 def delete(result_id: str) -> None:
-    db.db_delete_history(result_id)
+    db.delete_one("history", "result_id", result_id)
 
 
-def get_audio_path(result_id: str) -> str | None:
-    item_data = db.db_list_history()
-    for d in item_data:
-        if d.get("result_id") == result_id and d.get("output_audio_id"):
-            for ext in [".wav", ".mp3", ".flac"]:
-                path = os.path.join(OUTPUT_DIR, f"{d['output_audio_id']}{ext}")
-                if os.path.exists(path):
-                    return path
-    return None
+def audio_path(result_id: str) -> Path | None:
+    item = get(result_id)
+    if not item or not item.output_path:
+        return None
+    path = Path(item.output_path)
+    return path if path.exists() else None
+

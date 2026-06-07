@@ -1,9 +1,9 @@
-"""三引擎端到端集成测试。
+"""双引擎端到端集成测试。
 
-覆盖三个 TTS 引擎的完整 API 层集成验证:
-  - indextts  (IndexTTS v2,    22050 Hz, emotion_control)
-  - indextts-v1  (IndexTTS v1,  24000 Hz, voice_clone only)
-  - omnivoice (OmniVoice,      24000 Hz, voice_design)
+覆盖当前 WebUI 暴露的 TTS 引擎完整 API 层集成验证:
+  - indextts-v2  (IndexTTS v2,    22050 Hz, emotion_control)
+  - omnivoice    (OmniVoice,       24000 Hz, voice_design)
+  - mimo-v2.5-tts (MiMo Cloud,     Token Plan API)
 
 分层 (T1-T4):
   T1 - 引擎注册表 API (无需模型, 始终运行)
@@ -66,30 +66,22 @@ REF_AUDIO = _find_reference_audio()
 class TestEngineRegistryAPI:
     """引擎注册表 API: 列表 / 元数据 / 单查 / 404."""
 
-    def test_list_engines_returns_all_three(self):
+    def test_list_engines_returns_current_engines(self):
         resp = client.get("/api/engines")
         assert resp.status_code == 200
         ids = [e["manifest"]["engine_id"] for e in resp.json()]
-        assert "indextts" in ids
-        assert "indextts-v1" in ids
-        assert "omnivoice" in ids
+        assert ids == ["indextts-v2", "omnivoice", "mimo-v2.5-tts"]
 
     def test_engine_metadata(self):
         resp = client.get("/api/engines")
         by_id = {e["manifest"]["engine_id"]: e["manifest"] for e in resp.json()}
 
-        # indextts (v2)
-        m = by_id["indextts"]
+        # indextts-v2
+        m = by_id["indextts-v2"]
         assert m["sample_rate"] == 22050
         assert "emotion_control" in m["capabilities"]
         assert "voice_clone" in m["capabilities"]
-        assert m["version"] == "v2"
-
-        # indextts-v1
-        m = by_id["indextts-v1"]
-        assert m["sample_rate"] == 24000
-        assert "voice_clone" in m["capabilities"]
-        assert "emotion_control" not in m["capabilities"]
+        assert m["version"] == "2.0"
 
         # omnivoice
         m = by_id["omnivoice"]
@@ -97,11 +89,16 @@ class TestEngineRegistryAPI:
         assert "voice_design" in m["capabilities"]
         assert "multilingual" in m["capabilities"]
 
+        # mimo cloud
+        m = by_id["mimo-v2.5-tts"]
+        assert m["engine_type"] == "cloud"
+        assert "cloud_api" in m["capabilities"]
+
     def test_get_single_engine(self):
-        resp = client.get("/api/engines/indextts")
+        resp = client.get("/api/engines/indextts-v2")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["manifest"]["engine_id"] == "indextts"
+        assert data["manifest"]["engine_id"] == "indextts-v2"
         assert data["manifest"]["sample_rate"] == 22050
 
     def test_get_engine_not_found(self):
@@ -110,7 +107,7 @@ class TestEngineRegistryAPI:
 
     def test_engine_initial_status(self):
         """Engines should not be 'loaded' initially."""
-        for eid in ("indextts", "indextts-v1", "omnivoice"):
+        for eid in ("indextts-v2", "omnivoice", "mimo-v2.5-tts"):
             resp = client.get(f"/api/engines/{eid}")
             assert resp.status_code == 200
             status = resp.json()["state"]["status"]
@@ -122,18 +119,18 @@ class TestEngineRegistryAPI:
 # ════════════════════════════════════════════════════════════
 
 class TestEngineLifecycle:
-    """start/stop 引擎生命周期. indextts v2 requires model files."""
+    """start/stop 引擎生命周期. indextts-v2 requires model files."""
 
     def test_start_stop_indextts_v2(self):
         """start -> loaded -> stop -> stopped."""
         if not HAS_V2_MODEL:
             pytest.skip(f"IndexTTS v2 model not found: {MODEL_DIR_V2}")
 
-        resp = client.post("/api/engines/indextts/start")
+        resp = client.post("/api/engines/indextts-v2/start")
         assert resp.status_code == 200
         assert resp.json()["state"]["status"] == "loaded"
 
-        resp = client.post("/api/engines/indextts/stop")
+        resp = client.post("/api/engines/indextts-v2/stop")
         assert resp.status_code == 200
         assert resp.json()["state"]["status"] == "stopped"
 
@@ -143,7 +140,7 @@ class TestEngineLifecycle:
 
     def test_health_check_not_loaded(self):
         """Unstarted engine health_check reports non-loaded status."""
-        resp = client.post("/api/engines/indextts-v1/health-check")
+        resp = client.post("/api/engines/indextts-v2/health-check")
         assert resp.status_code == 200
         data = resp.json()
         assert data.get("healthy") is not None or data.get("status") is not None
@@ -187,15 +184,14 @@ class TestGenerationFlow:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             # ── A. Start engine ──
-            resp = await ac.post("/api/engines/indextts/start")
+            resp = await ac.post("/api/engines/indextts-v2/start")
             assert resp.status_code == 200, f"Engine start failed: {resp.text}"
             assert resp.json()["state"]["status"] == "loaded"
 
             # ── 1. Basic generation ──
             resp = await ac.post("/api/generate", json={
                 "text": "你好，这是一个引擎集成测试。",
-                "engine_id": "indextts",
-                "engine_version": "indextts",
+                "engine_id": "indextts-v2",
                 "reference_audio_path": REF_AUDIO,
                 "language": "zh",
             })
@@ -209,9 +205,11 @@ class TestGenerationFlow:
             assert task["result_duration_ms"] > 500, (
                 f"Generated audio too short: {task['result_duration_ms']}ms"
             )
-            output_path = os.path.join(
-                OUTPUT_DIR, f"{task['result_audio_id']}.wav"
-            )
+            hist_resp = await ac.get("/api/history")
+            assert hist_resp.status_code == 200
+            item = next((h for h in hist_resp.json() if h["task_id"] == task["task_id"]), None)
+            assert item is not None
+            output_path = item["output_path"]
             assert os.path.isfile(output_path), (
                 f"Output file not found: {output_path}"
             )
@@ -220,8 +218,7 @@ class TestGenerationFlow:
             # ── 2. Speed control ──
             resp = await ac.post("/api/generate", json={
                 "text": "今天天气真不错，我们出去走走吧。",
-                "engine_id": "indextts",
-                "engine_version": "indextts",
+                "engine_id": "indextts-v2",
                 "reference_audio_path": REF_AUDIO,
                 "language": "zh",
                 "speed": 1.5,
@@ -235,8 +232,7 @@ class TestGenerationFlow:
             # ── 3. Emotion control ──
             resp = await ac.post("/api/generate", json={
                 "text": "太棒了！今天我们完成了三引擎集成！",
-                "engine_id": "indextts",
-                "engine_version": "indextts",
+                "engine_id": "indextts-v2",
                 "reference_audio_path": REF_AUDIO,
                 "language": "zh",
                 "emotion": "happy",
@@ -251,8 +247,7 @@ class TestGenerationFlow:
             # ── 4. Missing reference audio (should fail) ──
             resp = await ac.post("/api/generate", json={
                 "text": "test",
-                "engine_id": "indextts",
-                "engine_version": "indextts",
+                "engine_id": "indextts-v2",
             })
             if resp.status_code == 200:
                 task = await self._async_poll(ac, resp.json()["task_id"], timeout=60)
@@ -265,7 +260,6 @@ class TestGenerationFlow:
             resp = await ac.post("/api/generate", json={
                 "text": "test",
                 "engine_id": "nonexistent",
-                "engine_version": "indextts",
             })
             if resp.status_code == 200:
                 task = await self._async_poll(ac, resp.json()["task_id"], timeout=60)
@@ -277,8 +271,7 @@ class TestGenerationFlow:
             # ── 6. Empty text (may pass or fail - either is OK) ──
             resp = await ac.post("/api/generate", json={
                 "text": "",
-                "engine_id": "indextts",
-                "engine_version": "indextts",
+                "engine_id": "indextts-v2",
             })
             if resp.status_code == 200:
                 task = await self._async_poll(ac, resp.json()["task_id"], timeout=60)

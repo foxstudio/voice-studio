@@ -1,276 +1,335 @@
-// ── Enums (string literal unions) ──────────────────────
+export type EngineStatus = 'not_installed' | 'stopped' | 'loading' | 'loaded' | 'running' | 'error';
+export type TaskStatus = 'pending' | 'queued' | 'running' | 'postprocessing' | 'success' | 'failed' | 'cancelled' | 'retrying';
+export type OutputFormat = 'wav' | 'mp3' | 'flac';
 
-export type EngineType = 'local' | 'cloud';
-
-export type EngineStatusValue =
-  | 'not_installed'
-  | 'stopped'
-  | 'loading'
-  | 'loaded'
-  | 'starting'
-  | 'running'
-  | 'error';
-
-export type VoiceTypeValue =
-  | 'real_person'
-  | 'virtual_character'
-  | 'host'
-  | 'singer'
-  | 'narrator'
-  | 'emotion_reference'
-  | 'test_sample';
-
-export type LicenseStatusValue =
-  | 'self_voice'
-  | 'company_authorized'
-  | 'authorized'
-  | 'test_only'
-  | 'unknown'
-  | 'commercial_forbidden';
-
-export type TaskStatusValue =
-  | 'pending'
-  | 'queued'
-  | 'running'
-  | 'postprocessing'
-  | 'success'
-  | 'failed'
-  | 'cancelled'
-  | 'retrying';
-
-export type EmotionModeValue =
-  | 'follow_reference'
-  | 'emotion_reference'
-  | 'emotion_vector'
-  | 'emotion_text';
-
-export type VoiceModeValue = 'clone' | 'design' | 'auto';
-
-export type SegmentStatusValue =
-  | 'empty'
-  | 'ready'
-  | 'queued'
-  | 'generating'
-  | 'completed'
-  | 'failed'
-  | 'locked';
-
-export type EngineVersionValue = 'v1' | 'v2';
-
-export type EmotionName =
-  | 'happy' | 'sad' | 'angry' | 'afraid'
-  | 'disgusted' | 'melancholic' | 'surprised' | 'calm';
-
-// ── Engine ──────────────────────────────────────────────
-
-export interface EngineManifest {
-  engine_id: string;
-  name: string;
-  display_name: string;
-  engine_type: EngineType;
-  provider: string;
-  version: string;
-  description: string;
-  supported_languages: string[];
-  capabilities: string[];
-  default_use_case: string;
-  privacy_level: string;
-  available_versions: string[];
-  sample_rate: number | null;
-  max_tokens: number | null;
+export interface AudioQualityResult {
+	duration_ms: number;
+	sample_rate: number;
+	peak: number;
+	rms: number;
+	silence_ratio: number;
+	size_bytes: number;
+	passed: boolean;
+	warnings: string[];
 }
 
-export interface EngineState {
-  engine_id: string;
-  status: EngineStatusValue;
-  model_path: string | null;
-  error_message: string | null;
+export interface ParameterSchema {
+	key: string;
+	label: string;
+	type: 'text' | 'textarea' | 'number' | 'slider' | 'select' | 'toggle' | 'file';
+	level: 'basic' | 'advanced' | 'developer';
+	default: unknown;
+	min: number | null;
+	max: number | null;
+	step: number | null;
+	options: { label: string; value: string }[];
+	required: boolean;
+	capability: string | null;
 }
 
 export interface EngineDetail {
-  manifest: EngineManifest;
-  state: EngineState;
+	manifest: {
+		engine_id: string;
+		display_name: string;
+		engine_type: 'local' | 'cloud';
+		provider: string;
+		version: string;
+		description: string;
+		supported_languages: string[];
+		capabilities: string[];
+		sample_rate: number | null;
+		max_tokens: number | null;
+		privacy_level: string;
+		default_use_case: string;
+		parameter_schema: ParameterSchema[];
+	};
+	state: {
+		engine_id: string;
+		status: EngineStatus;
+		model_path: string | null;
+		error_message: string | null;
+		loaded_at: string | null;
+	};
 }
 
-// ── Voice Asset ─────────────────────────────────────────
+export interface AppSettings {
+	data_dir: string;
+	model_dir: string;
+	voice_dir: string;
+	output_dir: string;
+	export_dir: string;
+	project_dir: string;
+	cache_dir: string;
+	log_dir: string;
+	default_engine_id: string;
+	default_language: string;
+	default_output_format: OutputFormat;
+	device: 'auto' | 'mps' | 'cpu';
+	cloud_enabled: boolean;
+	mimo_base_url: string;
+	mimo_api_key_configured: boolean;
+	mimo_default_voice: string;
+	default_emotion: string;
+	default_emo_alpha: number;
+	theme: 'system' | 'dark' | 'light';
+}
 
 export interface VoiceAssetCreate {
-  name: string;
-  voice_type: VoiceTypeValue;
-  description: string;
-  default_language: string;
-  tags: string[];
-  reference_text: string;
-  recommended_engine_id: string | null;
-  reference_audio_ids: string[];
-  license_status: LicenseStatusValue;
+	name: string;
+	voice_type: string;
+	description: string;
+	default_language: string;
+	tags: string[];
+	reference_text: string;
+	recommended_engine_id: string | null;
+	reference_audio_ids: string[];
+	license_status: string;
 }
 
-export interface VoiceAsset {
-  voice_id: string;
-  name: string;
-  voice_type: VoiceTypeValue;
-  description: string;
-  default_language: string;
-  tags: string[];
-  reference_audio_ids: string[];
-  reference_text: string;
-  recommended_engine_id: string | null;
-  license_status: LicenseStatusValue;
-  quality_status: string;
-  quality_notes: string;
-  favorite: boolean;
-  created_at: string;
-  updated_at: string;
-  last_used_at: string | null;
+export interface VoiceAsset extends VoiceAssetCreate {
+	voice_id: string;
+	quality_status: string;
+	quality_notes: string;
+	favorite: boolean;
+	created_at: string;
+	updated_at: string;
+	last_used_at: string | null;
 }
 
 export interface UploadResult {
-  file_id: string;
-  filename: string;
-  quality: AudioQuality | null;
+	file_id: string;
+	filename: string;
+	quality: { passed: boolean; warnings: string[] };
 }
-
-export interface AudioQuality {
-  passed?: boolean;
-  warnings?: string[];
-  [key: string]: unknown;
-}
-
-// ── Generate ────────────────────────────────────────────
 
 export interface GenerateRequest {
-  text: string;
-  engine_id: string;
-  engine_version: EngineVersionValue;
-  voice_id?: string | null;
-  reference_audio_path?: string | null;
-  language: string;
-  emotion_mode: EmotionModeValue;
-  emotion_values?: Record<string, number> | null;
-  emotion_text?: string | null;
-  emotion?: EmotionName | null;
-  emo_alpha: number;
-  speed: number;
-  temperature: number;
-  top_p: number;
-  top_k: number;
-  repetition_penalty: number;
-  seed?: number | null;
-  max_mel_tokens: number;
-  max_text_tokens_per_segment: number;
-  interval_silence: number;
-  segment_overlap_ms: number;
-  diffusion_steps: number;
-  cfg_rate: number;
-  output_format: string;
+	text: string;
+	engine_id: string;
+	voice_id?: string | null;
+	reference_audio_path?: string | null;
+	ref_text?: string | null;
+	language: string;
+	emotion_mode: 'follow_reference' | 'emotion_vector' | 'emotion_text';
+	emotion?: string | null;
+	emotion_values?: Record<string, number> | null;
+	emotion_text?: string | null;
+	emo_alpha: number;
+	speed: number;
+	temperature: number;
+	top_p: number;
+	top_k: number;
+	repetition_penalty: number;
+	seed?: number | null;
+	max_mel_tokens: number;
+	max_text_tokens_per_segment: number;
+	interval_silence: number;
+	segment_overlap_ms: number;
+	diffusion_steps: number;
+	cfg_rate: number;
+	output_format: OutputFormat;
 }
 
 export interface GenerateResponse {
-  task_id: string;
-  status: string;
+	task_id: string;
+	status: TaskStatus;
 }
 
-// ── Error ───────────────────────────────────────────────
-
-export interface ErrorDetail {
-  code: string;
-  message: string;
-  detail: Record<string, unknown>;
+export interface BatchSegmentInput {
+	segment_id?: string | null;
+	chapter?: string | null;
+	step?: number | null;
+	text: string;
+	audio?: string | null;
+	engine_id?: string | null;
+	voice_id?: string | null;
+	language?: string | null;
+	emotion?: string | null;
+	emotion_text?: string | null;
+	speed?: number | null;
 }
 
-export interface ErrorResponse {
-  error: ErrorDetail;
+export interface BatchTask {
+	batch_task_id: string;
+	project_name: string;
+	engine_id: string;
+	voice_id: string | null;
+	output_dir: string | null;
+	output_format: string;
+	status: TaskStatus;
+	progress: number;
+	error_message: string | null;
+	segments: {
+		segment_id: string;
+		chapter: string | null;
+		step: number | null;
+		text: string;
+		audio: string | null;
+		output_path: string | null;
+		duration_ms: number | null;
+		status: TaskStatus;
+		error_message: string | null;
+	}[];
+	parameters: Record<string, unknown>;
+	created_at: string;
+	started_at: string | null;
+	completed_at: string | null;
 }
-
-// ── Task ────────────────────────────────────────────────
 
 export interface GenerationTask {
-  task_id: string;
-  task_type: string;
-  engine_id: string;
-  engine_version: string;
-  voice_id: string | null;
-  input_text: string;
-  status: TaskStatusValue;
-  progress: number;
-  error_message: string | null;
-  result_audio_id: string | null;
-  result_id: string | null;
-  result_duration_ms: number | null;
-  generation_time_ms: number | null;
-  parameters: Record<string, unknown>;
-  created_at: string;
-  started_at: string | null;
-  completed_at: string | null;
+	task_id: string;
+	task_type: 'single' | 'segment' | 'batch' | 'export';
+	engine_id: string;
+	voice_id: string | null;
+	project_id: string | null;
+	segment_id: string | null;
+	input_text: string;
+	status: TaskStatus;
+	progress: number;
+	error_message: string | null;
+	result_audio_id: string | null;
+	result_id: string | null;
+	result_duration_ms: number | null;
+	generation_time_ms: number | null;
+	parameters: Record<string, unknown>;
+	logs: string[];
+	created_at: string;
+	started_at: string | null;
+	completed_at: string | null;
 }
-
-// ── History ─────────────────────────────────────────────
 
 export interface HistoryItem {
-  result_id: string;
-  task_id: string;
-  engine_id: string;
-  engine_version: string;
-  voice_id: string | null;
-  voice_name: string | null;
-  input_text: string;
-  output_audio_id: string | null;
-  duration_ms: number | null;
-  generation_time_ms: number | null;
-  parameter_snapshot: Record<string, unknown>;
-  favorite: boolean;
-  created_at: string;
-  completed_at: string | null;
+	result_id: string;
+	task_id: string;
+	engine_id: string;
+	voice_id: string | null;
+	voice_name: string | null;
+	project_id: string | null;
+	segment_id: string | null;
+	input_text: string;
+	output_audio_id: string | null;
+	output_path: string | null;
+	duration_ms: number | null;
+	generation_time_ms: number | null;
+	parameter_snapshot: Record<string, unknown>;
+	favorite: boolean;
+	created_at: string;
 }
 
-// ── Settings ────────────────────────────────────────────
-
-export interface AppSettings {
-  default_engine_id: string;
-  default_engine_version: string;
-  default_language: string;
-  default_output_format: string;
-  model_dir: string;
-  voice_dir: string;
-  output_dir: string;
-  export_dir: string;
-  project_dir: string;
-  cache_dir: string;
-  log_dir: string;
-  device: string;
-  cloud_enabled: boolean;
-  default_emotion: string;
-  default_emo_alpha: number;
-  theme: string;
+export interface Role {
+	role_id: string;
+	name: string;
+	color: string;
+	default_voice_id: string | null;
+	default_engine_id: string | null;
+	default_language: string;
+	default_emotion: string | null;
+	default_speed: number;
 }
 
-// ── Health ──────────────────────────────────────────────
-
-export interface HealthResponse {
-  status: string;
-  version: string;
-  data_dir: string;
-  engines: Record<string, string>;
-  uptime_seconds: number;
+export interface ScriptSegment {
+	segment_id: string;
+	index: number;
+	text: string;
+	role_id: string | null;
+	voice_id: string | null;
+	engine_id: string | null;
+	language: string;
+	emotion: string | null;
+	speed: number;
+	status: 'empty' | 'ready' | 'queued' | 'generating' | 'completed' | 'failed' | 'locked';
+	result_audio_id: string | null;
+	result_id: string | null;
+	error_message: string | null;
+	locked: boolean;
 }
 
-// ── Generic ─────────────────────────────────────────────
-
-export interface DeleteResponse {
-  status: string;
+export interface Project {
+	project_id: string;
+	name: string;
+	description: string;
+	default_engine_id: string | null;
+	roles: Role[];
+	segments: ScriptSegment[];
+	created_at: string;
+	updated_at: string;
 }
 
-export interface RetryResponse {
-  status: string;
-  task_id: string;
+export interface ExportRecord {
+	export_id: string;
+	path: string;
+	format: string;
+	source_count: number;
+	created_at: string;
 }
 
-export interface CancelResponse {
-  status: string;
+export interface PresetTemplate {
+	preset_id: string;
+	name: string;
+	scene: string;
+	description: string;
+	engine_id: string;
+	sample_text: string;
+	parameters: Record<string, unknown>;
+	source_test_id: string | null;
+	recommended_voice_type: string;
+	tags: string[];
 }
 
-export interface TestGenerateResponse {
-  task_id: string;
-  status: string;
+export interface VoiceSeed {
+	seed_id: string;
+	name: string;
+	description: string;
+	source: string;
+	download_url: string;
+	recommended_engine_id: string;
+	reference_text: string;
+	tags: string[];
+	license_status: string;
+	imported_voice_id: string | null;
+	quality: AudioQualityResult | null;
+}
+
+export interface EngineAudioDiagnosis {
+	engine_id: string;
+	status: 'passed' | 'failed';
+	output_path: string | null;
+	quality: Partial<AudioQualityResult>;
+	generation_time_ms: number | null;
+}
+
+export interface EvaluationAudioSample {
+	id: string;
+	title: string;
+	engine_id: string;
+	text: string;
+	expectation: string;
+	status: string;
+	params: Record<string, unknown>;
+	metrics: {
+		duration_sec?: number;
+		sample_rate?: number;
+		peak?: number;
+		rms?: number;
+		silence_ratio?: number;
+		zero_crossing_rate?: number;
+		size_bytes?: number;
+	};
+	audio_file: string;
+	audio_url: string;
+}
+
+export interface EvaluationReport {
+	run_id: string;
+	report_dir: string;
+	success_count: number;
+	total_count: number;
+	report_markdown: string;
+	files: {
+		markdown: string;
+		docx: string;
+		metrics: string;
+		manifest: string;
+	};
+	audio_samples: EvaluationAudioSample[];
+	file_sizes: Record<string, number>;
 }

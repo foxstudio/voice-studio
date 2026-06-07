@@ -1,179 +1,126 @@
-#!/usr/bin/env python3
-"""Standalone inference runner — called via subprocess from tts_engine.py.
-
-Completely isolates MPS/PyTorch from the uvicorn process to avoid deadlocks.
-Receives JSON via stdin, runs inference, outputs JSON result to stdout.
-"""
-
 from __future__ import annotations
 
-import json as _json
+import json
 import os
+import shutil
 import sys
 import time
 import traceback
 from pathlib import Path
 
-_project_root = Path(__file__).resolve().parents[3]
-if str(_project_root) not in sys.path:
-    sys.path.insert(0, str(_project_root))
+import numpy as np
 
-_backend_root = str(_project_root / "backend")
-if _backend_root not in sys.path:
-    sys.path.insert(0, _backend_root)
-
-
-def run_omnivoice(
-    text: str,
-    ref_audio_path: str | None = None,
-    ref_text: str | None = None,
-    language: str | None = None,
-    emotion: str | None = None,
-    speed: float = 1.0,
-    output_path: str | None = None,
-    **kwargs,
-) -> dict:
-    from app.services.adapters.omnivoice_adapter import OmniVoiceAdapter
-
-    adapter = OmniVoiceAdapter()
-    start = time.time()
-    result = adapter.generate(
-        text=text,
-        ref_audio_path=ref_audio_path,
-        ref_text=ref_text,
-        language=language,
-        emotion=emotion,
-        speed=speed,
-        output_path=output_path,
-        **kwargs,
-    )
-    result["generation_time_ms"] = int((time.time() - start) * 1000)
-    result["output_path"] = output_path
-    return result
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+BACKEND_ROOT = PROJECT_ROOT / "backend"
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
 
-def run_indextts_v2(
-    text: str,
-    reference_audio: str,
-    output_path: str | None = None,
-    temperature: float = 0.8,
-    top_p: float = 0.8,
-    top_k: int = 30,
-    repetition_penalty: float = 10.0,
-    max_mel_tokens: int = 1500,
-    max_text_tokens_per_segment: int = 120,
-    interval_silence: int = 200,
-    diffusion_steps: int = 25,
-    cfg_rate: float = 0.7,
-    emotion: str | dict | None = None,
-    emo_alpha: float = 0.6,
-    speed: float = 1.0,
-    seed: int | None = None,
-    **kwargs,
-) -> dict:
+def _audio_meta(path: str, sample_rate: int) -> dict:
+    try:
+        import soundfile as sf
+
+        info = sf.info(path)
+        return {"duration_ms": int(info.frames / info.samplerate * 1000), "sample_rate": info.samplerate}
+    except Exception:
+        size = os.path.getsize(path) if os.path.exists(path) else 0
+        return {"duration_ms": max(0, int((size - 44) / (sample_rate * 2) * 1000)), "sample_rate": sample_rate}
+
+
+def run_indextts_v2(**kwargs):
     from mlx_indextts.generate_v2 import IndexTTSv2
 
-    model_dir = os.path.join(str(_project_root), "models", "mlx-indexTTS-2.0")
-    model = IndexTTSv2(model_dir, device="mps")
-    start = time.time()
-    model.generate(
-        text=text,
-        reference_audio=reference_audio,
-        output_path=output_path,
-        temperature=temperature,
-        top_p=top_p,
-        top_k=top_k,
-        repetition_penalty=repetition_penalty,
-        max_mel_tokens=max_mel_tokens,
-        max_text_tokens_per_segment=max_text_tokens_per_segment,
-        interval_silence=interval_silence,
-        diffusion_steps=diffusion_steps,
-        cfg_rate=cfg_rate,
-        emotion=emotion,
-        emo_alpha=emo_alpha,
-        speed=speed,
-        seed=seed,
-    )
-    return {
-        "output_path": output_path,
-        "generation_time_ms": int((time.time() - start) * 1000),
-    }
+    output_path = kwargs.pop("output_path")
+    model_dir = kwargs.pop("model_dir")
+    start = time.perf_counter()
+    model = IndexTTSv2(model_dir, device=kwargs.pop("device", "mps"))
+    model.generate(output_path=output_path, **kwargs)
+    meta = _audio_meta(output_path, 22050)
+    meta.update({"output_path": output_path, "generation_time_ms": int((time.perf_counter() - start) * 1000)})
+    return meta
 
 
-def run_indextts_v1(
-    text: str,
-    ref_audio_path: str,
-    output_path: str | None = None,
-    temperature: float = 1.0,
-    speed: float = 1.0,
-    max_mel_tokens: int = 600,
-    max_text_tokens_per_segment: int = 120,
-    top_p: float = 0.8,
-    top_k: int = 30,
-    repetition_penalty: float = 10.0,
-    interval_silence: int = 200,
-    seed: int | None = None,
-    **kwargs,
-) -> dict:
-    from app.services.adapters.v1_adapter import V1Adapter
+def run_indextts_v1(**kwargs):
+    from mlx_indextts.generate import IndexTTS
 
-    adapter = V1Adapter()
-    adapter.load()
-    start = time.time()
-    result = adapter.generate(
-        text=text,
-        ref_audio_path=ref_audio_path,
-        output_path=output_path,
-        temperature=temperature,
-        speed=speed,
-        max_mel_tokens=max_mel_tokens,
-        max_text_tokens_per_segment=max_text_tokens_per_segment,
-        top_p=top_p,
-        top_k=top_k,
-        repetition_penalty=repetition_penalty,
-        interval_silence=interval_silence,
-        seed=seed,
-    )
-    result["generation_time_ms"] = int((time.time() - start) * 1000)
-    return result
+    output_path = kwargs.pop("output_path")
+    model_dir = kwargs.pop("model_dir")
+    ref_audio = kwargs.pop("reference_audio")
+    text = kwargs.pop("text")
+    start = time.perf_counter()
+    model = IndexTTS.load_model(model_dir)
+    audio = model.generate(text=text, ref_audio=ref_audio, **kwargs)
+    model.save_audio(audio, output_path)
+    meta = _audio_meta(output_path, 24000)
+    meta.update({"output_path": output_path, "generation_time_ms": int((time.perf_counter() - start) * 1000)})
+    return meta
 
 
-ENGINE_DISPATCH = {
+def run_omnivoice(**kwargs):
+    output_path = kwargs.pop("output_path")
+    text = kwargs.pop("text")
+    ref_audio = kwargs.pop("reference_audio", None)
+    ref_text = kwargs.pop("ref_text", None)
+    language = kwargs.pop("language", "auto")
+    instruction = kwargs.pop("emotion_text", None) or kwargs.pop("emotion", None)
+    speed = kwargs.pop("speed", 1.0)
+    start = time.perf_counter()
+    from omnivoice import OmniVoice
+
+    model = OmniVoice.from_pretrained("k2-fsa/OmniVoice", device_map=kwargs.pop("device", "mps"))
+    gen_kwargs = {"text": text}
+    if language and language != "auto":
+        gen_kwargs["language"] = language
+    if ref_audio:
+        gen_kwargs["ref_audio"] = ref_audio
+        if ref_text:
+            gen_kwargs["ref_text"] = ref_text
+    elif instruction:
+        gen_kwargs["instruct"] = instruction
+    if speed != 1.0:
+        gen_kwargs["speed"] = speed
+    result = model.generate(**gen_kwargs)
+    if isinstance(result, (str, Path)):
+        shutil.copy2(str(result), output_path)
+    else:
+        import soundfile as sf
+
+        audio = np.concatenate([np.asarray(x).reshape(-1) for x in result]).astype(np.float32)
+        sf.write(output_path, np.clip(audio, -1, 1), getattr(model, "sampling_rate", 24000), subtype="PCM_16")
+    meta = _audio_meta(output_path, getattr(model, "sampling_rate", 24000))
+    meta.update({"output_path": output_path, "generation_time_ms": int((time.perf_counter() - start) * 1000)})
+    return meta
+
+
+def run_mimo_tts(**kwargs):
+    from app.services import mimo_client
+
+    output_path = kwargs.pop("output_path")
+    start = time.perf_counter()
+    fmt = Path(output_path).suffix.lstrip(".") or "wav"
+    result = mimo_client.generate_tts(output_path=output_path, audio_format=fmt, **kwargs)
+    meta = _audio_meta(output_path, 24000)
+    meta.update({"output_path": result["output_path"], "generation_time_ms": int((time.perf_counter() - start) * 1000)})
+    return meta
+
+
+RUNNERS = {
+    "indextts-v2": run_indextts_v2,
     "omnivoice": run_omnivoice,
-    "indextts": run_indextts_v2,
-    "indextts-v1": run_indextts_v1,
+    "mimo-v2.5-tts": run_mimo_tts,
 }
 
 
 def main() -> None:
-    raw = sys.stdin.read()
     try:
-        args = _json.loads(raw)
-    except _json.JSONDecodeError as exc:
-        _json.dump({"error": f"Invalid JSON input: {exc}"}, sys.stdout)
-        sys.exit(1)
-
-    engine_id = args.get("engine_id", "")
-    kwargs = args.get("kwargs", {})
-
-    runner = ENGINE_DISPATCH.get(engine_id)
-    if runner is None:
-        _json.dump({"error": f"Unknown engine: {engine_id}"}, sys.stdout)
-        sys.exit(1)
-
-    try:
-        result = runner(**kwargs)
+        payload = json.loads(sys.stdin.read())
+        result = RUNNERS[payload["engine_id"]](**payload["kwargs"])
+        print(json.dumps(result, ensure_ascii=False))
     except Exception as exc:
-        _json.dump(
-            {
-                "error": str(exc),
-                "traceback": traceback.format_exc()[-2000:],
-            },
-            sys.stdout,
-        )
+        print(json.dumps({"error": str(exc), "traceback": traceback.format_exc()[-3000:]}, ensure_ascii=False))
         sys.exit(1)
-
-    _json.dump(result, sys.stdout)
 
 
 if __name__ == "__main__":

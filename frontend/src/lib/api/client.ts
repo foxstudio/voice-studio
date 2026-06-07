@@ -1,93 +1,36 @@
-import type { ErrorResponse } from './types';
-
-const BASE = '/api';
-
-// ── Error classes ────────────────────────────────────────
-
 export class ApiError extends Error {
-  status: number;
-  code?: string;
-  details?: unknown;
-
-  constructor(status: number, message: string, code?: string, details?: unknown) {
-    super(message);
-    this.name = 'ApiError';
-    this.status = status;
-    this.code = code;
-    this.details = details;
-  }
+	constructor(
+		message: string,
+		public status: number,
+		public code = 'API_ERROR'
+	) {
+		super(message);
+	}
 }
 
-export class NetworkError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'NetworkError';
-  }
+async function parse<T>(res: Response): Promise<T> {
+	const text = await res.text();
+	const data = text ? JSON.parse(text) : {};
+	if (!res.ok) {
+		const err = data.error ?? {};
+		throw new ApiError(err.message ?? res.statusText, res.status, err.code);
+	}
+	return data as T;
 }
-
-// ── Internal helpers ───────────────────────────────────
-
-async function parseErrorBody(res: Response) {
-  try {
-    const body = await res.json() as ErrorResponse;
-    return {
-      message: body.error?.message ?? res.statusText,
-      code: body.error?.code,
-      details: body.error?.detail,
-    };
-  } catch {
-    return { message: res.statusText };
-  }
-}
-
-async function request<T>(path: string, opts?: RequestInit): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(`${BASE}${path}`, {
-      headers: { 'Content-Type': 'application/json' },
-      ...opts,
-    });
-  } catch (err) {
-    throw new NetworkError((err as Error)?.message ?? 'Network request failed');
-  }
-
-  if (!res.ok) {
-    const { message, code, details } = await parseErrorBody(res);
-    throw new ApiError(res.status, message, code, details);
-  }
-
-  // 204 No Content
-  if (res.status === 204) return undefined as T;
-
-  return res.json();
-}
-
-// ── Exported client ────────────────────────────────────
 
 export const api = {
-  get: <T>(path: string) => request<T>(path),
-
-  post: <T>(path: string, body: unknown) =>
-    request<T>(path, { method: 'POST', body: JSON.stringify(body) }),
-
-  patch: <T>(path: string, body: unknown) =>
-    request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
-
-  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
-
-  upload: async <T>(path: string, file: File): Promise<T> => {
-    const form = new FormData();
-    form.append('file', file);
-    let res: Response;
-    try {
-      res = await fetch(`${BASE}${path}`, { method: 'POST', body: form });
-    } catch (err) {
-      throw new NetworkError((err as Error)?.message ?? 'Upload request failed');
-    }
-    if (!res.ok) {
-      const { message, code, details } = await parseErrorBody(res);
-      throw new ApiError(res.status, message, code, details);
-    }
-    return res.json();
-  },
+	get: <T>(path: string) => fetch(`/api${path}`).then(parse<T>),
+	post: <T>(path: string, body?: unknown) =>
+		fetch(`/api${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) }).then(parse<T>),
+	patch: <T>(path: string, body: unknown) =>
+		fetch(`/api${path}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(parse<T>),
+	put: <T>(path: string, body: unknown) =>
+		fetch(`/api${path}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(parse<T>),
+	delete: <T>(path: string) => fetch(`/api${path}`, { method: 'DELETE' }).then(parse<T>),
+	upload: <T>(path: string, file: File) => {
+		const form = new FormData();
+		form.append('file', file);
+		return fetch(`/api${path}`, { method: 'POST', body: form }).then(parse<T>);
+	}
 };
+

@@ -1,129 +1,159 @@
-"""SQLite 持久化存储"""
+from __future__ import annotations
 
 import json
 import os
 import sqlite3
 from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
 
-DB_PATH = os.path.expanduser("~/VoiceStudio/config/voice_studio.db")
+from app.services.paths import expand_path
 
-_schema = """
-CREATE TABLE IF NOT EXISTS voices (
-    voice_id TEXT PRIMARY KEY,
-    data TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS history (
-    result_id TEXT PRIMARY KEY,
-    data TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS tasks (
-    task_id TEXT PRIMARY KEY,
-    data TEXT NOT NULL
-);
+def _default_db_path() -> Path:
+    explicit = os.environ.get("VOICE_STUDIO_DB_PATH")
+    if explicit:
+        return expand_path(explicit)
+    data_dir = expand_path(os.environ.get("VOICE_STUDIO_DATA_DIR", "~/VoiceStudio"))
+    return data_dir / "config" / "voice_studio.db"
+
+
+DB_PATH = _default_db_path()
+
+SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS voices (
+    voice_id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS voice_files (
+    file_id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tasks (
+    task_id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS history (
+    result_id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS projects (
+    project_id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS exports (
+    export_id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS batches (
+    batch_task_id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL
+);
 """
 
 
-def _ensure_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+def set_db_path(path: str | Path) -> None:
+    global DB_PATH
+    DB_PATH = expand_path(str(path))
+
+
+def ensure_db() -> None:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
 @contextmanager
-def get_conn():
-    _ensure_db()
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.executescript(_schema)
+def conn():
+    ensure_db()
+    db = sqlite3.connect(DB_PATH)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    db.executescript(SCHEMA)
     try:
-        yield conn
-        conn.commit()
+        yield db
+        db.commit()
     finally:
-        conn.close()
+        db.close()
 
 
-# ── Voices ──
-
-def db_list_voices() -> list[dict]:
-    with get_conn() as conn:
-        rows = conn.execute("SELECT data FROM voices ORDER BY json_extract(data, '$.updated_at') DESC").fetchall()
-    return [json.loads(r[0]) for r in rows]
+def _dump(data: dict[str, Any]) -> str:
+    return json.dumps(data, ensure_ascii=False)
 
 
-def db_get_voice(voice_id: str) -> dict | None:
-    with get_conn() as conn:
-        row = conn.execute("SELECT data FROM voices WHERE voice_id = ?", (voice_id,)).fetchone()
-    return json.loads(row[0]) if row else None
+def _load(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    return json.loads(row["data"]) if row else None
 
 
-def db_save_voice(data: dict) -> None:
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO voices (voice_id, data) VALUES (?, ?)",
-            (data["voice_id"], json.dumps(data, ensure_ascii=False)),
-        )
+def upsert(table: str, key: str, data: dict[str, Any], time_field: str = "updated_at") -> None:
+    timestamp = data.get(time_field) or data.get("created_at") or ""
+    id_field = f"{table[:-1]}_id"
+    if table == "history":
+        id_field = "result_id"
+        time_field = "created_at"
+    elif table == "tasks":
+        id_field = "task_id"
+    elif table == "voice_files":
+        id_field = "file_id"
+        time_field = "created_at"
+    elif table == "exports":
+        id_field = "export_id"
+        time_field = "created_at"
+    elif table == "batches":
+        id_field = "batch_task_id"
+        time_field = "created_at"
+    with conn() as db:
+        if table == "tasks":
+            db.execute(
+                "INSERT OR REPLACE INTO tasks (task_id, data, created_at, status) VALUES (?, ?, ?, ?)",
+                (key, _dump(data), data.get("created_at", ""), data.get("status", "")),
+            )
+        elif table == "batches":
+            db.execute(
+                "INSERT OR REPLACE INTO batches (batch_task_id, data, created_at, status) VALUES (?, ?, ?, ?)",
+                (key, _dump(data), data.get("created_at", ""), data.get("status", "")),
+            )
+        else:
+            db.execute(
+                f"INSERT OR REPLACE INTO {table} ({id_field}, data, {time_field}) VALUES (?, ?, ?)",
+                (key, _dump(data), timestamp),
+            )
 
 
-def db_delete_voice(voice_id: str) -> None:
-    with get_conn() as conn:
-        conn.execute("DELETE FROM voices WHERE voice_id = ?", (voice_id,))
+def get_one(table: str, key_field: str, key: str) -> dict[str, Any] | None:
+    with conn() as db:
+        row = db.execute(f"SELECT data FROM {table} WHERE {key_field} = ?", (key,)).fetchone()
+    return _load(row)
 
 
-# ── History ──
-
-def db_list_history(limit: int | None = None, offset: int | None = None) -> list[dict]:
-    with get_conn() as conn:
-        sql = "SELECT data FROM history ORDER BY json_extract(data, '$.created_at') DESC"
-        params: list[int] = []
-        if limit is not None:
-            sql += " LIMIT ?"
-            params.append(limit)
-        if offset is not None:
-            sql += " OFFSET ?"
-            params.append(offset)
-        rows = conn.execute(sql, params).fetchall()
-    return [json.loads(r[0]) for r in rows]
+def list_all(table: str, order_field: str = "created_at", desc: bool = True) -> list[dict[str, Any]]:
+    direction = "DESC" if desc else "ASC"
+    with conn() as db:
+        rows = db.execute(f"SELECT data FROM {table} ORDER BY {order_field} {direction}").fetchall()
+    return [json.loads(r["data"]) for r in rows]
 
 
-def db_save_history(data: dict) -> None:
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO history (result_id, data) VALUES (?, ?)",
-            (data["result_id"], json.dumps(data, ensure_ascii=False)),
-        )
+def delete_one(table: str, key_field: str, key: str) -> None:
+    with conn() as db:
+        db.execute(f"DELETE FROM {table} WHERE {key_field} = ?", (key,))
 
 
-def db_delete_history(result_id: str) -> None:
-    with get_conn() as conn:
-        conn.execute("DELETE FROM history WHERE result_id = ?", (result_id,))
+def get_settings_rows() -> dict[str, str]:
+    with conn() as db:
+        rows = db.execute("SELECT key, value FROM settings").fetchall()
+    return {row["key"]: row["value"] for row in rows}
 
 
-# ── Tasks ──
-
-def db_list_tasks() -> list[dict]:
-    with get_conn() as conn:
-        rows = conn.execute("SELECT data FROM tasks ORDER BY json_extract(data, '$.created_at') DESC").fetchall()
-    return [json.loads(r[0]) for r in rows]
-
-
-def db_save_task(data: dict) -> None:
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO tasks (task_id, data) VALUES (?, ?)",
-            (data["task_id"], json.dumps(data, ensure_ascii=False)),
-        )
-
-
-# ── Settings ──
-
-def db_get_settings() -> dict:
-    with get_conn() as conn:
-        rows = conn.execute("SELECT key, value FROM settings").fetchall()
-    return dict(rows)
-
-
-def db_save_settings(key: str, value: str) -> None:
-    with get_conn() as conn:
-        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+def save_setting(key: str, value: str) -> None:
+    with conn() as db:
+        db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))

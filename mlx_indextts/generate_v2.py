@@ -321,6 +321,9 @@ class IndexTTSv2:
             self.spk_matrix = None
             self.emo_matrix_split = None
             self.spk_matrix_split = None
+        # Compatibility aliases for older tests/integrations.
+        self._emo_matrix = self.emo_matrix
+        self._spk_matrix = self.spk_matrix
 
     def _init_pytorch_modules(self):
         """Initialize PyTorch modules for .wav preprocessing.
@@ -400,6 +403,7 @@ class IndexTTSv2:
             print(f"GPT v2 (MLX) loaded from {self.gpt_weights_path}")
         else:
             print(f"Warning: GPT v2 weights not found at {self.gpt_weights_path}")
+        self.gpt_mlx = self.gpt
 
         # If runtime quantization requested (and model wasn't pre-quantized)
         if self.quantize_bits and not saved_quantize_bits:
@@ -1061,5 +1065,4 @@ class IndexTTSv2:
             sf.write(output_path, audio, sample_rate)
 
         return audio
-
 

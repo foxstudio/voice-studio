@@ -1,4 +1,4 @@
-"""语音生成 API"""
+from __future__ import annotations
 
 from fastapi import APIRouter
 
@@ -9,6 +9,7 @@ router = APIRouter()
 
 
 @router.post("", response_model=GenerateResponse)
-async def generate_speech(req: GenerateRequest):
+async def generate(req: GenerateRequest):
     task_id = await task_queue.submit(req)
-    return GenerateResponse(task_id=task_id, status="queued")
+    return GenerateResponse(task_id=task_id)
+

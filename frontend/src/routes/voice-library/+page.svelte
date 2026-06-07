@@ -1,389 +1,237 @@
 <script lang="ts">
-  import { listVoices, createVoice, updateVoice, deleteVoice, uploadVoice, testGenerateVoice } from '$lib/api';
-  import type { VoiceAsset } from '$lib/api';
-  import { Plus, Search, Play, Trash2, Upload, Music, Check, X, Edit3, Send, Filter } from 'lucide-svelte';
+	import { Api } from '$lib/api';
+	import type { VoiceAsset, VoiceSeed } from '$lib/api/types';
+	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
+	import { Check, Download, FileText, Pencil, Play, Plus, Trash2, Upload, X } from 'lucide-svelte';
+	import { licenseLabel } from '$lib/labels';
 
-  let voices = $state<VoiceAsset[]>([]);
-  let searchQuery = $state('');
-  let filterTag = $state('');
-  let filterAuth = $state('');
-  let showAddModal = $state(false);
-  let showEditModal = $state(false);
+	let voices = $state<VoiceAsset[]>([]);
+	let seeds = $state<VoiceSeed[]>([]);
+	let name = $state('');
+	let description = $state('');
+	let tags = $state('');
+	let referenceText = $state('');
+	let license = $state('unknown');
+	let engine = $state<string | null>('indextts-v2');
+	let file = $state<File | null>(null);
+	let uploadMessage = $state('');
+	let importing = $state('');
+	let editingVoice = $state<VoiceAsset | null>(null);
 
-  // 新建表单
-  let newName = $state('');
-  let newDesc = $state('');
-  let newLang = $state('zh');
-  let newType = $state('test_sample');
-  let newTags = $state('');
-  let newAuth = $state('unknown');
-  let newEngine = $state('');
-  let newRefText = $state('');
-  let newAudioFile: File | null = $state(null);
-  let uploadQuality: any = $state(null);
-  let uploading = $state(false);
-  let uploadError = $state('');
+	async function refresh() {
+		[voices, seeds] = await Promise.all([Api.voices(), Api.voiceSeeds()]);
+	}
+	$effect(() => { refresh(); });
 
-  // 错误和试听状态
-  let errorMsg = $state('');
-  let playingAudioId = $state<string | null>(null);
-  let audioRef: HTMLAudioElement | null = null;
+	function resetForm() {
+		name = '';
+		description = '';
+		tags = '';
+		referenceText = '';
+		license = 'unknown';
+		engine = 'indextts-v2';
+		file = null;
+		editingVoice = null;
+	}
 
-  // 编辑表单
-  let editVoice: VoiceAsset | null = $state(null);
+	function editVoice(voice: VoiceAsset) {
+		editingVoice = voice;
+		name = voice.name;
+		description = voice.description;
+		tags = voice.tags.join(', ');
+		referenceText = voice.reference_text;
+		license = voice.license_status;
+		engine = voice.recommended_engine_id;
+		file = null;
+		uploadMessage = '';
+	}
 
-  $effect(() => {
-    listVoices()
-      .then(d => { voices = d; errorMsg = ''; })
-      .catch((e: any) => {
-        errorMsg = e.message || '加载声音列表失败';
-        console.error('[voice-library] listVoices failed:', e);
-      });
-  });
+	async function saveVoice() {
+		let ids = editingVoice ? [...editingVoice.reference_audio_ids] : [];
+		if (file) {
+			const uploaded = await Api.uploadVoice(file);
+			ids = editingVoice ? [...ids, uploaded.file_id] : [uploaded.file_id];
+			uploadMessage = uploaded.quality.warnings.join('；') || '音频已上传';
+		}
+		const payload = {
+			name,
+			description,
+			tags: tags.split(',').map((x) => x.trim()).filter(Boolean),
+			reference_text: referenceText,
+			reference_audio_ids: ids,
+			license_status: license,
+			recommended_engine_id: engine,
+			default_language: 'zh',
+			voice_type: 'test_sample'
+		};
+		if (editingVoice) {
+			await Api.updateVoice(editingVoice.voice_id, payload);
+			uploadMessage = uploadMessage || '声音信息已更新';
+		} else {
+			await Api.createVoice(payload);
+		}
+		resetForm();
+		await refresh();
+	}
+	async function remove(id: string) {
+		await Api.deleteVoice(id);
+		if (editingVoice?.voice_id === id) resetForm();
+		await refresh();
+	}
+	async function importSeed(seedId: string) {
+		importing = seedId;
+		try {
+			await Api.importVoiceSeed(seedId);
+			await refresh();
+		} catch (err) {
+			uploadMessage = err instanceof Error ? err.message : '导入失败';
+		} finally {
+			importing = '';
+		}
+	}
 
-  const voiceTypes = [
-    { value: 'real_person', label: '真人' },
-    { value: 'virtual_character', label: '虚拟角色' },
-    { value: 'host', label: '主播' },
-    { value: 'narrator', label: '旁白' },
-    { value: 'test_sample', label: '测试样本' },
-  ];
-  const authStatuses = [
-    { value: 'self_voice', label: '自己的声音' },
-    { value: 'company_authorized', label: '公司授权' },
-    { value: 'authorized', label: '已授权' },
-    { value: 'test_only', label: '仅测试' },
-    { value: 'unknown', label: '未知' },
-  ];
+	function tagClass(tag: string) {
+		if (tag.startsWith('seed:') || tag.includes('官方')) return 'source';
+		if (tag.includes('男') || tag.includes('女') || tag.includes('角色') || tag.includes('本人')) return 'role';
+		if (tag.includes('情绪') || tag.includes('悲伤') || tag.includes('悬疑')) return 'emotion';
+		if (tag.includes('讲解') || tag.includes('旁白') || tag.includes('口播') || tag.includes('测试')) return 'use';
+		return '';
+	}
 
-  const allTags = $derived([...new Set(voices.flatMap(v => v.tags))]);
-
-  let filtered = $derived(voices.filter(v => {
-    if (searchQuery && !v.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
-    if (filterTag && !v.tags.includes(filterTag)) return false;
-    if (filterAuth && v.license_status !== filterAuth) return false;
-    return true;
-  }));
-
-  async function addVoice() {
-    if (!newName.trim()) return;
-    uploading = true; uploadError = '';
-    try {
-      let audioIds: string[] = [];
-      if (newAudioFile) {
-        const res = await uploadVoice(newAudioFile);
-        audioIds = [res.file_id];
-        uploadQuality = res.quality;
-      }
-      await createVoice({
-        name: newName, description: newDesc, default_language: newLang,
-        voice_type: newType as any, tags: newTags ? newTags.split(',').map(t => t.trim()) : [],
-        license_status: newAuth as any, recommended_engine_id: newEngine || null,
-        reference_text: newRefText, reference_audio_ids: audioIds,
-      });
-      voices = await listVoices();
-      closeAddModal();
-    } catch (e: any) { uploadError = e.message || '创建失败'; }
-    finally { uploading = false; }
-  }
-
-  async function saveEdit() {
-    if (!editVoice) return;
-    await updateVoice(editVoice.voice_id, {
-        name: editVoice.name, description: editVoice.description,
-        default_language: editVoice.default_language,
-        voice_type: editVoice.voice_type as any,
-        tags: editVoice.tags,
-        license_status: editVoice.license_status as any,
-        recommended_engine_id: editVoice.recommended_engine_id,
-        reference_text: editVoice.reference_text,
-        reference_audio_ids: editVoice.reference_audio_ids,
-      });
-    voices = await listVoices();
-    showEditModal = false; editVoice = null;
-  }
-
-  async function removeVoice(id: string) {
-    if (!confirm('确定删除该 voice？')) return;
-    try {
-      await deleteVoice(id);
-      errorMsg = '';
-      voices = await listVoices();
-    } catch (e: any) {
-      errorMsg = e.message || '删除失败';
-      console.error('[voice-library] deleteVoice failed:', e);
-    }
-  }
-
-  async function testGenerate(id: string) {
-    await testGenerateVoice(id);
-  }
-
-  function playPreview(voiceId: string, audioId: string) {
-    if (playingAudioId === audioId) {
-      audioRef?.pause();
-      playingAudioId = null;
-      return;
-    }
-    audioRef?.pause();
-    const url = `/api/voices/${voiceId}/audio/${audioId}`;
-    const audio = new Audio(url);
-    audio.onended = () => { playingAudioId = null; };
-    audio.onerror = () => { errorMsg = '播放失败'; playingAudioId = null; };
-    audio.play().catch(() => { errorMsg = '播放失败'; playingAudioId = null; });
-    audioRef = audio;
-    playingAudioId = audioId;
-  }
-
-  function closeAddModal() {
-    showAddModal = false; newName = ''; newDesc = ''; newAudioFile = null;
-    uploadQuality = null; uploadError = '';
-  }
-
-  function openEdit(v: VoiceAsset) { editVoice = { ...v }; showEditModal = true; }
-  function onFileChange(e: Event) { newAudioFile = (e.target as HTMLInputElement).files?.[0] || null; }
-  function fmtSize(b: number) { return b < 1024 ? b+'B' : b < 1048576 ? (b/1024).toFixed(1)+'KB' : (b/1048576).toFixed(1)+'MB'; }
-  function voiceTypeLabel(t: string) { return voiceTypes.find(v => v.value === t)?.label || t; }
-  function authLabel(a: string) { return authStatuses.find(s => s.value === a)?.label || a; }
-
-  let gotoGenerateWithVoice = (voiceId: string) => { window.location.href = `/generate?voice=${voiceId}`; };
+	const help = [
+		{ title: '什么是“可导入参考音色”', body: '这里的官方参考音色还没有真正进入你的音色库，像素材候选。点“导入”后，它会下载到本地，变成下面音色库里的声音，之后才能在单条生成或批处理里选择。' },
+		{ title: '音色库怎么用', body: '音色库里的声音主要作为声音克隆参考。IndexTTS v2 通常需要选择一个参考声音；OmniVoice 可以选择参考声音，也可以不选，改用声音设计标签。' },
+		{ title: '参考文本', body: '参考文本是参考音频里大概说了什么。克隆或多语言模型有时会用它理解发音和音色；卡片里的文本按钮可以快速查看，不会撑大卡片。' },
+		{ title: '编辑声音', body: '卡片上的“编辑”会把名称、描述、标签、参考文本和推荐引擎载入右侧表单。这里保存的是同一个声音名称，生成页下拉菜单会同步显示。' }
+	];
 </script>
 
-<svelte:head><title>声音资产库 - Voice Studio</title></svelte:head>
+<svelte:head><title>音色库 - 声音工作台</title></svelte:head>
 
-<section>
-  <div class="header">
-    <div>
-      <h1>声音资产库</h1>
-      <p class="desc">管理参考音频与声音资产（{voices.length} 个声音）</p>
-    </div>
-    <button class="btn primary" onclick={() => showAddModal = true}>
-      <Plus size={16} /> 新增声音
-    </button>
-  </div>
-
-  {#if errorMsg}
-    <div class="error-msg"><X size={14} /> {errorMsg}</div>
-  {/if}
-
-  <div class="toolbar">
-    <div class="search-box">
-      <Search size={16} />
-      <input type="text" placeholder="搜索声音名称..." bind:value={searchQuery} />
-    </div>
-    <div class="filters">
-      {#if allTags.length > 0}
-        <select bind:value={filterTag}>
-          <option value="">全部标签</option>
-          {#each allTags as tag}<option value={tag}>{tag}</option>{/each}
-        </select>
-      {/if}
-      <select bind:value={filterAuth}>
-        <option value="">全部授权</option>
-        {#each authStatuses as s}<option value={s.value}>{s.label}</option>{/each}
-      </select>
-    </div>
-  </div>
-
-  {#if filtered.length === 0}
-    <div class="empty">
-      <Music size={48} class="empty-icon" />
-      <p>{voices.length === 0 ? '还没有声音资产' : '没有匹配的声音'}</p>
-      <p class="dim">上传参考音频（3-10秒 wav/mp3），用于声音克隆</p>
-    </div>
-  {:else}
-    <div class="voice-grid">
-      {#each filtered as voice}
-        <div class="voice-card" onclick={() => openEdit(voice)}>
-          <div class="card-top">
-            <div class="voice-avatar">{voice.name.charAt(0).toUpperCase()}</div>
-            <div class="voice-info">
-              <div class="voice-name">{voice.name}</div>
-              <div class="voice-meta">
-                {voiceTypeLabel(voice.voice_type)} · {voice.default_language.toUpperCase()}
-              </div>
-            </div>
-            <span class="auth-badge" class:ok={voice.license_status === 'self_voice'}>
-              {authLabel(voice.license_status)}
-            </span>
-          </div>
-          <p class="voice-desc">{voice.description || '暂无描述'}</p>
-
-          {#if voice.reference_audio_ids.length > 0}
-            <div class="audio-badge has"><Music size={12} /> {voice.reference_audio_ids.length} 个参考音频</div>
-          {:else}
-            <div class="audio-badge none"><Upload size={12} /> 未上传参考音频</div>
-          {/if}
-
-          {#if voice.tags.length > 0}
-            <div class="tags">{#each voice.tags as tag}<span class="tag">{tag}</span>{/each}</div>
-          {/if}
-
-          <div class="card-actions" onclick={(e) => e.stopPropagation()}>
-            {#if voice.reference_audio_ids.length > 0}
-              <button class="btn sm" title="试听" onclick={() => playPreview(voice.voice_id, voice.reference_audio_ids[0])}>
-                <Play size={12} /> {playingAudioId === voice.reference_audio_ids[0] ? '播放中' : '试听'}
-              </button>
-              <button class="btn sm primary" title="用于生成" onclick={() => gotoGenerateWithVoice(voice.voice_id)}>
-                <Send size={12} /> 使用
-              </button>
-            {/if}
-            <button class="btn sm ghost" title="编辑" onclick={() => openEdit(voice)}><Edit3 size={12} /></button>
-            <button class="btn sm ghost danger" title="删除" onclick={() => removeVoice(voice.voice_id)}><Trash2 size={12} /></button>
-          </div>
-        </div>
-      {/each}
-    </div>
-  {/if}
-
-  <!-- 新增声音弹窗 -->
-  {#if showAddModal}
-    <div class="modal-overlay" onclick={closeAddModal}>
-      <div class="modal" onclick={(e) => e.stopPropagation()}>
-        <h2>新增声音</h2>
-        <label>声音名称 * <input type="text" bind:value={newName} placeholder="例：小美" /></label>
-        <label>声音类型
-          <select bind:value={newType}>{#each voiceTypes as t}<option value={t.value}>{t.label}</option>{/each}</select>
-        </label>
-        <label>描述 <input type="text" bind:value={newDesc} placeholder="声音特点描述" /></label>
-        <label>语言 <select bind:value={newLang}><option value="zh">中文</option><option value="en">英文</option><option value="ja">日文</option></select></label>
-        <label>标签（逗号分隔）<input type="text" bind:value={newTags} placeholder="温柔, 女声" /></label>
-        <label>授权状态
-          <select bind:value={newAuth}>{#each authStatuses as s}<option value={s.value}>{s.label}</option>{/each}</select>
-        </label>
-        <label>推荐引擎
-          <select bind:value={newEngine}><option value="">自动</option><option value="indextts">IndexTTS</option><option value="omnivoice">OmniVoice</option></select>
-        </label>
-        <label>参考文本（可选）<input type="text" bind:value={newRefText} placeholder="参考音频对应的文字" /></label>
-
-        <div class="upload-area">
-          <label class="upload-label">
-            <div class="upload-content">
-              <Upload size={24} />
-              {#if newAudioFile}
-                <span class="has-file"><Check size={14} /> {newAudioFile.name} ({fmtSize(newAudioFile.size)})</span>
-              {:else}
-                <span>点击上传参考音频</span>
-                <span class="dim">wav / mp3 / flac，建议 3-10 秒</span>
-              {/if}
-            </div>
-            <input type="file" accept="audio/*" onchange={onFileChange} class="hidden-input" />
-          </label>
-        </div>
-
-        {#if uploadQuality && !uploadQuality.passed}
-          <div class="quality-warn">
-            <X size={14} /> 质量检测未通过：
-            {#each uploadQuality.warnings as w}<span>{w}</span>{/each}
-          </div>
-        {:else if uploadQuality?.warnings?.length > 0}
-          <div class="quality-info">
-            {#each uploadQuality.warnings as w}<span>⚠ {w}</span>{/each}
-          </div>
-        {/if}
-
-        {#if uploadError}<div class="error-msg"><X size={14} /> {uploadError}</div>{/if}
-
-        <div class="modal-actions">
-          <button class="btn" onclick={closeAddModal} disabled={uploading}>取消</button>
-          <button class="btn primary" onclick={addVoice} disabled={!newName.trim() || uploading}>
-            {uploading ? '上传中...' : '保存'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
-
-  <!-- 编辑声音弹窗 -->
-  {#if showEditModal && editVoice}
-    <div class="modal-overlay" onclick={() => showEditModal = false}>
-      <div class="modal" onclick={(e) => e.stopPropagation()}>
-        <h2>编辑声音：{editVoice.name}</h2>
-        <label>声音名称 * <input type="text" bind:value={editVoice.name} /></label>
-        <label>声音类型
-          <select bind:value={editVoice.voice_type}>{#each voiceTypes as t}<option value={t.value}>{t.label}</option>{/each}</select>
-        </label>
-        <label>描述 <input type="text" bind:value={editVoice.description} /></label>
-        <label>语言 <select bind:value={editVoice.default_language}><option value="zh">中文</option><option value="en">英文</option></select></label>
-        <label>标签（逗号分隔）<input type="text" value={editVoice.tags.join(', ')} oninput={(e) => editVoice.tags = (e.target as HTMLInputElement).value.split(',').map(t => t.trim()).filter(Boolean)} /></label>
-        <label>授权状态
-          <select bind:value={editVoice.license_status}>{#each authStatuses as s}<option value={s.value}>{s.label}</option>{/each}</select>
-        </label>
-        <label>推荐引擎
-          <select bind:value={editVoice.recommended_engine_id}><option value={null}>自动</option><option value="indextts">IndexTTS</option><option value="omnivoice">OmniVoice</option></select>
-        </label>
-        <label>参考文本 <input type="text" bind:value={editVoice.reference_text} /></label>
-
-        {#if editVoice.reference_audio_ids.length > 0}
-          <div class="audio-badge has"><Music size={12} /> 已关联 {editVoice.reference_audio_ids.length} 个参考音频</div>
-          <button class="btn" onclick={() => testGenerate(editVoice!.voice_id)}><Send size={14} /> 测试生成</button>
-        {:else}
-          <div class="audio-badge none"><Upload size={12} /> 未上传参考音频</div>
-        {/if}
-
-        <div class="modal-actions">
-          <button class="btn" onclick={() => showEditModal = false}>取消</button>
-          <button class="btn primary" onclick={saveEdit}>保存</button>
-        </div>
-      </div>
-    </div>
-  {/if}
-</section>
+<main class="page">
+	<div class="page-head"><div><h1>音色库</h1><p class="muted">导入、管理、试听和授权标记参考声音</p></div><HelpDrawer title="音色库" sections={help} /></div>
+	<section class="panel stack" style="margin-bottom:16px">
+		<div class="row" style="justify-content:space-between"><h2>官方参考音色（可导入）</h2><span class="muted">还未进入音色库的官方参考声音；导入后才能选择使用</span></div>
+		<div class="seed-grid">
+			{#each seeds as seed}
+				<article class="seed">
+					<div class="row" style="justify-content:space-between"><strong>{seed.name}</strong><span class="badge license">{licenseLabel(seed.license_status)}</span></div>
+					<p>{seed.description}</p>
+					<div class="row">{#each seed.tags as tag}<span class={`badge ${tagClass(tag)}`}>{tag}</span>{/each}</div>
+					<div class="row">
+						<span class="badge source">来源：{seed.source}</span>
+						<span class="badge engine">引擎：{seed.recommended_engine_id}</span>
+						<span class="text-pop" data-text={seed.reference_text}><FileText size={15} /> 文本</span>
+					</div>
+					{#if seed.quality}
+						<span class="badge" class:ok={seed.quality.passed} class:warn={!seed.quality.passed}>{seed.quality.passed ? '质量通过' : '需复核'} · RMS {seed.quality.rms.toFixed(3)}</span>
+					{/if}
+					{#if seed.imported_voice_id}
+						<a class="btn success" href={`/generate?voice=${seed.imported_voice_id}`}><Play size={15} /> 使用</a>
+					{:else}
+						<button class="btn" disabled={Boolean(importing)} onclick={() => importSeed(seed.seed_id)}><Download size={15} /> {importing === seed.seed_id ? '导入中' : '导入'}</button>
+					{/if}
+				</article>
+			{/each}
+		</div>
+	</section>
+	<div class="workbench">
+		<section class="grid">
+			{#each voices as voice}
+				<article class="card stack">
+					<div class="row" style="justify-content:space-between"><h2>{voice.name}</h2><span class="badge license" class:ok={voice.license_status === 'self_voice'}>{licenseLabel(voice.license_status)}</span></div>
+					<p class="muted">{voice.description || '暂无描述'}</p>
+					<div class="row">{#each voice.tags as tag}<span class={`badge ${tagClass(tag)}`}>{tag.startsWith('seed:') ? `来源：${tag.replace('seed:', '')}` : tag}</span>{/each}</div>
+					<div class="row">
+						<span class="badge">参考音频：{voice.reference_audio_ids.length} 个</span>
+						<span class="badge engine">推荐引擎：{voice.recommended_engine_id ?? '自动引擎'}</span>
+						<span class="text-pop" data-text={voice.reference_text || '暂无参考文本'}><FileText size={15} /> 文本</span>
+					</div>
+					{#if voice.reference_audio_ids[0]}
+						<audio class="audio" controls src={`/api/voices/${voice.voice_id}/audio/${voice.reference_audio_ids[0]}`}></audio>
+					{/if}
+					<div class="row">
+						<a class="btn primary" href={`/generate?voice=${voice.voice_id}`}><Play size={15} /> 使用</a>
+						<button class="btn" onclick={() => editVoice(voice)}><Pencil size={15} /> 编辑</button>
+						<button class="btn danger" onclick={() => remove(voice.voice_id)}><Trash2 size={15} /> 删除</button>
+					</div>
+				</article>
+			{:else}
+				<div class="empty">还没有声音资产</div>
+			{/each}
+		</section>
+		<aside class="panel stack">
+			<div class="row" style="justify-content:space-between">
+				<h2>{#if editingVoice}<Pencil size={16} /> 编辑声音{:else}<Plus size={16} /> 新增声音{/if}</h2>
+				{#if editingVoice}<button class="btn icon-text" onclick={resetForm}><X size={15} /> 取消</button>{/if}
+			</div>
+			<div class="field"><label for="voice-name">名称</label><input id="voice-name" bind:value={name} /></div>
+			<div class="field"><label for="voice-desc">描述</label><input id="voice-desc" bind:value={description} /></div>
+			<div class="field"><label for="voice-tags">标签</label><input id="voice-tags" bind:value={tags} placeholder="温柔, 女声" /></div>
+			<div class="field"><label for="voice-ref">参考文本</label><input id="voice-ref" bind:value={referenceText} /></div>
+			<div class="field"><label for="voice-license">授权</label><select id="voice-license" bind:value={license}><option value="unknown">未知</option><option value="self_voice">本人声音</option><option value="authorized">已授权</option><option value="test_only">仅测试</option></select></div>
+			<div class="field"><label for="voice-engine">推荐引擎</label><select id="voice-engine" bind:value={engine}><option value="indextts-v2">IndexTTS v2</option><option value="omnivoice">OmniVoice</option><option value="mimo-v2.5-tts">MiMo V2.5 TTS</option></select></div>
+			<div class="field"><label for="voice-file">{editingVoice ? '追加参考音频' : '参考音频'}</label><input id="voice-file" type="file" accept="audio/*" onchange={(e) => (file = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)} /></div>
+			{#if uploadMessage}<p class="muted"><Check size={13} /> {uploadMessage}</p>{/if}
+			<button class="btn primary" disabled={!name.trim()} onclick={saveVoice}><Upload size={15} /> {editingVoice ? '保存修改' : '保存声音'}</button>
+		</aside>
+	</div>
+</main>
 
 <style>
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem; }
-  h1 { font-size: 1.5rem; font-weight: 700; margin: 0 0 0.25rem; }
-  .desc { color: var(--color-text-dim); font-size: 0.9rem; margin: 0; }
-  .toolbar { display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
-  .search-box { display: flex; align-items: center; gap: 0.5rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 8px; padding: 0.5rem 1rem; flex: 1; max-width: 320px; }
-  .search-box input { background: none; border: none; color: var(--color-text); outline: none; font-size: 0.9rem; width: 100%; }
-  .filters { display: flex; gap: 0.5rem; }
-  .filters select { padding: 0.4rem 0.6rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 6px; color: var(--color-text); font-size: 0.8rem; }
-  .btn { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.45rem 1rem; border-radius: 6px; border: 1px solid var(--color-border); background: var(--color-surface-2); color: var(--color-text); font-size: 0.85rem; cursor: pointer; }
-  .btn.primary { background: var(--color-accent); color: white; border-color: var(--color-accent); }
-  .btn.sm { padding: 0.3rem 0.6rem; font-size: 0.75rem; }
-  .btn.ghost { background: none; border-color: transparent; }
-  .btn.ghost.danger:hover { color: var(--color-danger); }
-  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .empty { text-align: center; padding: 4rem; color: var(--color-text-dim); }
-  .empty-icon { opacity: 0.3; margin-bottom: 1rem; }
-  .dim { font-size: 0.8rem; opacity: 0.7; }
-  .voice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
-  .voice-card {
-    padding: 1.25rem; background: var(--color-surface); border: 1px solid var(--color-border);
-    border-radius: 12px; cursor: pointer; transition: border-color 0.15s;
-  }
-  .voice-card:hover { border-color: var(--color-accent); }
-  .card-top { display: flex; gap: 0.75rem; margin-bottom: 0.75rem; align-items: center; }
-  .voice-avatar { width: 36px; height: 36px; border-radius: 8px; background: var(--color-accent-dim); color: var(--color-accent); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.9rem; flex-shrink: 0; }
-  .voice-info { flex: 1; min-width: 0; }
-  .voice-name { font-weight: 600; font-size: 0.95rem; }
-  .voice-meta { font-size: 0.72rem; color: var(--color-text-dim); }
-  .auth-badge { font-size: 0.65rem; padding: 0.15rem 0.5rem; border-radius: 4px; background: var(--color-surface-2); color: var(--color-text-dim); white-space: nowrap; }
-  .auth-badge.ok { background: oklch(30% 0.06 150); color: var(--color-success); }
-  .voice-desc { font-size: 0.8rem; color: var(--color-text-dim); margin: 0 0 0.6rem; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .audio-badge { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 4px; margin-bottom: 0.5rem; }
-  .audio-badge.has { background: oklch(30% 0.06 150); color: var(--color-success); }
-  .audio-badge.none { background: var(--color-surface-2); color: var(--color-text-dim); }
-  .tags { display: flex; gap: 0.25rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
-  .tag { font-size: 0.68rem; padding: 0.1rem 0.4rem; background: var(--color-surface-2); border-radius: 3px; color: var(--color-text-dim); }
-  .card-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+	.seed-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+		gap: 10px;
+	}
 
-  /* Modal */
-  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
-  .modal { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 16px; padding: 2rem; min-width: 440px; max-width: 520px; max-height: 90vh; overflow-y: auto; }
-  .modal h2 { margin: 0 0 1.25rem; font-size: 1.15rem; }
-  .modal label { display: block; margin-bottom: 0.75rem; font-size: 0.82rem; color: var(--color-text-dim); }
-  .modal input[type="text"], .modal select { display: block; width: 100%; margin-top: 0.3rem; padding: 0.45rem 0.7rem; background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: 6px; color: var(--color-text); font-size: 0.88rem; outline: none; }
-  .modal input:focus, .modal select:focus { border-color: var(--color-accent); }
-  .upload-area { margin-bottom: 0.75rem; }
-  .upload-label { display: block; cursor: pointer; }
-  .upload-content { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; padding: 1.25rem; border: 2px dashed var(--color-border); border-radius: 10px; color: var(--color-text-dim); font-size: 0.88rem; transition: border-color 0.15s; }
-  .upload-content:hover { border-color: var(--color-accent); }
-  .has-file { color: var(--color-success); font-size: 0.85rem; display: flex; align-items: center; gap: 0.3rem; }
-  .hidden-input { display: none; }
-  .quality-warn { background: oklch(30% 0.06 25); color: var(--color-danger); padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.8rem; margin-bottom: 0.75rem; display: flex; flex-direction: column; gap: 0.2rem; }
-  .quality-info { background: oklch(30% 0.06 85); color: var(--color-warning); padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.8rem; margin-bottom: 0.75rem; display: flex; flex-direction: column; gap: 0.2rem; }
-  .error-msg { display: flex; align-items: center; gap: 0.3rem; color: var(--color-danger); font-size: 0.85rem; margin-bottom: 0.75rem; }
-  .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
+	.seed {
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		padding: 12px;
+		background: #121519;
+		display: grid;
+		gap: 8px;
+	}
+
+	.seed p {
+		margin: 0;
+		color: var(--muted);
+		line-height: 1.45;
+		font-size: 13px;
+	}
+
+	.text-pop {
+		position: relative;
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		border: 1px solid var(--line);
+		border-radius: 999px;
+		padding: 3px 8px;
+		color: #cbd4df;
+		background: #1c2026;
+		font-size: 12px;
+		cursor: help;
+	}
+
+	.text-pop:hover::after,
+	.text-pop:focus-within::after {
+		content: attr(data-text);
+		position: absolute;
+		left: 0;
+		bottom: calc(100% + 8px);
+		width: min(340px, 80vw);
+		max-height: 160px;
+		overflow: auto;
+		white-space: normal;
+		line-height: 1.55;
+		padding: 10px;
+		border-radius: 7px;
+		border: 1px solid var(--line);
+		background: #101215;
+		color: var(--text);
+		box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+		z-index: 3;
+	}
 </style>
