@@ -137,6 +137,19 @@
 			: voices
 	);
 	const hasRunningTasks = $derived(tasks.some((task) => taskIsActive(task)));
+	const engineRuntimeHint = $derived.by(() => {
+		const trimmedLength = text.trim().length;
+		if (isOmniVoice && trimmedLength > 90) {
+			return 'OmniVoice 更适合先用短句确认音色和语气；长文本或复杂参考音色更容易等待很久，甚至触发超时。';
+		}
+		if (isMimoClone && trimmedLength > 160) {
+			return 'MiMo 音色复刻建议先用短段试听；确认贴近度后再继续更长的文本。';
+		}
+		if (isIndexTTS && speed > 1.25 && trimmedLength > 160) {
+			return '当前文本较长且语速偏快，建议先做短段试听，确认稳定性后再整段生成。';
+		}
+		return '';
+	});
 
 	const statusCounts = $derived.by(() => ({
 		all: tasks.length,
@@ -737,6 +750,9 @@
 					<Send size={15} /> {busy ? '生成中' : '生成'}
 				</button>
 			</div>
+			{#if engineRuntimeHint}
+				<p class="badge">{engineRuntimeHint}</p>
+			{/if}
 
 			{#if showSplitPreview && textSegments.length}
 				<div class="split-preview">

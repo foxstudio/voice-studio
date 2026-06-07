@@ -1,13 +1,13 @@
 """Pytest configuration and fixtures."""
 
 import pytest
-import mlx.core as mx
-import numpy as np
 
 
 @pytest.fixture
 def sample_audio():
     """Generate sample audio data."""
+    mx = pytest.importorskip("mlx.core")
+    np = pytest.importorskip("numpy")
     # 1 second of audio at 24kHz
     return mx.array(np.random.randn(24000).astype(np.float32))
 
@@ -15,6 +15,8 @@ def sample_audio():
 @pytest.fixture
 def sample_mel():
     """Generate sample mel spectrogram."""
+    mx = pytest.importorskip("mlx.core")
+    np = pytest.importorskip("numpy")
     # (batch, n_mels, time)
     return mx.array(np.random.randn(1, 100, 200).astype(np.float32))
 
@@ -22,6 +24,7 @@ def sample_mel():
 @pytest.fixture
 def sample_text_tokens():
     """Generate sample text tokens."""
+    mx = pytest.importorskip("mlx.core")
     return mx.array([[100, 200, 300, 400, 500]], dtype=mx.int32)
 
 

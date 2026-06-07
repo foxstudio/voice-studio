@@ -4,6 +4,7 @@ import asyncio
 import threading
 import time
 from contextlib import suppress
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -34,13 +35,46 @@ def _save(task: GenerationTask) -> GenerationTask:
     return task
 
 
+def _timeout_seconds_for(engine_id: str) -> int:
+    return {
+        "omnivoice": 600,
+        "indextts-v2": 420,
+    }.get(engine_id, 300)
+
+
+def _task_is_active(status: TaskStatus | str) -> bool:
+    return status in [TaskStatus.pending, TaskStatus.queued, TaskStatus.running, TaskStatus.postprocessing, TaskStatus.retrying]
+
+
+def _elapsed_since(value: str | None) -> float:
+    if not value:
+        return 0.0
+    try:
+        return max(0.0, (datetime.now() - datetime.fromisoformat(value)).total_seconds())
+    except ValueError:
+        return 0.0
+
+
+def _reconcile_stale_task(task: GenerationTask) -> GenerationTask:
+    if task.status not in [TaskStatus.running, TaskStatus.postprocessing, TaskStatus.retrying]:
+        return task
+    stale_after = _timeout_seconds_for(task.engine_id) + 180
+    if _elapsed_since(task.started_at) <= stale_after:
+        return task
+    task.status = TaskStatus.failed
+    task.completed_at = now_iso()
+    task.error_message = "任务超过模型常规超时窗口，已自动标记为失败。可复用参数重新生成。"
+    _cancelled.discard(task.task_id)
+    return _save(task)
+
+
 def list_tasks() -> list[GenerationTask]:
-    return [GenerationTask(**d) for d in db.list_all("tasks", "created_at")]
+    return [_reconcile_stale_task(GenerationTask(**d)) for d in db.list_all("tasks", "created_at")]
 
 
 def get_task(task_id: str) -> GenerationTask | None:
     data = db.get_one("tasks", "task_id", task_id)
-    return GenerationTask(**data) if data else None
+    return _reconcile_stale_task(GenerationTask(**data)) if data else None
 
 
 async def _broadcast(task: GenerationTask) -> None:
@@ -158,7 +192,7 @@ def delete_task(task_id: str) -> dict:
     task = get_task(task_id)
     if not task:
         return {"task_id": task_id, "status": "not_found"}
-    if task.status in [TaskStatus.pending, TaskStatus.queued, TaskStatus.running, TaskStatus.postprocessing]:
+    if _task_is_active(task.status):
         return {"task_id": task_id, "status": "active_task"}
     if task.result_id:
         history_store.delete(task.result_id)
@@ -295,10 +329,7 @@ async def _process(task: GenerationTask) -> None:
             _save(task)
             _broadcast_from_thread(task)
 
-        timeout_seconds = {
-            "omnivoice": 600,
-            "indextts-v2": 420,
-        }.get(req.engine_id, 300)
+        timeout_seconds = _timeout_seconds_for(req.engine_id)
         result = await asyncio.to_thread(
             engine_registry.run_isolated,
             req.engine_id,

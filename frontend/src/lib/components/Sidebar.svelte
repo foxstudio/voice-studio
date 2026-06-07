@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { AudioLines, BookOpenText, ChartNoAxesColumn, ChevronsLeft, ChevronsRight, Clock3, FileAudio, Gauge, Library, ListChecks, Settings, SlidersHorizontal } from 'lucide-svelte';
+	import { AudioLines, BookOpenText, ChartNoAxesColumn, ChevronsLeft, ChevronsRight, Clock3, FileAudio, Gauge, Library, Settings, SlidersHorizontal } from 'lucide-svelte';
 	import { page } from '$app/state';
 
 	let { collapsed = false, onToggle = () => {} }: { collapsed?: boolean; onToggle?: () => void } = $props();
@@ -12,7 +12,6 @@
 		{ href: '/script-studio', label: '脚本与批量', icon: BookOpenText },
 		{ href: '/eval-reference', label: '参数参考', icon: ChartNoAxesColumn },
 		{ href: '/audio-tools', label: '语音转写', icon: FileAudio },
-		{ href: '/tasks', label: '任务中心', icon: ListChecks },
 		{ href: '/settings', label: '设置', icon: Settings }
 	];
 </script>

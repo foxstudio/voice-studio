@@ -88,6 +88,20 @@ async def get_transcription_task(task_id: str):
     return task
 
 
+@router.post("/tasks/{task_id}/cancel")
+async def cancel_transcription_task(task_id: str):
+    result = asr_tasks.cancel_task(task_id)
+    if result["status"] == "not_found":
+        raise AppException(404, "ASR_TASK_NOT_FOUND", "ASR task not found")
+    return result
+
+
+@router.post("/tasks/{task_id}/retry")
+async def retry_transcription_task(task_id: str):
+    task = asr_tasks.retry_task(task_id)
+    return {"task_id": task.task_id, "status": task.status}
+
+
 @router.delete("/tasks/{task_id}")
 async def delete_transcription_task(task_id: str):
     result = asr_tasks.delete_task(task_id)

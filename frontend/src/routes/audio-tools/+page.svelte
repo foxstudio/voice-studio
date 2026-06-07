@@ -22,10 +22,12 @@
 		Layers,
 		LoaderCircle,
 		RefreshCw,
+		RotateCcw,
 		Search,
 		TextQuote,
 		Trash2,
-		UploadCloud
+		UploadCloud,
+		X
 	} from 'lucide-svelte';
 	import { onMount } from 'svelte';
 
@@ -45,6 +47,7 @@
 
 	type TimestampStrategy = 'auto' | 'forced_aligner' | 'qwen3-asr-mlx';
 	type AsrTaskTab = 'all' | 'active' | 'success' | 'failed';
+	const FORCED_ALIGN_MAX_DURATION_MS = 5 * 60 * 1000;
 
 	let history = $state<HistoryItem[]>([]);
 	let transcriptions = $state<TranscriptionRecord[]>([]);
@@ -328,11 +331,19 @@
 	}
 
 	async function supplementTimestamps(record: TranscriptionRecord) {
+		const preciseIssue = forcedAlignIssue(record);
+		if (timestampStrategy === 'forced_aligner' && preciseIssue) {
+			asrError = preciseIssue;
+			return;
+		}
 		supplementingTimestamps = true;
 		asrError = '';
 		copyMessage = '';
 		importMessage = '';
 		try {
+			if (timestampStrategy === 'auto' && preciseIssue) {
+				asrInfo = `当前记录超过精准对齐范围，将自动回退到本地快速补齐。`;
+			}
 			const updated = await Api.supplementTranscriptionTimestamps(record.transcription_id, {
 				strategy: timestampStrategy
 			});
@@ -442,6 +453,25 @@
 		}[timestampStrategy];
 	}
 
+	function forcedAlignIssue(record: TranscriptionRecord | null) {
+		if (!record) return '';
+		if (!record.has_source_audio) return '这条记录没有保留源音频，不能做精准对齐。';
+		if ((record.duration_ms ?? 0) > FORCED_ALIGN_MAX_DURATION_MS)
+			return '精准 forced align 当前只支持 5 分钟以内的单条音频。';
+		return '';
+	}
+
+	function timestampStrategyNotice() {
+		if (timestampStrategy === 'forced_aligner') {
+			if (asrFiles.length > 1) return '精准 forced align 更适合转写后的单条记录做精修；批量文件建议先用“自动”。';
+			return '精准 forced align 当前只建议用于 5 分钟以内、保留了源音频的单条记录。';
+		}
+		if (timestampStrategy === 'auto') {
+			return '自动模式会先尝试精准对齐，不满足条件时再回退到本地快速补齐。';
+		}
+		return '本地快速补齐不会走精准对齐，适合更长的音频或批量补字幕。';
+	}
+
 	function toggleTranscriptionSelection(transcriptionId: string, checked: boolean) {
 		selectedTranscriptionIds = checked
 			? [...selectedTranscriptionIds, transcriptionId]
@@ -488,10 +518,22 @@
 
 	async function batchSupplementSelectedTranscriptions() {
 		if (!selectedTranscriptionIds.length) return;
+		const selectedRecords = selectedTranscriptions;
+		const preciseEligibleIds =
+			timestampStrategy === 'forced_aligner'
+				? selectedRecords.filter((item) => !forcedAlignIssue(item)).map((item) => item.transcription_id)
+				: selectedTranscriptionIds;
+		if (timestampStrategy === 'forced_aligner' && !preciseEligibleIds.length) {
+			asrError = '当前选择里没有符合精准 forced align 条件的记录。';
+			return;
+		}
 		supplementingTimestamps = true;
 		asrError = '';
 		try {
-			const updated = await Api.batchSupplementTranscriptionTimestamps(selectedTranscriptionIds, {
+			if (timestampStrategy === 'forced_aligner' && preciseEligibleIds.length < selectedTranscriptionIds.length) {
+				asrInfo = `已跳过 ${selectedTranscriptionIds.length - preciseEligibleIds.length} 条不符合精准对齐条件的记录。`;
+			}
+			const updated = await Api.batchSupplementTranscriptionTimestamps(preciseEligibleIds, {
 				strategy: timestampStrategy
 			});
 			const preciseCount = updated.filter(
@@ -546,7 +588,62 @@
 	}
 
 	function canDeleteTask(task: TranscriptionTask) {
-		return !['pending', 'queued', 'running', 'retrying', 'postprocessing'].includes(task.status);
+		return !['pending', 'queued', 'running', 'retrying', 'postprocessing'].includes(task.status) && !(task.status === 'cancelled' && !task.completed_at);
+	}
+
+	function canCancelTask(task: TranscriptionTask) {
+		return ['pending', 'queued', 'running', 'retrying', 'postprocessing'].includes(task.status);
+	}
+
+	function canRetryTask(task: TranscriptionTask) {
+		return ['failed', 'cancelled', 'success'].includes(task.status) && !!task.completed_at;
+	}
+
+	function taskTimingLine(task: TranscriptionTask) {
+		if (task.status === 'cancelled' && !task.completed_at) return '正在结束当前识别...';
+		if (task.completed_at) {
+			const date = new Date(task.completed_at);
+			if (!Number.isNaN(date.getTime())) {
+				return `完成于 ${new Intl.DateTimeFormat('zh-CN', {
+					month: '2-digit',
+					day: '2-digit',
+					hour: '2-digit',
+					minute: '2-digit'
+				}).format(date)}`;
+			}
+		}
+		if (task.started_at) return '后台处理中';
+		return '等待开始';
+	}
+
+	async function cancelTranscriptionTask(task: TranscriptionTask) {
+		const ok = window.confirm(
+			task.status === 'running'
+				? '取消后会停止保留这次结果；当前引擎可能会先跑完本轮，再丢弃结果。继续吗？'
+				: '取消这条转写任务？'
+		);
+		if (!ok) return;
+		asrError = '';
+		await Api.cancelTranscriptionTask(task.task_id);
+		if (activeTaskId === task.task_id) {
+			asrInfo = task.status === 'running' ? '已请求取消，当前识别结束后会丢弃结果。' : '已取消转写任务。';
+		}
+		await refresh();
+	}
+
+	async function retryTranscriptionTask(task: TranscriptionTask) {
+		asrError = '';
+		try {
+			const res = await Api.retryTranscriptionTask(task.task_id);
+			activeTaskId = res.task_id;
+			transcript = null;
+			selectedTranscriptionId = null;
+			asrInfo = '已重新提交转写任务。';
+			await refresh();
+			scrollToResult();
+		} catch (err) {
+			asrError = err instanceof Error ? err.message : '重新提交转写任务失败';
+		}
 	}
 
 	async function deleteTranscriptionTask(taskId: string) {
@@ -734,6 +831,7 @@
 				</select>
 				<small>{timestampStrategyHint()}</small>
 			</div>
+			<p class="badge">{timestampStrategyNotice()}</p>
 
 			{#if recommendAsync}
 				<p class="badge">当前文件数或体积较大，建议走异步任务。</p>
@@ -778,9 +876,23 @@
 						</div>
 					{:else if activeTask.status === 'failed'}
 						<p class="badge fail">{activeTask.error_message ?? '转写任务失败'}</p>
+					{:else if activeTask.status === 'cancelled' && !activeTask.completed_at}
+						<p class="badge">正在结束当前识别，完成后不会保留结果。</p>
 					{:else}
 						<p class="muted">任务正在后台进行，页面会自动刷新状态。</p>
 					{/if}
+					<div class="row wrap">
+						{#if canCancelTask(activeTask)}
+							<button class="btn" onclick={() => cancelTranscriptionTask(activeTask)}>
+								<X size={15} /> 取消任务
+							</button>
+						{/if}
+						{#if canRetryTask(activeTask)}
+							<button class="btn" onclick={() => retryTranscriptionTask(activeTask)}>
+								<RotateCcw size={15} /> 重新提交
+							</button>
+						{/if}
+					</div>
 				</div>
 			{/if}
 
@@ -830,6 +942,9 @@
 								当前只有文字稿，暂时还不能补时间戳。
 							{/if}
 						</p>
+						{#if canSupplement(transcript) && forcedAlignIssue(transcript)}
+							<p class="badge">{timestampStrategy === 'forced_aligner' ? forcedAlignIssue(transcript) : '这条记录不适合精准对齐时，会自动回退到本地快速补齐。'}</p>
+						{/if}
 					{/if}
 					{#if copyMessage}<p class="badge ok">{copyMessage}</p>{/if}
 					<div class="field">
@@ -906,6 +1021,7 @@
 									<span class="badge" class:ok={task.status === 'success'} class:fail={task.status === 'failed'}>{asrTaskStatusLabel(task.status)}</span>
 								</div>
 								<p class="muted">{engineTypeLabel(task.engine_id)} · {task.engine_id} · {task.language} · {Math.max(1, Math.round(task.size_bytes / 1024))} KB</p>
+								<p class="muted">{taskTimingLine(task)}</p>
 								<div class="row wrap">
 									{#if task.status === 'success' && task.transcription_id}
 										<button class="btn" onclick={() => openTranscription(task.transcription_id!)}>查看结果</button>
@@ -915,8 +1031,20 @@
 										{/if}
 									{:else if task.status === 'failed'}
 										<p class="badge fail">{task.error_message ?? '转写任务失败'}</p>
+									{:else if task.status === 'cancelled' && !task.completed_at}
+										<p class="badge">正在结束当前识别，完成后不会保留结果。</p>
 									{:else}
 										<p class="muted">等待完成后可查看结果。</p>
+									{/if}
+									{#if canCancelTask(task)}
+										<button class="btn" onclick={() => cancelTranscriptionTask(task)}>
+											<X size={15} /> 取消
+										</button>
+									{/if}
+									{#if canRetryTask(task)}
+										<button class="btn" onclick={() => retryTranscriptionTask(task)}>
+											<RotateCcw size={15} /> 重试
+										</button>
 									{/if}
 									{#if canDeleteTask(task)}
 										<button class="btn danger" onclick={() => deleteTranscriptionTask(task.task_id)}>
