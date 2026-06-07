@@ -30,6 +30,10 @@
 	type TaskSourceFilter = 'all' | 'local' | 'cloud';
 	type TaskDateFilter = 'all' | 'today' | '7d' | '30d';
 	type TaskSortBy = 'latest' | 'oldest' | 'duration_desc';
+	type RuntimeProfile = {
+		slowAfterSeconds: number;
+		timeoutSeconds: number;
+	};
 
 	let engines = $state<EngineDetail[]>([]);
 	let voices = $state<VoiceAsset[]>([]);
@@ -95,6 +99,14 @@
 	const MIMO_DEFAULTS = {
 		temperature: 0.6,
 		topP: 0.95
+	};
+
+	const RUNTIME_PROFILES: Record<string, RuntimeProfile> = {
+		omnivoice: { slowAfterSeconds: 480, timeoutSeconds: 600 },
+		'indextts-v2': { slowAfterSeconds: 150, timeoutSeconds: 420 },
+		'mimo-v2.5-tts-preset': { slowAfterSeconds: 90, timeoutSeconds: 300 },
+		'mimo-v2.5-tts-voicedesign': { slowAfterSeconds: 90, timeoutSeconds: 300 },
+		'mimo-v2.5-tts-voiceclone': { slowAfterSeconds: 120, timeoutSeconds: 300 }
 	};
 
 	function taskIsActive(task: GenerationTask) {
@@ -562,6 +574,10 @@
 
 	function elapsedLabel(task: GenerationTask) {
 		const totalSeconds = elapsedSeconds(task);
+		return formatSeconds(totalSeconds);
+	}
+
+	function formatSeconds(totalSeconds: number) {
 		const minutes = Math.floor(totalSeconds / 60);
 		const seconds = totalSeconds % 60;
 		return `${minutes}:${seconds.toString().padStart(2, '0')}`;
@@ -594,15 +610,28 @@
 	function taskEtaLabel(task: GenerationTask) {
 		if (!taskIsActive(task) || !task.started_at) return '';
 		const progress = task.progress ?? 0;
-		if (progress < 0.18 || progress >= 0.98) return '';
+		const profile = RUNTIME_PROFILES[task.engine_id] ?? { slowAfterSeconds: 180, timeoutSeconds: 300 };
 		const elapsed = elapsedSeconds(task);
+		if (progress >= 0.9) {
+			const remainingToTimeout = profile.timeoutSeconds - elapsed;
+			return remainingToTimeout > 10 ? `保护窗口剩 ${formatSeconds(remainingToTimeout)}` : '';
+		}
+		if (progress < 0.18) return '';
 		if (elapsed < 2) return '';
 		const totalEstimate = elapsed / progress;
 		const remaining = Math.max(0, Math.round(totalEstimate - elapsed));
 		if (!Number.isFinite(remaining) || remaining <= 1) return '';
-		const minutes = Math.floor(remaining / 60);
-		const seconds = remaining % 60;
-		return `预计剩余 ${minutes}:${seconds.toString().padStart(2, '0')}`;
+		return `预计剩余 ${formatSeconds(remaining)}`;
+	}
+
+	function taskRuntimeHint(task: GenerationTask) {
+		if (!taskIsActive(task) || !task.started_at) return '';
+		const profile = RUNTIME_PROFILES[task.engine_id] ?? { slowAfterSeconds: 180, timeoutSeconds: 300 };
+		const elapsed = elapsedSeconds(task);
+		if (elapsed >= profile.timeoutSeconds) return '已超过超时保护窗口，等待后台收敛状态。';
+		if (elapsed >= profile.slowAfterSeconds) return '已超过常规时长，仍在等待模型返回。';
+		if ((task.progress ?? 0) >= 0.9) return '接近收尾，长音频可能会在最后阶段停留一会儿。';
+		return '';
 	}
 
 	function engineKind(engineId: string) {
@@ -940,6 +969,9 @@
 											<span class="muted">已运行 {elapsedLabel(task)}</span>
 											{#if taskEtaLabel(task)}<span class="muted">{taskEtaLabel(task)}</span>{/if}
 										</div>
+										{#if taskRuntimeHint(task)}
+											<p class="progress-hint">{taskRuntimeHint(task)}</p>
+										{/if}
 									</div>
 								{/if}
 
@@ -1495,6 +1527,13 @@
 
 	.progress-foot {
 		justify-content: space-between;
+	}
+
+	.progress-hint {
+		margin: -2px 0 0;
+		color: #b7c1cf;
+		font-size: 12px;
+		line-height: 1.45;
 	}
 
 	.card-actions {
