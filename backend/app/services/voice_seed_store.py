@@ -63,6 +63,17 @@ SEEDS: list[VoiceSeed] = [
         tags=["官方示例", "情绪参考", "悲伤"],
         license_status=LicenseStatus.test_only,
     ),
+    VoiceSeed(
+        seed_id="index_emo_hate",
+        name=voice_aliases.seed_label("index_emo_hate") or "官方反感情绪参考",
+        description="来自 IndexTTS 官方 examples 的情绪参考音频，可用于反感、厌恶等情绪控制测试。",
+        source="IndexTTS 官方 examples",
+        download_url=f"{INDEX_EXAMPLE_RAW}/emo_hate.wav",
+        recommended_engine_id="indextts-v2",
+        reference_text="官方反感情绪参考音频，用于测试情绪控制。",
+        tags=["官方示例", "情绪参考", "反感"],
+        license_status=LicenseStatus.test_only,
+    ),
 ]
 
 

@@ -12,7 +12,7 @@ if str(BACKEND) not in sys.path:
 
 from app.main import app  # noqa: E402
 from app.models.schemas import AppSettings  # noqa: E402
-from app.services import batch_queue, database, settings_store, voice_aliases  # noqa: E402
+from app.services import batch_queue, community_voice_pack_store, database, settings_store, voice_aliases, voice_store  # noqa: E402
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -231,3 +231,56 @@ def test_project_imports_transcription_segments_and_plain_text(tmp_path: Path):
     assert segments[2]["source_start_ms"] is None
     assert segments[2]["language"] == "zh"
     assert [segment["index"] for segment in segments] == [0, 1, 2, 3]
+
+
+def test_community_voice_pack_can_import_single_candidate_once(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+
+    def fake_download(download_url: str, path: Path) -> None:
+        path.write_bytes(b"RIFF" + b"\0" * 128)
+
+    monkeypatch.setattr(community_voice_pack_store, "_download_audio", fake_download)
+    monkeypatch.setattr(
+        "app.services.audio_tools.probe_audio",
+        lambda path: {"duration_ms": 3200, "sample_rate": 24000},
+    )
+    monkeypatch.setattr(
+        "app.services.audio_tools.quality_metrics",
+        lambda path: {
+            "duration_ms": 3200,
+            "sample_rate": 24000,
+            "peak": 0.4,
+            "rms": 0.12,
+            "silence_ratio": 0.05,
+            "size_bytes": Path(path).stat().st_size,
+            "passed": True,
+            "warnings": [],
+        },
+    )
+
+    packs = client.get("/api/community-voice-packs")
+    assert packs.status_code == 200
+    pack = packs.json()[0]
+    candidate_id = pack["candidates"][0]["candidate_id"]
+
+    imported = client.post(
+        "/api/community-voice-packs/import",
+        json={"pack_id": pack["pack_id"], "candidate_ids": [candidate_id]},
+    )
+    assert imported.status_code == 200
+    imported_candidate = next(item for item in imported.json()["candidates"] if item["candidate_id"] == candidate_id)
+    assert imported_candidate["imported_voice_id"]
+    assert imported.json()["imported_count"] == 1
+
+    voices = [voice for voice in voice_store.list_voices() if f"community:{candidate_id}" in voice.tags]
+    assert len(voices) == 1
+    assert voices[0].license_status == "authorized"
+    assert voices[0].reference_audio_ids
+
+    reimported = client.post(
+        "/api/community-voice-packs/import",
+        json={"pack_id": pack["pack_id"], "candidate_ids": [candidate_id]},
+    )
+    assert reimported.status_code == 200
+    voices_after = [voice for voice in voice_store.list_voices() if f"community:{candidate_id}" in voice.tags]
+    assert len(voices_after) == 1

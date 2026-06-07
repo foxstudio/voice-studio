@@ -361,6 +361,31 @@ export interface VoiceSeed {
 	quality: AudioQualityResult | null;
 }
 
+export interface CommunityVoiceCandidate {
+	candidate_id: string;
+	name: string;
+	description: string;
+	source: string;
+	download_url: string;
+	recommended_engine_id: string;
+	reference_text: string;
+	tags: string[];
+	license_status: string;
+	imported_voice_id: string | null;
+	quality: AudioQualityResult | null;
+}
+
+export interface CommunityVoicePack {
+	pack_id: string;
+	name: string;
+	description: string;
+	source: string;
+	license_summary: string;
+	tags: string[];
+	candidates: CommunityVoiceCandidate[];
+	imported_count: number;
+}
+
 export interface EngineAudioDiagnosis {
 	engine_id: string;
 	status: 'passed' | 'failed';

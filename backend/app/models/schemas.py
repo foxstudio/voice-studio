@@ -524,6 +524,36 @@ class VoiceSeedImportRequest(BaseModel):
     seed_id: str
 
 
+class CommunityVoiceCandidate(BaseModel):
+    candidate_id: str
+    name: str
+    description: str = ""
+    source: str
+    download_url: str
+    recommended_engine_id: str = "indextts-v2"
+    reference_text: str = ""
+    tags: list[str] = Field(default_factory=list)
+    license_status: LicenseStatus = LicenseStatus.test_only
+    imported_voice_id: str | None = None
+    quality: AudioQualityResult | None = None
+
+
+class CommunityVoicePack(BaseModel):
+    pack_id: str
+    name: str
+    description: str
+    source: str
+    license_summary: str
+    tags: list[str] = Field(default_factory=list)
+    candidates: list[CommunityVoiceCandidate] = Field(default_factory=list)
+    imported_count: int = 0
+
+
+class CommunityVoicePackImportRequest(BaseModel):
+    pack_id: str
+    candidate_ids: list[str] = Field(default_factory=list)
+
+
 class EngineAudioDiagnosisRequest(BaseModel):
     text: str = "这是本地引擎音频诊断测试，用来确认生成结果是否清晰可听。"
     reference_audio_path: str | None = None
