@@ -3492,39 +3492,6 @@
 		line-height: 1.5;
 	}
 
-	.verification-card {
-		display: grid;
-		gap: 6px;
-		padding: 8px 9px;
-		border: 1px solid var(--line);
-		border-radius: 7px;
-		background: #10151c;
-		font-size: 12px;
-		line-height: 1.5;
-	}
-
-	.verification-card p {
-		margin: 0;
-		color: #b7c1cf;
-	}
-
-	.verification-head {
-		justify-content: space-between;
-		gap: 8px;
-	}
-
-	.verification-card.passed {
-		border-color: rgba(66, 196, 155, 0.35);
-	}
-
-	.verification-card.warning {
-		border-color: rgba(245, 158, 11, 0.35);
-	}
-
-	.verification-card.failed {
-		border-color: rgba(248, 113, 113, 0.4);
-	}
-
 	.verification-pending-line {
 		margin: 0;
 		padding: 7px 8px;
