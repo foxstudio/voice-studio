@@ -68,29 +68,6 @@ def test_engine_diagnostic_audio_endpoint_serves_latest_file(tmp_path: Path):
     assert missing.status_code == 404
 
 
-def test_voice_seed_audio_preview_redirects(tmp_path: Path):
-    client = _client(tmp_path)
-    resp = client.get("/api/voice-seeds/index_voice_01/audio", follow_redirects=False)
-    assert resp.status_code in {302, 307}
-    assert "voice_01.wav" in resp.headers["location"]
-
-
-def test_community_candidate_audio_preview_uses_resolved_url(tmp_path: Path, monkeypatch):
-    client = _client(tmp_path)
-    monkeypatch.setattr(
-        community_voice_pack_store,
-        "candidate_preview_url",
-        lambda pack_id, candidate_id: "https://example.test/sample.wav",
-    )
-
-    resp = client.get(
-        "/api/community-voice-packs/csemotions_character_samples/candidates/csemotions_1200/audio",
-        follow_redirects=False,
-    )
-    assert resp.status_code in {302, 307}
-    assert resp.headers["location"] == "https://example.test/sample.wav"
-
-
 def test_voice_seed_catalog_contains_official_index_examples(tmp_path: Path):
     client = _client(tmp_path)
     resp = client.get("/api/voice-seeds")

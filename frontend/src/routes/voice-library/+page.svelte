@@ -1,14 +1,12 @@
 <script lang="ts">
 	import { Api } from '$lib/api';
-	import type { CommunityVoicePack, VoiceAsset, VoiceSeed } from '$lib/api/types';
+	import type { VoiceAsset } from '$lib/api/types';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
-	import { Check, ChevronDown, ChevronUp, Database, Download, FileText, PackageOpen, Pencil, Play, Plus, Search, ShieldCheck, Trash2, Upload, X } from 'lucide-svelte';
+	import { Check, Database, FileText, Pencil, Play, Plus, Search, ShieldCheck, Trash2, Upload, X } from 'lucide-svelte';
 	import { licenseLabel } from '$lib/labels';
 	import { onMount } from 'svelte';
 
 	let voices = $state<VoiceAsset[]>([]);
-	let seeds = $state<VoiceSeed[]>([]);
-	let communityPacks = $state<CommunityVoicePack[]>([]);
 	let name = $state('');
 	let description = $state('');
 	let tags = $state('');
@@ -17,20 +15,14 @@
 	let engine = $state<string | null>('indextts-v2');
 	let file = $state<File | null>(null);
 	let uploadMessage = $state('');
-	let importing = $state('');
-	let importingPack = $state('');
 	let editingVoice = $state<VoiceAsset | null>(null);
 	let voiceQuery = $state('');
 	let voiceEngineFilter = $state('all');
 	let voiceLicenseFilter = $state('all');
 	let voiceSort = $state<'updated' | 'name'>('updated');
-	let seedQuery = $state('');
-	let packQuery = $state('');
-	let sourceTab = $state<'official' | 'community'>('official');
-	let showSources = $state(false);
 
 	async function refresh() {
-		[voices, seeds, communityPacks] = await Promise.all([Api.voices(), Api.voiceSeeds(), Api.communityVoicePacks()]);
+		voices = await Api.voices();
 	}
 	onMount(() => {
 		refresh();
@@ -91,31 +83,8 @@
 		if (editingVoice?.voice_id === id) resetForm();
 		await refresh();
 	}
-	async function importSeed(seedId: string) {
-		importing = seedId;
-		try {
-			await Api.importVoiceSeed(seedId);
-			await refresh();
-		} catch (err) {
-			uploadMessage = err instanceof Error ? err.message : '导入失败';
-		} finally {
-			importing = '';
-		}
-	}
-	async function importCommunityPack(packId: string, candidateIds: string[] = []) {
-		importingPack = candidateIds.length > 1 ? packId : (candidateIds[0] ?? packId);
-		try {
-			await Api.importCommunityVoicePack(packId, candidateIds);
-			await refresh();
-		} catch (err) {
-			uploadMessage = err instanceof Error ? err.message : '社区音色包导入失败';
-		} finally {
-			importingPack = '';
-		}
-	}
 
 	function tagClass(tag: string) {
-		if (tag.startsWith('seed:') || tag.includes('官方')) return 'source';
 		if (tag.includes('男') || tag.includes('女') || tag.includes('角色') || tag.includes('本人')) return 'role';
 		if (tag.includes('情绪') || tag.includes('悲伤') || tag.includes('悬疑')) return 'emotion';
 		if (tag.includes('讲解') || tag.includes('旁白') || tag.includes('口播') || tag.includes('测试')) return 'use';
@@ -140,10 +109,6 @@
 		return engineKind(voice.recommended_engine_id);
 	}
 
-	function seedCardKind(seed: VoiceSeed) {
-		return engineKind(seed.recommended_engine_id);
-	}
-
 	function cleanTags(tags: string[], limit = 5) {
 		return tags
 			.filter((tag) => !tag.startsWith('seed:') && !tag.startsWith('pack:') && !tag.startsWith('community:'))
@@ -151,29 +116,10 @@
 			.slice(0, limit);
 	}
 
-	function qualityLabel(quality: { passed?: boolean; rms?: number } | null | undefined) {
-		if (!quality) return '';
-		return quality.passed ? `声量正常 ${quality.rms?.toFixed(3) ?? '-'}` : `声量需复核 ${quality.rms?.toFixed(3) ?? '-'}`;
-	}
-
-	function qualityDetail(quality: { rms?: number; peak?: number; duration_ms?: number; warnings?: string[] } | null | undefined) {
-		if (!quality) return '';
-		const warnings = quality.warnings?.length ? `；提示：${quality.warnings.join('；')}` : '';
-		return `RMS 是平均响度，用来判断参考音频会不会太小声。RMS ${quality.rms ?? '-'}，峰值 ${quality.peak ?? '-'}，时长 ${quality.duration_ms ?? '-'}ms${warnings}`;
-	}
-
 	function textLabel(text: string | null | undefined) {
 		const value = (text ?? '').trim();
 		if (!value) return '说明';
 		return value.includes('参考音频') || value.includes('用于测试') || value.includes('官方示例') ? '说明' : '台词';
-	}
-
-	function seedAudioUrl(seed: VoiceSeed) {
-		return `/api/voice-seeds/${seed.seed_id}/audio`;
-	}
-
-	function candidateAudioUrl(pack: CommunityVoicePack, candidateId: string) {
-		return `/api/community-voice-packs/${pack.pack_id}/candidates/${candidateId}/audio`;
 	}
 
 	const filteredVoices = $derived.by(() => {
@@ -195,68 +141,17 @@
 			});
 	});
 
-	const pendingSeeds = $derived(seeds.filter((seed) => !seed.imported_voice_id));
-	const pendingCommunityPacks = $derived.by(() =>
-		communityPacks
-			.map((pack) => ({
-				...pack,
-				candidates: pack.candidates.filter((candidate) => !candidate.imported_voice_id)
-			}))
-			.filter((pack) => pack.candidates.length > 0)
-	);
-	const pendingCommunityCandidateCount = $derived(pendingCommunityPacks.reduce((total, pack) => total + pack.candidates.length, 0));
-	const hasPendingSources = $derived(pendingSeeds.length > 0 || pendingCommunityCandidateCount > 0);
-
-	$effect(() => {
-		if (sourceTab === 'official' && pendingSeeds.length === 0 && pendingCommunityCandidateCount > 0) {
-			sourceTab = 'community';
-		}
-		if (sourceTab === 'community' && pendingCommunityCandidateCount === 0 && pendingSeeds.length > 0) {
-			sourceTab = 'official';
-		}
-	});
-
-	const filteredSeeds = $derived.by(() => {
-		const query = seedQuery.trim().toLowerCase();
-		return pendingSeeds.filter((seed) => {
-			if (!query) return true;
-			return (
-				seed.name.toLowerCase().includes(query) ||
-				seed.description.toLowerCase().includes(query) ||
-				seed.tags.join(' ').toLowerCase().includes(query)
-			);
-		});
-	});
-
-	const filteredCommunityPacks = $derived.by(() => {
-		const query = packQuery.trim().toLowerCase();
-		return pendingCommunityPacks
-			.map((pack) => ({
-				...pack,
-				candidates: pack.candidates.filter((candidate) => {
-					if (!query) return true;
-					return (
-						pack.name.toLowerCase().includes(query) ||
-						pack.description.toLowerCase().includes(query) ||
-						candidate.name.toLowerCase().includes(query) ||
-						candidate.description.toLowerCase().includes(query) ||
-						candidate.tags.join(' ').toLowerCase().includes(query)
-					);
-				})
-			}))
-			.filter((pack) => !query || pack.candidates.length > 0 || pack.name.toLowerCase().includes(query) || pack.description.toLowerCase().includes(query));
-	});
-	const communityCandidateCount = $derived(communityPacks.reduce((total, pack) => total + pack.candidates.length, 0));
-	const communityImportedCount = $derived(communityPacks.reduce((total, pack) => total + pack.imported_count, 0));
 	const cloudCloneReadyCount = $derived(
 		voices.filter((voice) => voice.engine_bindings?.some((binding) => binding.engine_id === 'mimo-v2.5-tts-voiceclone' && binding.available)).length
 	);
 	const selfOrAuthorizedCount = $derived(
 		voices.filter((voice) => ['self_voice', 'authorized', 'company_authorized'].includes(voice.license_status)).length
 	);
+	const referenceAudioCount = $derived(voices.reduce((total, voice) => total + voice.reference_audio_ids.length, 0));
+	const canSaveVoice = $derived(Boolean(name.trim()) && (Boolean(editingVoice) || Boolean(file)));
 
 	const help = [
-		{ title: '什么是“待导入素材”', body: '上方只显示还没进入本地音色库的候选参考音频。点“导入”后，它会下载到本地，并从上方消失，统一进入下方音色库。' },
+		{ title: '新增声音', body: '这里只保留自己上传参考音频这一条路径。准备一段 10-20 秒左右的 mp3 或 wav，填写名称和参考文本后保存，它就会进入本地音色库。' },
 		{ title: '音色库怎么用', body: '音色库里的声音主要作为声音克隆参考。IndexTTS v2 通常需要选择一个参考声音；OmniVoice 可以选择参考声音，也可以不选，改用声音设计标签。' },
 		{ title: '参考文本', body: '参考文本是参考音频里大概说了什么。克隆或多语言模型有时会用它理解发音和音色；卡片里的文本按钮可以快速查看，不会撑大卡片。' },
 		{ title: '编辑声音', body: '卡片上的“编辑”会把名称、描述、标签、参考文本和推荐引擎载入右侧表单。这里保存的是同一个声音名称，生成页下拉菜单会同步显示。' }
@@ -266,7 +161,7 @@
 <svelte:head><title>音色管理 - 声音工作台</title></svelte:head>
 
 <main class="page">
-	<div class="page-head"><div><h1>音色管理</h1><p class="muted">导入、管理、试听和授权标记参考声音；内容多起来时也能按来源、授权和可用引擎查找。</p></div><HelpDrawer title="音色管理" sections={help} /></div>
+	<div class="page-head"><div><h1>音色管理</h1><p class="muted">上传、管理、试听和授权标记自己的参考声音；内容多起来时也能按授权和可用引擎查找。</p></div><HelpDrawer title="音色管理" sections={help} /></div>
 	<section class="voice-overview">
 		<div class="metric-card">
 			<Database size={17} />
@@ -277,8 +172,8 @@
 			<div><span>授权可用</span><strong>{selfOrAuthorizedCount}</strong></div>
 		</div>
 		<div class="metric-card">
-			<PackageOpen size={17} />
-			<div><span>社区已入库</span><strong>{communityImportedCount}/{communityCandidateCount}</strong></div>
+			<Play size={17} />
+			<div><span>参考音频</span><strong>{referenceAudioCount}</strong></div>
 		</div>
 		<div class="metric-card">
 			<Play size={17} />
@@ -286,134 +181,6 @@
 		</div>
 	</section>
 
-	{#if hasPendingSources}
-	<section class:source-panel-compact={!showSources} class="panel stack source-panel">
-		<div class="source-head">
-			<div>
-				<h2>待导入素材</h2>
-				<p class="muted">
-					{pendingSeeds.length} 个官方示例、{pendingCommunityCandidateCount} 个社区候选还没入库；默认收起，避免和下方音色库重复。
-				</p>
-			</div>
-			<div class="source-actions">
-				{#if showSources}
-					<div class="source-tabs" role="tablist" aria-label="素材来源">
-						<button type="button" class:active={sourceTab === 'official'} onclick={() => (sourceTab = 'official')}>
-							官方示例 <span>{filteredSeeds.length}</span>
-						</button>
-						<button type="button" class:active={sourceTab === 'community'} onclick={() => (sourceTab = 'community')}>
-							社区候选 <span>{pendingCommunityCandidateCount}</span>
-						</button>
-					</div>
-				{/if}
-				<button class="btn icon-text" type="button" onclick={() => (showSources = !showSources)}>
-					{#if showSources}
-						<ChevronUp size={15} /> 收起
-					{:else}
-						<ChevronDown size={15} /> 展开导入
-					{/if}
-				</button>
-			</div>
-		</div>
-
-		{#if showSources && sourceTab === 'official'}
-			<div class="toolbar-grid compact-toolbar">
-				<label class="field">
-					<span>搜索官方参考音色</span>
-					<div class="search-field">
-						<Search size={15} />
-						<input bind:value={seedQuery} placeholder="名称、描述、标签" />
-					</div>
-				</label>
-			</div>
-			<div class="seed-grid">
-				{#each filteredSeeds as seed}
-					<article class={`seed asset-card engine-surface ${seedCardKind(seed) === 'cloud' ? 'engine-cloud' : 'engine-local'}`}>
-						<div class="asset-card-head">
-							<strong>{seed.name}</strong>
-							<span class="badge license">{licenseLabel(seed.license_status)}</span>
-						</div>
-						<p class="clamp-desc desc-pop" data-text={seed.description}>{seed.description}</p>
-						<audio class="audio compact-audio" controls preload="metadata" src={seedAudioUrl(seed)}></audio>
-						<div class="tag-row">{#each cleanTags(seed.tags) as tag}<span class={`badge ${tagClass(tag)}`}>{tag}</span>{/each}</div>
-						<div class="asset-meta">
-							<span>来源：{seed.source}</span>
-							<span>{bindingLabel(seed.recommended_engine_id)}</span>
-							<span class="text-pop text-chip" data-text={seed.reference_text || '暂无参考文本'}><FileText size={13} /> {textLabel(seed.reference_text)}</span>
-						</div>
-						{#if seed.quality}
-							<span class="badge text-pop" class:ok={seed.quality.passed} class:warn={!seed.quality.passed} data-text={qualityDetail(seed.quality)}>{qualityLabel(seed.quality)}</span>
-						{/if}
-						{#if seed.imported_voice_id}
-							<a class="btn success" href={`/generate?voice=${seed.imported_voice_id}`}><Play size={15} /> 去合成</a>
-						{:else}
-							<button class="btn" disabled={Boolean(importing)} onclick={() => importSeed(seed.seed_id)}><Download size={15} /> {importing === seed.seed_id ? '导入中' : '导入'}</button>
-						{/if}
-					</article>
-				{:else}
-					<div class="empty">官方示例已入库或当前筛选下没有待导入素材。已入库音色在下方音色库里管理。</div>
-				{/each}
-			</div>
-		{:else if showSources}
-			<div class="toolbar-grid compact-toolbar">
-				<label class="field">
-					<span>搜索社区音色包</span>
-					<div class="search-field">
-						<Search size={15} />
-						<input bind:value={packQuery} placeholder="包名、候选、标签" />
-					</div>
-				</label>
-			</div>
-			<div class="pack-grid">
-				{#each filteredCommunityPacks as pack}
-					<article class="pack engine-surface engine-local">
-						<div class="pack-head">
-							<div>
-								<h3>{pack.name}</h3>
-								<p>{pack.description}</p>
-							</div>
-							<span class="badge">{pack.imported_count}/{pack.candidates.length} 已导入</span>
-						</div>
-						<div class="tag-row">
-							<span class="badge source">来源：{pack.source}</span>
-							<span class="badge license">{pack.license_summary}</span>
-							<span class="badge">待导入 {pack.candidates.length}</span>
-							{#each cleanTags(pack.tags, 4) as tag}<span class={`badge ${tagClass(tag)}`}>{tag}</span>{/each}
-						</div>
-						<div class="candidate-list">
-							{#each pack.candidates as candidate}
-								<div class="candidate-row">
-									<div>
-										<strong>{candidate.name}</strong>
-										<p class="clamp-desc desc-pop" data-text={candidate.description}>{candidate.description}</p>
-										<audio class="audio compact-audio" controls preload="metadata" src={candidateAudioUrl(pack, candidate.candidate_id)}></audio>
-										<div class="tag-row">
-											<span class="badge license">{licenseLabel(candidate.license_status)}</span>
-											{#each cleanTags(candidate.tags, 4) as tag}<span class={`badge ${tagClass(tag)}`}>{tag}</span>{/each}
-											<span class="text-pop text-chip" data-text={candidate.reference_text || '暂无参考文本'}><FileText size={13} /> {textLabel(candidate.reference_text)}</span>
-										</div>
-									</div>
-									{#if candidate.imported_voice_id}
-										<a class="btn success" href={`/generate?voice=${candidate.imported_voice_id}`}><Play size={15} /> 去合成</a>
-									{:else}
-										<button class="btn" disabled={Boolean(importingPack)} onclick={() => importCommunityPack(pack.pack_id, [candidate.candidate_id])}>
-											<Download size={15} /> {importingPack === candidate.candidate_id ? '导入中' : '导入'}
-										</button>
-									{/if}
-								</div>
-							{/each}
-						</div>
-						<button class="btn primary pack-action" disabled={Boolean(importingPack) || pack.candidates.length === 0} onclick={() => importCommunityPack(pack.pack_id, pack.candidates.map((candidate) => candidate.candidate_id))}>
-							<Download size={15} /> {importingPack === pack.pack_id ? '导入中' : '导入剩余'}
-						</button>
-					</article>
-				{:else}
-					<div class="empty">社区候选已入库或当前筛选下没有待导入素材。已入库音色在下方音色库里管理。</div>
-				{/each}
-			</div>
-		{/if}
-	</section>
-	{/if}
 	<div class="workbench">
 		<section class="stack">
 			<section class="panel stack library-toolbar">
@@ -512,7 +279,7 @@
 				</div>
 			</div>
 			{#if uploadMessage}<p class="muted"><Check size={13} /> {uploadMessage}</p>{/if}
-			<button class="btn primary" disabled={!name.trim()} onclick={saveVoice}><Upload size={15} /> {editingVoice ? '保存修改' : '保存声音'}</button>
+			<button class="btn primary" disabled={!canSaveVoice} onclick={saveVoice}><Upload size={15} /> {editingVoice ? '保存修改' : '保存声音'}</button>
 		</aside>
 	</div>
 </main>
@@ -554,18 +321,6 @@
 		line-height: 1;
 	}
 
-	.source-panel {
-		margin-bottom: 16px;
-	}
-
-	.source-panel-compact {
-		padding-top: 12px;
-		padding-bottom: 12px;
-	}
-
-	.source-head,
-	.pack-head,
-	.asset-card-head,
 	.voice-card-head {
 		display: flex;
 		justify-content: space-between;
@@ -574,74 +329,11 @@
 		min-width: 0;
 	}
 
-	.source-actions {
-		display: flex;
-		align-items: center;
-		justify-content: flex-end;
-		gap: 8px;
-		flex-wrap: wrap;
-	}
-
-	.source-head h2,
-	.source-head p,
-	.pack-head h3,
-	.pack-head p {
-		margin: 0;
-	}
-
-	.source-tabs {
-		display: inline-flex;
-		gap: 4px;
-		padding: 4px;
-		border: 1px solid var(--line);
-		border-radius: 8px;
-		background: #0d1014;
-	}
-
-	.source-tabs button {
-		display: inline-flex;
-		align-items: center;
-		gap: 7px;
-		border: 0;
-		border-radius: 6px;
-		background: transparent;
-		color: var(--muted);
-		min-height: 30px;
-		padding: 0 10px;
-		cursor: pointer;
-	}
-
-	.source-tabs button.active {
-		background: #1a2533;
-		color: var(--text);
-	}
-
-	.source-tabs span {
-		color: var(--muted);
-		font-size: 12px;
-	}
-
-	.seed-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-		gap: 10px;
-	}
-
-	.pack-grid {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-		gap: 12px;
-	}
-
 	.toolbar-grid {
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
 		gap: 12px;
 		align-items: end;
-	}
-
-	.compact-toolbar {
-		grid-template-columns: minmax(260px, 420px);
 	}
 
 	.search-field {
@@ -680,35 +372,6 @@
 		grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 	}
 
-	.seed,
-	.asset-card {
-		border: 1px solid var(--line);
-		border-radius: 8px;
-		padding: 10px;
-		background: #121519;
-		display: grid;
-		gap: 8px;
-	}
-
-	.asset-card > .btn,
-	.seed > .btn {
-		justify-self: start;
-	}
-
-	.seed p,
-	.asset-card p {
-		margin: 0;
-		color: var(--muted);
-		line-height: 1.45;
-		font-size: 13px;
-		display: -webkit-box;
-		line-clamp: 2;
-		-webkit-line-clamp: 2;
-		-webkit-box-orient: vertical;
-		overflow: hidden;
-	}
-
-	.clamp-desc,
 	.desc-pop {
 		position: relative;
 		cursor: help;
@@ -734,26 +397,6 @@
 		font-size: 11.5px;
 		box-shadow: 0 18px 42px rgba(0, 0, 0, 0.38);
 		z-index: 50;
-	}
-
-	.pack {
-		border: 1px solid var(--line);
-		border-radius: 8px;
-		padding: 10px;
-		background: #121519;
-		display: grid;
-		gap: 10px;
-	}
-
-	.pack h3,
-	.pack p {
-		margin: 0;
-	}
-
-	.pack p {
-		color: var(--muted);
-		line-height: 1.45;
-		font-size: 13px;
 	}
 
 	.tag-row,
@@ -790,45 +433,6 @@
 		border: 1px solid rgba(255, 255, 255, 0.06);
 		border-radius: 999px;
 		background: rgba(255, 255, 255, 0.025);
-	}
-
-	.compact-audio {
-		height: 30px;
-	}
-
-	.candidate-list {
-		display: grid;
-		gap: 8px;
-		max-height: 330px;
-		overflow: auto;
-		padding-right: 2px;
-	}
-
-	.candidate-row {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
-		gap: 10px;
-		align-items: center;
-		border: 1px solid rgba(255, 255, 255, 0.06);
-		border-radius: 6px;
-		padding: 8px;
-		background: rgba(255, 255, 255, 0.025);
-	}
-
-	.candidate-row p {
-		margin: 4px 0 6px;
-		color: var(--muted);
-		font-size: 12px;
-		line-height: 1.35;
-		display: -webkit-box;
-		line-clamp: 2;
-		-webkit-line-clamp: 2;
-		-webkit-box-orient: vertical;
-		overflow: hidden;
-	}
-
-	.pack-action {
-		justify-self: start;
 	}
 
 	.voice-card {
@@ -911,25 +515,6 @@
 		.voice-overview,
 		.toolbar-grid,
 		.voice-toolbar {
-			grid-template-columns: 1fr;
-		}
-
-		.source-head,
-		.pack-head,
-		.candidate-row {
-			grid-template-columns: 1fr;
-		}
-
-		.source-head,
-		.pack-head {
-			display: grid;
-		}
-
-		.source-actions {
-			justify-content: flex-start;
-		}
-
-		.pack-grid {
 			grid-template-columns: 1fr;
 		}
 	}

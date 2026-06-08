@@ -213,16 +213,6 @@ def import_pack(pack_id: str, candidate_ids: list[str] | None = None) -> Communi
     return _mark_pack_imported(pack.model_copy(deep=True))
 
 
-def candidate_preview_url(pack_id: str, candidate_id: str) -> str:
-    pack = next((pack for pack in PACKS if pack.pack_id == pack_id), None)
-    if not pack:
-        raise ValueError("COMMUNITY_VOICE_PACK_NOT_FOUND")
-    candidate = next((candidate for candidate in pack.candidates if candidate.candidate_id == candidate_id), None)
-    if not candidate:
-        raise ValueError("COMMUNITY_VOICE_CANDIDATE_NOT_FOUND")
-    return _resolve_download_url(candidate.download_url)
-
-
 def _mark_pack_imported(pack: CommunityVoicePack) -> CommunityVoicePack:
     imported_count = 0
     for candidate in pack.candidates:

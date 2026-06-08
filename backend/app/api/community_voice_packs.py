@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
-from fastapi.responses import RedirectResponse
 
 from app.models.exceptions import AppException
 from app.models.schemas import CommunityVoicePack, CommunityVoicePackImportRequest
@@ -28,16 +27,3 @@ async def import_community_voice_pack(data: CommunityVoicePackImportRequest):
         raise AppException(400, "COMMUNITY_VOICE_PACK_IMPORT_INVALID", code) from exc
     except Exception as exc:
         raise AppException(502, "COMMUNITY_VOICE_PACK_IMPORT_FAILED", f"Community voice pack import failed: {exc}") from exc
-
-
-@router.get("/{pack_id}/candidates/{candidate_id}/audio")
-async def preview_community_candidate_audio(pack_id: str, candidate_id: str):
-    try:
-        return RedirectResponse(community_voice_pack_store.candidate_preview_url(pack_id, candidate_id))
-    except ValueError as exc:
-        code = str(exc)
-        if code == "COMMUNITY_VOICE_PACK_NOT_FOUND":
-            raise AppException(404, code, "Community voice pack not found") from None
-        if code == "COMMUNITY_VOICE_CANDIDATE_NOT_FOUND":
-            raise AppException(404, code, "Community voice candidate not found") from None
-        raise AppException(400, "COMMUNITY_VOICE_PREVIEW_INVALID", code) from exc
