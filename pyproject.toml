@@ -98,7 +98,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "mlx_indextts/indextts/**" = ["E", "F", "W"]  # inlined upstream code, don't lint
-"scripts/**" = ["F401", "F841"]
+"scripts/**" = ["E401", "F401", "F541", "F841"]  # utility scripts, relax import/f-string rules
+"tests/**" = ["E402"]  # sys.path.insert before imports is standard pattern
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
