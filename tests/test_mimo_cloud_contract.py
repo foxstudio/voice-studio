@@ -52,18 +52,37 @@ def test_mimo_engines_are_split_and_legacy_id_is_hidden(tmp_path: Path):
     } <= set(by_id)
 
     preset = by_id["mimo-v2.5-tts-preset"]
+    preset_param_keys = {p["key"] for p in preset["parameter_schema"]}
     preset_voice = next(p for p in preset["parameter_schema"] if p["key"] == "mimo_voice")
     assert preset_voice["type"] == "select"
     assert {x["value"] for x in preset_voice["options"]} >= {"冰糖", "茉莉", "苏打", "白桦", "Mia", "Chloe", "Milo", "Dean"}
     assert "singing" in preset["capabilities"]
 
     design = by_id["mimo-v2.5-tts-voicedesign"]
+    design_param_keys = {p["key"] for p in design["parameter_schema"]}
     assert "voice_design" in design["capabilities"]
     assert next(p for p in design["parameter_schema"] if p["key"] == "voice_design_prompt")["required"] is True
+    assert "optimize_text_preview" in design_param_keys
 
     clone = by_id["mimo-v2.5-tts-voiceclone"]
+    clone_param_keys = {p["key"] for p in clone["parameter_schema"]}
     assert "voice_clone" in clone["capabilities"]
     assert "preset_voice" not in clone["capabilities"]
+    assert clone_param_keys == {"style_instruction", "temperature", "top_p"}
+
+    local_only_params = {
+        "speed",
+        "top_k",
+        "max_text_tokens_per_segment",
+        "interval_silence",
+        "diffusion_steps",
+        "cfg_rate",
+        "emotion",
+        "emo_alpha",
+    }
+    assert local_only_params.isdisjoint(preset_param_keys)
+    assert local_only_params.isdisjoint(design_param_keys)
+    assert local_only_params.isdisjoint(clone_param_keys)
 
     qwen = by_id["qwen3-asr-mlx"]
     assert qwen["engine_type"] == "local"
@@ -110,11 +129,12 @@ def test_mimo_tts_payloads_match_official_message_roles(tmp_path: Path):
         text="欢迎收听。",
         audio_format="wav",
         voice_design_prompt="中年男性，声音沉稳，语速缓慢。",
+        optimize_text_preview=True,
     )
     assert design["messages"][0]["role"] == "user"
     assert design["messages"][0]["content"] == "中年男性，声音沉稳，语速缓慢。"
     assert design["messages"][1] == {"role": "assistant", "content": "欢迎收听。"}
-    assert design["audio"] == {"format": "wav"}
+    assert design["audio"] == {"format": "wav", "optimize_text_preview": True}
 
     clone = mimo_client.build_tts_payload(
         model="mimo-v2.5-tts-voiceclone",

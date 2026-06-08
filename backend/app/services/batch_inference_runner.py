@@ -92,7 +92,7 @@ def run_omnivoice(payload: dict[str, Any]) -> list[dict[str, Any]]:
             gen_kwargs["language"] = kwargs["language"]
         if kwargs.get("reference_audio"):
             gen_kwargs["ref_audio"] = kwargs["reference_audio"]
-            if kwargs.get("ref_text"):
+            if kwargs.get("ref_text") is not None:
                 gen_kwargs["ref_text"] = kwargs["ref_text"]
         elif kwargs.get("emotion_text") or kwargs.get("emotion"):
             gen_kwargs["instruct"] = kwargs.get("emotion_text") or kwargs.get("emotion")
@@ -133,6 +133,7 @@ def run_mimo_tts(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 voice=kwargs.get("mimo_voice") or kwargs.get("voice") or "mimo_default",
                 instruction=kwargs.get("style_instruction") or kwargs.get("emotion_text") or kwargs.get("emotion"),
                 voice_design_prompt=kwargs.get("voice_design_prompt"),
+                optimize_text_preview=bool(kwargs.get("optimize_text_preview")),
                 reference_audio_path=kwargs.get("reference_audio") or kwargs.get("reference_audio_path"),
                 temperature=kwargs.get("temperature"),
                 top_p=kwargs.get("top_p"),
@@ -146,9 +147,54 @@ def run_mimo_tts(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return results
 
 
+def run_external_tts(payload: dict[str, Any], runner_name: str, sample_rate: int) -> list[dict[str, Any]]:
+    from app.services import inference_runner
+
+    runner = getattr(inference_runner, runner_name)
+    common = dict(payload["common"])
+    results = []
+    for segment in payload["segments"]:
+        started = time.perf_counter()
+        out = _target_path(segment["output_path"])
+        kwargs = dict(common)
+        kwargs.update({k: v for k, v in segment.get("parameters", {}).items() if v is not None})
+        kwargs["text"] = segment["text"]
+        kwargs["output_path"] = str(out if out.suffix.lower() == ".wav" else out.with_suffix(".batch-tmp.wav"))
+        try:
+            meta = runner(**kwargs)
+            final = Path(meta["output_path"])
+            if out.suffix.lower() != ".wav":
+                meta = _finalize_wav(final, out, sample_rate)
+            meta["generation_time_ms"] = int((time.perf_counter() - started) * 1000)
+            results.append({"segment_id": segment["segment_id"], "status": "success", **meta})
+        except Exception as exc:
+            results.append({"segment_id": segment["segment_id"], "status": "failed", "error_message": str(exc)})
+    return results
+
+
+def run_emotivoice(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return run_external_tts(payload, "run_emotivoice", 16000)
+
+
+def run_f5_tts(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return run_external_tts(payload, "run_f5_tts", 24000)
+
+
+def run_cosyvoice_sft(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return run_external_tts(payload, "run_cosyvoice_sft", 22050)
+
+
+def run_cosyvoice_zero_shot(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return run_external_tts(payload, "run_cosyvoice_zero_shot", 22050)
+
+
 RUNNERS = {
     "indextts-v2": run_indextts_v2,
     "omnivoice": run_omnivoice,
+    "emotivoice": run_emotivoice,
+    "f5-tts": run_f5_tts,
+    "cosyvoice-sft": run_cosyvoice_sft,
+    "cosyvoice-zero-shot": run_cosyvoice_zero_shot,
     "mimo-v2.5-tts": run_mimo_tts,
     "mimo-v2.5-tts-preset": run_mimo_tts,
     "mimo-v2.5-tts-voicedesign": run_mimo_tts,

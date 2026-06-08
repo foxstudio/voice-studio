@@ -11,7 +11,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
-from app.models.schemas import AppSettings, EngineAudioDiagnosisRequest, Project, Role, ScriptSegment  # noqa: E402
+from app.models.schemas import AppSettings, EngineAudioDiagnosisRequest, GenerateRequest, Project, Role, ScriptSegment  # noqa: E402
 from app.services import batch_queue, community_voice_pack_store, database, settings_store, task_queue, voice_aliases, voice_store  # noqa: E402
 
 
@@ -40,12 +40,65 @@ def test_presets_are_available_and_apply_to_main_engines(tmp_path: Path):
     ids = {preset["preset_id"] for preset in presets}
     assert "idx2_default_narration" in ids
     assert "idx2_long_text_editing" in ids
-    assert {preset["engine_id"] for preset in presets} <= {"indextts-v2", "omnivoice"}
+    assert {
+        "indextts-v2",
+        "omnivoice",
+        "emotivoice",
+        "f5-tts",
+        "cosyvoice-sft",
+        "cosyvoice-zero-shot",
+    } <= {preset["engine_id"] for preset in presets}
+    assert "f5_official_default_clone" in ids
+    assert "cosy_zero_reference_default" in ids
     default = next(p for p in presets if p["preset_id"] == "idx2_default_narration")
     assert default["name"] == "贴近参考音色"
     assert default["parameters"]["emotion"] is None
     assert default["parameters"]["emo_alpha"] == 0.0
     assert default["parameters"]["temperature"] == 0.8
+
+
+def test_custom_presets_can_be_created_updated_and_deleted(tmp_path: Path):
+    client = _client(tmp_path)
+    payload = {
+        "name": "我的 MiMo 慢讲",
+        "scene": "课程旁白",
+        "description": "语速稍慢，适合长句。",
+        "engine_id": "mimo-v2.5-tts-voiceclone",
+        "sample_text": "这是一段自定义预设测试文本。",
+        "parameters": {
+            "style_instruction": "语速稍慢，停顿自然。",
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "output_format": "wav",
+        },
+        "tags": ["自定义", "慢讲"],
+    }
+
+    created = client.post("/api/presets", json=payload)
+    assert created.status_code == 200
+    preset = created.json()
+    assert preset["preset_id"].startswith("custom_")
+    assert preset["engine_id"] == "mimo-v2.5-tts-voiceclone"
+
+    updated = client.patch(
+        f"/api/presets/{preset['preset_id']}",
+        json={**payload, "name": "我的 MiMo 慢讲 v2"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["name"] == "我的 MiMo 慢讲 v2"
+
+    listed = client.get("/api/presets").json()
+    assert any(item["preset_id"] == preset["preset_id"] for item in listed)
+
+    deleted = client.delete(f"/api/presets/{preset['preset_id']}")
+    assert deleted.status_code == 200
+    assert client.get(f"/api/presets/{preset['preset_id']}").status_code == 404
+
+
+def test_builtin_presets_are_readonly(tmp_path: Path):
+    client = _client(tmp_path)
+    resp = client.delete("/api/presets/idx2_default_narration")
+    assert resp.status_code == 409
 
 
 def test_engine_audio_diagnosis_defaults_follow_reference_emotion():
@@ -105,6 +158,10 @@ def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path):
     assert set(by_id) == {
         "indextts-v2",
         "omnivoice",
+        "emotivoice",
+        "f5-tts",
+        "cosyvoice-sft",
+        "cosyvoice-zero-shot",
         "mimo-v2.5-tts-preset",
         "mimo-v2.5-tts-voicedesign",
         "mimo-v2.5-tts-voiceclone",
@@ -115,6 +172,10 @@ def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path):
     assert by_id["mimo-v2.5-tts-preset"]["engine_type"] == "cloud"
     assert "mimo-v2.5-tts" not in by_id
     assert "speech_recognition" in by_id["qwen3-asr-mlx"]["capabilities"]
+    assert by_id["emotivoice"]["sample_rate"] == 16000
+    assert "preset_voice" in by_id["cosyvoice-sft"]["capabilities"]
+    assert "voice_clone" in by_id["f5-tts"]["capabilities"]
+    assert "voice_clone" in by_id["cosyvoice-zero-shot"]["capabilities"]
 
 
 def test_mimo_secret_is_not_returned_in_settings(tmp_path: Path):
@@ -392,3 +453,64 @@ def test_community_voice_pack_can_import_single_candidate_once(tmp_path: Path, m
     assert reimported.status_code == 200
     voices_after = [voice for voice in voice_store.list_voices() if f"community:{candidate_id}" in voice.tags]
     assert len(voices_after) == 1
+
+
+def test_omnivoice_reference_audio_without_text_skips_auto_asr(tmp_path: Path):
+    _client(tmp_path)
+    ref = tmp_path / "voices" / "ref.wav"
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    ref.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ")
+
+    req = GenerateRequest(
+        text="测试一句。",
+        engine_id="omnivoice",
+        reference_audio_path=str(ref),
+        ref_text=None,
+    )
+
+    kwargs = task_queue._kwargs(req, str(tmp_path / "out.wav"))
+
+    assert kwargs["reference_audio"] == str(ref)
+    assert kwargs["ref_text"] == ""
+
+
+def test_f5_requires_reference_text_to_avoid_auto_asr(tmp_path: Path):
+    _client(tmp_path)
+    ref = tmp_path / "voices" / "ref.wav"
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    ref.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ")
+
+    req = GenerateRequest(
+        text="测试一句。",
+        engine_id="f5-tts",
+        reference_audio_path=str(ref),
+        ref_text=None,
+    )
+
+    try:
+        task_queue._kwargs(req, str(tmp_path / "out.wav"))
+    except ValueError as exc:
+        assert str(exc) == "REFERENCE_TEXT_REQUIRED"
+    else:
+        raise AssertionError("F5-TTS should require reference text")
+
+
+def test_cosyvoice_zero_shot_requires_reference_text(tmp_path: Path):
+    _client(tmp_path)
+    ref = tmp_path / "voices" / "ref.wav"
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    ref.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ")
+
+    req = GenerateRequest(
+        text="测试一句。",
+        engine_id="cosyvoice-zero-shot",
+        reference_audio_path=str(ref),
+        ref_text=None,
+    )
+
+    try:
+        task_queue._kwargs(req, str(tmp_path / "out.wav"))
+    except ValueError as exc:
+        assert str(exc) == "REFERENCE_TEXT_REQUIRED"
+    else:
+        raise AssertionError("CosyVoice Zero-Shot should require reference text")

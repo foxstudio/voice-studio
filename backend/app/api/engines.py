@@ -77,9 +77,42 @@ async def diagnose_audio(engine_id: str, data: EngineAudioDiagnosisRequest):
             raise AppException(400, "REFERENCE_AUDIO_REQUIRED", "IndexTTS v2 diagnosis requires a reference audio")
         if engine_id == "indextts-v2":
             kwargs.update({"max_mel_tokens": 1500, "diffusion_steps": 25, "cfg_rate": 0.7, "emotion": data.emotion, "emo_alpha": 0.6})
+        elif engine_id == "emotivoice":
+            kwargs = {
+                "text": data.text,
+                "output_path": str(output_path),
+                "speaker_id": "8051",
+                "prompt": "开心",
+                "speed": 1.0,
+            }
+        elif engine_id in {"f5-tts", "cosyvoice-zero-shot"}:
+            if not ref:
+                raise AppException(400, "REFERENCE_AUDIO_REQUIRED", f"{engine_id} diagnosis requires a reference audio")
+            selected_voice = voice_store.get_voice(data.voice_id) if data.voice_id else None
+            ref_text = selected_voice.reference_text if selected_voice else ""
+            if not ref_text.strip():
+                raise AppException(400, "REFERENCE_TEXT_REQUIRED", f"{engine_id} diagnosis requires the selected voice to have reference text")
+            kwargs = {
+                "text": data.text,
+                "reference_audio": ref,
+                "ref_text": ref_text,
+                "output_path": str(output_path),
+                "speed": 1.0,
+                "seed": 42,
+            }
+            if engine_id == "f5-tts":
+                kwargs.update({"nfe_step": 32, "cfg_strength": 2.0, "target_rms": 0.1, "cross_fade_duration": 0.15, "remove_silence": False})
+        elif engine_id == "cosyvoice-sft":
+            kwargs = {
+                "text": data.text,
+                "output_path": str(output_path),
+                "speaker_id": "中文女",
+                "speed": 1.0,
+            }
         else:
             kwargs.update({"language": data.language, "ref_text": None, "emotion": None, "emotion_text": data.emotion_text})
-        result = await asyncio.to_thread(engine_registry.run_isolated, engine_id, kwargs, 300)
+        timeout = 900 if engine_id in {"cosyvoice-sft", "cosyvoice-zero-shot"} else 600 if engine_id in {"f5-tts", "emotivoice"} else 300
+        result = await asyncio.to_thread(engine_registry.run_isolated, engine_id, kwargs, timeout)
         final_path = Path(result["output_path"])
         quality = audio_tools.quality_metrics(final_path)
         return {

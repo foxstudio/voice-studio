@@ -24,6 +24,40 @@ _EMOTION_OPTIONS = [
     {"label": "惊讶 surprised", "value": "surprised"},
 ]
 
+_EMOTIVOICE_PROMPTS = [
+    {"label": "开心", "value": "开心"},
+    {"label": "兴奋", "value": "兴奋"},
+    {"label": "悲伤", "value": "悲伤"},
+    {"label": "愤怒", "value": "愤怒"},
+    {"label": "害怕", "value": "害怕"},
+    {"label": "惊讶", "value": "惊讶"},
+    {"label": "厌恶", "value": "厌恶"},
+    {"label": "中立", "value": "中立"},
+]
+
+_COSYVOICE_SPEAKERS = [
+    {"label": "中文女", "value": "中文女"},
+    {"label": "中文男", "value": "中文男"},
+    {"label": "粤语女", "value": "粤语女"},
+    {"label": "日语男", "value": "日语男"},
+    {"label": "韩语女", "value": "韩语女"},
+]
+
+_EMOTIVOICE_SPEAKERS = [
+    {"label": "8051 Maria Kasper 女声 · 清晰舒缓", "value": "8051"},
+    {"label": "11614 Sylviamb 女声 · 清脆旋律", "value": "11614"},
+    {"label": "9017 John Van Stan 男声 · 浑厚共鸣", "value": "9017"},
+    {"label": "6097 Phil Benson 男声 · 平滑醇厚", "value": "6097"},
+    {"label": "6671 Tony Oliva 男声 · 有魅力", "value": "6671"},
+    {"label": "6670 Mike Pelton 男声", "value": "6670"},
+    {"label": "9136 Helen Taylor 女声", "value": "9136"},
+    {"label": "11697 Celine Major 女声", "value": "11697"},
+    {"label": "92 Cori Samuel 女声 · 活泼有能量", "value": "92"},
+    {"label": "12787 LikeManyWaters 女声", "value": "12787"},
+    {"label": "1006 Marta Kornowska 女声", "value": "1006"},
+    {"label": "1018 JimmyLogan 男声", "value": "1018"},
+]
+
 
 def _common_params(v2: bool = False) -> list[ParameterSchema]:
     params = [
@@ -87,6 +121,105 @@ _ENGINES: dict[str, EngineDetail] = {
         ),
         state=EngineState(engine_id="omnivoice", status=EngineStatus.stopped),
     ),
+    "emotivoice": EngineDetail(
+        manifest=EngineManifest(
+            engine_id="emotivoice",
+            display_name="EmotiVoice",
+            provider="NetEase Youdao",
+            version="open-source",
+            description="本地中文情感语音合成，使用官方开源预训练说话人和情绪提示词",
+            supported_languages=["zh"],
+            capabilities=["local_inference", "preset_voice", "emotion_control"],
+            sample_rate=16000,
+            default_use_case="中文角色感、情绪短句和音色预设试听",
+            parameter_schema=[
+                ParameterSchema(
+                    key="speaker_id",
+                    label="说话人",
+                    type="select",
+                    default="8051",
+                    options=_EMOTIVOICE_SPEAKERS,
+                    required=True,
+                    capability="preset_voice",
+                ),
+                ParameterSchema(
+                    key="prompt",
+                    label="情绪提示",
+                    type="select",
+                    default="开心",
+                    options=_EMOTIVOICE_PROMPTS,
+                    capability="emotion_control",
+                ),
+            ],
+        ),
+        state=EngineState(engine_id="emotivoice", status=EngineStatus.stopped),
+    ),
+    "f5-tts": EngineDetail(
+        manifest=EngineManifest(
+            engine_id="f5-tts",
+            display_name="F5-TTS",
+            provider="SWivid",
+            version="v1 Base",
+            description="本地参考音频 TTS，适合研究已授权参考音色的跨文本复刻",
+            supported_languages=["zh", "en"],
+            capabilities=["local_inference", "voice_clone", "multilingual"],
+            sample_rate=24000,
+            default_use_case="已授权参考音频的音色迁移和中英文生成研究",
+            privacy_level="local_only_noncommercial_model",
+            parameter_schema=[
+                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05),
+                ParameterSchema(key="nfe_step", label="采样步数 NFE", type="slider", default=32, min=4, max=64, step=1, level="advanced"),
+                ParameterSchema(key="cfg_strength", label="引导强度 CFG", type="slider", default=2.0, min=0.1, max=5.0, step=0.1, level="advanced"),
+                ParameterSchema(key="target_rms", label="响度目标 RMS", type="slider", default=0.1, min=0.01, max=0.5, step=0.01, level="advanced"),
+                ParameterSchema(key="cross_fade_duration", label="分段交叉淡化", type="slider", default=0.15, min=0, max=1, step=0.05, level="advanced"),
+                ParameterSchema(key="remove_silence", label="移除静音", type="toggle", default=False, level="advanced"),
+            ],
+        ),
+        state=EngineState(engine_id="f5-tts", status=EngineStatus.stopped),
+    ),
+    "cosyvoice-sft": EngineDetail(
+        manifest=EngineManifest(
+            engine_id="cosyvoice-sft",
+            display_name="CosyVoice SFT",
+            provider="FunAudioLLM",
+            version="300M-SFT",
+            description="本地 CosyVoice 官方预训练 SFT 音色，支持中文、粤语及多语种预设",
+            supported_languages=["zh", "yue", "ja", "ko", "en"],
+            capabilities=["local_inference", "preset_voice", "multilingual"],
+            sample_rate=22050,
+            default_use_case="高质量官方预置音色口播和多语种试听",
+            parameter_schema=[
+                ParameterSchema(
+                    key="speaker_id",
+                    label="预置音色",
+                    type="select",
+                    default="中文女",
+                    options=_COSYVOICE_SPEAKERS,
+                    required=True,
+                    capability="preset_voice",
+                ),
+                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05),
+            ],
+        ),
+        state=EngineState(engine_id="cosyvoice-sft", status=EngineStatus.stopped),
+    ),
+    "cosyvoice-zero-shot": EngineDetail(
+        manifest=EngineManifest(
+            engine_id="cosyvoice-zero-shot",
+            display_name="CosyVoice Zero-Shot",
+            provider="FunAudioLLM",
+            version="300M-SFT zero-shot path",
+            description="本地 CosyVoice 参考音频复刻路径，使用本地音色库参考音频和对应台词生成新文本",
+            supported_languages=["zh", "en", "yue", "ja", "ko"],
+            capabilities=["local_inference", "voice_clone", "zero_shot", "multilingual"],
+            sample_rate=22050,
+            default_use_case="使用已授权参考音频做 CosyVoice 本地音色复刻",
+            parameter_schema=[
+                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05),
+            ],
+        ),
+        state=EngineState(engine_id="cosyvoice-zero-shot", status=EngineStatus.stopped),
+    ),
     "mimo-v2.5-tts-preset": EngineDetail(
         manifest=EngineManifest(
             engine_id="mimo-v2.5-tts-preset",
@@ -130,6 +263,14 @@ _ENGINES: dict[str, EngineDetail] = {
             privacy_level="cloud_required",
             parameter_schema=[
                 ParameterSchema(key="voice_design_prompt", label="音色描述", type="textarea", default="", required=True, capability="voice_design"),
+                ParameterSchema(
+                    key="optimize_text_preview",
+                    label="润色播报文本",
+                    type="toggle",
+                    default=False,
+                    level="advanced",
+                    capability="voice_design",
+                ),
                 ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.6, min=0, max=1.5, step=0.05, level="advanced"),
                 ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.95, min=0.01, max=1.0, step=0.01, level="advanced"),
             ],
@@ -211,6 +352,58 @@ def _mlx_audio_runtime_available() -> tuple[bool, str | None]:
     return qwen_mlx_asr.runtime_available()
 
 
+def _external_engine_root(engine_id: str) -> Path:
+    env_names = {
+        "emotivoice": "VOICE_STUDIO_EMOTIVOICE_ROOT",
+        "f5-tts": "VOICE_STUDIO_F5_TTS_ROOT",
+        "cosyvoice-sft": "VOICE_STUDIO_COSYVOICE_ROOT",
+        "cosyvoice-zero-shot": "VOICE_STUDIO_COSYVOICE_ROOT",
+    }
+    defaults = {
+        "emotivoice": "/Users/foxmacstudio/Projects/tts-engine-lab/EmotiVoice",
+        "f5-tts": "/Users/foxmacstudio/Projects/tts-engine-lab/F5-TTS",
+        "cosyvoice-sft": "/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice",
+        "cosyvoice-zero-shot": "/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice",
+    }
+    value = os.environ.get(env_names[engine_id], defaults[engine_id])
+    return Path(value).expanduser()
+
+
+def _health_external_engine(engine_id: str) -> dict[str, Any]:
+    root = _external_engine_root(engine_id)
+    python = root / ".venv" / "bin" / "python"
+    required: list[Path] = [python]
+    if engine_id == "emotivoice":
+        required.extend([
+            root / "frontend.py",
+            root / "inference_am_vocoder_joint.py",
+            root / "WangZeJun" / "simbert-base-chinese" / "pytorch_model.bin",
+            root / "outputs" / "prompt_tts_open_source_joint" / "ckpt" / "g_00140000",
+        ])
+    elif engine_id == "f5-tts":
+        required.extend([
+            root / "src" / "f5_tts" / "api.py",
+            root / "local_smoke" / "modelscope" / "F5-TTS_Emilia-ZH-EN" / "model_1250000.safetensors",
+            root / "local_smoke" / "modelscope" / "F5-TTS_Emilia-ZH-EN" / "vocab.txt",
+        ])
+    elif engine_id in {"cosyvoice-sft", "cosyvoice-zero-shot"}:
+        required.extend([
+            root / "cosyvoice" / "cli" / "cosyvoice.py",
+            root / "third_party" / "Matcha-TTS",
+            root / "pretrained_models" / "CosyVoice-300M-SFT" / "cosyvoice.yaml",
+            root / "pretrained_models" / "CosyVoice-300M-SFT" / "llm.pt",
+            root / "pretrained_models" / "CosyVoice-300M-SFT" / "spk2info.pt",
+        ])
+    missing = [str(path.relative_to(root)) if path.is_relative_to(root) else str(path) for path in required if not path.exists()]
+    return {
+        "healthy": not missing,
+        "status": "ok" if not missing else "external_runtime_missing",
+        "model_path": str(root),
+        "python": str(python),
+        "missing": missing,
+    }
+
+
 def health_check(engine_id: str) -> dict[str, Any]:
     engine_id = _resolve_engine_id(engine_id)
     detail = _ENGINES.get(engine_id)
@@ -242,6 +435,8 @@ def health_check(engine_id: str) -> dict[str, Any]:
             health["healthy"] = ok
             health["detail"] = f"mlx-audio runtime is unavailable: {detail}" if detail else health.get("detail")
         return health
+    if engine_id in {"emotivoice", "f5-tts", "cosyvoice-sft", "cosyvoice-zero-shot"}:
+        return _health_external_engine(engine_id)
     try:
         import omnivoice  # noqa: F401
 

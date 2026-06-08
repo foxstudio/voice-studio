@@ -27,7 +27,17 @@ _worker_task: asyncio.Task[None] | None = None
 _worker_loop: asyncio.AbstractEventLoop | None = None
 _lock = threading.Lock()
 _cancelled: set[str] = set()
+_queued_task_ids: set[str] = set()
 _clients: list[WebSocket] = []
+
+_TERMINAL_STATUSES = {TaskStatus.success, TaskStatus.failed, TaskStatus.cancelled}
+_RECOVERABLE_STATUSES = {
+    TaskStatus.pending,
+    TaskStatus.queued,
+    TaskStatus.running,
+    TaskStatus.postprocessing,
+    TaskStatus.retrying,
+}
 
 
 def _save(task: GenerationTask) -> GenerationTask:
@@ -39,6 +49,10 @@ def _timeout_seconds_for(engine_id: str) -> int:
     return {
         "omnivoice": 600,
         "indextts-v2": 420,
+        "emotivoice": 420,
+        "f5-tts": 600,
+        "cosyvoice-sft": 900,
+        "cosyvoice-zero-shot": 900,
     }.get(engine_id, 300)
 
 
@@ -120,6 +134,8 @@ def start_worker() -> None:
         _queue = asyncio.Queue()
         _worker_loop = loop
         _worker_task = loop.create_task(_worker(_queue))
+        for task_id in _recover_incomplete_tasks():
+            _enqueue_task_id(task_id)
 
 
 async def shutdown() -> None:
@@ -129,6 +145,7 @@ async def shutdown() -> None:
     _worker_loop = None
     _worker_task = None
     _cancelled.clear()
+    _queued_task_ids.clear()
     _clients.clear()
     if task and not task.done():
         task.cancel()
@@ -149,9 +166,7 @@ async def submit(req: GenerateRequest, task_type: str = "single", project_id: st
         parameters=req.model_dump(),
     )
     _save(task)
-    if _queue is None:
-        globals()["_queue"] = asyncio.Queue()
-    await _queue.put(task.task_id)
+    _enqueue_task_id(task.task_id)
     await _broadcast(task)
     return task.task_id
 
@@ -235,10 +250,37 @@ async def retry_task(task_id: str) -> str:
 async def _worker(queue: asyncio.Queue[str]) -> None:
     while True:
         task_id = await queue.get()
+        _queued_task_ids.discard(task_id)
         task = get_task(task_id)
         if not task or task.status == TaskStatus.cancelled:
             continue
         await _process(task)
+
+
+def _enqueue_task_id(task_id: str) -> None:
+    if _queue is None or task_id in _queued_task_ids:
+        return
+    _queue.put_nowait(task_id)
+    _queued_task_ids.add(task_id)
+
+
+def _recover_incomplete_tasks() -> list[str]:
+    task_ids: list[str] = []
+    for row in db.list_all("tasks", "created_at", False):
+        task = _reconcile_stale_task(GenerationTask(**row))
+        if task.status in _TERMINAL_STATUSES or task.status not in _RECOVERABLE_STATUSES:
+            continue
+        if task.status != TaskStatus.queued or task.started_at or task.progress:
+            previous_status = task.status
+            task.status = TaskStatus.queued
+            task.progress = 0.0
+            task.started_at = None
+            task.completed_at = None
+            if previous_status in {TaskStatus.running, TaskStatus.postprocessing, TaskStatus.retrying}:
+                task.error_message = "服务重启后已重新排队。"
+            _save(task)
+        task_ids.append(task.task_id)
+    return task_ids
 
 
 def _resolve_reference(req: GenerateRequest) -> str | None:
@@ -261,8 +303,17 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
     ref = _resolve_reference(req)
     voice = voice_store.get_voice(req.voice_id) if req.voice_id else None
     ref_text = req.ref_text or (voice.reference_text if voice else None)
+    if req.engine_id == "omnivoice" and ref and ref_text is None:
+        # Avoid OmniVoice's on-the-fly Whisper auto-transcription in isolated jobs.
+        # Missing transcripts should not turn a short TTS request into a 10-minute ASR timeout.
+        ref_text = ""
     if req.engine_id == "indextts-v2" and not ref:
         raise ValueError("REFERENCE_AUDIO_REQUIRED")
+    if req.engine_id in {"f5-tts", "cosyvoice-zero-shot"}:
+        if not ref:
+            raise ValueError("REFERENCE_AUDIO_REQUIRED")
+        if not (ref_text or "").strip():
+            raise ValueError("REFERENCE_TEXT_REQUIRED")
     if req.engine_id in ["mimo-v2.5-tts", "mimo-v2.5-tts-preset", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"]:
         settings = settings_store.get()
         api_key = settings_store.mimo_api_key()
@@ -280,11 +331,42 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
             "voice": req.mimo_voice or settings.mimo_default_voice,
             "instruction": req.style_instruction or req.emotion_text or req.emotion,
             "voice_design_prompt": req.voice_design_prompt or req.style_instruction or req.emotion_text,
+            "optimize_text_preview": req.optimize_text_preview,
             "reference_audio_path": ref,
             "temperature": req.temperature,
             "top_p": req.top_p,
         }
     model_dir = str(settings_store.model_path(req.engine_id))
+    if req.engine_id in {"emotivoice", "cosyvoice-sft"}:
+        return {
+            "text": req.text,
+            "output_path": output_path,
+            "speaker_id": req.speaker_id,
+            "prompt": req.prompt or req.emotion,
+            "speed": req.speed,
+        }
+    if req.engine_id == "f5-tts":
+        return {
+            "text": req.text,
+            "reference_audio": ref,
+            "ref_text": ref_text,
+            "output_path": output_path,
+            "speed": req.speed,
+            "nfe_step": req.nfe_step,
+            "cfg_strength": req.cfg_strength,
+            "target_rms": req.target_rms,
+            "cross_fade_duration": req.cross_fade_duration,
+            "remove_silence": req.remove_silence,
+            "seed": req.seed,
+        }
+    if req.engine_id == "cosyvoice-zero-shot":
+        return {
+            "text": req.text,
+            "reference_audio": ref,
+            "ref_text": ref_text,
+            "output_path": output_path,
+            "speed": req.speed,
+        }
     common = {
         "text": req.text,
         "reference_audio": ref,
@@ -341,6 +423,10 @@ async def _process(task: GenerationTask) -> None:
             ramp_seconds = {
                 "omnivoice": 300.0,
                 "indextts-v2": 180.0,
+                "emotivoice": 180.0,
+                "f5-tts": 240.0,
+                "cosyvoice-sft": 420.0,
+                "cosyvoice-zero-shot": 420.0,
                 "mimo-v2.5-tts-preset": 120.0,
                 "mimo-v2.5-tts-voicedesign": 120.0,
                 "mimo-v2.5-tts-voiceclone": 120.0,
@@ -368,6 +454,7 @@ async def _process(task: GenerationTask) -> None:
             task.status = TaskStatus.cancelled
             task.error_message = "cancelled by user"
         else:
+            task.status = TaskStatus.postprocessing
             task.progress = 0.96
             _save(task)
             await _broadcast(task)

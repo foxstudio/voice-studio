@@ -149,6 +149,8 @@
 		return {
 			'indextts-v2': 'IndexTTS',
 			omnivoice: 'OmniVoice',
+			'f5-tts': 'F5-TTS',
+			'cosyvoice-zero-shot': 'CosyVoice 复刻',
 			'mimo-v2.5-tts-preset': 'MiMo 预置',
 			'mimo-v2.5-tts-voiceclone': 'MiMo 复刻'
 		}[engineId] ?? engineId;
@@ -219,7 +221,7 @@
 
 	const help = [
 		{ title: '新增声音', body: '这里只保留自己上传参考音频这一条路径。准备一段 10-20 秒左右的 mp3 或 wav，填写名称和参考文本后保存，它就会进入本地音色库。' },
-		{ title: '音色库怎么用', body: '音色库里的声音主要作为声音克隆参考。IndexTTS v2 通常需要选择一个参考声音；OmniVoice 可以选择参考声音，也可以不选，改用声音设计标签。' },
+		{ title: '音色库怎么用', body: '音色库里的声音主要作为声音克隆参考。IndexTTS v2 通常需要选择一个参考声音；F5-TTS 和 CosyVoice Zero-Shot 需要参考音频和准确参考台词；OmniVoice 可以选择参考声音，也可以不选，改用声音设计标签。' },
 		{ title: '参考文本', body: '参考文本是参考音频里大概说了什么。克隆或多语言模型有时会用它理解发音和音色；卡片里的文本按钮可以快速查看，不会撑大卡片。' },
 		{ title: '编辑声音', body: '卡片上的“编辑”会把名称、描述、标签、参考文本和推荐引擎载入右侧表单。这里保存的是同一个声音名称，生成页下拉菜单会同步显示。' }
 	];

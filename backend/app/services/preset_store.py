@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from app.models.schemas import PresetTemplate
+from app.models.schemas import PresetTemplate, PresetTemplateUpsert, new_id, now_iso
+from app.services import database
 
 
 _COMMON = {
@@ -16,7 +17,7 @@ _COMMON = {
 }
 
 
-PRESETS: list[PresetTemplate] = [
+BUILTIN_PRESETS: list[PresetTemplate] = [
     PresetTemplate(
         preset_id="idx2_default_narration",
         name="贴近参考音色",
@@ -95,12 +96,184 @@ PRESETS: list[PresetTemplate] = [
         recommended_voice_type="voice_design",
         tags=["声音设计", "女声"],
     ),
+    PresetTemplate(
+        preset_id="emotivoice_official_clear_female",
+        name="清晰女声开心",
+        scene="EmotiVoice 官方 speaker / 情绪短句",
+        description="使用官方 voice wiki 中的 8051 Maria Kasper，配合开心情绪提示；这是预置 speaker，不使用本地参考音色。",
+        engine_id="emotivoice",
+        sample_text="大家好，欢迎来到本期内容。今天我们用轻松一点的语气开始。",
+        parameters={"language": "zh", "output_format": "wav", "speaker_id": "8051", "prompt": "开心"},
+        source_test_id="emotivoice_8051_happy",
+        recommended_voice_type="preset_voice",
+        tags=["官方音色", "女声", "开心"],
+    ),
+    PresetTemplate(
+        preset_id="emotivoice_official_rich_male",
+        name="浑厚男声中立",
+        scene="EmotiVoice 官方 speaker / 稳定旁白",
+        description="使用官方 voice wiki 中的 9017 John Van Stan，配合中立提示，适合稳一点的试音。",
+        engine_id="emotivoice",
+        sample_text="这是一段稳定旁白测试，用来确认音色、节奏和清晰度。",
+        parameters={"language": "zh", "output_format": "wav", "speaker_id": "9017", "prompt": "中立"},
+        source_test_id="emotivoice_9017_neutral",
+        recommended_voice_type="preset_voice",
+        tags=["官方音色", "男声", "中立"],
+    ),
+    PresetTemplate(
+        preset_id="emotivoice_lively_female",
+        name="活泼女声兴奋",
+        scene="EmotiVoice 官方 speaker / 角色试音",
+        description="使用官方 voice wiki 中的 92 Cori Samuel，配合兴奋提示，适合短句角色感测试。",
+        engine_id="emotivoice",
+        sample_text="太好了，这个版本终于跑通了，我们可以继续往下测试。",
+        parameters={"language": "zh", "output_format": "wav", "speaker_id": "92", "prompt": "兴奋"},
+        source_test_id="emotivoice_92_excited",
+        recommended_voice_type="preset_voice",
+        tags=["官方音色", "女声", "兴奋"],
+    ),
+    PresetTemplate(
+        preset_id="f5_official_default_clone",
+        name="官方默认复刻",
+        scene="F5-TTS 官方默认参数",
+        description="使用 F5-TTS 官方默认推理参数：NFE 32、CFG 2.0、RMS 0.1、交叉淡化 0.15。需要本地参考音频和准确参考台词。",
+        engine_id="f5-tts",
+        sample_text="这是 F5 TTS 的参考音色复刻测试。请确认音色库里已经补全参考台词。",
+        parameters={"language": "zh", "output_format": "wav", "speed": 1.0, "nfe_step": 32, "cfg_strength": 2.0, "target_rms": 0.1, "cross_fade_duration": 0.15, "remove_silence": False},
+        source_test_id="f5_official_basic",
+        recommended_voice_type="reference_voice",
+        tags=["官方默认", "参考音色", "F5"],
+    ),
+    PresetTemplate(
+        preset_id="f5_fast_preview",
+        name="快速试听",
+        scene="F5-TTS 本地快速测试",
+        description="降低采样步数以加快本地试听；质量和贴近度可能低于官方默认。",
+        engine_id="f5-tts",
+        sample_text="这是一段快速试听文本，用来先判断参考音色是否可用。",
+        parameters={"language": "zh", "output_format": "wav", "speed": 1.0, "nfe_step": 16, "cfg_strength": 1.5, "target_rms": 0.1, "cross_fade_duration": 0.15, "remove_silence": False},
+        source_test_id="f5_fast_preview",
+        recommended_voice_type="reference_voice",
+        tags=["快速", "参考音色", "F5"],
+    ),
+    PresetTemplate(
+        preset_id="f5_clean_cut",
+        name="短句去静音",
+        scene="F5-TTS 短句 / 素材剪辑",
+        description="开启生成后静音裁剪，适合短句素材；需要自然停顿时不要使用。",
+        engine_id="f5-tts",
+        sample_text="请把这句话生成得干净一些，方便后期剪辑。",
+        parameters={"language": "zh", "output_format": "wav", "speed": 1.0, "nfe_step": 32, "cfg_strength": 2.0, "target_rms": 0.1, "cross_fade_duration": 0.15, "remove_silence": True},
+        source_test_id="f5_remove_silence",
+        recommended_voice_type="reference_voice",
+        tags=["剪辑", "去静音", "F5"],
+    ),
+    PresetTemplate(
+        preset_id="cosy_sft_zh_female",
+        name="中文女声",
+        scene="CosyVoice SFT 官方预置音色",
+        description="使用 CosyVoice SFT 官方预置 speaker：中文女。不使用本地参考音色。",
+        engine_id="cosyvoice-sft",
+        sample_text="大家好，这是 CosyVoice 官方预置中文女声的试听。",
+        parameters={"language": "zh", "output_format": "wav", "speaker_id": "中文女", "speed": 1.0},
+        source_test_id="cosy_sft_zh_female",
+        recommended_voice_type="preset_voice",
+        tags=["官方预置", "中文女"],
+    ),
+    PresetTemplate(
+        preset_id="cosy_sft_zh_male",
+        name="中文男声",
+        scene="CosyVoice SFT 官方预置音色",
+        description="使用 CosyVoice SFT 官方预置 speaker：中文男。不使用本地参考音色。",
+        engine_id="cosyvoice-sft",
+        sample_text="大家好，这是 CosyVoice 官方预置中文男声的试听。",
+        parameters={"language": "zh", "output_format": "wav", "speaker_id": "中文男", "speed": 1.0},
+        source_test_id="cosy_sft_zh_male",
+        recommended_voice_type="preset_voice",
+        tags=["官方预置", "中文男"],
+    ),
+    PresetTemplate(
+        preset_id="cosy_sft_yue_female",
+        name="粤语女声",
+        scene="CosyVoice SFT 官方预置音色",
+        description="使用 CosyVoice SFT 官方预置 speaker：粤语女，适合粤语或粤语风格短句测试。",
+        engine_id="cosyvoice-sft",
+        sample_text="大家好，这是 CosyVoice 粤语女声的试听。",
+        parameters={"language": "yue", "output_format": "wav", "speaker_id": "粤语女", "speed": 1.0},
+        source_test_id="cosy_sft_yue_female",
+        recommended_voice_type="preset_voice",
+        tags=["官方预置", "粤语"],
+    ),
+    PresetTemplate(
+        preset_id="cosy_zero_reference_default",
+        name="参考音色复刻",
+        scene="CosyVoice Zero-Shot",
+        description="使用本地参考音频和准确参考台词进行 CosyVoice zero-shot 复刻；目标文本不要明显短于参考文本。",
+        engine_id="cosyvoice-zero-shot",
+        sample_text="这是 CosyVoice Zero-Shot 的参考音色复刻测试，请确认参考台词已经填写准确。",
+        parameters={"language": "zh", "output_format": "wav", "speed": 1.0},
+        source_test_id="cosy_zero_reference_default",
+        recommended_voice_type="reference_voice",
+        tags=["参考音色", "zero-shot"],
+    ),
+    PresetTemplate(
+        preset_id="cosy_zero_slow_clear",
+        name="慢速清晰",
+        scene="CosyVoice Zero-Shot / 教程",
+        description="降低语速以提升清晰度；仍然需要本地参考音频和准确参考台词。",
+        engine_id="cosyvoice-zero-shot",
+        sample_text="请用更清楚的节奏读出这句话，方便我们检查发音和音色贴近度。",
+        parameters={"language": "zh", "output_format": "wav", "speed": 0.9},
+        source_test_id="cosy_zero_slow_clear",
+        recommended_voice_type="reference_voice",
+        tags=["参考音色", "慢速"],
+    ),
 ]
 
 
 def list_presets() -> list[PresetTemplate]:
-    return PRESETS
+    custom = [PresetTemplate(**row) for row in database.list_all("presets", "updated_at")]
+    return BUILTIN_PRESETS + custom
 
 
 def get_preset(preset_id: str) -> PresetTemplate | None:
-    return next((preset for preset in PRESETS if preset.preset_id == preset_id), None)
+    builtin = next((preset for preset in BUILTIN_PRESETS if preset.preset_id == preset_id), None)
+    if builtin:
+        return builtin
+    row = database.get_one("presets", "preset_id", preset_id)
+    return PresetTemplate(**row) if row else None
+
+
+def is_builtin(preset_id: str) -> bool:
+    return any(preset.preset_id == preset_id for preset in BUILTIN_PRESETS)
+
+
+def save_preset(payload: PresetTemplateUpsert) -> PresetTemplate:
+    preset_id = payload.preset_id or f"custom_{new_id()}"
+    if is_builtin(preset_id):
+        raise ValueError("BUILTIN_PRESET_READONLY")
+    preset = PresetTemplate(
+        preset_id=preset_id,
+        name=payload.name,
+        scene=payload.scene,
+        description=payload.description,
+        engine_id=payload.engine_id,
+        sample_text=payload.sample_text,
+        parameters=payload.parameters,
+        source_test_id=payload.source_test_id,
+        recommended_voice_type=payload.recommended_voice_type,
+        tags=payload.tags,
+    )
+    data = preset.model_dump(mode="json")
+    data["updated_at"] = now_iso()
+    database.upsert("presets", preset.preset_id, data)
+    return preset
+
+
+def delete_preset(preset_id: str) -> bool:
+    if is_builtin(preset_id):
+        raise ValueError("BUILTIN_PRESET_READONLY")
+    if not database.get_one("presets", "preset_id", preset_id):
+        return False
+    database.delete_one("presets", "preset_id", preset_id)
+    return True

@@ -363,6 +363,54 @@ class TTSVerificationResponse(BaseModel):
     asr_engine_id: str | None = None
 
 
+class LongformGenerateRequest(BaseModel):
+    generate_request: GenerateRequest
+    segments: list[PlannedTextSegment] | None = None
+    verify_enabled: bool = True
+    merge_enabled: bool = True
+    max_retries: int = Field(default=2, ge=0, le=5)
+    stop_merge_on_verification_failed: bool = True
+    asr_engine_id: str = "qwen3-asr-mlx"
+    silence_ms: int = Field(default=300, ge=0, le=5000)
+    normalize: bool = False
+
+
+class LongformSegmentTask(BaseModel):
+    index: int
+    text: str
+    char_count: int
+    status: TaskStatus = TaskStatus.pending
+    attempts: int = 0
+    task_id: str | None = None
+    result_id: str | None = None
+    duration_ms: int | None = None
+    error_message: str | None = None
+    verification: TTSVerificationResponse | None = None
+
+
+class LongformTask(BaseModel):
+    longform_task_id: str = Field(default_factory=new_id)
+    engine_id: str
+    voice_id: str | None = None
+    input_text: str
+    status: TaskStatus = TaskStatus.pending
+    progress: float = 0.0
+    error_message: str | None = None
+    segments: list[LongformSegmentTask] = Field(default_factory=list)
+    result_ids: list[str] = Field(default_factory=list)
+    export_id: str | None = None
+    export_path: str | None = None
+    verify_enabled: bool = True
+    merge_enabled: bool = True
+    max_retries: int = 2
+    stop_merge_on_verification_failed: bool = True
+    asr_engine_id: str = "qwen3-asr-mlx"
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(default_factory=now_iso)
+    started_at: str | None = None
+    completed_at: str | None = None
+
+
 class BatchSegmentInput(BaseModel):
     segment_id: str | None = None
     chapter: str | None = None

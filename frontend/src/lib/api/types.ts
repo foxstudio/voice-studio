@@ -265,6 +265,54 @@ export interface TTSVerificationResponse {
 	asr_engine_id: string | null;
 }
 
+export interface LongformGenerateRequest {
+	generate_request: GenerateRequest;
+	segments?: PlannedTextSegment[] | null;
+	verify_enabled?: boolean;
+	merge_enabled?: boolean;
+	max_retries?: number;
+	stop_merge_on_verification_failed?: boolean;
+	asr_engine_id?: string;
+	silence_ms?: number;
+	normalize?: boolean;
+}
+
+export interface LongformSegmentTask {
+	index: number;
+	text: string;
+	char_count: number;
+	status: TaskStatus;
+	attempts: number;
+	task_id: string | null;
+	result_id: string | null;
+	duration_ms: number | null;
+	error_message: string | null;
+	verification: TTSVerificationResponse | null;
+}
+
+export interface LongformTask {
+	longform_task_id: string;
+	engine_id: string;
+	voice_id: string | null;
+	input_text: string;
+	status: TaskStatus;
+	progress: number;
+	error_message: string | null;
+	segments: LongformSegmentTask[];
+	result_ids: string[];
+	export_id: string | null;
+	export_path: string | null;
+	verify_enabled: boolean;
+	merge_enabled: boolean;
+	max_retries: number;
+	stop_merge_on_verification_failed: boolean;
+	asr_engine_id: string;
+	parameters: Record<string, unknown>;
+	created_at: string;
+	started_at: string | null;
+	completed_at: string | null;
+}
+
 export interface BatchSegmentInput {
 	segment_id?: string | null;
 	chapter?: string | null;

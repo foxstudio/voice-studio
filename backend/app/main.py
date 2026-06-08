@@ -7,9 +7,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import asr, audio_tools, batches, community_voice_packs, engines, evaluations, exports, generate, history, presets, projects, settings, tasks, text_tools, voice_seeds, voices
+from app.api import asr, audio_tools, batches, community_voice_packs, engines, evaluations, exports, generate, history, longform, presets, projects, settings, tasks, text_tools, voice_seeds, voices
 from app.models.exceptions import AppException
-from app.services import asr_tasks, batch_queue, engine_registry, qwen_forced_aligner, settings_store, task_queue
+from app.services import asr_tasks, batch_queue, engine_registry, longform_queue, qwen_forced_aligner, settings_store, task_queue
 
 START = time.monotonic()
 app = FastAPI(title="Voice Studio", version="1.0.0")
@@ -25,6 +25,7 @@ app.add_middleware(
 app.include_router(engines.router, prefix="/api/engines", tags=["engines"])
 app.include_router(voices.router, prefix="/api/voices", tags=["voices"])
 app.include_router(generate.router, prefix="/api/generate", tags=["generate"])
+app.include_router(longform.router, prefix="/api/longform", tags=["longform"])
 app.include_router(batches.router, prefix="/api/batches", tags=["batches"])
 app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
 app.include_router(history.router, prefix="/api/history", tags=["history"])
@@ -43,11 +44,14 @@ app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 @app.on_event("startup")
 async def startup():
     settings_store.ensure_directories()
+    task_queue.start_worker()
+    longform_queue.start_worker()
 
 
 @app.on_event("shutdown")
 async def shutdown():
     await asr_tasks.shutdown()
+    await longform_queue.shutdown()
     await task_queue.shutdown()
     await batch_queue.shutdown()
     qwen_forced_aligner.shutdown()

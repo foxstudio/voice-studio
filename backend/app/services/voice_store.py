@@ -112,6 +112,11 @@ def _engine_bindings(voice: VoiceAsset) -> list[VoiceEngineBinding]:
         clone_reason = "MiMo voiceclone 仅支持 wav/mp3"
     elif ref.size_bytes > 10 * 1024 * 1024:
         clone_reason = "参考音频超过 MiMo 10MB 限制"
+    local_clone_reason = ""
+    if not has_ref:
+        local_clone_reason = "缺少参考音频"
+    elif not voice.reference_text.strip():
+        local_clone_reason = "缺少参考台词"
 
     return [
         VoiceEngineBinding(
@@ -125,6 +130,18 @@ def _engine_bindings(voice: VoiceAsset) -> list[VoiceEngineBinding]:
             mode="reference_audio",
             available=has_ref,
             reason="" if has_ref else "OmniVoice 可无参考音频改用声音设计",
+        ),
+        VoiceEngineBinding(
+            engine_id="f5-tts",
+            mode="voice_clone",
+            available=has_ref and not local_clone_reason,
+            reason=local_clone_reason,
+        ),
+        VoiceEngineBinding(
+            engine_id="cosyvoice-zero-shot",
+            mode="voice_clone",
+            available=has_ref and not local_clone_reason,
+            reason=local_clone_reason,
         ),
         VoiceEngineBinding(
             engine_id="mimo-v2.5-tts-preset",

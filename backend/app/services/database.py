@@ -72,6 +72,17 @@ CREATE TABLE IF NOT EXISTS batches (
     created_at TEXT NOT NULL,
     status TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS longform_tasks (
+    longform_task_id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS presets (
+    preset_id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -126,6 +137,9 @@ def upsert(table: str, key: str, data: dict[str, Any], time_field: str = "update
     elif table == "batches":
         id_field = "batch_task_id"
         time_field = "created_at"
+    elif table == "longform_tasks":
+        id_field = "longform_task_id"
+        time_field = "created_at"
     with conn() as db:
         if table == "tasks":
             db.execute(
@@ -140,6 +154,11 @@ def upsert(table: str, key: str, data: dict[str, Any], time_field: str = "update
         elif table == "asr_tasks":
             db.execute(
                 "INSERT OR REPLACE INTO asr_tasks (task_id, data, created_at, status) VALUES (?, ?, ?, ?)",
+                (key, _dump(data), data.get("created_at", ""), data.get("status", "")),
+            )
+        elif table == "longform_tasks":
+            db.execute(
+                "INSERT OR REPLACE INTO longform_tasks (longform_task_id, data, created_at, status) VALUES (?, ?, ?, ?)",
                 (key, _dump(data), data.get("created_at", ""), data.get("status", "")),
             )
         else:

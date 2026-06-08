@@ -159,6 +159,7 @@ def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
             "model": model,
             "mimo_voice": req.parameters.get("mimo_voice") or settings.mimo_default_voice,
             "voice_design_prompt": req.parameters.get("voice_design_prompt"),
+            "optimize_text_preview": req.parameters.get("optimize_text_preview", False),
             "reference_audio_path": _resolve_reference(req),
             "temperature": req.parameters.get("temperature", 0.6),
             "top_p": req.parameters.get("top_p", 0.95),
@@ -167,11 +168,43 @@ def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
     ref = _resolve_reference(req)
     voice = voice_store.get_voice(req.voice_id) if req.voice_id else None
     ref_text = req.ref_text or req.parameters.get("ref_text") or (voice.reference_text if voice else None)
+    if req.engine_id == "omnivoice" and ref and ref_text is None:
+        # Avoid OmniVoice's on-the-fly Whisper auto-transcription in batch jobs.
+        ref_text = ""
     if req.engine_id == "indextts-v2" and not ref:
         raise ValueError("REFERENCE_AUDIO_REQUIRED")
+    if req.engine_id in {"f5-tts", "cosyvoice-zero-shot"}:
+        if not ref:
+            raise ValueError("REFERENCE_AUDIO_REQUIRED")
+        if not (ref_text or "").strip():
+            raise ValueError("REFERENCE_TEXT_REQUIRED")
     base = GenerateRequest(text="placeholder", engine_id=req.engine_id, voice_id=req.voice_id, language=req.language)
     values = base.model_dump()
     values.update(req.parameters)
+    if req.engine_id in {"emotivoice", "cosyvoice-sft"}:
+        return {
+            "speaker_id": values.get("speaker_id"),
+            "prompt": values.get("prompt"),
+            "speed": values.get("speed"),
+        }
+    if req.engine_id == "f5-tts":
+        return {
+            "reference_audio": ref,
+            "ref_text": ref_text,
+            "speed": values.get("speed"),
+            "nfe_step": values.get("nfe_step"),
+            "cfg_strength": values.get("cfg_strength"),
+            "target_rms": values.get("target_rms"),
+            "cross_fade_duration": values.get("cross_fade_duration"),
+            "remove_silence": values.get("remove_silence"),
+            "seed": values.get("seed"),
+        }
+    if req.engine_id == "cosyvoice-zero-shot":
+        return {
+            "reference_audio": ref,
+            "ref_text": ref_text,
+            "speed": values.get("speed"),
+        }
     common = {
         "reference_audio": ref,
         "ref_text": ref_text,
@@ -215,6 +248,13 @@ def _runner_segments(req: BatchGenerateRequest, batch: BatchTask, output_dir: Pa
             "language": segment.language,
             "reference_audio": segment.reference_audio_path,
             "ref_text": segment.ref_text,
+            "speaker_id": segment.parameters.get("speaker_id"),
+            "prompt": segment.parameters.get("prompt"),
+            "nfe_step": segment.parameters.get("nfe_step"),
+            "cfg_strength": segment.parameters.get("cfg_strength"),
+            "target_rms": segment.parameters.get("target_rms"),
+            "cross_fade_duration": segment.parameters.get("cross_fade_duration"),
+            "remove_silence": segment.parameters.get("remove_silence"),
         }
         params.update({key: value for key, value in explicit_params.items() if value is not None})
         runner_segments.append(

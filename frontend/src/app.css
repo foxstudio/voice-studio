@@ -168,6 +168,30 @@ textarea { resize: vertical; min-height: 120px; line-height: 1.5; }
 	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
 }
 
+.card:has(.text-pop:hover),
+.card:has(.text-pop:focus-within),
+.card:has(.meta-pop:hover),
+.card:has(.meta-pop:focus-within),
+.card:has(.param-pop:hover),
+.card:has(.param-pop:focus-within),
+.engine-surface:has(.text-pop:hover),
+.engine-surface:has(.text-pop:focus-within),
+.engine-surface:has(.meta-pop:hover),
+.engine-surface:has(.meta-pop:focus-within),
+.engine-surface:has(.param-pop:hover),
+.engine-surface:has(.param-pop:focus-within) {
+	z-index: 120;
+}
+
+.text-pop:hover,
+.text-pop:focus-within,
+.meta-pop:hover,
+.meta-pop:focus-within,
+.param-pop:hover,
+.param-pop:focus-within {
+	z-index: 121;
+}
+
 .text-pop:hover::after,
 .text-pop:focus-within::after,
 .meta-pop:hover::after,
@@ -189,7 +213,7 @@ textarea { resize: vertical; min-height: 120px; line-height: 1.5; }
 	color: #eef3fb;
 	font-size: 11.5px;
 	box-shadow: 0 18px 42px rgba(0, 0, 0, 0.38);
-	z-index: 40;
+	z-index: 122;
 }
 
 @media (max-width: 900px) {

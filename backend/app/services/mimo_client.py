@@ -82,6 +82,7 @@ def build_tts_payload(
     voice: str | None = None,
     style_instruction: str | None = None,
     voice_design_prompt: str | None = None,
+    optimize_text_preview: bool = False,
     reference_audio_path: str | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
@@ -89,7 +90,7 @@ def build_tts_payload(
     if model not in MIMO_TTS_MODELS:
         raise ValueError("MIMO_TTS_MODEL_UNSUPPORTED")
     messages: list[dict[str, str]] = []
-    audio: dict[str, str] = {"format": audio_format}
+    audio: dict[str, Any] = {"format": audio_format}
 
     if model == "mimo-v2.5-tts":
         resolved_voice = voice or "mimo_default"
@@ -102,6 +103,8 @@ def build_tts_payload(
         if not voice_design_prompt or not voice_design_prompt.strip():
             raise ValueError("MIMO_VOICE_DESIGN_PROMPT_REQUIRED")
         messages.append({"role": "user", "content": voice_design_prompt.strip()})
+        if optimize_text_preview:
+            audio["optimize_text_preview"] = True
     else:
         if not reference_audio_path:
             raise ValueError("MIMO_VOICECLONE_REFERENCE_AUDIO_REQUIRED")
@@ -171,6 +174,7 @@ def generate_tts(
     instruction: str | None = None,
     model: str = "mimo-v2.5-tts",
     voice_design_prompt: str | None = None,
+    optimize_text_preview: bool = False,
     reference_audio_path: str | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
@@ -184,6 +188,7 @@ def generate_tts(
         voice=voice,
         style_instruction=instruction,
         voice_design_prompt=voice_design_prompt,
+        optimize_text_preview=optimize_text_preview,
         reference_audio_path=reference_audio_path,
         temperature=temperature,
         top_p=top_p,

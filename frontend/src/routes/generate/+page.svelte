@@ -6,6 +6,8 @@
 		GenerationTask,
 		GeneratePlanResponse,
 		GenerateRequest,
+		LongformTask,
+		PlannedTextSegment,
 		PresetTemplate,
 		TTSVerificationResponse,
 		VoiceAsset
@@ -40,6 +42,7 @@
 	type TaskSourceFilter = 'all' | 'local' | 'cloud';
 	type TaskDateFilter = 'all' | 'today' | '7d' | '30d';
 	type TaskSortBy = 'latest' | 'oldest' | 'duration_desc';
+	type LongformStrategy = 'split_merge' | 'split_only' | 'single';
 	type TextCueAction = {
 		label: string;
 		insert: string;
@@ -115,6 +118,7 @@
 	let showAdvanced = $state(false);
 
 	let tasks = $state<GenerationTask[]>([]);
+	let longformTasks = $state<LongformTask[]>([]);
 	let selectedTaskIds = $state<string[]>([]);
 	let taskQuery = $state('');
 	let taskStatusTab = $state<TaskStatusTab>('all');
@@ -128,6 +132,13 @@
 	let verificationBusyTaskId = $state('');
 	let verificationReports = $state<Record<string, TTSVerificationResponse>>({});
 	let verificationErrors = $state<Record<string, string>>({});
+	let showLongformDialog = $state(false);
+	let pendingLongformPlan = $state<GeneratePlanResponse | null>(null);
+	let pendingLongformResolve = $state<((value: LongformStrategy | null) => void) | null>(null);
+	let longformStrategy = $state<LongformStrategy>('split_merge');
+	let longformVerifyEnabled = $state(true);
+	let longformMergeEnabled = $state(true);
+	let longformMaxRetries = $state(2);
 
 	let busy = $state(false);
 	let error = $state('');
@@ -173,8 +184,12 @@
 		'mimo-v2.5-tts-voiceclone': { slowAfterSeconds: 120, timeoutSeconds: 300 }
 	};
 
+	function statusIsActive(status: string) {
+		return ['pending', 'queued', 'running', 'postprocessing', 'retrying'].includes(status);
+	}
+
 	function taskIsActive(task: GenerationTask) {
-		return ['pending', 'queued', 'running', 'postprocessing', 'retrying'].includes(task.status);
+		return statusIsActive(task.status);
 	}
 
 	function taskIsWaiting(task: GenerationTask) {
@@ -307,7 +322,9 @@
 		const tags = voiceOptionTags(voice);
 		return tags.length ? `${voice.name}（${tags.join('、')}）` : voice.name;
 	}
-	const hasRunningTasks = $derived(tasks.some((task) => taskIsActive(task)));
+	const hasRunningTasks = $derived(
+		tasks.some((task) => taskIsActive(task)) || longformTasks.some((task) => statusIsActive(task.status))
+	);
 	const engineRuntimeHint = $derived.by(() => {
 		const trimmedLength = text.trim().length;
 		if (isOmniVoice && selectedVoice?.reference_audio_ids.length && !selectedVoice.reference_text.trim()) {
@@ -428,16 +445,18 @@
 	);
 
 	async function refreshPageData() {
-		const [e, v, t, p, s] = await Promise.all([
+		const [e, v, t, lf, p, s] = await Promise.all([
 			Api.engines(),
 			Api.voices(),
 			Api.tasks(),
+			Api.longformTasks(),
 			Api.presets(),
 			Api.settings()
 		]);
 		engines = e;
 		voices = v;
 		tasks = t;
+		longformTasks = lf;
 		presets = p;
 		settings = s;
 
@@ -822,28 +841,38 @@
 		return { level: 'recommended', label: '建议分段', className: 'info' };
 	}
 
-	function confirmLongformPlan(plan: GeneratePlanResponse) {
+	function prepareLongformPlan(plan: GeneratePlanResponse) {
 		lastGeneratePlan = plan;
 		textSegments = plan.segments.map((segment) => segment.text);
 		showSplitPreview = plan.segments.length > 1;
-		if (!plan.requires_user_confirmation) return true;
-		const preview = plan.segments
-			.slice(0, 4)
-			.map((segment) => `${segment.index}. ${segment.char_count}字：${segment.text.slice(0, 42)}${segment.text.length > 42 ? '…' : ''}`)
-			.join('\n');
-		return window.confirm(
-			[
-				'当前文本较长，系统建议先分段生成。',
-				`推荐策略：${plan.recommended_action}`,
-				`预计分段：${plan.segments.length} 段`,
-				plan.warnings.join('\n'),
-				preview ? `\n分段预览：\n${preview}` : '',
-				'\n第一阶段已完成分段规划提示；真正的分段生成、校对和合并会在下一阶段接入。',
-				'现在继续将按单条生成提交。是否继续？'
-			]
-				.filter(Boolean)
-				.join('\n')
-		);
+	}
+
+	function requestLongformStrategy(plan: GeneratePlanResponse): Promise<LongformStrategy | null> {
+		prepareLongformPlan(plan);
+		if (!plan.requires_user_confirmation) return Promise.resolve('single');
+		pendingLongformPlan = plan;
+		longformStrategy = plan.recommended_action === 'split_generate' ? 'split_only' : 'split_merge';
+		longformVerifyEnabled = plan.recommended_action.includes('verify');
+		longformMergeEnabled = longformStrategy === 'split_merge';
+		longformMaxRetries = 2;
+		showLongformDialog = true;
+		return new Promise((resolve) => {
+			pendingLongformResolve = resolve;
+		});
+	}
+
+	function closeLongformDialog(value: LongformStrategy | null) {
+		const resolve = pendingLongformResolve;
+		showLongformDialog = false;
+		pendingLongformResolve = null;
+		pendingLongformPlan = null;
+		resolve?.(value);
+	}
+
+	function longformSegmentsFor(plan: GeneratePlanResponse): PlannedTextSegment[] {
+		return plan.segments.length
+			? plan.segments
+			: [{ index: 1, text: text.trim(), char_count: text.trim().length, segment_reason: 'direct_text' }];
 	}
 
 	async function poll(taskId: string) {
@@ -878,7 +907,8 @@
 				planner_mode: 'auto',
 				target_format: outputFormat
 			});
-			if (!confirmLongformPlan(plan)) return;
+			const longformChoice = await requestLongformStrategy(plan);
+			if (!longformChoice) return;
 			if (isMimoClone && settings?.mimo_voiceclone_confirm_upload) {
 				const name = selectedVoice?.name ?? '当前参考音色';
 				const ok = window.confirm(
@@ -888,6 +918,22 @@
 			}
 			const engine = engines.find((item) => item.manifest.engine_id === engineId);
 			if (engine && engine.state.status !== 'loaded') await Api.startEngine(engineId);
+			if (longformChoice !== 'single') {
+				const res = await Api.generateLongform({
+					generate_request: requestBody(),
+					segments: longformSegmentsFor(plan),
+					verify_enabled: longformVerifyEnabled,
+					merge_enabled: longformChoice === 'split_merge' && longformMergeEnabled,
+					max_retries: longformMaxRetries,
+					stop_merge_on_verification_failed: true,
+					asr_engine_id: 'qwen3-asr-mlx',
+					silence_ms: 300,
+					normalize: false
+				});
+				longformTasks = [res, ...longformTasks.filter((item) => item.longform_task_id !== res.longform_task_id)];
+				currentPage = 1;
+				return;
+			}
 			const res = await Api.generate(requestBody());
 			currentPage = 1;
 			await poll(res.task_id);
@@ -992,6 +1038,29 @@
 			};
 		} finally {
 			verificationBusyTaskId = '';
+		}
+	}
+
+	function longformTitle(task: LongformTask) {
+		return task.input_text.trim() || '长文本任务';
+	}
+
+	function longformStatusText(task: LongformTask) {
+		const success = task.segments.filter((segment) => segment.status === 'success').length;
+		return `${taskStatusLabel(task.status)} · ${success}/${task.segments.length} 段`;
+	}
+
+	function longformDownloadUrl(task: LongformTask) {
+		return task.export_id ? `/api/longform/${task.longform_task_id}/download` : '';
+	}
+
+	async function retryLongform(task: LongformTask) {
+		actionBusyTaskId = task.longform_task_id;
+		try {
+			const next = await Api.retryLongformFailed(task.longform_task_id);
+			longformTasks = [next, ...longformTasks.filter((item) => item.longform_task_id !== next.longform_task_id)];
+		} finally {
+			actionBusyTaskId = '';
 		}
 	}
 
@@ -1422,6 +1491,83 @@
 				<p class="badge">{engineRuntimeHint}</p>
 			{/if}
 
+			{#if showLongformDialog && pendingLongformPlan}
+				<div class="modal-backdrop" role="presentation">
+					<div class="longform-dialog" role="dialog" aria-modal="true" aria-label="长文本生成策略">
+						<div class="dialog-head">
+							<div>
+								<h3>长文本生成策略</h3>
+								<p class="muted">
+									预计 {pendingLongformPlan.segments.length} 段。{pendingLongformPlan.planner_reason}
+								</p>
+							</div>
+							<button class="icon-btn" type="button" onclick={() => closeLongformDialog(null)} aria-label="关闭">×</button>
+						</div>
+						{#if pendingLongformPlan.warnings.length}
+							<p class="dialog-warning">{pendingLongformPlan.warnings[0]}</p>
+						{/if}
+						<div class="strategy-grid">
+							<button
+								class:active={longformStrategy === 'split_merge'}
+								type="button"
+								onclick={() => {
+									longformStrategy = 'split_merge';
+									longformMergeEnabled = true;
+									longformVerifyEnabled = true;
+								}}
+							>
+								<strong>分段生成并合并</strong>
+								<span>逐段生成，校对后自动合并为一个音频。</span>
+							</button>
+							<button
+								class:active={longformStrategy === 'split_only'}
+								type="button"
+								onclick={() => {
+									longformStrategy = 'split_only';
+									longformMergeEnabled = false;
+								}}
+							>
+								<strong>只分段生成</strong>
+								<span>保留每段结果，适合先人工复听。</span>
+							</button>
+							<button
+								class:active={longformStrategy === 'single'}
+								type="button"
+								onclick={() => {
+									longformStrategy = 'single';
+									longformMergeEnabled = false;
+								}}
+							>
+								<strong>仍然单条生成</strong>
+								<span>最快开始，但更容易超时、漏句或截断。</span>
+							</button>
+						</div>
+						<div class="dialog-options">
+							<label class="check-row">
+								<input type="checkbox" bind:checked={longformVerifyEnabled} disabled={longformStrategy === 'single'} />
+								<span>生成后自动 ASR 校对</span>
+							</label>
+							<label class="field compact-field">
+								<span>失败重试</span>
+								<input type="number" min="0" max="5" bind:value={longformMaxRetries} disabled={longformStrategy === 'single'} />
+							</label>
+						</div>
+						<div class="dialog-preview">
+							{#each pendingLongformPlan.segments.slice(0, 4) as segment}
+								<p><strong>{segment.index}</strong> {segment.text}</p>
+							{/each}
+							{#if pendingLongformPlan.segments.length > 4}
+								<p class="muted">还有 {pendingLongformPlan.segments.length - 4} 段...</p>
+							{/if}
+						</div>
+						<div class="dialog-actions">
+							<button class="btn" type="button" onclick={() => closeLongformDialog(null)}>取消</button>
+							<button class="btn primary" type="button" onclick={() => closeLongformDialog(longformStrategy)}>开始</button>
+						</div>
+					</div>
+				</div>
+			{/if}
+
 			{#if showSplitPreview && textSegments.length}
 				<div class="split-preview">
 					<div class="row" style="justify-content:space-between">
@@ -1587,6 +1733,59 @@
 					</label>
 					</div>
 				</div>
+
+				{#if longformTasks.length}
+					<section class="longform-list" aria-label="长文本任务">
+						<div class="row section-subhead">
+							<div>
+								<h3>长文本任务</h3>
+								<p class="muted">分段生成、校对、重试和合并的父任务。</p>
+							</div>
+						</div>
+						{#each longformTasks.slice(0, 6) as task}
+							<article class={`longform-card ${task.status}`}>
+								<div class="longform-card-head">
+									<div>
+										<strong>{longformTitle(task)}</strong>
+										<p class="muted">{longformStatusText(task)}</p>
+									</div>
+									<div class="row wrap longform-actions">
+										<span class="badge">{Math.round(task.progress * 100)}%</span>
+										{#if task.export_id}
+											<a class="btn" href={longformDownloadUrl(task)}>下载合并音频</a>
+										{/if}
+										{#if task.status === 'failed'}
+											<button class="btn" type="button" onclick={() => retryLongform(task)} disabled={actionBusyTaskId === task.longform_task_id}>
+												<RotateCcw size={15} /> 重试失败段
+											</button>
+										{/if}
+									</div>
+								</div>
+								<div class="progress-track">
+									<div class="progress-fill" style={`width:${Math.max(3, Math.round(task.progress * 100))}%`}></div>
+								</div>
+								<div class="longform-segments">
+									{#each task.segments as segment}
+										<div class={`longform-segment ${segment.status}`}>
+											<span class="badge">{segment.index}</span>
+											<p>{segment.text}</p>
+											<span class="badge">{taskStatusLabel(segment.status)}</span>
+											{#if segment.verification}
+												<span class={`badge verify-${segment.verification.status}`}>{verificationStatusLabel(segment.verification.status)}</span>
+											{/if}
+											{#if segment.error_message}
+												<span class="muted">{segment.error_message}</span>
+											{/if}
+										</div>
+									{/each}
+								</div>
+								{#if task.error_message}
+									<p class="muted error-line">{task.error_message}</p>
+								{/if}
+							</article>
+						{/each}
+					</section>
+				{/if}
 
 				{#if pagedTasks.length}
 					<div class="result-grid">

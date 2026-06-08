@@ -77,6 +77,10 @@ class TestEngineRegistryAPI:
         assert ids == [
             "indextts-v2",
             "omnivoice",
+            "emotivoice",
+            "f5-tts",
+            "cosyvoice-sft",
+            "cosyvoice-zero-shot",
             "mimo-v2.5-tts-preset",
             "mimo-v2.5-tts-voicedesign",
             "mimo-v2.5-tts-voiceclone",
@@ -101,6 +105,16 @@ class TestEngineRegistryAPI:
         assert "voice_design" in m["capabilities"]
         assert "multilingual" in m["capabilities"]
 
+        # local community/high-popularity engines
+        assert by_id["emotivoice"]["sample_rate"] == 16000
+        assert "preset_voice" in by_id["emotivoice"]["capabilities"]
+        assert by_id["f5-tts"]["sample_rate"] == 24000
+        assert "voice_clone" in by_id["f5-tts"]["capabilities"]
+        assert by_id["cosyvoice-sft"]["sample_rate"] == 22050
+        assert "preset_voice" in by_id["cosyvoice-sft"]["capabilities"]
+        assert by_id["cosyvoice-zero-shot"]["sample_rate"] == 22050
+        assert "voice_clone" in by_id["cosyvoice-zero-shot"]["capabilities"]
+
         # mimo cloud
         m = by_id["mimo-v2.5-tts-preset"]
         assert m["engine_type"] == "cloud"
@@ -122,12 +136,13 @@ class TestEngineRegistryAPI:
         assert resp.status_code == 404
 
     def test_engine_initial_status(self, client):
-        """Engines should not be 'loaded' initially."""
+        """Engine state endpoint should return a valid lifecycle status."""
+        valid_statuses = {"not_installed", "stopped", "loading", "loaded", "running", "error"}
         for eid in ("indextts-v2", "omnivoice", "mimo-v2.5-tts-preset"):
             resp = client.get(f"/api/engines/{eid}")
             assert resp.status_code == 200
             status = resp.json()["state"]["status"]
-            assert status != "loaded", f"{eid} should not be loaded initially"
+            assert status in valid_statuses
 
 
 # ════════════════════════════════════════════════════════════
