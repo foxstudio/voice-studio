@@ -144,12 +144,19 @@ def _ensure_result_records(task: LongformTask) -> LongformTask:
         segment_count = len(task.segments)
         for segment in task.segments:
             if segment.task_id:
-                task_queue.update_longform_segment_metadata(
+                updated = task_queue.update_longform_segment_metadata(
                     segment.task_id,
                     longform_task_id=task.longform_task_id,
                     segment_index=segment.index,
                     segment_count=segment_count,
                 )
+                if not updated and segment.result_id:
+                    task_queue.add_completed_longform_segment(task, segment)
+            elif segment.result_id:
+                restored = task_queue.add_completed_longform_segment(task, segment)
+                if restored:
+                    segment.task_id = restored.task_id
+                    _save(task)
     if task.status != TaskStatus.success or not task.export_id or not task.export_path:
         return task
     if task_queue.find_longform_export_task(task.longform_task_id, task.export_id):

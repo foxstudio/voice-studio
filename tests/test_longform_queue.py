@@ -12,7 +12,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
-from app.models.schemas import ExportRecord, GenerateRequest, GenerationTask, LongformSegmentTask, LongformTask, TaskStatus  # noqa: E402
+from app.models.schemas import ExportRecord, GenerateRequest, GenerationTask, HistoryItem, LongformSegmentTask, LongformTask, TaskStatus  # noqa: E402
 from app.services import database as db  # noqa: E402
 from app.services import longform_queue  # noqa: E402
 from app.services import history_store, task_queue  # noqa: E402
@@ -233,10 +233,28 @@ def test_list_longform_tasks_backfills_existing_export_result(isolated_db, tmp_p
             parameters={},
         ).model_dump(),
     )
+    history_store.add(
+        HistoryItem(
+            result_id="result-b",
+            task_id="legacy-segment-2",
+            engine_id="indextts-v2",
+            voice_id="voice-a",
+            input_text="第二段。",
+            output_audio_id="legacy-segment-2",
+            output_path=str(merged),
+            duration_ms=1500,
+            parameter_snapshot=GenerateRequest(
+                text="第二段。",
+                engine_id="indextts-v2",
+                voice_id="voice-a",
+            ).model_dump(),
+        )
+    )
 
     items = longform_queue.list_tasks()
     export_task = task_queue.find_longform_export_task("legacy-longform", "legacy-export")
     segment_task = task_queue.get_task("legacy-segment-1")
+    restored_segment = task_queue.get_task("legacy-segment-2")
 
     assert items[0].longform_task_id == "legacy-longform"
     assert export_task is not None
@@ -245,3 +263,6 @@ def test_list_longform_tasks_backfills_existing_export_result(isolated_db, tmp_p
     assert segment_task is not None
     assert segment_task.longform_segment_index == 1
     assert segment_task.longform_segment_count == 2
+    assert restored_segment is not None
+    assert restored_segment.longform_segment_index == 2
+    assert restored_segment.longform_segment_count == 2

@@ -15,6 +15,7 @@ from app.models.schemas import (
     GenerateRequest,
     GenerationTask,
     HistoryItem,
+    LongformSegmentTask,
     LongformTask,
     Project,
     ScriptSegment,
@@ -263,6 +264,41 @@ def add_completed_longform_export(
         )
     )
     task.result_id = hist.result_id
+    return _save(task)
+
+
+def add_completed_longform_segment(
+    longform_task: LongformTask,
+    segment: LongformSegmentTask,
+) -> GenerationTask | None:
+    if not segment.result_id:
+        return None
+    hist = history_store.get(segment.result_id)
+    if not hist:
+        return None
+    parameters = dict(hist.parameter_snapshot or {})
+    task = GenerationTask(
+        task_id=segment.task_id or hist.task_id,
+        task_type="segment",
+        engine_id=longform_task.engine_id,
+        voice_id=longform_task.voice_id,
+        longform_task_id=longform_task.longform_task_id,
+        longform_segment_index=segment.index,
+        longform_segment_count=len(longform_task.segments),
+        input_text=segment.text,
+        status=TaskStatus.success,
+        progress=1.0,
+        result_audio_id=hist.output_audio_id,
+        result_id=hist.result_id,
+        result_duration_ms=segment.duration_ms or hist.duration_ms,
+        generation_time_ms=hist.generation_time_ms,
+        parameters=parameters,
+        completed_at=hist.created_at,
+    )
+    hist.longform_task_id = longform_task.longform_task_id
+    hist.longform_segment_index = segment.index
+    hist.longform_segment_count = len(longform_task.segments)
+    history_store.add(hist)
     return _save(task)
 
 

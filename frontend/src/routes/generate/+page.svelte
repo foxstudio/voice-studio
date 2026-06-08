@@ -435,6 +435,10 @@
 			if (taskIsActive(a) && taskIsActive(b)) {
 				return a.created_at.localeCompare(b.created_at) || a.task_id.localeCompare(b.task_id);
 			}
+			if (taskSortBy === 'latest' || taskSortBy === 'oldest') {
+				const longformDelta = compareLongformGroupOrder(a, b, filtered, taskSortBy);
+				if (longformDelta !== null) return longformDelta;
+			}
 			if (taskSortBy === 'oldest') return a.created_at.localeCompare(b.created_at);
 			if (taskSortBy === 'duration_desc') return (b.result_duration_ms ?? 0) - (a.result_duration_ms ?? 0);
 			return b.created_at.localeCompare(a.created_at);
@@ -1092,6 +1096,41 @@
 
 	function longformDownloadUrl(task: LongformTask) {
 		return task.export_id ? `/api/longform/${task.longform_task_id}/download` : '';
+	}
+
+	function longformGroupSortTime(task: GenerationTask, group: GenerationTask[], sortBy: TaskSortBy) {
+		const times = group
+			.map((item) => new Date(item.created_at).getTime())
+			.filter((time) => Number.isFinite(time));
+		if (!times.length) return new Date(task.created_at).getTime() || 0;
+		return sortBy === 'oldest' ? Math.min(...times) : Math.max(...times);
+	}
+
+	function longformItemRank(task: GenerationTask) {
+		if (taskIsLongformExport(task)) return 0;
+		if (taskIsLongformSegment(task)) return task.longform_segment_index ?? 999;
+		return 999;
+	}
+
+	function compareLongformGroupOrder(
+		a: GenerationTask,
+		b: GenerationTask,
+		scope: GenerationTask[],
+		sortBy: TaskSortBy
+	) {
+		const groupA = a.longform_task_id ? scope.filter((item) => item.longform_task_id === a.longform_task_id) : [a];
+		const groupB = b.longform_task_id ? scope.filter((item) => item.longform_task_id === b.longform_task_id) : [b];
+		const groupKeyA = a.longform_task_id ?? a.task_id;
+		const groupKeyB = b.longform_task_id ?? b.task_id;
+		if (groupKeyA !== groupKeyB) {
+			const timeA = longformGroupSortTime(a, groupA, sortBy);
+			const timeB = longformGroupSortTime(b, groupB, sortBy);
+			if (timeA !== timeB) return sortBy === 'oldest' ? timeA - timeB : timeB - timeA;
+			return groupKeyA.localeCompare(groupKeyB);
+		}
+		const rankDelta = longformItemRank(a) - longformItemRank(b);
+		if (rankDelta !== 0) return rankDelta;
+		return a.created_at.localeCompare(b.created_at) || a.task_id.localeCompare(b.task_id);
 	}
 
 	function taskIsLongformSegment(task: GenerationTask) {
