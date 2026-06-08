@@ -87,6 +87,7 @@
 	let textSegments = $state<string[]>([]);
 	let textToolBusy = $state<'clean' | 'numbers' | 'split' | ''>('');
 	let showSplitPreview = $state(false);
+	let splitPreviewCollapsed = $state(false);
 	let lastGeneratePlan = $state<GeneratePlanResponse | null>(null);
 
 	let engineId = $state('indextts-v2');
@@ -845,6 +846,7 @@
 		lastGeneratePlan = plan;
 		textSegments = plan.segments.map((segment) => segment.text);
 		showSplitPreview = plan.segments.length > 1;
+		splitPreviewCollapsed = false;
 	}
 
 	function requestLongformStrategy(plan: GeneratePlanResponse): Promise<LongformStrategy | null> {
@@ -962,6 +964,7 @@
 			}
 			textSegments = (await Api.splitText(text)).segments;
 			showSplitPreview = true;
+			splitPreviewCollapsed = false;
 		} finally {
 			textToolBusy = '';
 		}
@@ -1569,7 +1572,7 @@
 			{/if}
 
 			{#if showSplitPreview && textSegments.length}
-				<div class="split-preview">
+				<div class="split-preview" class:collapsed={splitPreviewCollapsed}>
 					<div class="split-preview-head">
 						<div class="split-preview-title">
 							<div class="row wrap split-title-row">
@@ -1582,18 +1585,28 @@
 								{/if}
 							</p>
 						</div>
-						<button class="icon-btn split-collapse" type="button" onclick={() => (showSplitPreview = false)} title="收起分段计划" aria-label="收起分段计划">
+						<button
+							class="icon-btn split-collapse"
+							class:expanded={!splitPreviewCollapsed}
+							type="button"
+							onclick={() => (splitPreviewCollapsed = !splitPreviewCollapsed)}
+							title={splitPreviewCollapsed ? '展开分段计划' : '收起分段计划'}
+							aria-label={splitPreviewCollapsed ? '展开分段计划' : '收起分段计划'}
+							aria-expanded={!splitPreviewCollapsed}
+						>
 							<ChevronRight size={15} />
 						</button>
 					</div>
-					<div class="segment-list">
-						{#each textSegments as segment, index}
-							<div class="segment-card">
-								<span class="segment-index">{index + 1}</span>
-								<p>{segment}</p>
-							</div>
-						{/each}
-					</div>
+					{#if !splitPreviewCollapsed}
+						<div class="segment-list">
+							{#each textSegments as segment, index}
+								<div class="segment-card">
+									<span class="segment-index">{index + 1}</span>
+									<p>{segment}</p>
+								</div>
+							{/each}
+						</div>
+					{/if}
 				</div>
 			{/if}
 
@@ -2651,6 +2664,10 @@
 		background: #111821;
 	}
 
+	.split-preview.collapsed {
+		gap: 0;
+	}
+
 	.split-preview-head {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) auto;
@@ -2685,6 +2702,11 @@
 		width: 30px;
 		height: 30px;
 		border-radius: 7px;
+		transition: transform 160ms ease;
+	}
+
+	.split-collapse.expanded {
+		transform: rotate(90deg);
 	}
 
 	.segment-list {
