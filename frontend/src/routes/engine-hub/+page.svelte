@@ -29,6 +29,14 @@
 		});
 	});
 
+	const engineCounts = $derived.by(() => ({
+		visible: visibleEngines.length,
+		total: engines.length,
+		local: engines.filter((engine) => engine.manifest.engine_type === 'local').length,
+		cloud: engines.filter((engine) => engine.manifest.engine_type === 'cloud').length,
+		loaded: engines.filter((engine) => engine.state.status === 'loaded').length
+	}));
+
 	async function refresh() {
 		[engines, voices] = await Promise.all([Api.engines(), Api.voices()]);
 	}
@@ -90,9 +98,11 @@
 					<option value="asr">ASR</option>
 				</select>
 			</label>
-			<div class="stack summary-box">
-				<span class="muted">可见 {visibleEngines.length} / {engines.length}</span>
-				<span class="badge">本地 {engines.filter((engine) => engine.manifest.engine_type === 'local').length}</span>
+			<div class="summary-box" aria-label="引擎概览">
+				<span class="summary-chip strong">可见 {engineCounts.visible}/{engineCounts.total}</span>
+				<span class="summary-chip">本地 {engineCounts.local}</span>
+				<span class="summary-chip">云端 {engineCounts.cloud}</span>
+				<span class="summary-chip ok">已加载 {engineCounts.loaded}</span>
 			</div>
 		</div>
 	</section>
@@ -165,11 +175,42 @@
 	}
 
 	.summary-box {
-		padding: 8px 10px;
+		display: flex;
+		align-items: center;
+		align-content: center;
+		gap: 6px;
+		flex-wrap: wrap;
+		padding: 6px;
 		border: 1px solid var(--line);
 		border-radius: 7px;
 		background: #101215;
-		min-height: 100%;
+		min-height: 34px;
+	}
+
+	.summary-chip {
+		display: inline-flex;
+		align-items: center;
+		min-height: 22px;
+		padding: 2px 7px;
+		border: 1px solid rgba(255, 255, 255, 0.07);
+		border-radius: 999px;
+		color: var(--muted);
+		background: rgba(255, 255, 255, 0.025);
+		font-size: 11px;
+		line-height: 1.2;
+		white-space: nowrap;
+	}
+
+	.summary-chip.strong {
+		color: #d9e2ef;
+		border-color: rgba(79, 156, 249, 0.28);
+		background: rgba(79, 156, 249, 0.09);
+	}
+
+	.summary-chip.ok {
+		color: #9ee6c8;
+		border-color: rgba(66, 196, 155, 0.28);
+		background: rgba(66, 196, 155, 0.08);
 	}
 
 	.grid {
@@ -187,6 +228,11 @@
 		gap: 10px;
 	}
 
+	.engine-card-head .badge {
+		flex: 0 0 auto;
+		white-space: nowrap;
+	}
+
 	.engine-card-head h2 {
 		margin-bottom: 0;
 		line-height: 1.25;
@@ -200,7 +246,8 @@
 		overflow: hidden;
 		width: 100%;
 		margin: 0;
-		line-height: 1.45;
+		font-size: 12px;
+		line-height: 1.4;
 	}
 
 	.text-pop.clamp-text {
