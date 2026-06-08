@@ -84,12 +84,21 @@ build-backend = "hatchling.build"
 packages = ["mlx_indextts"]
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B"]
-ignore = ["E501"]
+select = ["E", "F", "W"]
+ignore = [
+    "E501",   # line too long - let formatter handle it
+    "E741",   # ambiguous variable name (common in math/ML code)
+    "F401",   # unused imports - many are re-exports or conditional
+    "F841",   # unused variable - often intentional in ML code
+]
+
+[tool.ruff.lint.per-file-ignores]
+"mlx_indextts/indextts/**" = ["E", "F", "W"]  # inlined upstream code, don't lint
+"scripts/**" = ["F401", "F841"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

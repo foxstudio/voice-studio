@@ -126,6 +126,8 @@ async def diagnose_audio(engine_id: str, data: EngineAudioDiagnosisRequest):
             api_key = settings_store.mimo_api_key()
             if not api_key:
                 raise AppException(400, "MIMO_API_KEY_REQUIRED", "请先在设置中配置 MiMo API Key")
+            if engine_id == "mimo-v2.5-tts-voiceclone" and not ref:
+                raise AppException(400, "REFERENCE_AUDIO_REQUIRED", "MiMo VoiceClone 诊断需要选择一个参考音色")
             model = "mimo-v2.5-tts" if engine_id in {"mimo-v2.5-tts", "mimo-v2.5-tts-preset"} else engine_id
             kwargs = {
                 "text": data.text,

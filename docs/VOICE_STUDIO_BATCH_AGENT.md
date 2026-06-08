@@ -11,7 +11,7 @@
 先启动 Voice Studio 后端服务：
 
 ```bash
-cd /Users/foxmacstudio/Projects/mlx-indextts
+cd /path/to/voice-studio
 PYTHONPATH=backend .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -57,7 +57,7 @@ npm run extract-narrations
 这会生成 `audio-segments.json`。然后调用 Voice Studio 批处理：
 
 ```bash
-python /Users/foxmacstudio/Projects/mlx-indextts/scripts/voice_studio_batch.py \
+python scripts/voice_studio_batch.py \
   audio-segments.json \
   --voice 819316179a4a \
   --engine indextts-v2 \

@@ -33,7 +33,7 @@
 
 当前状态：
 
-- EmotiVoice 官方提供 2000+ voices；本项目已加载一组精选 `speaker_id` 到 `GET /api/engines` 的 `emotivoice.parameter_schema`，来源是本地 `/Users/foxmacstudio/Projects/tts-engine-lab/EmotiVoice/data/youdao/text/README.md`。
+- EmotiVoice 官方提供 2000+ voices；本项目已加载一组精选 `speaker_id` 到 `GET /api/engines` 的 `emotivoice.parameter_schema`，来源是本地 EmotiVoice 仓库的 `data/youdao/text/README.md`。
 - CosyVoice SFT 官方预置 speaker 已加载为 `cosyvoice-sft.speaker_id`，包括 `中文女`、`中文男`、`粤语女`、`日语男`、`韩语女`。
 - F5-TTS 没有固定官方 speaker 库；它主要使用 `ref_audio + ref_text` 做参考音色生成。
 - CosyVoice Zero-Shot 没有固定本地 speaker 选择；它使用音色库里的参考音频和对应台词。
@@ -44,7 +44,7 @@
 启动后端：
 
 ```bash
-cd /Users/foxmacstudio/Projects/mlx-indextts
+cd /path/to/voice-studio
 PYTHONPATH=backend .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -286,7 +286,7 @@ agent 规则：
 - `prompt`：中文情绪提示，例如 `开心`、`悲伤`、`愤怒`。
 - 官方推理格式是 `speaker|style_prompt/emotion_prompt/content|phoneme|content`。本项目 runner 会自动调用 `frontend.py` 生成 phoneme。
 - 当前精选 speaker 只是官方 2000+ voices 的子集；完整列表在本地 EmotiVoice `data/youdao/text/README.md` 和官方 voice wiki。
-- 当前通过外部 venv 调用 `/Users/foxmacstudio/Projects/tts-engine-lab/EmotiVoice`，可用 `VOICE_STUDIO_EMOTIVOICE_ROOT` 覆盖路径。
+- 当前通过外部 venv 调用本地 EmotiVoice 仓库，可用 `VOICE_STUDIO_EMOTIVOICE_ROOT` 覆盖路径。
 
 ### F5-TTS
 
@@ -298,13 +298,13 @@ agent 规则：
 - `target_rms`：响度目标，官方默认是 `0.1`。
 - `cross_fade_duration`：分段交叉淡化秒数，官方默认是 `0.15`。
 - `remove_silence`：生成后移除较长静音。官方 basic 示例默认关闭。
-- 当前通过外部 venv 调用 `/Users/foxmacstudio/Projects/tts-engine-lab/F5-TTS`，默认使用本地 ModelScope 权重，可用 `VOICE_STUDIO_F5_TTS_ROOT` 覆盖路径。
+- 当前通过外部 venv 调用本地 F5-TTS 仓库，默认使用本地 ModelScope 权重，可用 `VOICE_STUDIO_F5_TTS_ROOT` 覆盖路径。
 
 ### CosyVoice SFT
 
 - `speaker_id`：官方 SFT 预置音色，例如 `中文女`、`中文男`、`粤语女`。
 - `speed`：语速倍率。
-- 当前通过外部 venv 调用 `/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice`，可用 `VOICE_STUDIO_COSYVOICE_ROOT` 覆盖路径。
+- 当前通过外部 venv 调用本地 CosyVoice 仓库，可用 `VOICE_STUDIO_COSYVOICE_ROOT` 覆盖路径。
 
 ### CosyVoice Zero-Shot
 
@@ -313,7 +313,7 @@ agent 规则：
 - `ref_text`：参考音频对应台词，必填。缺失时后端会报 `REFERENCE_TEXT_REQUIRED`。
 - `speed`：语速倍率。
 - 官方实现会在目标文本明显短于 prompt text 时给出效果下降提醒；后台 agent 应先用较完整的测试句确认贴近度。
-- 当前通过外部 venv 调用 `/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice`，可用 `VOICE_STUDIO_COSYVOICE_ROOT` 覆盖路径。
+- 当前通过外部 venv 调用本地 CosyVoice 仓库，可用 `VOICE_STUDIO_COSYVOICE_ROOT` 覆盖路径。
 
 ### MiMo V2.5 TTS Preset
 
