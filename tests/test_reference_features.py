@@ -106,6 +106,35 @@ def test_f5_run_isolated_uses_persistent_worker_by_default(monkeypatch):
     assert captured["python"].endswith("/.venv/bin/python")
 
 
+def test_cosyvoice_run_isolated_uses_persistent_worker_by_default(monkeypatch):
+    captured: dict = {}
+
+    def fake_run(engine_id, kwargs, *, root, python, timeout, cancel_check=None, on_tick=None):
+        captured.update(
+            {
+                "engine_id": engine_id,
+                "kwargs": kwargs,
+                "root": root,
+                "python": python,
+                "timeout": timeout,
+                "cancel_check": cancel_check,
+                "on_tick": on_tick,
+            }
+        )
+        return {"output_path": kwargs["output_path"], "duration_ms": 1000, "generation_time_ms": 42}
+
+    monkeypatch.delenv("VOICE_STUDIO_COSYVOICE_PERSISTENT_WORKER", raising=False)
+    monkeypatch.setattr(engine_registry.cosyvoice_worker, "run", fake_run)
+
+    result = engine_registry.run_isolated("cosyvoice-zero-shot", {"output_path": "/tmp/cosy.wav"}, timeout=456)
+
+    assert result["output_path"] == "/tmp/cosy.wav"
+    assert captured["engine_id"] == "cosyvoice-zero-shot"
+    assert captured["timeout"] == 456
+    assert captured["root"].name == "CosyVoice"
+    assert captured["python"].endswith("/.venv/bin/python")
+
+
 def test_custom_presets_can_be_created_updated_and_deleted(tmp_path: Path):
     client = _client(tmp_path)
     payload = {

@@ -29,6 +29,8 @@ Updated: 2026-06-08
 - Added longform parent metadata to segment tasks and history records for merged longform exports.
 - Added a persistent F5-TTS worker process that reuses the external `F5TTS` model between requests; set `VOICE_STUDIO_F5_PERSISTENT_WORKER=0` to fall back to per-task isolation.
 - Smoke-tested two real F5-TTS voice-clone generations with the same local reference voice; the second request reused the worker and completed quickly.
+- Added a persistent CosyVoice worker process shared by SFT and Zero-Shot; set `VOICE_STUDIO_COSYVOICE_PERSISTENT_WORKER=0` to fall back to per-task isolation.
+- Smoke-tested CosyVoice SFT and CosyVoice Zero-Shot on the persistent worker. Reuse avoids model reload, but CosyVoice inference itself remains slower than F5 on this machine.
 - Merged the Soundpackage branch work into `main`.
 
 ## Verification
@@ -48,10 +50,11 @@ Last known result:
 
 - Frontend check: passed, 0 errors / 0 warnings.
 - Backend compile: passed.
-- Tests: 55 passed, 5 warnings.
+- Tests: 57 passed, 7 warnings.
 - CLI health: `ok`.
 - CLI voice list: 74 voices.
 - F5 real smoke: two `f5-tts` tasks succeeded with voice `c27a673f6db5`; outputs `/tmp/voice-studio-f5-smoke-1.wav` and `/tmp/voice-studio-f5-smoke-2.wav` are both 24 kHz WAV files, about 3.7 seconds each.
+- CosyVoice real smoke: `cosyvoice-sft` task `eeb3d1a94ee2` succeeded in 18.0s after worker warm-up, and `cosyvoice-zero-shot` task `cf9e34d08fef` succeeded in 20.9s using voice `c27a673f6db5`; outputs are 22.05 kHz WAV files.
 - Reference text backfill: 48 updated, 0 skipped; local API currently has 0 voices with reference audio but empty `reference_text`, 40 voices still tagged `ASR待复核`, and 8 ASR-filled voices already marked `verified`.
 - EmotiVoice speaker catalog: local README has 2,000+ speaker rows; API search and generate-page speaker filtering are available.
 
@@ -84,12 +87,12 @@ Recommended path:
 
 ### 2. Persistent Workers
 
-F5-TTS now has a persistent external worker that reuses the loaded `F5TTS` model between requests while preserving timeout/cancel reset behavior. CosyVoice still loads per task.
+F5-TTS and CosyVoice now have persistent external workers that reuse loaded models between requests while preserving timeout/cancel reset behavior. CosyVoice SFT and Zero-Shot share one `AutoModel` worker; the model stays loaded, but generation is still relatively slow on local MPS.
 
 Recommended path:
 
-- Add a visible worker status/reset control after the first few F5 field tests.
-- Treat CosyVoice persistent workers as a separate task because SFT and Zero-Shot share a heavier `AutoModel` process and need careful MPS memory handling.
+- Add a visible worker status/reset control after the first few field tests.
+- Track warm/cold generation time per engine in the task UI so slow inference is easier to distinguish from model loading.
 
 ### 3. Voice Quality Evaluation
 

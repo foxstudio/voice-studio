@@ -10,6 +10,7 @@
 - F5-TTS 是本地参考音频 TTS，当前接入要求已授权参考音频和对应 `ref_text`，不会自动调用 Whisper 听写参考音频。
 - CosyVoice SFT 是本地官方预训练音色 TTS，当前接入使用官方 SFT 预置 speaker。
 - CosyVoice Zero-Shot 是本地参考音频复刻 TTS，使用音色库参考音频和对应 `ref_text`；不要和 SFT 预置音色混用。
+- F5-TTS 和 CosyVoice 默认使用外部持久 worker 复用已加载模型；排查问题时可分别设置 `VOICE_STUDIO_F5_PERSISTENT_WORKER=0` 或 `VOICE_STUDIO_COSYVOICE_PERSISTENT_WORKER=0` 回退一次性子进程。
 - MiMo V2.5 TTS 是云端 OpenAI 兼容接口，已拆成 preset、voicedesign、voiceclone 三个引擎；官方 TTS 超参是 `temperature` 和 `top_p`。
 - MiMo voiceclone 没有独立的数值 `speed` API 参数。需要调语速时，把“语速稍慢/语速偏快”等写进 `style_instruction`，或在合成文本里使用官方音频标签。
 - MiMo ASR 只做音频转文字，当前有效参数是 `language`。

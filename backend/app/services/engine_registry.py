@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.models.schemas import EngineDetail, EngineManifest, EngineSpeaker, EngineState, EngineStatus, ParameterSchema
-from app.services import f5_worker, mimo_client, qwen_mlx_asr, settings_store
+from app.services import cosyvoice_worker, f5_worker, mimo_client, qwen_mlx_asr, settings_store
 from app.services.paths import PROJECT_ROOT
 
 
@@ -531,6 +531,8 @@ def stop_engine(engine_id: str) -> EngineDetail:
     engine_id = _resolve_engine_id(engine_id)
     if engine_id == "f5-tts":
         f5_worker.shutdown()
+    if engine_id in {"cosyvoice-sft", "cosyvoice-zero-shot"}:
+        cosyvoice_worker.shutdown()
     detail = _ENGINES[engine_id]
     detail.state.status = EngineStatus.stopped
     detail.state.error_message = None
@@ -558,6 +560,17 @@ def run_isolated(
     if engine_id == "f5-tts" and os.environ.get("VOICE_STUDIO_F5_PERSISTENT_WORKER", "1") != "0":
         root = _external_engine_root("f5-tts")
         return f5_worker.run(
+            kwargs,
+            root=root,
+            python=str(root / ".venv" / "bin" / "python"),
+            timeout=timeout,
+            cancel_check=cancel_check,
+            on_tick=on_tick,
+        )
+    if engine_id in {"cosyvoice-sft", "cosyvoice-zero-shot"} and os.environ.get("VOICE_STUDIO_COSYVOICE_PERSISTENT_WORKER", "1") != "0":
+        root = _external_engine_root(engine_id)
+        return cosyvoice_worker.run(
+            engine_id,
             kwargs,
             root=root,
             python=str(root / ".venv" / "bin" / "python"),
@@ -636,3 +649,4 @@ def _terminate_process(proc: subprocess.Popen) -> None:
 
 def shutdown_workers() -> None:
     f5_worker.shutdown()
+    cosyvoice_worker.shutdown()
