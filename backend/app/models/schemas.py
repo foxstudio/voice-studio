@@ -271,7 +271,15 @@ class GenerateRequest(BaseModel):
     emotion_text: str | None = None
     style_instruction: str | None = None
     voice_design_prompt: str | None = None
+    optimize_text_preview: bool = False
     mimo_voice: str | None = None
+    speaker_id: str | None = None
+    prompt: str | None = None
+    nfe_step: int = Field(default=32, ge=4, le=64)
+    cfg_strength: float = Field(default=2.0, ge=0.1, le=5.0)
+    target_rms: float = Field(default=0.1, ge=0.01, le=1.0)
+    cross_fade_duration: float = Field(default=0.15, ge=0.0, le=1.0)
+    remove_silence: bool = False
     emo_alpha: float = Field(default=0.6, ge=0, le=1)
     speed: float = Field(default=1.0, ge=0.5, le=3.0)
     temperature: float = Field(default=0.8, ge=0.1, le=2.0)
@@ -291,6 +299,68 @@ class GenerateRequest(BaseModel):
 class GenerateResponse(BaseModel):
     task_id: str
     status: TaskStatus = TaskStatus.queued
+
+
+class GeneratePlanRequest(BaseModel):
+    text: str
+    engine_id: str = "indextts-v2"
+    planner_mode: Literal["auto", "rules", "llm"] = "auto"
+    target_format: Literal["wav", "mp3", "flac"] = "mp3"
+
+
+class PlannedTextSegment(BaseModel):
+    index: int
+    text: str
+    char_count: int
+    segment_reason: str = "sentence_boundary"
+
+
+class GeneratePlanResponse(BaseModel):
+    planner: Literal["rules", "llm"] = "rules"
+    llm_available: bool = False
+    mode: Literal["direct", "longform_recommended", "longform_strongly_recommended"] = "direct"
+    recommended_action: Literal["direct_generate", "direct_generate_with_verification", "split_generate", "split_verify_merge"] = "direct_generate"
+    requires_user_confirmation: bool = False
+    text_length: int = 0
+    threshold: int = 0
+    hard_threshold: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    privacy_notice: str = ""
+    planner_reason: str = ""
+    segments: list[PlannedTextSegment] = Field(default_factory=list)
+
+
+class TTSVerificationRequest(BaseModel):
+    result_id: str | None = None
+    expected_text: str | None = None
+    transcript_text: str | None = None
+    asr_engine_id: str = "qwen3-asr-mlx"
+    language: Literal["auto", "zh", "en"] = "auto"
+
+
+class TTSVerificationSegment(BaseModel):
+    index: int
+    expected_text: str
+    normalized_expected: str
+    coverage: float
+    status: Literal["passed", "warning", "failed"]
+
+
+class TTSVerificationResponse(BaseModel):
+    status: Literal["passed", "warning", "failed", "skipped"]
+    coverage: float
+    similarity: float
+    expected_text: str
+    transcript_text: str
+    normalized_expected: str
+    normalized_transcript: str
+    missing_segments: list[TTSVerificationSegment] = Field(default_factory=list)
+    segment_results: list[TTSVerificationSegment] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+    result_id: str | None = None
+    transcription_id: str | None = None
+    asr_engine_id: str | None = None
 
 
 class BatchSegmentInput(BaseModel):
@@ -504,6 +574,19 @@ class PresetTemplate(BaseModel):
     description: str
     engine_id: str
     sample_text: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    source_test_id: str | None = None
+    recommended_voice_type: str = "reference_voice"
+    tags: list[str] = Field(default_factory=list)
+
+
+class PresetTemplateUpsert(BaseModel):
+    preset_id: str | None = None
+    name: str
+    scene: str = ""
+    description: str = ""
+    engine_id: str = "indextts-v2"
+    sample_text: str = ""
     parameters: dict[str, Any] = Field(default_factory=dict)
     source_test_id: str | None = None
     recommended_voice_type: str = "reference_voice"

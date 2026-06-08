@@ -173,7 +173,15 @@ export interface GenerateRequest {
 	emotion_text?: string | null;
 	style_instruction?: string | null;
 	voice_design_prompt?: string | null;
+	optimize_text_preview?: boolean;
 	mimo_voice?: string | null;
+	speaker_id?: string | null;
+	prompt?: string | null;
+	nfe_step: number;
+	cfg_strength: number;
+	target_rms: number;
+	cross_fade_duration: number;
+	remove_silence: boolean;
 	emo_alpha: number;
 	speed: number;
 	temperature: number;
@@ -195,6 +203,68 @@ export interface GenerateResponse {
 	status: TaskStatus;
 }
 
+export interface GeneratePlanRequest {
+	text: string;
+	engine_id: string;
+	planner_mode?: 'auto' | 'rules' | 'llm';
+	target_format?: OutputFormat;
+}
+
+export interface PlannedTextSegment {
+	index: number;
+	text: string;
+	char_count: number;
+	segment_reason: string;
+}
+
+export interface GeneratePlanResponse {
+	planner: 'rules' | 'llm';
+	llm_available: boolean;
+	mode: 'direct' | 'longform_recommended' | 'longform_strongly_recommended';
+	recommended_action: 'direct_generate' | 'direct_generate_with_verification' | 'split_generate' | 'split_verify_merge';
+	requires_user_confirmation: boolean;
+	text_length: number;
+	threshold: number;
+	hard_threshold: number;
+	warnings: string[];
+	privacy_notice: string;
+	planner_reason: string;
+	segments: PlannedTextSegment[];
+}
+
+export interface TTSVerificationRequest {
+	result_id?: string | null;
+	expected_text?: string | null;
+	transcript_text?: string | null;
+	asr_engine_id?: string;
+	language?: 'auto' | 'zh' | 'en';
+}
+
+export interface TTSVerificationSegment {
+	index: number;
+	expected_text: string;
+	normalized_expected: string;
+	coverage: number;
+	status: 'passed' | 'warning' | 'failed';
+}
+
+export interface TTSVerificationResponse {
+	status: 'passed' | 'warning' | 'failed' | 'skipped';
+	coverage: number;
+	similarity: number;
+	expected_text: string;
+	transcript_text: string;
+	normalized_expected: string;
+	normalized_transcript: string;
+	missing_segments: TTSVerificationSegment[];
+	segment_results: TTSVerificationSegment[];
+	warnings: string[];
+	suggestions: string[];
+	result_id: string | null;
+	transcription_id: string | null;
+	asr_engine_id: string | null;
+}
+
 export interface BatchSegmentInput {
 	segment_id?: string | null;
 	chapter?: string | null;
@@ -210,6 +280,7 @@ export interface BatchSegmentInput {
 	emotion_text?: string | null;
 	style_instruction?: string | null;
 	voice_design_prompt?: string | null;
+	optimize_text_preview?: boolean;
 	mimo_voice?: string | null;
 	speed?: number | null;
 	parameters?: Record<string, unknown>;
@@ -352,6 +423,11 @@ export interface PresetTemplate {
 	recommended_voice_type: string;
 	tags: string[];
 }
+
+export type PresetTemplateInput = Omit<PresetTemplate, 'preset_id' | 'source_test_id'> & {
+	preset_id?: string | null;
+	source_test_id?: string | null;
+};
 
 export interface VoiceSeed {
 	seed_id: string;
