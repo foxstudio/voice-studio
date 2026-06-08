@@ -99,26 +99,26 @@
 	<section class="grid">
 			{#each visibleEngines as engine}
 				<article class={`card stack engine-surface ${engine.manifest.engine_type === 'cloud' ? 'engine-cloud' : 'engine-local'}`}>
-				<div class="row" style="justify-content:space-between">
+				<div class="row engine-card-head">
 					<h2>{engine.manifest.display_name}</h2>
 					<span class="badge" class:ok={engine.state.status === 'loaded'} class:fail={engine.state.status === 'error'}>{engineStatusLabel(engine.state.status)}</span>
 				</div>
-				<p class="muted">{engine.manifest.description}</p>
+				<p class="muted clamp-text text-pop" data-text={engine.manifest.description}>{engine.manifest.description}</p>
 				{#if engine.manifest.engine_id === 'indextts-v2'}
-					<p class="muted">当前主力中文口播引擎：支持 8 种情绪、更长文本、S2Mel/BigVGAN2。</p>
+					<p class="muted clamp-text text-pop" data-text="当前主力中文口播引擎：支持 8 种情绪、更长文本、S2Mel/BigVGAN2。">当前主力中文口播引擎：支持 8 种情绪、更长文本、S2Mel/BigVGAN2。</p>
 				{/if}
-				<div class="row">
+				<div class="row compact-tags">
 					<span class="badge">{engine.manifest.sample_rate ?? '-'} Hz</span>
 					<span class="badge badge-kind">{engine.manifest.engine_type === 'local' ? '本地' : '云端'}</span>
 					<span class="badge">{engine.manifest.privacy_level === 'local_only' ? '仅本地' : engine.manifest.privacy_level}</span>
 				</div>
-				<div class="row">
+				<div class="row compact-tags capability-row">
 					{#each engine.manifest.capabilities as cap}<span class="badge">{capabilityLabel(cap)}</span>{/each}
 				</div>
-					<div class="row">
-						{#if engine.state.status === 'loaded'}<button class="btn" onclick={() => stop(engine.manifest.engine_id)}><Square size={15} /> 停止</button>{:else}<button class="btn primary" onclick={() => start(engine.manifest.engine_id)}><Play size={15} /> 启动</button>{/if}
-						<button class="btn" onclick={() => check(engine.manifest.engine_id)}><Activity size={15} /> 检查</button>
-						{#if !engine.manifest.capabilities.includes('speech_recognition')}<button class="btn" onclick={() => diagnose(engine.manifest.engine_id)}><Volume2 size={15} /> 音频诊断</button>{/if}
+					<div class="row compact-actions">
+						{#if engine.state.status === 'loaded'}<button class="btn mini-btn" onclick={() => stop(engine.manifest.engine_id)}><Square size={13} /> 停止</button>{:else}<button class="btn primary mini-btn" onclick={() => start(engine.manifest.engine_id)}><Play size={13} /> 启动</button>{/if}
+						<button class="btn mini-btn" onclick={() => check(engine.manifest.engine_id)}><Activity size={13} /> 检查</button>
+						{#if !engine.manifest.capabilities.includes('speech_recognition')}<button class="btn mini-btn" onclick={() => diagnose(engine.manifest.engine_id)}><Volume2 size={13} /> 音频诊断</button>{/if}
 					</div>
 				{#if diagnosis[engine.manifest.engine_id]}
 					<div class="diagnosis-box">
@@ -170,6 +170,84 @@
 		border-radius: 7px;
 		background: #101215;
 		min-height: 100%;
+	}
+
+	.grid {
+		align-items: stretch;
+	}
+
+	.card {
+		gap: 9px;
+	}
+
+	.engine-card-head {
+		justify-content: space-between;
+		flex-wrap: nowrap;
+		align-items: flex-start;
+		gap: 10px;
+	}
+
+	.engine-card-head h2 {
+		margin-bottom: 0;
+		line-height: 1.25;
+	}
+
+	.clamp-text {
+		display: -webkit-box;
+		line-clamp: 2;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+		width: 100%;
+		margin: 0;
+		line-height: 1.45;
+	}
+
+	.text-pop.clamp-text {
+		padding: 0;
+		border: 0;
+		border-radius: 0;
+		background: transparent;
+		backdrop-filter: none;
+		box-shadow: none;
+		cursor: help;
+	}
+
+	.text-pop.clamp-text:hover::after,
+	.text-pop.clamp-text:focus-within::after {
+		left: 0;
+		bottom: calc(100% + 8px);
+		width: min(320px, 76vw);
+	}
+
+	.compact-tags {
+		gap: 5px;
+		align-items: flex-start;
+	}
+
+	.compact-tags .badge {
+		padding: 1px 6px;
+		font-size: 11px;
+		line-height: 1.4;
+	}
+
+	.capability-row {
+		row-gap: 5px;
+	}
+
+	.compact-actions {
+		gap: 6px;
+		align-items: center;
+		margin-top: 2px;
+	}
+
+	.mini-btn {
+		min-height: 24px;
+		padding: 3px 7px;
+		gap: 4px;
+		font-size: 11px;
+		border-radius: 6px;
+		line-height: 1.1;
 	}
 
 	.diagnosis-box {
