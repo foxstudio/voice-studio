@@ -53,7 +53,46 @@ uv sync --extra server
 cd frontend && pnpm install && cd ..
 ```
 
-### 启动
+### 模型获取
+
+本项目**不包含模型权重**（文件过大，不适合放 Git）。需要自行下载并转换：
+
+```bash
+# 安装转换依赖
+uv sync --extra convert
+
+# 从 HuggingFace 下载 PyTorch 模型，然后转换为 MLX 格式
+# 1. 下载原始模型到本地（示例）
+git lfs install
+git clone https://huggingface.co/IndexTeam/IndexTTS2 models/IndexTTS2-pt
+
+# 2. 转换为 MLX 格式
+uv run voice-studio convert \
+  --model-dir models/IndexTTS2-pt \
+  --output models/mlx-indexTTS-2.0
+```
+
+转换完成后，`models/mlx-indexTTS-2.0/` 约 4 GB。
+
+## 音色库
+
+声音克隆引擎（IndexTTS v2、F5-TTS、CosyVoice Zero-Shot）需要参考音频。通过 WebUI 的**音色库**页面上传管理：
+
+1. 启动服务后打开 http://localhost:5173
+2. 进入「音色库」页面
+3. 上传 wav/mp3 参考音频，填写名称和台词文本
+4. 生成时选择对应音色即可
+
+CLI 也可指定参考音频路径：`-r reference.wav`
+
+## 云端引擎配置
+
+MiMo V2.5 云端引擎需要 API key：
+
+1. 前往 [小米 MiMo 平台](https://platform.xiaomimimo.com) 注册并获取 API key
+2. 在 WebUI「设置」页面填入 key，或设置环境变量 `MIMO_API_KEY`
+
+## 启动
 
 ```bash
 ./start.sh
