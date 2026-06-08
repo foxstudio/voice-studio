@@ -207,6 +207,11 @@
 						<div class="search-field">
 							<Search size={15} />
 							<input bind:value={voiceQuery} placeholder="名称、描述、标签" />
+							{#if voiceQuery.trim()}
+								<button class="search-clear" type="button" aria-label="清空搜索" title="清空搜索" onclick={() => (voiceQuery = '')}>
+									<X size={14} />
+								</button>
+							{/if}
 						</div>
 					</label>
 					<label class="field">
@@ -375,6 +380,31 @@
 		padding: 0;
 		color: inherit;
 		outline: none;
+	}
+
+	.search-clear {
+		display: inline-grid;
+		place-items: center;
+		flex: 0 0 auto;
+		width: 22px;
+		height: 22px;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.04);
+		color: var(--muted);
+		cursor: pointer;
+		padding: 0;
+	}
+
+	.search-clear:hover {
+		border-color: rgba(78, 163, 255, 0.5);
+		background: rgba(78, 163, 255, 0.12);
+		color: var(--text);
+	}
+
+	.search-clear:focus-visible {
+		outline: 2px solid rgba(78, 163, 255, 0.75);
+		outline-offset: 2px;
 	}
 
 	.library-toolbar {
