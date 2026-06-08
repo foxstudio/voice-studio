@@ -221,7 +221,7 @@
 	let expandedCards = $state(new Set<string>());
 	let expandedCategories = $state(new Set<string>());
 
-	const tagsByCategory = $derived.by(() => {
+	const { tagsByCategory, tagCounts } = $derived.by(() => {
 		const counts = new Map<string, number>();
 		const groups: Record<string, string[]> = {};
 		for (const voice of voices) {
@@ -235,7 +235,7 @@
 		for (const cat of Object.keys(groups)) {
 			groups[cat].sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0));
 		}
-		return groups;
+		return { tagsByCategory: groups, tagCounts: counts };
 	});
 
 	function selectedTags(): Set<string> {
@@ -370,6 +370,10 @@
 
 			{#if Object.keys(tagsByCategory).length > 0}
 			<section class="tag-cloud-section">
+				<div class="tag-cloud-header">
+					<span>标签筛选</span>
+					<span class="muted">{filteredVoices.length} / {voices.length} 条结果</span>
+				</div>
 				{#each [
 					{ key: 'gender', label: '性别' },
 					{ key: 'age', label: '年龄' },
@@ -379,19 +383,21 @@
 					{ key: 'source', label: '来源' }
 				] as cat}
 					{#if tagsByCategory[cat.key]?.length}
-						<div class="tag-cloud-category">
+						<div class="tag-cloud-category" class:expanded={expandedCategories.has(cat.key)}>
 							<span class="tag-cloud-label">{cat.label}</span>
-							{#each (expandedCategories.has(cat.key) ? tagsByCategory[cat.key] : tagsByCategory[cat.key].slice(0, 8)) as tag}
+							{#each tagsByCategory[cat.key] as tag}
 								<button
-									class={`tag-cloud-chip tag-cloud-${tagCategory(tag)} {selectedTags().has(tag.toLowerCase()) ? 'active' : ''}`}
+									class="tag-cloud-chip tag-cloud-{tagCategory(tag)} {selectedTags().has(tag.toLowerCase()) ? 'active' : ''}"
 									type="button"
 									onclick={() => toggleTagFromCloud(tag)}
-								>{tag}</button>
+								>{tag}<span class="tag-count">{tagCounts.get(tag)}</span></button>
 							{/each}
-							{#if tagsByCategory[cat.key].length > 8 && !expandedCategories.has(cat.key)}
-								<button class="tag-cloud-expand" type="button" onclick={() => expandedCategories.add(cat.key)}>
-									…+{tagsByCategory[cat.key].length - 8}
-								</button>
+							{#if tagsByCategory[cat.key].length > 3}
+								<button class="tag-cloud-expand" type="button" onclick={() => {
+									expandedCategories = expandedCategories.has(cat.key)
+										? new Set([...expandedCategories].filter(k => k !== cat.key))
+										: new Set([...expandedCategories, cat.key]);
+								}}>{expandedCategories.has(cat.key) ? '收起' : '更多'}</button>
 							{/if}
 						</div>
 					{/if}
@@ -412,7 +418,7 @@
 							<button class={`badge tag-filter ${tagClass(tag)}`} type="button" title={`添加到搜索：${tag}`} onclick={() => appendVoiceQueryTag(tag)}>{tag}</button>
 						{/each}
 						{#if cleanTags(voice.tags, 99).length > 4 && !expandedCards.has(voice.voice_id)}
-							<button class="tag-expand-btn" type="button" onclick={() => expandedCards.add(voice.voice_id)}>+{cleanTags(voice.tags, 99).length - 4}</button>
+							<button class="tag-expand-btn" type="button" onclick={() => { expandedCards = new Set([...expandedCards, voice.voice_id]); }}>+{cleanTags(voice.tags, 99).length - 4}</button>
 						{/if}
 					</div>
 					<div class="asset-meta">
@@ -722,64 +728,103 @@
 		color: var(--text);
 	}
 
-	.tag-cloud-section {
-		padding: 10px 0;
-	}
+			.tag-cloud-section {
+			padding: 10px 0;
+		}
 
-	.tag-cloud-category {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 5px;
-		margin-bottom: 6px;
-	}
+		.tag-cloud-header {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			margin-bottom: 8px;
+			font-size: 12px;
+			font-weight: 500;
+		}
 
-	.tag-cloud-label {
-		font-size: 11px;
-		color: var(--muted);
-		min-width: 36px;
-		flex: 0 0 auto;
-	}
+		.tag-cloud-category {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 5px;
+			margin-bottom: 6px;
+			position: relative;
+			max-height: 26px;
+			overflow: hidden;
+		}
 
-	.tag-cloud-chip {
-		appearance: none;
-		border: 1px solid rgba(148, 163, 184, 0.22);
-		background: rgba(148, 163, 184, 0.08);
-		font: inherit;
-		color: #b8c2cf;
-		cursor: pointer;
-		padding: 2px 8px;
-		font-size: 11px;
-		line-height: 1.4;
-		border-radius: 999px;
-		transition: border-color 0.15s, background 0.15s;
-	}
+		.tag-cloud-category.expanded {
+			max-height: none;
+			overflow: visible;
+		}
 
-	.tag-cloud-chip:hover {
-		border-color: rgba(78, 163, 255, 0.55);
-		background: rgba(78, 163, 255, 0.12);
-		color: var(--text);
-	}
+		.tag-cloud-label {
+			font-size: 11px;
+			color: var(--muted);
+			min-width: 36px;
+			flex: 0 0 auto;
+		}
 
-	.tag-cloud-chip.active {
-		border-color: rgba(78, 163, 255, 0.7);
-		background: rgba(78, 163, 255, 0.18);
-		color: #fff;
-	}
+		.tag-cloud-chip {
+			appearance: none;
+			border: 1px solid rgba(148, 163, 184, 0.22);
+			background: rgba(148, 163, 184, 0.08);
+			font: inherit;
+			color: #b8c2cf;
+			cursor: pointer;
+			padding: 2px 8px;
+			font-size: 11px;
+			line-height: 1.4;
+			border-radius: 999px;
+			transition: border-color 0.15s, background 0.15s;
+		}
 
-	.tag-cloud-expand {
-		appearance: none;
-		border: none;
-		background: transparent;
-		color: var(--accent);
-		cursor: pointer;
-		font-size: 11px;
-		padding: 2px 4px;
-	}
+		.tag-cloud-chip:hover {
+			border-color: rgba(78, 163, 255, 0.55);
+			background: rgba(78, 163, 255, 0.12);
+			color: var(--text);
+		}
 
-	.tag-cloud-expand:hover {
-		text-decoration: underline;
-	}
+		.tag-cloud-chip.active {
+			border-color: rgba(78, 163, 255, 0.7);
+			background: rgba(78, 163, 255, 0.18);
+			color: #fff;
+		}
+
+		.tag-count {
+			font-size: 10px;
+			opacity: 0.45;
+			margin-left: 2px;
+		}
+
+		.tag-cloud-expand {
+			appearance: none;
+			border: none;
+			background: transparent;
+			color: var(--accent);
+			cursor: pointer;
+			font-size: 11px;
+			padding: 2px 4px;
+			flex-shrink: 0;
+		}
+
+		.tag-cloud-category:not(.expanded) .tag-cloud-expand {
+			position: absolute;
+			right: 0;
+			bottom: 0;
+			padding-left: 24px;
+			background: linear-gradient(to right, transparent, #12161d 45%);
+			line-height: 1.4;
+		}
+
+		.tag-cloud-category.expanded .tag-cloud-expand {
+			position: static;
+			background: none;
+			padding-left: 0;
+		}
+
+		.tag-cloud-expand:hover {
+			text-decoration: underline;
+		}
 
 	.tag-filter:hover {
 		border-color: rgba(78, 163, 255, 0.55);
