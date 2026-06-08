@@ -1570,21 +1570,26 @@
 
 			{#if showSplitPreview && textSegments.length}
 				<div class="split-preview">
-					<div class="row" style="justify-content:space-between">
-						<div>
-							<h3>{lastGeneratePlan ? '系统分段计划' : '智能分句预览'}</h3>
-							<p class="muted">
-								共 {textSegments.length} 段，用来提前检查停顿和节奏。{#if lastGeneratePlan}
+					<div class="split-preview-head">
+						<div class="split-preview-title">
+							<div class="row wrap split-title-row">
+								<h3>{lastGeneratePlan ? '系统分段计划' : '智能分句预览'}</h3>
+								<span class="badge">{textSegments.length} 段</span>
+							</div>
+							<p>
+								用来提前检查停顿和节奏。{#if lastGeneratePlan}
 									{lastGeneratePlan.planner_reason}
 								{/if}
 							</p>
 						</div>
-						<button class="btn" type="button" onclick={() => (showSplitPreview = false)}>收起</button>
+						<button class="icon-btn split-collapse" type="button" onclick={() => (showSplitPreview = false)} title="收起分段计划" aria-label="收起分段计划">
+							<ChevronRight size={15} />
+						</button>
 					</div>
 					<div class="segment-list">
 						{#each textSegments as segment, index}
 							<div class="segment-card">
-								<span class="badge">{index + 1}</span>
+								<span class="segment-index">{index + 1}</span>
 								<p>{segment}</p>
 							</div>
 						{/each}
@@ -2639,32 +2644,86 @@
 
 	.split-preview {
 		display: grid;
-		gap: 10px;
-		padding: 11px;
+		gap: 12px;
+		padding: 12px;
 		border: 1px solid var(--line);
 		border-radius: 8px;
-		background: #121519;
+		background: #111821;
+	}
+
+	.split-preview-head {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: start;
+		gap: 12px;
+	}
+
+	.split-preview-title {
+		display: grid;
+		gap: 5px;
+		min-width: 0;
+	}
+
+	.split-title-row {
+		gap: 8px;
+	}
+
+	.split-title-row h3 {
+		margin: 0;
+		font-size: 14px;
+		line-height: 1.25;
+	}
+
+	.split-preview-title p {
+		margin: 0;
+		color: #aeb8c7;
+		font-size: 12px;
+		line-height: 1.45;
+	}
+
+	.split-collapse {
+		width: 30px;
+		height: 30px;
+		border-radius: 7px;
 	}
 
 	.segment-list {
 		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-		gap: 10px;
+		grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+		gap: 8px;
 	}
 
 	.segment-card {
 		display: grid;
-		gap: 8px;
-		padding: 10px;
+		grid-template-columns: 26px minmax(0, 1fr);
+		align-items: start;
+		gap: 9px;
+		min-height: 118px;
+		padding: 9px;
 		border: 1px solid var(--line);
 		border-radius: 7px;
-		background: #101215;
+		background: #0e141c;
+	}
+
+	.segment-index {
+		display: inline-grid;
+		width: 24px;
+		height: 24px;
+		place-items: center;
+		border: 1px solid rgba(148, 163, 184, 0.22);
+		border-radius: 999px;
+		background: #122033;
+		color: #bcd1f1;
+		font-size: 12px;
+		line-height: 1;
 	}
 
 	.segment-card p {
 		margin: 0;
-		font-size: 13px;
-		line-height: 1.5;
+		color: #dbe4f0;
+		font-size: 12px;
+		line-height: 1.55;
+		overflow-wrap: anywhere;
 	}
 
 	.modal-backdrop {
