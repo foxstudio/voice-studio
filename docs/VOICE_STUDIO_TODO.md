@@ -23,6 +23,10 @@ Updated: 2026-06-08
 - Updated shared `local-tts` skill documentation and batch agent documentation.
 - Added partial voice update support for `reference_text`, `quality_status`, `quality_notes`, and `favorite`.
 - Added `scripts/backfill_voice_reference_text.py` to dry-run or apply local ASR reference-text backfill.
+- Backfilled `reference_text` for all 48 voices that had reference audio but no reference text; ASR-derived lines are tracked with `quality_status` and review notes.
+- Added voice-library review filtering, quality status chips, and a manual reviewed action for ASR-derived reference text.
+- Added `/api/engines/{engine_id}/speakers` and EmotiVoice speaker search in the generate page, backed by the local official voice wiki README.
+- Added longform parent metadata to segment tasks and history records for merged longform exports.
 - Merged the Soundpackage branch work into `main`.
 
 ## Verification
@@ -42,10 +46,11 @@ Last known result:
 
 - Frontend check: passed, 0 errors / 0 warnings.
 - Backend compile: passed.
-- Tests: 50 passed, 5 warnings.
+- Tests: 51 passed, 5 warnings.
 - CLI health: `ok`.
 - CLI voice list: 74 voices.
-- Reference text dry-run: 5 candidates listed, no writes; local API currently has 48 voices with reference audio but empty `reference_text`.
+- Reference text backfill: 48 updated, 0 skipped; local API currently has 0 voices with reference audio but empty `reference_text`, 40 voices still tagged `ASR待复核`, and 8 ASR-filled voices already marked `verified`.
+- EmotiVoice speaker catalog: local README has 2,000+ speaker rows; API search and generate-page speaker filtering are available.
 
 ## Import Scripts
 
@@ -64,15 +69,15 @@ Follow-up cleanup:
 
 ## Remaining Work
 
-### 1. Reference Text Backfill
+### 1. Reference Text Review
 
-Many imported character voices have reference audio but empty `reference_text`. F5-TTS and CosyVoice Zero-Shot require accurate reference text. This is the main quality blocker.
+Imported character voices now have ASR-derived `reference_text`, so F5-TTS and CosyVoice Zero-Shot can use them as reference voices. The remaining quality work is human review: ASR can mishear names, particles, or stylized character lines.
 
 Recommended path:
 
-- Run `scripts/backfill_voice_reference_text.py` in dry-run mode to inspect candidates.
-- Apply it in small batches, for example `--limit 5 --apply`, so generated transcripts can be reviewed.
-- Keep the `ASR待复核` tag and `quality_notes` note until a human verifies the reference line.
+- Use the voice-library `复核` filter to show `ASR待复核` voices.
+- Listen to the reference audio and compare it with the `台词` chip text.
+- Click `已复核` only after the reference text is manually confirmed.
 
 ### 2. Persistent Workers
 
@@ -96,12 +101,12 @@ Recommended path:
 
 ### 4. EmotiVoice Speaker Catalog
 
-Only a curated subset of official EmotiVoice speakers is exposed in the parameter schema.
+The full local EmotiVoice speaker catalog is exposed through a searchable API and the generate page. The parameter schema still keeps a compact default subset, so the page stays fast before searching.
 
 Recommended path:
 
-- Add a searchable speaker catalog/import UI if the full catalog becomes useful.
-- Keep the default parameter dropdown compact.
+- Audition promising speaker IDs and promote the best 5-10 into built-in presets.
+- Keep the full catalog searchable rather than loading all 2,000+ rows into the default dropdown.
 
 ### 5. Agent-Facing Usage Notes
 

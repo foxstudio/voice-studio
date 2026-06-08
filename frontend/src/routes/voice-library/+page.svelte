@@ -2,7 +2,7 @@
 	import { Api } from '$lib/api';
 	import type { VoiceAsset } from '$lib/api/types';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
-	import { Check, Database, FileText, Pencil, Play, Plus, Search, ShieldCheck, Trash2, Upload, X } from 'lucide-svelte';
+	import { Check, CircleCheck, Database, FileText, Pencil, Play, Plus, Search, ShieldCheck, Trash2, Upload, X } from 'lucide-svelte';
 	import { licenseLabel } from '$lib/labels';
 	import { onMount } from 'svelte';
 
@@ -19,6 +19,7 @@
 	let voiceQuery = $state('');
 	let voiceEngineFilter = $state('all');
 	let voiceLicenseFilter = $state('all');
+	let voiceQualityFilter = $state('all');
 	let voiceSort = $state<'updated' | 'name'>('updated');
 
 	async function refresh() {
@@ -81,6 +82,20 @@
 	async function remove(id: string) {
 		await Api.deleteVoice(id);
 		if (editingVoice?.voice_id === id) resetForm();
+		await refresh();
+	}
+
+	async function markVoiceReviewed(voice: VoiceAsset) {
+		const tags = voice.tags.filter((tag) => tag !== 'ASR待复核');
+		const reviewedNote = '人工已复核 reference_text。';
+		const quality_notes = voice.quality_notes?.includes(reviewedNote)
+			? voice.quality_notes
+			: [voice.quality_notes, reviewedNote].filter(Boolean).join('\n');
+		await Api.updateVoice(voice.voice_id, {
+			tags,
+			quality_status: 'verified',
+			quality_notes
+		});
 		await refresh();
 	}
 
@@ -181,6 +196,21 @@
 		return value;
 	}
 
+	function needsReview(voice: VoiceAsset) {
+		return voice.quality_status === 'needs_review' || voice.tags.includes('ASR待复核');
+	}
+
+	function qualityLabel(voice: VoiceAsset) {
+		if (needsReview(voice)) return 'ASR待复核';
+		if (voice.quality_status === 'verified') return '已复核';
+		if (voice.quality_status === 'unchecked') return '未质检';
+		return voice.quality_status || '未质检';
+	}
+
+	function qualityNoteText(voice: VoiceAsset) {
+		return voice.quality_notes?.trim() || '暂无质检备注';
+	}
+
 	function queryTokens(query: string) {
 		return query
 			.split(/[\s,，、]+/)
@@ -200,6 +230,9 @@
 			.filter((voice) => {
 				if (voiceEngineFilter !== 'all' && !voice.engine_bindings?.some((binding) => binding.engine_id === voiceEngineFilter && binding.available)) return false;
 				if (voiceLicenseFilter !== 'all' && voice.license_status !== voiceLicenseFilter) return false;
+				if (voiceQualityFilter === 'needs_review' && !needsReview(voice)) return false;
+				if (voiceQualityFilter === 'verified' && voice.quality_status !== 'verified') return false;
+				if (voiceQualityFilter === 'unchecked' && voice.quality_status !== 'unchecked') return false;
 				if (!tokens.length) return true;
 				const haystack = [voice.name, voice.description, voice.tags.join(' '), voice.reference_text].join(' ').toLowerCase();
 				return tokens.every((token) => haystack.includes(token));
@@ -210,20 +243,19 @@
 			});
 	});
 
-	const cloudCloneReadyCount = $derived(
-		voices.filter((voice) => voice.engine_bindings?.some((binding) => binding.engine_id === 'mimo-v2.5-tts-voiceclone' && binding.available)).length
-	);
 	const selfOrAuthorizedCount = $derived(
 		voices.filter((voice) => ['self_voice', 'authorized', 'company_authorized'].includes(voice.license_status)).length
 	);
 	const referenceAudioCount = $derived(voices.reduce((total, voice) => total + voice.reference_audio_ids.length, 0));
+	const needsReviewCount = $derived(voices.filter((voice) => needsReview(voice)).length);
 	const canSaveVoice = $derived(Boolean(name.trim()) && (Boolean(editingVoice) || Boolean(file)));
 
 	const help = [
 		{ title: '新增声音', body: '这里只保留自己上传参考音频这一条路径。准备一段 10-20 秒左右的 mp3 或 wav，填写名称和参考文本后保存，它就会进入本地音色库。' },
 		{ title: '音色库怎么用', body: '音色库里的声音主要作为声音克隆参考。IndexTTS v2 通常需要选择一个参考声音；F5-TTS 和 CosyVoice Zero-Shot 需要参考音频和准确参考台词；OmniVoice 可以选择参考声音，也可以不选，改用声音设计标签。' },
 		{ title: '参考文本', body: '参考文本是参考音频里大概说了什么。克隆或多语言模型有时会用它理解发音和音色；卡片里的文本按钮可以快速查看，不会撑大卡片。' },
-		{ title: '编辑声音', body: '卡片上的“编辑”会把名称、描述、标签、参考文本和推荐引擎载入右侧表单。这里保存的是同一个声音名称，生成页下拉菜单会同步显示。' }
+		{ title: '编辑声音', body: '卡片上的“编辑”会把名称、描述、标签、参考文本和推荐引擎载入右侧表单。这里保存的是同一个声音名称，生成页下拉菜单会同步显示。' },
+		{ title: 'ASR 待复核', body: '用本地 ASR 回填的参考文本会保留 ASR待复核 标签。人工听过参考音频并确认台词后，可以在卡片上标记为已复核。' }
 	];
 </script>
 
@@ -245,8 +277,8 @@
 			<div><span>参考音频</span><strong>{referenceAudioCount}</strong></div>
 		</div>
 		<div class="metric-card">
-			<Play size={17} />
-			<div><span>可云端复刻</span><strong>{cloudCloneReadyCount}</strong></div>
+			<CircleCheck size={17} />
+			<div><span>待复核</span><strong>{needsReviewCount}</strong></div>
 		</div>
 	</section>
 
@@ -290,6 +322,15 @@
 						</select>
 					</label>
 					<label class="field">
+						<span>复核</span>
+						<select bind:value={voiceQualityFilter}>
+							<option value="all">全部</option>
+							<option value="needs_review">ASR待复核</option>
+							<option value="verified">已复核</option>
+							<option value="unchecked">未质检</option>
+						</select>
+					</label>
+					<label class="field">
 						<span>排序</span>
 						<select bind:value={voiceSort}>
 							<option value="updated">最近更新</option>
@@ -316,6 +357,9 @@
 						<span>参考音频 {voice.reference_audio_ids.length}</span>
 						<span>{voiceCardKind(voice) === 'cloud' ? '云端' : '本地'}</span>
 						<span>{voice.recommended_engine_id ? bindingLabel(voice.recommended_engine_id) : '自动引擎'}</span>
+						<span class={`quality-chip ${needsReview(voice) ? 'warn' : voice.quality_status === 'verified' ? 'ok' : ''}`} title={qualityNoteText(voice)}>
+							<CircleCheck size={13} /> {qualityLabel(voice)}
+						</span>
 						<span class="text-pop text-chip" data-text={voiceLineText(voice.reference_text)}><FileText size={13} /> 台词</span>
 					</div>
 					<div class="binding-row">
@@ -328,6 +372,9 @@
 					{/if}
 					<div class="card-actions">
 						<a class="btn primary" href={`/generate?voice=${voice.voice_id}`}><Play size={15} /> 去合成</a>
+						{#if needsReview(voice)}
+							<button class="btn" onclick={() => markVoiceReviewed(voice)}><CircleCheck size={15} /> 已复核</button>
+						{/if}
 						<button class="btn" onclick={() => editVoice(voice)}><Pencil size={15} /> 编辑</button>
 						<button class="btn danger" onclick={() => remove(voice.voice_id)}><Trash2 size={15} /> 删除</button>
 					</div>
@@ -468,7 +515,19 @@
 	}
 
 	.voice-toolbar {
-		grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(150px, 0.8fr));
+		grid-template-columns: minmax(220px, 1.35fr) repeat(4, minmax(118px, 0.72fr));
+	}
+
+	.quality-chip.warn {
+		color: #ffd08a;
+		border-color: rgba(167, 111, 35, 0.56);
+		background: rgba(108, 75, 30, 0.24);
+	}
+
+	.quality-chip.ok {
+		color: #a7e9be;
+		border-color: rgba(56, 142, 89, 0.55);
+		background: rgba(44, 104, 65, 0.24);
 	}
 
 	.voice-grid {

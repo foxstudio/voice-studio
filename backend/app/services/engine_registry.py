@@ -5,10 +5,11 @@ import signal
 import subprocess
 import sys
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
-from app.models.schemas import EngineDetail, EngineManifest, EngineState, EngineStatus, ParameterSchema
+from app.models.schemas import EngineDetail, EngineManifest, EngineSpeaker, EngineState, EngineStatus, ParameterSchema
 from app.services import mimo_client, qwen_mlx_asr, settings_store
 from app.services.paths import PROJECT_ROOT
 
@@ -57,6 +58,71 @@ _EMOTIVOICE_SPEAKERS = [
     {"label": "1006 Marta Kornowska 女声", "value": "1006"},
     {"label": "1018 JimmyLogan 男声", "value": "1018"},
 ]
+
+
+def _speaker_option_to_detail(option: dict[str, str]) -> EngineSpeaker:
+    value = str(option.get("value") or "")
+    label = str(option.get("label") or value)
+    name = label.replace(value, "", 1).strip(" -·")
+    return EngineSpeaker(speaker_id=value, name=name or value, label=label)
+
+
+@lru_cache(maxsize=1)
+def _emotivoice_speaker_catalog() -> list[EngineSpeaker]:
+    readme = _external_engine_root("emotivoice") / "data" / "youdao" / "text" / "README.md"
+    if not readme.exists():
+        return [_speaker_option_to_detail(option) for option in _EMOTIVOICE_SPEAKERS]
+
+    speakers: list[EngineSpeaker] = []
+    for line in readme.read_text(encoding="utf-8", errors="ignore").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|") or "---" in stripped:
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if len(cells) < 4 or not cells[0].isdigit():
+            continue
+        speaker_id, name, gender, description = cells[:4]
+        gender_label = {"F": "女声", "M": "男声"}.get(gender, gender)
+        label_parts = [speaker_id, name]
+        if gender_label:
+            label_parts.append(gender_label)
+        if description:
+            label_parts.append(f"· {description}")
+        speakers.append(
+            EngineSpeaker(
+                speaker_id=speaker_id,
+                name=name,
+                gender=gender,
+                description=description,
+                label=" ".join(label_parts),
+            )
+        )
+    return speakers or [_speaker_option_to_detail(option) for option in _EMOTIVOICE_SPEAKERS]
+
+
+def list_speakers(engine_id: str, query: str = "", gender: str = "all", limit: int = 80) -> list[EngineSpeaker]:
+    engine_id = _resolve_engine_id(engine_id)
+    limit = max(1, min(limit, 500))
+    normalized_query = query.strip().lower()
+    normalized_gender = gender.strip().upper()
+
+    if engine_id == "emotivoice":
+        speakers = _emotivoice_speaker_catalog()
+        if normalized_gender in {"F", "M"}:
+            speakers = [speaker for speaker in speakers if speaker.gender.upper() == normalized_gender]
+        if normalized_query:
+            speakers = [
+                speaker
+                for speaker in speakers
+                if normalized_query in " ".join([speaker.speaker_id, speaker.name, speaker.gender, speaker.description, speaker.label]).lower()
+            ]
+        return speakers[:limit]
+
+    detail = get_engine(engine_id)
+    if not detail:
+        return []
+    speaker_param = next((param for param in detail.manifest.parameter_schema if param.key == "speaker_id"), None)
+    return [_speaker_option_to_detail(option) for option in (speaker_param.options if speaker_param else [])][:limit]
 
 
 def _common_params(v2: bool = False) -> list[ParameterSchema]:

@@ -12,7 +12,7 @@ if str(BACKEND) not in sys.path:
 
 from app.main import app  # noqa: E402
 from app.models.schemas import AppSettings, EngineAudioDiagnosisRequest, GenerateRequest, Project, Role, ScriptSegment  # noqa: E402
-from app.services import batch_queue, community_voice_pack_store, database, settings_store, task_queue, voice_aliases, voice_store  # noqa: E402
+from app.services import batch_queue, community_voice_pack_store, database, engine_registry, settings_store, task_queue, voice_aliases, voice_store  # noqa: E402
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -55,6 +55,37 @@ def test_presets_are_available_and_apply_to_main_engines(tmp_path: Path):
     assert default["parameters"]["emotion"] is None
     assert default["parameters"]["emo_alpha"] == 0.0
     assert default["parameters"]["temperature"] == 0.8
+
+
+def test_emotivoice_speaker_catalog_can_be_filtered(tmp_path: Path, monkeypatch):
+    root = tmp_path / "EmotiVoice"
+    readme = root / "data" / "youdao" / "text" / "README.md"
+    readme.parent.mkdir(parents=True)
+    readme.write_text(
+        "\n".join(
+            [
+                "| ID | Voice Name | Gender | Description |",
+                "|----|-------|--------|-------------|",
+                "| 8051 | Maria Kasper | F | Clear, soothing, expressive |",
+                "| 9017 | John Van Stan | M | Rich, resonant, engaging |",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(engine_registry, "_external_engine_root", lambda engine_id: root)
+    engine_registry._emotivoice_speaker_catalog.cache_clear()
+    try:
+        client = _client(tmp_path)
+        resp = client.get("/api/engines/emotivoice/speakers?q=maria&gender=F&limit=10")
+
+        assert resp.status_code == 200
+        speakers = resp.json()
+        assert len(speakers) == 1
+        assert speakers[0]["speaker_id"] == "8051"
+        assert speakers[0]["name"] == "Maria Kasper"
+        assert "Clear" in speakers[0]["label"]
+    finally:
+        engine_registry._emotivoice_speaker_catalog.cache_clear()
 
 
 def test_custom_presets_can_be_created_updated_and_deleted(tmp_path: Path):

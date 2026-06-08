@@ -122,6 +122,14 @@ class EngineState(BaseModel):
     loaded_at: str | None = None
 
 
+class EngineSpeaker(BaseModel):
+    speaker_id: str
+    name: str
+    gender: str = ""
+    description: str = ""
+    label: str
+
+
 class EngineDetail(BaseModel):
     manifest: EngineManifest
     state: EngineState
@@ -495,6 +503,10 @@ class GenerationTask(BaseModel):
     voice_id: str | None = None
     project_id: str | None = None
     segment_id: str | None = None
+    longform_task_id: str | None = None
+    longform_segment_index: int | None = None
+    longform_segment_count: int | None = None
+    longform_export_id: str | None = None
     input_text: str
     status: TaskStatus = TaskStatus.pending
     progress: float = 0.0
@@ -518,6 +530,10 @@ class HistoryItem(BaseModel):
     voice_name: str | None = None
     project_id: str | None = None
     segment_id: str | None = None
+    longform_task_id: str | None = None
+    longform_segment_index: int | None = None
+    longform_segment_count: int | None = None
+    longform_export_id: str | None = None
     input_text: str
     output_audio_id: str | None = None
     output_path: str | None = None

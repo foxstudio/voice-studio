@@ -11,9 +11,11 @@ from typing import Iterable
 from fastapi import WebSocket
 
 from app.models.schemas import (
+    ExportRecord,
     GenerateRequest,
     GenerationTask,
     HistoryItem,
+    LongformTask,
     Project,
     ScriptSegment,
     SegmentStatus,
@@ -91,6 +93,32 @@ def get_task(task_id: str) -> GenerationTask | None:
     return _reconcile_stale_task(GenerationTask(**data)) if data else None
 
 
+def find_longform_export_task(longform_task_id: str, export_id: str | None) -> GenerationTask | None:
+    for row in db.list_all("tasks", "created_at", False):
+        task = GenerationTask(**row)
+        if task.task_type == "export" and task.longform_task_id == longform_task_id:
+            if not export_id or task.longform_export_id == export_id:
+                return task
+    return None
+
+
+def update_longform_segment_metadata(task_id: str, *, longform_task_id: str, segment_index: int, segment_count: int) -> GenerationTask | None:
+    task = get_task(task_id)
+    if not task:
+        return None
+    changed = (
+        task.longform_task_id != longform_task_id
+        or task.longform_segment_index != segment_index
+        or task.longform_segment_count != segment_count
+    )
+    if not changed:
+        return task
+    task.longform_task_id = longform_task_id
+    task.longform_segment_index = segment_index
+    task.longform_segment_count = segment_count
+    return _save(task)
+
+
 async def _broadcast(task: GenerationTask) -> None:
     dead = []
     payload = task.model_dump_json()
@@ -153,7 +181,16 @@ async def shutdown() -> None:
             await task
 
 
-async def submit(req: GenerateRequest, task_type: str = "single", project_id: str | None = None, segment_id: str | None = None) -> str:
+async def submit(
+    req: GenerateRequest,
+    task_type: str = "single",
+    project_id: str | None = None,
+    segment_id: str | None = None,
+    *,
+    longform_task_id: str | None = None,
+    longform_segment_index: int | None = None,
+    longform_segment_count: int | None = None,
+) -> str:
     start_worker()
     task = GenerationTask(
         task_type=task_type,
@@ -161,6 +198,9 @@ async def submit(req: GenerateRequest, task_type: str = "single", project_id: st
         voice_id=req.voice_id,
         project_id=project_id,
         segment_id=segment_id,
+        longform_task_id=longform_task_id,
+        longform_segment_index=longform_segment_index,
+        longform_segment_count=longform_segment_count,
         input_text=req.text,
         status=TaskStatus.queued,
         parameters=req.model_dump(),
@@ -169,6 +209,61 @@ async def submit(req: GenerateRequest, task_type: str = "single", project_id: st
     _enqueue_task_id(task.task_id)
     await _broadcast(task)
     return task.task_id
+
+
+def add_completed_longform_export(
+    longform_task: LongformTask,
+    export_record: ExportRecord,
+    *,
+    duration_ms: int | None = None,
+    generation_time_ms: int | None = None,
+) -> GenerationTask:
+    parameters = dict(longform_task.parameters)
+    parameters.update(
+        {
+            "longform_task_id": longform_task.longform_task_id,
+            "longform_segment_count": len(longform_task.segments),
+            "longform_export_id": export_record.export_id,
+            "source_result_ids": longform_task.result_ids,
+        }
+    )
+    task = GenerationTask(
+        task_type="export",
+        engine_id=longform_task.engine_id,
+        voice_id=longform_task.voice_id,
+        longform_task_id=longform_task.longform_task_id,
+        longform_segment_count=len(longform_task.segments),
+        longform_export_id=export_record.export_id,
+        input_text=longform_task.input_text,
+        status=TaskStatus.success,
+        progress=1.0,
+        result_audio_id=export_record.export_id,
+        result_duration_ms=duration_ms,
+        generation_time_ms=generation_time_ms,
+        parameters=parameters,
+        started_at=longform_task.started_at,
+        completed_at=now_iso(),
+    )
+    voice = voice_store.get_voice(longform_task.voice_id) if longform_task.voice_id else None
+    hist = history_store.add(
+        HistoryItem(
+            task_id=task.task_id,
+            engine_id=longform_task.engine_id,
+            voice_id=longform_task.voice_id,
+            voice_name=voice.name if voice else None,
+            longform_task_id=longform_task.longform_task_id,
+            longform_segment_count=len(longform_task.segments),
+            longform_export_id=export_record.export_id,
+            input_text=longform_task.input_text,
+            output_audio_id=export_record.export_id,
+            output_path=export_record.path,
+            duration_ms=duration_ms,
+            generation_time_ms=generation_time_ms,
+            parameter_snapshot=parameters,
+        )
+    )
+    task.result_id = hist.result_id
+    return _save(task)
 
 
 async def submit_project(project: Project) -> list[str]:
@@ -244,7 +339,15 @@ async def retry_task(task_id: str) -> str:
     old = get_task(task_id)
     if not old:
         raise ValueError("Task not found")
-    return await submit(GenerateRequest(**old.parameters), old.task_type, old.project_id, old.segment_id)
+    return await submit(
+        GenerateRequest(**old.parameters),
+        old.task_type,
+        old.project_id,
+        old.segment_id,
+        longform_task_id=old.longform_task_id,
+        longform_segment_index=old.longform_segment_index,
+        longform_segment_count=old.longform_segment_count,
+    )
 
 
 async def _worker(queue: asyncio.Queue[str]) -> None:

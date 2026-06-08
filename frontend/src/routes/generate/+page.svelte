@@ -3,6 +3,7 @@
 	import type {
 		AppSettings,
 		EngineDetail,
+		EngineSpeaker,
 		GenerationTask,
 		GeneratePlanResponse,
 		GenerateRequest,
@@ -34,7 +35,8 @@
 		Sparkles,
 		Square,
 		Trash2,
-		Wand2
+		Wand2,
+		X
 	} from 'lucide-svelte';
 	import { onMount } from 'svelte';
 
@@ -100,6 +102,11 @@
 	let styleInstruction = $state('');
 	let mimoVoice = $state('mimo_default');
 	let speakerId = $state('');
+	let speakerQuery = $state('');
+	let speakerGenderFilter = $state<'all' | 'F' | 'M'>('all');
+	let speakerCatalog = $state<EngineSpeaker[]>([]);
+	let speakerCatalogLoading = $state(false);
+	let speakerCatalogKey = $state('');
 	let voicePrompt = $state('');
 	let emoAlpha = $state(0.6);
 	let speed = $state(1.0);
@@ -310,6 +317,11 @@
 	});
 	const mimoVoiceOptions = $derived(selected?.manifest.parameter_schema.find((p) => p.key === 'mimo_voice')?.options ?? []);
 	const speakerOptions = $derived(selected?.manifest.parameter_schema.find((p) => p.key === 'speaker_id')?.options ?? []);
+	const speakerChoices = $derived(
+		isEmotiVoice && speakerCatalog.length
+			? speakerCatalog.map((speaker) => ({ label: speaker.label, value: speaker.speaker_id }))
+			: speakerOptions
+	);
 	const promptOptions = $derived(selected?.manifest.parameter_schema.find((p) => p.key === 'prompt')?.options ?? []);
 	const voiceChoices = $derived(voices);
 	const voiceAuthTagKeywords = ['测试', '授权', '许可', '商用', '自有', '试用'];
@@ -325,6 +337,9 @@
 	}
 	const hasRunningTasks = $derived(
 		tasks.some((task) => taskIsActive(task)) || longformTasks.some((task) => statusIsActive(task.status))
+	);
+	const visibleLongformTasks = $derived(
+		longformTasks.filter((task) => task.status !== 'success')
 	);
 	const engineRuntimeHint = $derived.by(() => {
 		const trimmedLength = text.trim().length;
@@ -479,6 +494,24 @@
 		}
 	}
 
+	async function loadSpeakerCatalog(engine: string, query: string, gender: 'all' | 'F' | 'M') {
+		if (engine !== 'emotivoice') {
+			speakerCatalog = [];
+			return;
+		}
+		const key = `${engine}|${query}|${gender}`;
+		speakerCatalogKey = key;
+		speakerCatalogLoading = true;
+		try {
+			const items = await Api.engineSpeakers(engine, { q: query, gender, limit: query ? 120 : 40 });
+			if (speakerCatalogKey !== key) return;
+			speakerCatalog = items;
+			if (!speakerId && items[0]) speakerId = items[0].speaker_id;
+		} finally {
+			if (speakerCatalogKey === key) speakerCatalogLoading = false;
+		}
+	}
+
 	onMount(() => {
 		refreshPageData();
 		const id = setInterval(() => {
@@ -508,6 +541,10 @@
 			showAdvanced = engineId === 'f5-tts';
 			lastEngineId = engineId;
 		}
+	});
+
+	$effect(() => {
+		loadSpeakerCatalog(engineId, speakerQuery.trim(), speakerGenderFilter);
 	});
 
 	$effect(() => {
@@ -1057,6 +1094,26 @@
 		return task.export_id ? `/api/longform/${task.longform_task_id}/download` : '';
 	}
 
+	function taskIsLongformSegment(task: GenerationTask) {
+		return Boolean(task.longform_task_id && task.longform_segment_index && task.longform_segment_count);
+	}
+
+	function taskIsLongformExport(task: GenerationTask) {
+		return Boolean(task.longform_task_id && task.task_type === 'export');
+	}
+
+	function longformResultLabel(task: GenerationTask) {
+		if (taskIsLongformExport(task)) return '完整长文本';
+		if (taskIsLongformSegment(task)) return `长文本 ${task.longform_segment_index}/${task.longform_segment_count}`;
+		return '';
+	}
+
+	function longformResultTitle(task: GenerationTask) {
+		if (taskIsLongformExport(task)) return '合并后的完整长文本音频';
+		if (taskIsLongformSegment(task)) return `同一篇长文本的第 ${task.longform_segment_index} 段，共 ${task.longform_segment_count} 段`;
+		return '';
+	}
+
 	async function retryLongform(task: LongformTask) {
 		actionBusyTaskId = task.longform_task_id;
 		try {
@@ -1243,7 +1300,8 @@
 	}
 
 	function displayTitle(task: GenerationTask) {
-		return task.input_text.trim() || '未命名任务';
+		const title = task.input_text.trim() || '未命名任务';
+		return taskIsLongformExport(task) ? `完整长文本：${title}` : title;
 	}
 
 	function voiceName(task: GenerationTask) {
@@ -1752,15 +1810,15 @@
 					</div>
 				</div>
 
-				{#if longformTasks.length}
+				{#if visibleLongformTasks.length}
 					<section class="longform-list" aria-label="长文本任务">
 						<div class="row section-subhead">
 							<div>
 								<h3>长文本任务</h3>
-								<p class="muted">分段生成、校对、重试和合并的父任务。</p>
+								<p class="muted">进行中的分段生成、校对、重试和合并父任务；完成后会进入下方结果记录。</p>
 							</div>
 						</div>
-						{#each longformTasks.slice(0, 6) as task}
+						{#each visibleLongformTasks.slice(0, 6) as task}
 							<article class={`longform-card ${task.status}`}>
 								<div class="longform-card-head">
 									<div>
@@ -1835,6 +1893,15 @@
 
 								<div class="row wrap result-meta">
 									<span class="badge badge-kind">{engineTypeLabel(task.engine_id)}</span>
+									{#if longformResultLabel(task)}
+										<span
+											class="badge longform-result-badge"
+											class:merged={taskIsLongformExport(task)}
+											title={longformResultTitle(task)}
+										>
+											{longformResultLabel(task)}
+										</span>
+									{/if}
 									<span class="badge engine">{engineMap.get(task.engine_id)?.manifest.display_name ?? task.engine_id}</span>
 									{#if voiceName(task)}<span class="badge">{voiceName(task)}</span>{/if}
 									{#if task.created_at}<span class="badge">{formatTime(task.created_at)}</span>{/if}
@@ -2100,11 +2167,32 @@
 				<div class="field param-field">
 					<label class="param-label" for="speaker-id">音色</label>
 					<div class="param-control">
+						{#if isEmotiVoice}
+							<div class="speaker-catalog-tools">
+								<div class="search-field speaker-search">
+									<Search size={14} />
+									<input bind:value={speakerQuery} placeholder="搜索 ID、名字、描述" />
+									{#if speakerQuery.trim()}
+										<button class="search-clear" type="button" aria-label="清空说话人搜索" title="清空说话人搜索" onclick={() => (speakerQuery = '')}>
+											<X size={13} />
+										</button>
+									{/if}
+								</div>
+								<select class="speaker-gender" bind:value={speakerGenderFilter} aria-label="筛选说话人性别">
+									<option value="all">全部</option>
+									<option value="F">女声</option>
+									<option value="M">男声</option>
+								</select>
+							</div>
+						{/if}
 						<select id="speaker-id" bind:value={speakerId}>
-							{#each speakerOptions as option}
+							{#each speakerChoices as option}
 								<option value={option.value}>{option.label}</option>
 							{/each}
 						</select>
+						{#if isEmotiVoice}
+							<small>{speakerCatalogLoading ? '正在读取说话人目录' : `目录结果 ${speakerCatalog.length} 条`}</small>
+						{/if}
 					</div>
 				</div>
 			{/if}
@@ -2914,6 +3002,18 @@
 		white-space: nowrap;
 	}
 
+	.longform-result-badge {
+		border-color: rgba(96, 165, 250, 0.48);
+		background: rgba(37, 99, 235, 0.16);
+		color: #b9d7ff;
+	}
+
+	.longform-result-badge.merged {
+		border-color: rgba(66, 196, 155, 0.5);
+		background: rgba(16, 185, 129, 0.16);
+		color: #bbf7d0;
+	}
+
 	.verify-passed {
 		color: #5ee0ae;
 	}
@@ -3065,6 +3165,42 @@
 		color: inherit;
 		outline: none;
 		padding: 0;
+	}
+
+	.search-clear {
+		display: inline-grid;
+		place-items: center;
+		flex: 0 0 auto;
+		width: 22px;
+		height: 22px;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.04);
+		color: var(--muted);
+		cursor: pointer;
+		padding: 0;
+	}
+
+	.speaker-catalog-tools {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) 76px;
+		gap: 6px;
+		align-items: center;
+	}
+
+	.speaker-search {
+		min-width: 0;
+		height: 32px;
+		padding: 0 8px;
+	}
+
+	.speaker-search input {
+		height: 30px;
+		min-height: 30px;
+	}
+
+	.speaker-gender {
+		min-width: 0;
 	}
 
 	.toolbar-actions {

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from app.models.exceptions import AppException
 from app.models.schemas import (
+    ExportRecord,
     ExportRequest,
     GenerateRequest,
     LongformGenerateRequest,
@@ -36,11 +37,11 @@ def _save(task: LongformTask) -> LongformTask:
 
 def get_task(longform_task_id: str) -> LongformTask | None:
     data = db.get_one("longform_tasks", "longform_task_id", longform_task_id)
-    return LongformTask(**data) if data else None
+    return _ensure_result_records(LongformTask(**data)) if data else None
 
 
 def list_tasks() -> list[LongformTask]:
-    return [LongformTask(**item) for item in db.list_all("longform_tasks", "created_at")]
+    return [_ensure_result_records(LongformTask(**item)) for item in db.list_all("longform_tasks", "created_at")]
 
 
 def start_worker() -> None:
@@ -138,6 +139,43 @@ def _segments_from_request(req: LongformGenerateRequest) -> list[PlannedTextSegm
     ]
 
 
+def _ensure_result_records(task: LongformTask) -> LongformTask:
+    if task.segments:
+        segment_count = len(task.segments)
+        for segment in task.segments:
+            if segment.task_id:
+                task_queue.update_longform_segment_metadata(
+                    segment.task_id,
+                    longform_task_id=task.longform_task_id,
+                    segment_index=segment.index,
+                    segment_count=segment_count,
+                )
+    if task.status != TaskStatus.success or not task.export_id or not task.export_path:
+        return task
+    if task_queue.find_longform_export_task(task.longform_task_id, task.export_id):
+        return task
+    export_path = Path(task.export_path)
+    if not export_path.exists():
+        return task
+    try:
+        req = LongformGenerateRequest(**task.parameters)
+        silence_ms = req.silence_ms
+    except Exception:
+        silence_ms = 300
+    task_queue.add_completed_longform_export(
+        task,
+        ExportRecord(
+            export_id=task.export_id,
+            path=task.export_path,
+            format=export_path.suffix.lstrip(".") or "wav",
+            source_count=len(task.result_ids) or len(task.segments),
+        ),
+        duration_ms=_merged_duration_ms(task, silence_ms),
+        generation_time_ms=_segments_generation_time_ms(task),
+    )
+    return task
+
+
 def _enqueue_task_id(longform_task_id: str) -> None:
     if _queue is None or longform_task_id in _queued_task_ids:
         return
@@ -190,6 +228,12 @@ async def _process(task: LongformTask) -> None:
             )
             task.export_id = record.export_id
             task.export_path = record.path
+            task_queue.add_completed_longform_export(
+                task,
+                record,
+                duration_ms=_merged_duration_ms(task, req.silence_ms),
+                generation_time_ms=_segments_generation_time_ms(task),
+            )
             task.progress = 1.0
             task.status = TaskStatus.success
         else:
@@ -210,7 +254,13 @@ async def _process_segment(task: LongformTask, segment: LongformSegmentTask, req
         segment.error_message = None
         _save(task)
         segment_request = _segment_request(req.generate_request, segment.text)
-        segment.task_id = await task_queue.submit(segment_request, task_type="segment")
+        segment.task_id = await task_queue.submit(
+            segment_request,
+            task_type="segment",
+            longform_task_id=task.longform_task_id,
+            longform_segment_index=segment.index,
+            longform_segment_count=len(task.segments),
+        )
         segment.status = TaskStatus.running
         _save(task)
         generated = await _wait_for_generation(segment.task_id)
@@ -239,6 +289,26 @@ async def _process_segment(task: LongformTask, segment: LongformSegmentTask, req
     segment.error_message = segment.error_message or last_error or "段落生成失败"
     _save(task)
     return False
+
+
+def _merged_duration_ms(task: LongformTask, silence_ms: int) -> int | None:
+    durations = [segment.duration_ms for segment in task.segments if segment.status == TaskStatus.success and segment.duration_ms]
+    if not durations:
+        return None
+    return sum(durations) + max(0, len(durations) - 1) * silence_ms
+
+
+def _segments_generation_time_ms(task: LongformTask) -> int | None:
+    total = 0
+    found = False
+    for segment in task.segments:
+        if not segment.task_id:
+            continue
+        generated = task_queue.get_task(segment.task_id)
+        if generated and generated.generation_time_ms:
+            total += generated.generation_time_ms
+            found = True
+    return total if found else None
 
 
 def _segment_request(base: GenerateRequest, text: str) -> GenerateRequest:

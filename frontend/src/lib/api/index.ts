@@ -4,6 +4,7 @@ import type {
 	BatchTask,
 	CommunityVoicePack,
 	EngineDetail,
+	EngineSpeaker,
 	ExportRecord,
 	EvaluationReport,
 	EngineAudioDiagnosis,
@@ -41,6 +42,14 @@ export const Api = {
 	saveSettings: (settings: AppSettings) => api.patch<AppSettings>('/settings', settings),
 	saveMimoSecret: (body: { api_key?: string | null; clear?: boolean }) => api.patch<AppSettings>('/settings/mimo-secret', body),
 	engines: () => api.get<EngineDetail[]>('/engines'),
+	engineSpeakers: (id: string, params: { q?: string; gender?: 'all' | 'F' | 'M'; limit?: number } = {}) => {
+		const search = new URLSearchParams();
+		if (params.q) search.set('q', params.q);
+		if (params.gender && params.gender !== 'all') search.set('gender', params.gender);
+		if (params.limit) search.set('limit', String(params.limit));
+		const suffix = search.toString() ? `?${search}` : '';
+		return api.get<EngineSpeaker[]>(`/engines/${id}/speakers${suffix}`);
+	},
 	startEngine: (id: string) => api.post<EngineDetail>(`/engines/${id}/start`),
 	stopEngine: (id: string) => api.post<EngineDetail>(`/engines/${id}/stop`),
 	healthEngine: (id: string) => api.post<Record<string, unknown>>(`/engines/${id}/health-check`),

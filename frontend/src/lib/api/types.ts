@@ -52,6 +52,14 @@ export interface EngineDetail {
 	};
 }
 
+export interface EngineSpeaker {
+	speaker_id: string;
+	name: string;
+	gender: string;
+	description: string;
+	label: string;
+}
+
 export interface AppSettings {
 	data_dir: string;
 	model_dir: string;
@@ -374,6 +382,10 @@ export interface GenerationTask {
 	voice_id: string | null;
 	project_id: string | null;
 	segment_id: string | null;
+	longform_task_id: string | null;
+	longform_segment_index: number | null;
+	longform_segment_count: number | null;
+	longform_export_id: string | null;
 	input_text: string;
 	status: TaskStatus;
 	progress: number;
@@ -397,6 +409,10 @@ export interface HistoryItem {
 	voice_name: string | null;
 	project_id: string | null;
 	segment_id: string | null;
+	longform_task_id: string | null;
+	longform_segment_index: number | null;
+	longform_segment_count: number | null;
+	longform_export_id: string | null;
 	input_text: string;
 	output_audio_id: string | null;
 	output_path: string | null;

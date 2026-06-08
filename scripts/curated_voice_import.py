@@ -137,7 +137,7 @@ def scan_dataset(dataset_name, speaker_en, max_scan=3000):
             break
         if row.get("speaker") != speaker_en:
             continue
-        if row.get("language") != "zh":
+        if row.get("language") not in ("Chinese", "zh"):
             continue
         audio = row.get("audio")
         if not audio or "array" not in audio:

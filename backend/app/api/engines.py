@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse
 
 from app.models.exceptions import AppException
-from app.models.schemas import EngineAudioDiagnosisRequest, EngineDetail
+from app.models.schemas import EngineAudioDiagnosisRequest, EngineDetail, EngineSpeaker
 from app.services import audio_tools, engine_registry, settings_store, voice_store
 
 router = APIRouter()
@@ -24,6 +24,18 @@ async def get_engine(engine_id: str):
     if not detail:
         raise AppException(404, "ENGINE_NOT_FOUND", "Engine not found")
     return detail
+
+
+@router.get("/{engine_id}/speakers", response_model=list[EngineSpeaker])
+async def list_speakers(
+    engine_id: str,
+    q: str = Query("", max_length=80),
+    gender: str = Query("all", pattern="^(all|F|M|f|m)$"),
+    limit: int = Query(80, ge=1, le=500),
+):
+    if not engine_registry.get_engine(engine_id):
+        raise AppException(404, "ENGINE_NOT_FOUND", "Engine not found")
+    return engine_registry.list_speakers(engine_id, query=q, gender=gender, limit=limit)
 
 
 @router.post("/{engine_id}/start", response_model=EngineDetail)

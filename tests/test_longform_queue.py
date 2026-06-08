@@ -12,8 +12,10 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
+from app.models.schemas import ExportRecord, GenerateRequest, GenerationTask, LongformSegmentTask, LongformTask, TaskStatus  # noqa: E402
 from app.services import database as db  # noqa: E402
 from app.services import longform_queue  # noqa: E402
+from app.services import history_store, task_queue  # noqa: E402
 
 
 @pytest.fixture
@@ -82,3 +84,164 @@ def test_longform_list_endpoint_returns_tasks(monkeypatch, isolated_db):
 
     assert response.status_code == 200
     assert any(item["longform_task_id"] == created["longform_task_id"] for item in response.json())
+
+
+@pytest.mark.asyncio
+async def test_longform_segment_tasks_carry_parent_metadata(monkeypatch, isolated_db):
+    captured: dict = {}
+
+    async def fake_submit(req, task_type="single", project_id=None, segment_id=None, **kwargs):
+        captured.update({"req": req, "task_type": task_type, **kwargs})
+        return "segment-task-1"
+
+    def fake_get_task(task_id):
+        return GenerationTask(
+            task_id=task_id,
+            task_type="segment",
+            engine_id="indextts-v2",
+            voice_id="voice-a",
+            input_text="第一段。",
+            status=TaskStatus.success,
+            result_id="result-a",
+            result_duration_ms=1200,
+            parameters={},
+        )
+
+    monkeypatch.setattr(task_queue, "submit", fake_submit)
+    monkeypatch.setattr(task_queue, "get_task", fake_get_task)
+
+    task = LongformTask(
+        longform_task_id="longform-a",
+        engine_id="indextts-v2",
+        voice_id="voice-a",
+        input_text="第一段。第二段。",
+        segments=[
+            LongformSegmentTask(index=1, text="第一段。", char_count=4),
+            LongformSegmentTask(index=2, text="第二段。", char_count=4),
+        ],
+        parameters={
+            "generate_request": GenerateRequest(
+                text="第一段。第二段。",
+                engine_id="indextts-v2",
+                voice_id="voice-a",
+            ).model_dump(),
+            "segments": [],
+            "verify_enabled": False,
+            "merge_enabled": True,
+        },
+    )
+    req = longform_queue.LongformGenerateRequest(**task.parameters)
+
+    ok = await longform_queue._process_segment(task, task.segments[0], req)
+
+    assert ok is True
+    assert captured["task_type"] == "segment"
+    assert captured["longform_task_id"] == "longform-a"
+    assert captured["longform_segment_index"] == 1
+    assert captured["longform_segment_count"] == 2
+
+
+def test_completed_longform_export_creates_history_result(isolated_db, tmp_path):
+    merged = tmp_path / "merged.mp3"
+    merged.write_bytes(b"fake mp3")
+    export = ExportRecord(export_id="export-a", path=str(merged), format="mp3", source_count=2)
+    task = LongformTask(
+        longform_task_id="longform-a",
+        engine_id="indextts-v2",
+        voice_id="voice-a",
+        input_text="第一段。第二段。",
+        status=TaskStatus.success,
+        segments=[
+            LongformSegmentTask(index=1, text="第一段。", char_count=4, status=TaskStatus.success, result_id="result-a"),
+            LongformSegmentTask(index=2, text="第二段。", char_count=4, status=TaskStatus.success, result_id="result-b"),
+        ],
+        result_ids=["result-a", "result-b"],
+        parameters={"generate_request": {"output_format": "mp3"}},
+    )
+
+    created = task_queue.add_completed_longform_export(task, export, duration_ms=2500, generation_time_ms=900)
+    history = history_store.get(created.result_id or "")
+
+    assert created.task_type == "export"
+    assert created.status == TaskStatus.success
+    assert created.longform_task_id == "longform-a"
+    assert created.longform_segment_count == 2
+    assert created.longform_export_id == "export-a"
+    assert created.result_duration_ms == 2500
+    assert history is not None
+    assert history.output_path == str(merged)
+    assert history.longform_task_id == "longform-a"
+    assert history.longform_export_id == "export-a"
+
+
+def test_list_longform_tasks_backfills_existing_export_result(isolated_db, tmp_path):
+    merged = tmp_path / "legacy.wav"
+    merged.write_bytes(b"fake wav")
+    task = LongformTask(
+        longform_task_id="legacy-longform",
+        engine_id="indextts-v2",
+        voice_id="voice-a",
+        input_text="第一段。第二段。",
+        status=TaskStatus.success,
+        segments=[
+            LongformSegmentTask(
+                index=1,
+                text="第一段。",
+                char_count=4,
+                status=TaskStatus.success,
+                task_id="legacy-segment-1",
+                result_id="result-a",
+                duration_ms=1000,
+            ),
+            LongformSegmentTask(
+                index=2,
+                text="第二段。",
+                char_count=4,
+                status=TaskStatus.success,
+                task_id="legacy-segment-2",
+                result_id="result-b",
+                duration_ms=1500,
+            ),
+        ],
+        result_ids=["result-a", "result-b"],
+        export_id="legacy-export",
+        export_path=str(merged),
+        parameters={
+            "generate_request": GenerateRequest(
+                text="第一段。第二段。",
+                engine_id="indextts-v2",
+                voice_id="voice-a",
+            ).model_dump(),
+            "segments": [],
+            "verify_enabled": False,
+            "merge_enabled": True,
+            "silence_ms": 300,
+        },
+    )
+    db.upsert("longform_tasks", task.longform_task_id, task.model_dump())
+    db.upsert(
+        "tasks",
+        "legacy-segment-1",
+        GenerationTask(
+            task_id="legacy-segment-1",
+            task_type="segment",
+            engine_id="indextts-v2",
+            voice_id="voice-a",
+            input_text="第一段。",
+            status=TaskStatus.success,
+            result_id="result-a",
+            parameters={},
+        ).model_dump(),
+    )
+
+    items = longform_queue.list_tasks()
+    export_task = task_queue.find_longform_export_task("legacy-longform", "legacy-export")
+    segment_task = task_queue.get_task("legacy-segment-1")
+
+    assert items[0].longform_task_id == "legacy-longform"
+    assert export_task is not None
+    assert export_task.result_id
+    assert export_task.result_duration_ms == 2800
+    assert segment_task is not None
+    assert segment_task.longform_segment_index == 1
+    assert segment_task.longform_segment_count == 2
