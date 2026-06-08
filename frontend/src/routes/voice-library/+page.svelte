@@ -85,9 +85,63 @@
 	}
 
 	function tagClass(tag: string) {
-		if (tag.includes('男') || tag.includes('女') || tag.includes('角色') || tag.includes('本人')) return 'role';
-		if (tag.includes('情绪') || tag.includes('悲伤') || tag.includes('悬疑')) return 'emotion';
-		if (tag.includes('讲解') || tag.includes('旁白') || tag.includes('口播') || tag.includes('测试')) return 'use';
+		if (['CSEMOTIONS', 'IndexTTS'].some((keyword) => tag.includes(keyword))) return 'source';
+		if (
+			[
+				'男',
+				'女',
+				'角色',
+				'本人',
+				'原神',
+				'二次元',
+				'游戏',
+				'狐狸',
+				'Fox'
+			].some((keyword) => tag.includes(keyword))
+		) return 'role';
+		if (
+			[
+				'情绪',
+				'悲伤',
+				'悬疑',
+				'开心',
+				'愤怒',
+				'恐惧',
+				'惊悚',
+				'反感',
+				'爽朗',
+				'沧桑',
+				'低沉',
+				'压迫',
+				'元气',
+				'爆发',
+				'温柔'
+			].some((keyword) => tag.includes(keyword))
+		) return 'emotion';
+		if (
+			[
+				'讲解',
+				'旁白',
+				'口播',
+				'测试',
+				'播报',
+				'独白',
+				'叙事',
+				'对白',
+				'新闻',
+				'睡前',
+				'纪录片',
+				'科技',
+				'小说',
+				'历史',
+				'故事',
+				'知识',
+				'方言',
+				'四川话',
+				'动画',
+				'轻喜剧'
+			].some((keyword) => tag.includes(keyword))
+		) return 'use';
 		return '';
 	}
 
@@ -111,7 +165,7 @@
 
 	function cleanTags(tags: string[], limit = 5) {
 		return tags
-			.filter((tag) => !tag.startsWith('seed:') && !tag.startsWith('pack:') && !tag.startsWith('community:'))
+			.filter((tag) => !/^(seed|pack|community|voice_design|design_prompt|user):/.test(tag))
 			.filter((tag) => !['官方示例', '参考声音', '社区音色', 'Apache 2.0', '中文'].includes(tag))
 			.slice(0, limit);
 	}
@@ -466,10 +520,36 @@
 	}
 
 	.tag-filter {
-		border: 1px solid rgba(255, 255, 255, 0.08);
+		appearance: none;
+		border: 1px solid rgba(148, 163, 184, 0.22);
+		background: rgba(148, 163, 184, 0.08);
 		font: inherit;
-		color: inherit;
+		color: #b8c2cf;
 		cursor: pointer;
+	}
+
+	.tag-filter.source {
+		color: #b9c7ff;
+		border-color: rgba(105, 91, 190, 0.55);
+		background: rgba(74, 61, 117, 0.26);
+	}
+
+	.tag-filter.role {
+		color: #f0c5d8;
+		border-color: rgba(157, 82, 112, 0.52);
+		background: rgba(107, 59, 80, 0.24);
+	}
+
+	.tag-filter.emotion {
+		color: #ffd08a;
+		border-color: rgba(167, 111, 35, 0.56);
+		background: rgba(108, 75, 30, 0.24);
+	}
+
+	.tag-filter.use {
+		color: #abdcb9;
+		border-color: rgba(61, 121, 79, 0.52);
+		background: rgba(49, 91, 61, 0.24);
 	}
 
 	.tag-filter:hover {
