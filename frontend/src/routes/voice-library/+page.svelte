@@ -125,18 +125,28 @@
 		return value;
 	}
 
+	function queryTokens(query: string) {
+		return query
+			.split(/[\s,，、]+/)
+			.map((token) => token.trim().toLowerCase())
+			.filter(Boolean);
+	}
+
+	function appendVoiceQueryTag(tag: string) {
+		const value = tag.trim();
+		if (!value) return;
+		voiceQuery = voiceQuery.trim() ? `${voiceQuery.trim()}、${value}` : value;
+	}
+
 	const filteredVoices = $derived.by(() => {
-		const query = voiceQuery.trim().toLowerCase();
+		const tokens = queryTokens(voiceQuery);
 		return [...voices]
 			.filter((voice) => {
 				if (voiceEngineFilter !== 'all' && !voice.engine_bindings?.some((binding) => binding.engine_id === voiceEngineFilter && binding.available)) return false;
 				if (voiceLicenseFilter !== 'all' && voice.license_status !== voiceLicenseFilter) return false;
-				if (!query) return true;
-				return (
-					voice.name.toLowerCase().includes(query) ||
-					voice.description.toLowerCase().includes(query) ||
-					voice.tags.join(' ').toLowerCase().includes(query)
-				);
+				if (!tokens.length) return true;
+				const haystack = [voice.name, voice.description, voice.tags.join(' '), voice.reference_text].join(' ').toLowerCase();
+				return tokens.every((token) => haystack.includes(token));
 			})
 			.sort((a, b) => {
 				if (voiceSort === 'name') return a.name.localeCompare(b.name, 'zh-Hans-CN');
@@ -236,7 +246,11 @@
 						<span class="badge license" class:ok={voice.license_status === 'self_voice'}>{licenseLabel(voice.license_status)}</span>
 					</div>
 					<p class="muted voice-desc desc-pop" data-text={voice.description || '暂无描述'}>{voice.description || '暂无描述'}</p>
-					<div class="tag-row">{#each cleanTags(voice.tags, 6) as tag}<span class={`badge ${tagClass(tag)}`}>{tag}</span>{/each}</div>
+					<div class="tag-row">
+						{#each cleanTags(voice.tags, 6) as tag}
+							<button class={`badge tag-filter ${tagClass(tag)}`} type="button" title={`添加到搜索：${tag}`} onclick={() => appendVoiceQueryTag(tag)}>{tag}</button>
+						{/each}
+					</div>
 					<div class="asset-meta">
 						<span>参考音频 {voice.reference_audio_ids.length}</span>
 						<span>{voiceCardKind(voice) === 'cloud' ? '云端' : '本地'}</span>
@@ -419,6 +433,24 @@
 		font-size: 11px;
 		line-height: 1.4;
 		min-height: 22px;
+	}
+
+	.tag-filter {
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		font: inherit;
+		color: inherit;
+		cursor: pointer;
+	}
+
+	.tag-filter:hover {
+		border-color: rgba(78, 163, 255, 0.55);
+		background: rgba(78, 163, 255, 0.12);
+		color: var(--text);
+	}
+
+	.tag-filter:focus-visible {
+		outline: 2px solid rgba(78, 163, 255, 0.75);
+		outline-offset: 2px;
 	}
 
 	.asset-meta {
