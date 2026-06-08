@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,10 +12,21 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
+from app.services import database as db  # noqa: E402
 from app.services import longform_queue  # noqa: E402
 
 
-def test_longform_generate_endpoint_creates_parent_task(monkeypatch):
+@pytest.fixture
+def isolated_db(tmp_path):
+    original = db.DB_PATH
+    db.set_db_path(tmp_path / "voice_studio.db")
+    try:
+        yield
+    finally:
+        db.set_db_path(original)
+
+
+def test_longform_generate_endpoint_creates_parent_task(monkeypatch, isolated_db):
     monkeypatch.setattr(longform_queue, "_enqueue_task_id", lambda task_id: None)
     client = TestClient(app)
     response = client.post(
@@ -47,7 +59,7 @@ def test_longform_generate_endpoint_creates_parent_task(monkeypatch):
     assert body["merge_enabled"] is True
 
 
-def test_longform_list_endpoint_returns_tasks(monkeypatch):
+def test_longform_list_endpoint_returns_tasks(monkeypatch, isolated_db):
     monkeypatch.setattr(longform_queue, "_enqueue_task_id", lambda task_id: None)
     client = TestClient(app)
     created = client.post(
