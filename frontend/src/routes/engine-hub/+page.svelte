@@ -186,18 +186,15 @@
 <main class="page">
 	<div class="page-head"><div><h1>引擎管理</h1><p class="muted">本地引擎生命周期、能力标签、版本差异和试听诊断</p></div><button class="btn" onclick={refresh}><RotateCcw size={16} /> 刷新</button></div>
 	{#if message}<div class="panel muted">{message}</div>{/if}
-	<section class="panel stack" style="margin-bottom:16px">
-		<h2>生成试听参考音色</h2>
-		<div class="row">
-			<select bind:value={voiceId} aria-label="生成试听参考音色">
-				<option value="">未选择，OmniVoice 可无参考试听</option>
-				{#each voices as voice}<option value={voice.voice_id}>{voice.name}</option>{/each}
-			</select>
-			<span class="muted">IndexTTS v2 试听需要参考音色；OmniVoice 可用声音设计做无参考试听。</span>
-		</div>
-	</section>
-	<section class="panel stack" style="margin-bottom:16px">
+	<section class="panel stack engine-toolbar-panel">
 		<div class="toolbar-grid">
+			<label class="field">
+				<span>试听参考音色</span>
+				<select bind:value={voiceId} aria-label="生成试听参考音色">
+					<option value="">未选择，OmniVoice 可无参考试听</option>
+					{#each voices as voice}<option value={voice.voice_id}>{voice.name}</option>{/each}
+				</select>
+			</label>
 			<label class="field">
 				<span>搜索引擎</span>
 				<div class="search-field">
@@ -286,10 +283,15 @@
 </main>
 
 <style>
+	.engine-toolbar-panel {
+		margin-bottom: 14px;
+		padding: 10px;
+	}
+
 	.toolbar-grid {
 		display: grid;
-		grid-template-columns: minmax(0, 1.5fr) minmax(180px, 0.7fr) minmax(140px, 0.6fr);
-		gap: 12px;
+		grid-template-columns: minmax(260px, 1.05fr) minmax(280px, 1.25fr) minmax(150px, 0.45fr) minmax(240px, 0.75fr);
+		gap: 10px;
 		align-items: end;
 	}
 
@@ -298,16 +300,21 @@
 		align-items: center;
 		gap: 8px;
 		border: 1px solid var(--line);
-		border-radius: 6px;
+		border-radius: 7px;
 		padding: 0 10px;
 		background: #0f1216;
+		height: 34px;
+		min-height: 34px;
+		overflow: hidden;
 	}
 
 	.search-field input {
 		border: 0;
 		background: transparent;
 		width: 100%;
-		min-height: 34px;
+		height: 30px;
+		min-height: 30px;
+		padding: 0;
 		color: inherit;
 		outline: none;
 	}
@@ -318,11 +325,13 @@
 		align-content: center;
 		gap: 6px;
 		flex-wrap: wrap;
-		padding: 6px;
+		padding: 5px;
 		border: 1px solid var(--line);
 		border-radius: 7px;
 		background: #101215;
+		height: 34px;
 		min-height: 34px;
+		overflow: hidden;
 	}
 
 	.summary-chip {
