@@ -2023,6 +2023,19 @@
 									</div>
 								{/if}
 
+								{#if taskVerificationReport(task)}
+									{@const report = taskVerificationReport(task)}
+									<div class="verification-line {report.status}">
+										<span class="dot"></span>
+										{verificationStatusLabel(report.status)}
+										<span class="coverage">覆盖率 {Math.round(report.coverage * 100)}%</span>
+									</div>
+								{:else if taskVerificationPending(task)}
+									<p class="muted verification-pending-line">自动校对中…</p>
+								{:else if taskVerificationError(task)}
+									<p class="muted error-line">{taskVerificationError(task)}</p>
+								{/if}
+
 								<div class="result-footer" class:without-audio={!task.result_id}>
 									{#if task.result_id}
 										<div class="result-audio-compact">
@@ -2089,32 +2102,7 @@
 								{#if task.error_message}
 									<p class="muted error-line">{task.error_message}</p>
 								{/if}
-								{#if taskVerificationReport(task)}
-									{@const report = taskVerificationReport(task)}
-									<div class={`verification-card ${report.status}`}>
-										<div class="row verification-head">
-											<strong>{verificationStatusLabel(report.status)}</strong>
-											<span class="badge">覆盖率 {Math.round(report.coverage * 100)}%</span>
-										</div>
-										{#if report.warnings.length}
-											<p>{report.warnings[0]}</p>
-										{:else if report.suggestions.length}
-											<p>{report.suggestions[0]}</p>
-										{/if}
-										{#if report.missing_segments.length}
-											<p class="muted">
-												缺失片段：{report.missing_segments
-													.slice(0, 2)
-													.map((segment) => segment.expected_text)
-													.join(' / ')}
-											</p>
-										{/if}
-									</div>
-								{:else if taskVerificationPending(task)}
-									<p class="muted verification-pending-line">自动校对中，完成后会显示覆盖率和缺句风险。</p>
-								{:else if taskVerificationError(task)}
-									<p class="muted error-line">{taskVerificationError(task)}</p>
-								{/if}
+
 							</article>
 						{/each}
 					</div>
@@ -3545,6 +3533,34 @@
 		background: rgba(37, 99, 235, 0.1);
 		font-size: 12px;
 		line-height: 1.5;
+	}
+
+	.verification-line {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 12px;
+		line-height: 1;
+	}
+
+	.verification-line.passed { color: #42c49b; }
+	.verification-line.passed .dot { background: #42c49b; }
+
+	.verification-line.warning { color: #e5a842; }
+	.verification-line.warning .dot { background: #e5a842; }
+
+	.verification-line.failed { color: #e54d4d; }
+	.verification-line.failed .dot { background: #e54d4d; }
+
+	.verification-line .dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		flex-shrink: 0;
+	}
+
+	.verification-line .coverage {
+		color: #7d8a9a;
 	}
 
 	.pagination-bar {
