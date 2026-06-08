@@ -37,20 +37,21 @@ export function capabilityLabel(capability: string) {
 	return {
 		local_inference: '本地推理',
 		voice_clone: '声音克隆',
+		zero_shot: '零样本',
 		emotion_control: '情绪控制',
 		long_text: '长文本',
 		pinyin_control: '拼音校正',
-			voice_design: '声音设计',
-			multilingual: '多语言',
-			nonverbal_tags: '非语言标签',
-			cloud_api: '云端 API',
-			preset_voice: '预置音色',
-			natural_language_control: '自然语言控制',
-			audio_tags: '音频标签',
-			singing: '唱歌',
-			speech_recognition: '语音识别',
-			transcription: '转写',
-			language_identification: '语言识别'
+		voice_design: '声音设计',
+		multilingual: '多语言',
+		nonverbal_tags: '非语言标签',
+		cloud_api: '云端 API',
+		preset_voice: '预置音色',
+		natural_language_control: '自然语言控制',
+		audio_tags: '音频标签',
+		singing: '唱歌',
+		speech_recognition: '语音识别',
+		transcription: '转写',
+		language_identification: '语言识别'
 		}[capability] ?? capability;
 }
 

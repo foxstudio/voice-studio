@@ -1,14 +1,14 @@
 [project]
-name = "mlx-indextts"
-version = "0.1.0"
-description = "IndexTTS for Apple Silicon using MLX"
+name = "voice-studio"
+version = "1.0.0"
+description = "Multi-engine TTS platform for Apple Silicon — local voice cloning, emotion control, long-form orchestration, and cloud synthesis via WebUI and API."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-authors = [{ name = "MLX-IndexTTS Contributors" }]
-keywords = ["tts", "text-to-speech", "mlx", "apple-silicon", "voice-cloning"]
+authors = [{ name = "Voice Studio Contributors" }]
+keywords = ["tts", "text-to-speech", "mlx", "apple-silicon", "voice-cloning", "voice-studio", "fastapi", "multi-engine"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS",
@@ -51,6 +51,12 @@ v2 = [
 asr = [
     "mlx-audio>=0.3.1",
 ]
+server = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "python-multipart>=0.0.5",
+    "httpx>=0.24.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -62,12 +68,13 @@ dev = [
 ]
 
 [project.scripts]
+voice-studio = "mlx_indextts.cli:main"
 mlx-indextts = "mlx_indextts.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/your-repo/mlx-indextts"
-Repository = "https://github.com/your-repo/mlx-indextts"
-Issues = "https://github.com/your-repo/mlx-indextts/issues"
+Homepage = "https://github.com/foxmacstudio/voice-studio"
+Repository = "https://github.com/foxmacstudio/voice-studio"
+Issues = "https://github.com/foxmacstudio/voice-studio/issues"
 
 [build-system]
 requires = ["hatchling"]

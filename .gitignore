@@ -44,6 +44,15 @@ ref_audios/
 *.npz
 /output*.wav
 /tmp/
+output/
+*.mp3
+
+# Second venv (Qwen forced aligner)
+.venv-qwen-align/
+
+# Development artifacts
+voice_studio_prd_package_*/
+voice_studio_frontend_png_*/
 
 # Benchmark outputs
 test_outputs/
@@ -58,8 +67,12 @@ htmlcov/
 
 # Claude Code
 .claude/
-CLAUDE.md
-docs/
+
+# Docs — 只排除内部 RFC/TODO
+docs/ASR_PRODUCT_ROADMAP.md
+docs/LONGFORM_TTS_VERIFICATION_RFC.md
+docs/MIMO_V2_5_CLOUD_API_RFC.md
+docs/VOICE_STUDIO_TODO.md
 
 # Frontend
 frontend/node_modules/

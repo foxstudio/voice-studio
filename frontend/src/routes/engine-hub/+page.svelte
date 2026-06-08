@@ -49,7 +49,17 @@
 	}));
 
 	const engineDescriptionExtras: Record<string, string> = {
-		'indextts-v2': '当前主力中文口播引擎：支持 8 种情绪、更长文本、S2Mel/BigVGAN2。'
+		'indextts-v2': '当前主力中文口播引擎：8 种情绪、长文本、S2Mel/BigVGAN2。',
+		'omnivoice': 'Apache 2.0 开源，581k 小时训练数据，覆盖 646 种语言。',
+		'emotivoice': '适合短句试听和音色筛选，16000 Hz 采样。',
+		'f5-tts': '非自回归架构，推理效率高，支持整本书连续生成。',
+		'cosyvoice-sft': 'CosyVoice-300M-SFT 模型，开箱即用的官方预训练音色。',
+		'cosyvoice-zero-shot': '提供参考音频 + 对应台词，即可跨语言复刻。',
+		'mimo-v2.5-tts-preset': 'Token Plan 计费，支持唱歌标签和自然语言风格指令。',
+		'mimo-v2.5-tts-voicedesign': '用文字描述音色特征，如"温柔略带沙哑的女性"。',
+		'mimo-v2.5-tts-voiceclone': '云端零样本克隆，支持 wav/mp3 参考音频上传。',
+		'mimo-v2.5-asr': '自动语言检测，适合会议录音和素材转写。',
+		'qwen3-asr-mlx': '纯 MLX 推理无需 PyTorch，数据不离设备，云端 ASR 的离线备选。'
 	};
 
 	const redundantCapabilities = new Set(['local_inference', 'cloud_api']);
@@ -299,7 +309,7 @@
 
 	.toolbar-grid {
 		display: grid;
-		grid-template-columns: minmax(260px, 1.05fr) minmax(280px, 1.25fr) minmax(150px, 0.45fr) minmax(240px, 0.75fr);
+		grid-template-columns: minmax(200px, 1fr) minmax(200px, 1.15fr) minmax(100px, 0.4fr) minmax(260px, 0.9fr);
 		gap: 10px;
 		align-items: end;
 	}

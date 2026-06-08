@@ -121,6 +121,26 @@ async def diagnose_audio(engine_id: str, data: EngineAudioDiagnosisRequest):
                 "speaker_id": "中文女",
                 "speed": 1.0,
             }
+        elif engine_id in {"mimo-v2.5-tts", "mimo-v2.5-tts-preset", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"}:
+            settings = settings_store.get()
+            api_key = settings_store.mimo_api_key()
+            if not api_key:
+                raise AppException(400, "MIMO_API_KEY_REQUIRED", "请先在设置中配置 MiMo API Key")
+            model = "mimo-v2.5-tts" if engine_id in {"mimo-v2.5-tts", "mimo-v2.5-tts-preset"} else engine_id
+            kwargs = {
+                "text": data.text,
+                "output_path": str(output_path),
+                "base_url": settings.mimo_base_url,
+                "api_key": api_key,
+                "model": model,
+                "voice": "mimo_default",
+                "instruction": None,
+                "voice_design_prompt": "温柔女声" if engine_id == "mimo-v2.5-tts-voicedesign" else None,
+                "reference_audio_path": ref if engine_id == "mimo-v2.5-tts-voiceclone" else None,
+                "temperature": 0.8,
+                "top_p": 0.8,
+                "audio_format": "wav",
+            }
         else:
             kwargs.update({"language": data.language, "ref_text": None, "emotion": None, "emotion_text": data.emotion_text})
         timeout = 900 if engine_id in {"cosyvoice-sft", "cosyvoice-zero-shot"} else 600 if engine_id in {"f5-tts", "emotivoice"} else 300

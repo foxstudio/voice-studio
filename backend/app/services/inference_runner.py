@@ -167,7 +167,21 @@ def run_mimo_tts(**kwargs):
     output_path = kwargs.pop("output_path")
     start = time.perf_counter()
     fmt = Path(output_path).suffix.lstrip(".") or "wav"
-    result = mimo_client.generate_tts(output_path=output_path, audio_format=fmt, **kwargs)
+    result = mimo_client.generate_tts(
+        output_path=output_path,
+        audio_format=fmt,
+        base_url=kwargs.get("base_url", ""),
+        api_key=kwargs.get("api_key", ""),
+        text=kwargs["text"],
+        voice=kwargs.get("voice", "mimo_default"),
+        instruction=kwargs.get("instruction"),
+        model=kwargs.get("model", "mimo-v2.5-tts"),
+        voice_design_prompt=kwargs.get("voice_design_prompt"),
+        optimize_text_preview=kwargs.get("optimize_text_preview", False),
+        reference_audio_path=kwargs.get("reference_audio_path"),
+        temperature=kwargs.get("temperature"),
+        top_p=kwargs.get("top_p"),
+    )
     meta = _audio_meta(output_path, 24000)
     meta.update({"output_path": result["output_path"], "generation_time_ms": int((time.perf_counter() - start) * 1000)})
     return meta
