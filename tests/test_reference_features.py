@@ -53,6 +53,21 @@ def test_engine_audio_diagnosis_defaults_follow_reference_emotion():
     assert req.emotion is None
 
 
+def test_engine_diagnostic_audio_endpoint_serves_latest_file(tmp_path: Path):
+    client = _client(tmp_path)
+    diagnostics = tmp_path / "outputs" / "diagnostics"
+    diagnostics.mkdir(parents=True)
+    wav = diagnostics / "indextts-v2-diagnosis.wav"
+    wav.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ")
+
+    resp = client.get("/api/engines/indextts-v2/diagnostic-audio")
+    assert resp.status_code == 200
+    assert resp.content.startswith(b"RIFF")
+
+    missing = client.get("/api/engines/omnivoice/diagnostic-audio")
+    assert missing.status_code == 404
+
+
 def test_voice_seed_catalog_contains_official_index_examples(tmp_path: Path):
     client = _client(tmp_path)
     resp = client.get("/api/voice-seeds")

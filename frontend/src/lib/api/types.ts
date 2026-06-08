@@ -396,6 +396,7 @@ export interface EngineAudioDiagnosis {
 	engine_id: string;
 	status: 'passed' | 'failed';
 	output_path: string | null;
+	audio_url?: string | null;
 	quality: Partial<AudioQualityResult>;
 	generation_time_ms: number | null;
 }

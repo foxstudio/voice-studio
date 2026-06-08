@@ -136,6 +136,10 @@
 		};
 	}
 
+	function diagnosticAudioUrl(engineId: string, item: EngineAudioDiagnosis) {
+		return `/api/engines/${engineId}/diagnostic-audio?t=${item.generation_time_ms ?? Date.now()}`;
+	}
+
 	async function refresh() {
 		[engines, voices] = await Promise.all([Api.engines(), Api.voices()]);
 	}
@@ -264,6 +268,10 @@
 					<div class="diagnosis-box">
 						<span class="badge" class:ok={diagnosis[engine.manifest.engine_id].status === 'passed'} class:fail={diagnosis[engine.manifest.engine_id].status === 'failed'}>{diagnosis[engine.manifest.engine_id].status === 'passed' ? '可听门槛通过' : '试听失败/需复核'}</span>
 						<p class="muted">RMS {diagnosis[engine.manifest.engine_id].quality.rms ?? '-'} · 峰值 {diagnosis[engine.manifest.engine_id].quality.peak ?? '-'} · 时长 {diagnosis[engine.manifest.engine_id].quality.duration_ms ?? '-'}ms</p>
+						{#if diagnosis[engine.manifest.engine_id].output_path}
+							<audio class="audio diagnosis-audio" controls preload="metadata" src={diagnosticAudioUrl(engine.manifest.engine_id, diagnosis[engine.manifest.engine_id])}></audio>
+							<a class="btn mini-btn diagnosis-download" href={diagnosticAudioUrl(engine.manifest.engine_id, diagnosis[engine.manifest.engine_id])}>下载试听</a>
+						{/if}
 						{#if diagnosis[engine.manifest.engine_id].quality.warnings?.length}
 							<p class="muted">{diagnosis[engine.manifest.engine_id].quality.warnings?.join('；')}</p>
 						{/if}
@@ -480,6 +488,15 @@
 
 	.diagnosis-box p {
 		margin: 0;
+	}
+
+	.diagnosis-audio {
+		height: 30px;
+	}
+
+	.diagnosis-download {
+		justify-self: start;
+		text-decoration: none;
 	}
 
 	@media (max-width: 960px) {

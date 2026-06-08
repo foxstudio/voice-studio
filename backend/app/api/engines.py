@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter
+from fastapi.responses import FileResponse
 
 from app.models.exceptions import AppException
 from app.models.schemas import EngineAudioDiagnosisRequest, EngineDetail
@@ -98,3 +99,13 @@ async def diagnose_audio(engine_id: str, data: EngineAudioDiagnosisRequest):
             "quality": {"passed": False, "warnings": [str(exc)]},
             "generation_time_ms": None,
         }
+
+
+@router.get("/{engine_id}/diagnostic-audio")
+async def get_diagnostic_audio(engine_id: str):
+    if not engine_registry.get_engine(engine_id):
+        raise AppException(404, "ENGINE_NOT_FOUND", "Engine not found")
+    path = settings_store.output_dir() / "diagnostics" / f"{engine_id}-diagnosis.wav"
+    if not path.exists():
+        raise AppException(404, "DIAGNOSTIC_AUDIO_NOT_FOUND", "Diagnostic audio not found")
+    return FileResponse(path)
