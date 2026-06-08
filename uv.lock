@@ -1737,101 +1737,6 @@ wheels = [
 ]
 
 [[package]]
-name = "mlx-indextts"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "bigvgan" },
-    { name = "einops" },
-    { name = "huggingface-hub" },
-    { name = "mlx" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "omegaconf" },
-    { name = "omnivoice" },
-    { name = "psutil" },
-    { name = "pyyaml" },
-    { name = "sentencepiece" },
-    { name = "soundfile" },
-    { name = "tqdm" },
-    { name = "wetext" },
-]
-
-[package.optional-dependencies]
-asr = [
-    { name = "mlx-audio" },
-]
-convert = [
-    { name = "torch" },
-    { name = "torchaudio" },
-]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
-    { name = "safetensors" },
-    { name = "torch" },
-    { name = "torchaudio" },
-    { name = "transformers" },
-]
-v2 = [
-    { name = "librosa" },
-    { name = "omegaconf" },
-    { name = "safetensors" },
-    { name = "torch" },
-    { name = "torchaudio" },
-    { name = "transformers" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "httpx" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "bigvgan", specifier = ">=2.4.1" },
-    { name = "einops", specifier = ">=0.8.2" },
-    { name = "huggingface-hub", specifier = ">=0.20.0" },
-    { name = "librosa", marker = "extra == 'v2'", specifier = ">=0.10.0" },
-    { name = "mlx", specifier = ">=0.18.0" },
-    { name = "mlx-audio", marker = "extra == 'asr'", specifier = ">=0.3.1" },
-    { name = "numpy", specifier = ">=1.24.0" },
-    { name = "omegaconf", specifier = ">=2.3.0" },
-    { name = "omegaconf", marker = "extra == 'v2'", specifier = ">=2.3.0" },
-    { name = "omnivoice", specifier = ">=0.1.5" },
-    { name = "psutil", specifier = ">=7.2.2" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "safetensors", marker = "extra == 'dev'", specifier = ">=0.4.0" },
-    { name = "safetensors", marker = "extra == 'v2'", specifier = ">=0.4.0" },
-    { name = "sentencepiece", specifier = ">=0.2.0" },
-    { name = "soundfile", specifier = ">=0.12.0" },
-    { name = "torch", marker = "extra == 'convert'", specifier = ">=2.0.0" },
-    { name = "torch", marker = "extra == 'dev'", specifier = ">=2.0.0" },
-    { name = "torch", marker = "extra == 'v2'", specifier = ">=2.0.0" },
-    { name = "torchaudio", marker = "extra == 'convert'", specifier = ">=2.0.0" },
-    { name = "torchaudio", marker = "extra == 'dev'", specifier = ">=2.0.0" },
-    { name = "torchaudio", marker = "extra == 'v2'", specifier = ">=2.0.0" },
-    { name = "tqdm", specifier = ">=4.65.0" },
-    { name = "transformers", marker = "extra == 'dev'", specifier = ">=4.40.0" },
-    { name = "transformers", marker = "extra == 'v2'", specifier = ">=4.40.0" },
-    { name = "wetext", specifier = ">=0.1.2" },
-]
-provides-extras = ["convert", "v2", "asr", "dev"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "pytest", specifier = ">=9.0.2" },
-    { name = "pytest-asyncio", specifier = ">=1.4.0" },
-]
-
-[[package]]
 name = "mlx-lm"
 version = "0.31.2"
 source = { registry = "https://pypi.org/simple" }
@@ -4228,6 +4133,111 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c4/1f/fa18009dea8469069cca78a4e877a008ab78f08b064bfc9ab891579077ff/uvicorn-0.49.0.tar.gz", hash = "sha256:ebf4271aa580d9de97f93192d4595176df6e91f9aae919ca73e4fc07df1e66a3", size = 91284, upload-time = "2026-06-03T22:01:30.448Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/88/fa/e1388bbcf24ef3274f45c0c1c7b501fd14971037c1b6ee23610553307497/uvicorn-0.49.0-py3-none-any.whl", hash = "sha256:ba3d14c3ee7e41c6c654c46c9eb489d33213cdd30aa1696eab1374337c13f68f", size = 71376, upload-time = "2026-06-03T22:01:29.037Z" },
+]
+
+[[package]]
+name = "voice-studio"
+version = "1.0.0"
+source = { editable = "." }
+dependencies = [
+    { name = "bigvgan" },
+    { name = "einops" },
+    { name = "huggingface-hub" },
+    { name = "mlx" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "omegaconf" },
+    { name = "omnivoice" },
+    { name = "psutil" },
+    { name = "pyyaml" },
+    { name = "sentencepiece" },
+    { name = "soundfile" },
+    { name = "tqdm" },
+    { name = "wetext" },
+]
+
+[package.optional-dependencies]
+asr = [
+    { name = "mlx-audio" },
+]
+convert = [
+    { name = "torch" },
+    { name = "torchaudio" },
+]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+    { name = "safetensors" },
+    { name = "torch" },
+    { name = "torchaudio" },
+    { name = "transformers" },
+]
+server = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "python-multipart" },
+    { name = "uvicorn" },
+]
+v2 = [
+    { name = "librosa" },
+    { name = "omegaconf" },
+    { name = "safetensors" },
+    { name = "torch" },
+    { name = "torchaudio" },
+    { name = "transformers" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bigvgan", specifier = ">=2.4.1" },
+    { name = "einops", specifier = ">=0.8.2" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.100.0" },
+    { name = "httpx", marker = "extra == 'server'", specifier = ">=0.24.0" },
+    { name = "huggingface-hub", specifier = ">=0.20.0" },
+    { name = "librosa", marker = "extra == 'v2'", specifier = ">=0.10.0" },
+    { name = "mlx", specifier = ">=0.18.0" },
+    { name = "mlx-audio", marker = "extra == 'asr'", specifier = ">=0.3.1" },
+    { name = "numpy", specifier = ">=1.24.0" },
+    { name = "omegaconf", specifier = ">=2.3.0" },
+    { name = "omegaconf", marker = "extra == 'v2'", specifier = ">=2.3.0" },
+    { name = "omnivoice", specifier = ">=0.1.5" },
+    { name = "psutil", specifier = ">=7.2.2" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+    { name = "python-multipart", marker = "extra == 'server'", specifier = ">=0.0.5" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+    { name = "safetensors", marker = "extra == 'dev'", specifier = ">=0.4.0" },
+    { name = "safetensors", marker = "extra == 'v2'", specifier = ">=0.4.0" },
+    { name = "sentencepiece", specifier = ">=0.2.0" },
+    { name = "soundfile", specifier = ">=0.12.0" },
+    { name = "torch", marker = "extra == 'convert'", specifier = ">=2.0.0" },
+    { name = "torch", marker = "extra == 'dev'", specifier = ">=2.0.0" },
+    { name = "torch", marker = "extra == 'v2'", specifier = ">=2.0.0" },
+    { name = "torchaudio", marker = "extra == 'convert'", specifier = ">=2.0.0" },
+    { name = "torchaudio", marker = "extra == 'dev'", specifier = ">=2.0.0" },
+    { name = "torchaudio", marker = "extra == 'v2'", specifier = ">=2.0.0" },
+    { name = "tqdm", specifier = ">=4.65.0" },
+    { name = "transformers", marker = "extra == 'dev'", specifier = ">=4.40.0" },
+    { name = "transformers", marker = "extra == 'v2'", specifier = ">=4.40.0" },
+    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.20.0" },
+    { name = "wetext", specifier = ">=0.1.2" },
+]
+provides-extras = ["convert", "v2", "asr", "server", "dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pytest-asyncio", specifier = ">=1.4.0" },
 ]
 
 [[package]]

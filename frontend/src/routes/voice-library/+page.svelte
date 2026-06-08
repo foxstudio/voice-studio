@@ -2,7 +2,7 @@
 	import { Api } from '$lib/api';
 	import type { VoiceAsset } from '$lib/api/types';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
-	import { Check, CircleCheck, Database, FileText, Pencil, Play, Plus, Search, ShieldCheck, Trash2, Upload, X } from 'lucide-svelte';
+	import { Check, CircleCheck, Database, FileText, Pencil, Pause, Play, Plus, Search, ShieldCheck, Trash2, Upload, X } from 'lucide-svelte';
 	import { licenseLabel } from '$lib/labels';
 	import { onMount } from 'svelte';
 
@@ -21,9 +21,32 @@
 	let voiceLicenseFilter = $state('all');
 	let voiceQualityFilter = $state('all');
 	let voiceSort = $state<'updated' | 'name'>('updated');
+	let voicePreviewAudio = $state<HTMLAudioElement | null>(null);
+	let playingVoiceId = $state('');
 
 	async function refresh() {
 		voices = await Api.voices();
+	}
+
+	async function toggleVoicePlayback(voice: VoiceAsset) {
+		if (!voice.reference_audio_ids[0] || !voicePreviewAudio) return;
+		const audioUrl = `/api/voices/${voice.voice_id}/audio/${voice.reference_audio_ids[0]}`;
+		if (playingVoiceId === voice.voice_id && !voicePreviewAudio.paused) {
+			voicePreviewAudio.pause();
+			playingVoiceId = '';
+			return;
+		}
+		const absoluteUrl = new URL(audioUrl, window.location.href).href;
+		if (voicePreviewAudio.src !== absoluteUrl) {
+			voicePreviewAudio.src = audioUrl;
+			voicePreviewAudio.currentTime = 0;
+		}
+		playingVoiceId = voice.voice_id;
+		try {
+			await voicePreviewAudio.play();
+		} catch {
+			playingVoiceId = '';
+		}
 	}
 	onMount(() => {
 		refresh();
@@ -99,65 +122,34 @@
 		await refresh();
 	}
 
+	const NOISE_TAGS = new Set([
+		'官方示例', '参考声音', '社区音色', 'Apache 2.0', '中文',
+		'ASR待复核', '仅测试', '测试音色', '声音设计'
+	]);
+
+	function tagCategory(tag: string): string {
+		if (['男声', '女声', '童声'].some((k) => tag.includes(k))) return 'gender';
+		if (['少女音', '少年音', '成熟', '年轻', '少年', '少女'].some((k) => tag.includes(k))) return 'age';
+		if ([
+			'原神', '绝区零', '二次元', '虚拟主播', '虚拟UP主', 'A-SOUL', '崩坏',
+			'游戏', '动漫', '真人', '狐狸', 'Fox', '角色音'
+		].some((k) => tag.includes(k))) return 'source';
+		if ([
+			'情绪', '悲伤', '悬疑', '开心', '愤怒', '恐惧', '惊悚', '反感',
+			'爽朗', '沧桑', '压迫', '元气', '爆发', '冷静', '活泼', '热情',
+			'冷淡', '傲娇', '从容', '戏谑', '俏皮', '古灵精怪', '威严'
+		].some((k) => tag.includes(k))) return 'emotion';
+		if ([
+			'讲解', '旁白', '口播', '播报', '独白', '叙事', '对白', '新闻',
+			'睡前', '纪录片', '科技', '小说', '历史', '故事', '知识', '方言',
+			'四川话', '动画', '轻喜剧', '解说', '角色扮演', '角色配音', '角色感',
+			'对白'
+		].some((k) => tag.includes(k))) return 'use';
+		return 'timbre';
+	}
+
 	function tagClass(tag: string) {
-		if (['CSEMOTIONS', 'IndexTTS'].some((keyword) => tag.includes(keyword))) return 'source';
-		if (
-			[
-				'男',
-				'女',
-				'角色',
-				'本人',
-				'原神',
-				'二次元',
-				'游戏',
-				'狐狸',
-				'Fox'
-			].some((keyword) => tag.includes(keyword))
-		) return 'role';
-		if (
-			[
-				'情绪',
-				'悲伤',
-				'悬疑',
-				'开心',
-				'愤怒',
-				'恐惧',
-				'惊悚',
-				'反感',
-				'爽朗',
-				'沧桑',
-				'低沉',
-				'压迫',
-				'元气',
-				'爆发',
-				'温柔'
-			].some((keyword) => tag.includes(keyword))
-		) return 'emotion';
-		if (
-			[
-				'讲解',
-				'旁白',
-				'口播',
-				'测试',
-				'播报',
-				'独白',
-				'叙事',
-				'对白',
-				'新闻',
-				'睡前',
-				'纪录片',
-				'科技',
-				'小说',
-				'历史',
-				'故事',
-				'知识',
-				'方言',
-				'四川话',
-				'动画',
-				'轻喜剧'
-			].some((keyword) => tag.includes(keyword))
-		) return 'use';
-		return '';
+		return `tag-${tagCategory(tag)}`;
 	}
 
 	function bindingLabel(engineId: string) {
@@ -180,10 +172,12 @@
 		return engineKind(voice.recommended_engine_id);
 	}
 
-	function cleanTags(tags: string[], limit = 5) {
-		return tags
-			.filter((tag) => !/^(seed|pack|community|voice_design|design_prompt|user):/.test(tag))
-			.filter((tag) => !['官方示例', '参考声音', '社区音色', 'Apache 2.0', '中文'].includes(tag))
+	function cleanTags(voiceTags: string[], limit = 5) {
+		const names = new Set(voices.map((v) => v.name));
+		return voiceTags
+			.filter((tag) => !/^(seed|pack|community|voice_design|design_prompt|user|source|emotion):/.test(tag))
+			.filter((tag) => !NOISE_TAGS.has(tag))
+			.filter((tag) => !names.has(tag))
 			.slice(0, limit);
 	}
 
@@ -222,6 +216,40 @@
 		const value = tag.trim();
 		if (!value) return;
 		voiceQuery = voiceQuery.trim() ? `${voiceQuery.trim()}、${value}` : value;
+	}
+
+	let expandedCards = $state(new Set<string>());
+	let expandedCategories = $state(new Set<string>());
+
+	const tagsByCategory = $derived.by(() => {
+		const counts = new Map<string, number>();
+		const groups: Record<string, string[]> = {};
+		for (const voice of voices) {
+			for (const tag of cleanTags(voice.tags, 99)) {
+				counts.set(tag, (counts.get(tag) ?? 0) + 1);
+				const cat = tagCategory(tag);
+				if (!groups[cat]) groups[cat] = [];
+				if (!groups[cat].includes(tag)) groups[cat].push(tag);
+			}
+		}
+		for (const cat of Object.keys(groups)) {
+			groups[cat].sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0));
+		}
+		return groups;
+	});
+
+	function selectedTags(): Set<string> {
+		return new Set(queryTokens(voiceQuery));
+	}
+
+	function toggleTagFromCloud(tag: string) {
+		const tokens = queryTokens(voiceQuery);
+		const lower = tag.toLowerCase();
+		if (tokens.includes(lower)) {
+			voiceQuery = tokens.filter((t) => t !== lower).join('、');
+		} else {
+			appendVoiceQueryTag(tag);
+		}
 	}
 
 	const filteredVoices = $derived.by(() => {
@@ -340,6 +368,37 @@
 				</div>
 			</section>
 
+			{#if Object.keys(tagsByCategory).length > 0}
+			<section class="tag-cloud-section">
+				{#each [
+					{ key: 'gender', label: '性别' },
+					{ key: 'age', label: '年龄' },
+					{ key: 'timbre', label: '音色' },
+					{ key: 'emotion', label: '情绪' },
+					{ key: 'use', label: '用途' },
+					{ key: 'source', label: '来源' }
+				] as cat}
+					{#if tagsByCategory[cat.key]?.length}
+						<div class="tag-cloud-category">
+							<span class="tag-cloud-label">{cat.label}</span>
+							{#each (expandedCategories.has(cat.key) ? tagsByCategory[cat.key] : tagsByCategory[cat.key].slice(0, 8)) as tag}
+								<button
+									class={`tag-cloud-chip tag-cloud-${tagCategory(tag)} {selectedTags().has(tag.toLowerCase()) ? 'active' : ''}`}
+									type="button"
+									onclick={() => toggleTagFromCloud(tag)}
+								>{tag}</button>
+							{/each}
+							{#if tagsByCategory[cat.key].length > 8 && !expandedCategories.has(cat.key)}
+								<button class="tag-cloud-expand" type="button" onclick={() => expandedCategories.add(cat.key)}>
+									…+{tagsByCategory[cat.key].length - 8}
+								</button>
+							{/if}
+						</div>
+					{/if}
+				{/each}
+			</section>
+			{/if}
+
 			<section class="grid voice-grid">
 			{#each filteredVoices as voice}
 				<article class={`card stack voice-card engine-surface ${voiceCardKind(voice) === 'cloud' ? 'engine-cloud' : 'engine-local'}`}>
@@ -349,12 +408,15 @@
 					</div>
 					<p class="muted voice-desc desc-pop" data-text={voice.description || '暂无描述'}>{voice.description || '暂无描述'}</p>
 					<div class="tag-row">
-						{#each cleanTags(voice.tags, 6) as tag}
+						{#each cleanTags(voice.tags, expandedCards.has(voice.voice_id) ? 99 : 4) as tag}
 							<button class={`badge tag-filter ${tagClass(tag)}`} type="button" title={`添加到搜索：${tag}`} onclick={() => appendVoiceQueryTag(tag)}>{tag}</button>
 						{/each}
+						{#if cleanTags(voice.tags, 99).length > 4 && !expandedCards.has(voice.voice_id)}
+							<button class="tag-expand-btn" type="button" onclick={() => expandedCards.add(voice.voice_id)}>+{cleanTags(voice.tags, 99).length - 4}</button>
+						{/if}
 					</div>
 					<div class="asset-meta">
-						<span>参考音频 {voice.reference_audio_ids.length}</span>
+						<span>×{voice.reference_audio_ids.length} 音频</span>
 						<span>{voiceCardKind(voice) === 'cloud' ? '云端' : '本地'}</span>
 						<span>{voice.recommended_engine_id ? bindingLabel(voice.recommended_engine_id) : '自动引擎'}</span>
 						<span class={`quality-chip ${needsReview(voice) ? 'warn' : voice.quality_status === 'verified' ? 'ok' : ''}`} title={qualityNoteText(voice)}>
@@ -362,13 +424,22 @@
 						</span>
 						<span class="text-pop text-chip" data-text={voiceLineText(voice.reference_text)}><FileText size={13} /> 台词</span>
 					</div>
-					<div class="binding-row">
-						{#each (voice.engine_bindings ?? []).filter((binding) => binding.engine_id !== 'mimo-v2.5-tts-preset') as binding}
-							<span class="badge" class:ok={binding.available} class:warn={!binding.available} title={binding.reason}>{bindingLabel(binding.engine_id)}</span>
-						{/each}
-					</div>
 					{#if voice.reference_audio_ids[0]}
-						<audio class="audio" controls src={`/api/voices/${voice.voice_id}/audio/${voice.reference_audio_ids[0]}`}></audio>
+						<div class="voice-audio-compact">
+							<button
+								class="icon-btn voice-play-btn"
+								onclick={() => toggleVoicePlayback(voice)}
+								title={playingVoiceId === voice.voice_id ? '暂停' : '播放'}
+								aria-label={playingVoiceId === voice.voice_id ? '暂停' : '播放'}
+							>
+								{#if playingVoiceId === voice.voice_id}
+									<Pause size={14} />
+								{:else}
+									<Play size={14} />
+								{/if}
+							</button>
+							<span class="muted voice-audio-label">{playingVoiceId === voice.voice_id ? '播放中…' : '试听'}</span>
+						</div>
 					{/if}
 					<div class="card-actions">
 						<a class="btn primary" href={`/generate?voice=${voice.voice_id}`}><Play size={15} /> 去合成</a>
@@ -407,6 +478,14 @@
 			<button class="btn primary" disabled={!canSaveVoice} onclick={saveVoice}><Upload size={15} /> {editingVoice ? '保存修改' : '保存声音'}</button>
 		</aside>
 	</div>
+	<audio
+		bind:this={voicePreviewAudio}
+		preload="none"
+		onended={() => (playingVoiceId = "")}
+		onpause={() => {
+			if (voicePreviewAudio?.ended || !voicePreviewAudio?.currentTime) playingVoiceId = "";
+		}}
+	></audio>
 </main>
 
 <style>
@@ -589,28 +668,117 @@
 		cursor: pointer;
 	}
 
-	.tag-filter.source {
-		color: #b9c7ff;
-		border-color: rgba(105, 91, 190, 0.55);
-		background: rgba(74, 61, 117, 0.26);
+	.tag-filter.tag-gender {
+		color: #a8c8f0;
+		border-color: rgba(80, 130, 190, 0.45);
+		background: rgba(55, 95, 140, 0.2);
 	}
 
-	.tag-filter.role {
+	.tag-filter.tag-age {
+		color: #c3b5ff;
+		border-color: rgba(120, 100, 190, 0.45);
+		background: rgba(85, 70, 140, 0.2);
+	}
+
+	.tag-filter.tag-timbre {
 		color: #f0c5d8;
 		border-color: rgba(157, 82, 112, 0.52);
 		background: rgba(107, 59, 80, 0.24);
 	}
 
-	.tag-filter.emotion {
+	.tag-filter.tag-emotion {
 		color: #ffd08a;
 		border-color: rgba(167, 111, 35, 0.56);
 		background: rgba(108, 75, 30, 0.24);
 	}
 
-	.tag-filter.use {
+	.tag-filter.tag-use {
 		color: #abdcb9;
 		border-color: rgba(61, 121, 79, 0.52);
 		background: rgba(49, 91, 61, 0.24);
+	}
+
+	.tag-filter.tag-source {
+		color: #d4c8e8;
+		border-color: rgba(130, 110, 160, 0.45);
+		background: rgba(95, 80, 120, 0.2);
+	}
+
+	.tag-expand-btn {
+		appearance: none;
+		border: 1px dashed rgba(148, 163, 184, 0.3);
+		background: transparent;
+		color: var(--muted);
+		cursor: pointer;
+		padding: 1px 6px;
+		font-size: 11px;
+		line-height: 1.4;
+		min-height: 22px;
+		border-radius: 999px;
+	}
+
+	.tag-expand-btn:hover {
+		border-color: rgba(78, 163, 255, 0.5);
+		color: var(--text);
+	}
+
+	.tag-cloud-section {
+		padding: 10px 0;
+	}
+
+	.tag-cloud-category {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 5px;
+		margin-bottom: 6px;
+	}
+
+	.tag-cloud-label {
+		font-size: 11px;
+		color: var(--muted);
+		min-width: 36px;
+		flex: 0 0 auto;
+	}
+
+	.tag-cloud-chip {
+		appearance: none;
+		border: 1px solid rgba(148, 163, 184, 0.22);
+		background: rgba(148, 163, 184, 0.08);
+		font: inherit;
+		color: #b8c2cf;
+		cursor: pointer;
+		padding: 2px 8px;
+		font-size: 11px;
+		line-height: 1.4;
+		border-radius: 999px;
+		transition: border-color 0.15s, background 0.15s;
+	}
+
+	.tag-cloud-chip:hover {
+		border-color: rgba(78, 163, 255, 0.55);
+		background: rgba(78, 163, 255, 0.12);
+		color: var(--text);
+	}
+
+	.tag-cloud-chip.active {
+		border-color: rgba(78, 163, 255, 0.7);
+		background: rgba(78, 163, 255, 0.18);
+		color: #fff;
+	}
+
+	.tag-cloud-expand {
+		appearance: none;
+		border: none;
+		background: transparent;
+		color: var(--accent);
+		cursor: pointer;
+		font-size: 11px;
+		padding: 2px 4px;
+	}
+
+	.tag-cloud-expand:hover {
+		text-decoration: underline;
 	}
 
 	.tag-filter:hover {
@@ -670,9 +838,30 @@
 		overflow: hidden;
 	}
 
-	.voice-card .audio {
-		width: 100%;
+	.voice-audio-compact {
+		display: inline-flex;
+		align-items: center;
+		gap: 7px;
+		min-width: 0;
+		padding: 4px 6px 4px 4px;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-radius: 8px;
+		background: #10151c;
+		width: fit-content;
 		max-width: 100%;
+	}
+
+	.voice-play-btn {
+		width: 30px;
+		height: 30px;
+		border-radius: 7px;
+	}
+
+	.voice-audio-label {
+		min-width: 0;
+		font-size: 12px;
+		line-height: 1;
+		white-space: nowrap;
 	}
 
 	.file-row {
