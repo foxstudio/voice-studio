@@ -37,6 +37,65 @@
 		loaded: engines.filter((engine) => engine.state.status === 'loaded').length
 	}));
 
+	const engineDescriptionExtras: Record<string, string> = {
+		'indextts-v2': '当前主力中文口播引擎：支持 8 种情绪、更长文本、S2Mel/BigVGAN2。'
+	};
+
+	function engineDescription(engine: EngineDetail) {
+		return [engine.manifest.description, engineDescriptionExtras[engine.manifest.engine_id]]
+			.filter(Boolean)
+			.join(' · ');
+	}
+
+	function descriptionTooltip(node: HTMLElement, text: string) {
+		let description = text;
+		let frame = 0;
+		let observer: ResizeObserver | null = null;
+
+		const updateTooltipState = () => {
+			const textNode = node.querySelector<HTMLElement>('.clamp-text');
+			const overflows =
+				!!textNode &&
+				(textNode.scrollHeight > textNode.clientHeight + 1 ||
+					textNode.scrollWidth > textNode.clientWidth + 1);
+
+			node.classList.toggle('has-tooltip', overflows);
+			if (overflows) {
+				node.dataset.text = description;
+				node.tabIndex = 0;
+				node.setAttribute('aria-label', `完整引擎描述：${description}`);
+			} else {
+				delete node.dataset.text;
+				node.removeAttribute('tabindex');
+				node.removeAttribute('aria-label');
+			}
+		};
+
+		const schedule = () => {
+			if (frame) cancelAnimationFrame(frame);
+			frame = requestAnimationFrame(updateTooltipState);
+		};
+
+		if (typeof ResizeObserver !== 'undefined') {
+			observer = new ResizeObserver(schedule);
+			observer.observe(node);
+			const textNode = node.querySelector<HTMLElement>('.clamp-text');
+			if (textNode) observer.observe(textNode);
+		}
+		schedule();
+
+		return {
+			update(nextText: string) {
+				description = nextText;
+				schedule();
+			},
+			destroy() {
+				if (frame) cancelAnimationFrame(frame);
+				observer?.disconnect();
+			}
+		};
+	}
+
 	async function refresh() {
 		[engines, voices] = await Promise.all([Api.engines(), Api.voices()]);
 	}
@@ -113,10 +172,9 @@
 					<h2>{engine.manifest.display_name}</h2>
 					<span class="badge" class:ok={engine.state.status === 'loaded'} class:fail={engine.state.status === 'error'}>{engineStatusLabel(engine.state.status)}</span>
 				</div>
-				<p class="muted clamp-text text-pop" data-text={engine.manifest.description}>{engine.manifest.description}</p>
-				{#if engine.manifest.engine_id === 'indextts-v2'}
-					<p class="muted clamp-text text-pop" data-text="当前主力中文口播引擎：支持 8 种情绪、更长文本、S2Mel/BigVGAN2。">当前主力中文口播引擎：支持 8 种情绪、更长文本、S2Mel/BigVGAN2。</p>
-				{/if}
+				<div class="description-pop" use:descriptionTooltip={engineDescription(engine)}>
+					<p class="muted clamp-text">{engineDescription(engine)}</p>
+				</div>
 				<div class="row compact-tags">
 					<span class="badge">{engine.manifest.sample_rate ?? '-'} Hz</span>
 					<span class="badge badge-kind">{engine.manifest.engine_type === 'local' ? '本地' : '云端'}</span>
@@ -250,21 +308,42 @@
 		line-height: 1.4;
 	}
 
-	.text-pop.clamp-text {
-		padding: 0;
-		border: 0;
-		border-radius: 0;
-		background: transparent;
-		backdrop-filter: none;
-		box-shadow: none;
+	.description-pop {
+		position: relative;
+		width: 100%;
+		cursor: default;
+	}
+
+	.description-pop.has-tooltip {
 		cursor: help;
 	}
 
-	.text-pop.clamp-text:hover::after,
-	.text-pop.clamp-text:focus-within::after {
+	.description-pop.has-tooltip:focus-visible {
+		outline: 1px solid rgba(79, 156, 249, 0.46);
+		outline-offset: 3px;
+		border-radius: 4px;
+	}
+
+	.description-pop.has-tooltip:hover::after,
+	.description-pop.has-tooltip:focus::after {
+		content: attr(data-text);
+		position: absolute;
 		left: 0;
 		bottom: calc(100% + 8px);
 		width: min(320px, 76vw);
+		max-height: 240px;
+		overflow: auto;
+		white-space: pre-wrap;
+		line-height: 1.65;
+		padding: 11px 12px;
+		border-radius: 12px;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		background: rgba(12, 15, 20, 0.9);
+		backdrop-filter: blur(18px);
+		color: #eef3fb;
+		font-size: 11.5px;
+		box-shadow: 0 18px 42px rgba(0, 0, 0, 0.38);
+		z-index: 5;
 	}
 
 	.compact-tags {
