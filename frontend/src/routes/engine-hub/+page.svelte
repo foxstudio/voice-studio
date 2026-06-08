@@ -1,14 +1,25 @@
 <script lang="ts">
 	import { Api } from '$lib/api';
+	import { ApiError } from '$lib/api/client';
 	import type { EngineAudioDiagnosis, EngineDetail, VoiceAsset } from '$lib/api/types';
 	import { Activity, Play, RotateCcw, Search, Square, Volume2 } from 'lucide-svelte';
 	import { capabilityLabel, engineStatusLabel } from '$lib/labels';
+
+	type EngineCheckCard = {
+		status: 'running' | 'passed' | 'failed';
+		title: string;
+		detail: string;
+	};
 
 	let engines = $state<EngineDetail[]>([]);
 	let voices = $state<VoiceAsset[]>([]);
 	let message = $state('');
 	let voiceId = $state('');
 	let diagnosis = $state<Record<string, EngineAudioDiagnosis>>({});
+	let diagnosisErrors = $state<Record<string, string>>({});
+	let diagnosing = $state<Record<string, boolean>>({});
+	let healthChecks = $state<Record<string, EngineCheckCard>>({});
+	let checking = $state<Record<string, boolean>>({});
 	let query = $state('');
 	let engineFilter = $state<'all' | 'local' | 'cloud' | 'asr' | 'tts'>('all');
 
@@ -96,6 +107,35 @@
 		};
 	}
 
+	function compactJson(value: unknown) {
+		return JSON.stringify(value, null, 0);
+	}
+
+	function errorText(error: unknown) {
+		if (error instanceof ApiError) {
+			if (error.code === 'REFERENCE_AUDIO_REQUIRED') return 'IndexTTS v2 需要先选择一个参考音色，再生成试听。';
+			return `${error.message}${error.code ? `（${error.code}）` : ''}`;
+		}
+		return error instanceof Error ? error.message : String(error);
+	}
+
+	function formatHealthCheck(result: Record<string, unknown>): EngineCheckCard {
+		const healthy = result.healthy === true;
+		const status = String(result.status ?? (healthy ? 'ok' : 'unknown'));
+		const detailParts = [
+			result.detail,
+			Array.isArray(result.missing) && result.missing.length ? `缺少文件：${result.missing.join('、')}` : null,
+			result.model_path ? `模型路径：${result.model_path}` : null,
+			result.base_url ? `服务地址：${result.base_url}` : null
+		].filter(Boolean);
+
+		return {
+			status: healthy ? 'passed' : 'failed',
+			title: healthy ? `环境可用 · ${status}` : `环境不可用 · ${status}`,
+			detail: detailParts.join('；') || compactJson(result)
+		};
+	}
+
 	async function refresh() {
 		[engines, voices] = await Promise.all([Api.engines(), Api.voices()]);
 	}
@@ -112,30 +152,44 @@
 		await refresh();
 	}
 	async function check(id: string) {
-		const result = await Api.healthEngine(id);
-		message = JSON.stringify(result);
+		checking = { ...checking, [id]: true };
+		healthChecks = { ...healthChecks, [id]: { status: 'running', title: '正在检查环境', detail: '正在确认模型文件、依赖包或云端配置。' } };
+		try {
+			const result = await Api.healthEngine(id);
+			healthChecks = { ...healthChecks, [id]: formatHealthCheck(result) };
+		} catch (error) {
+			healthChecks = { ...healthChecks, [id]: { status: 'failed', title: '环境检查失败', detail: errorText(error) } };
+		} finally {
+			checking = { ...checking, [id]: false };
+		}
 	}
 	async function diagnose(id: string) {
-		message = `正在诊断 ${id}`;
-		const result = await Api.diagnoseEngineAudio(id, { voice_id: voiceId || null });
-		diagnosis = { ...diagnosis, [id]: result };
-		message = '';
+		diagnosing = { ...diagnosing, [id]: true };
+		diagnosisErrors = { ...diagnosisErrors, [id]: '' };
+		try {
+			const result = await Api.diagnoseEngineAudio(id, { voice_id: voiceId || null });
+			diagnosis = { ...diagnosis, [id]: result };
+		} catch (error) {
+			diagnosisErrors = { ...diagnosisErrors, [id]: errorText(error) };
+		} finally {
+			diagnosing = { ...diagnosing, [id]: false };
+		}
 	}
 </script>
 
 <svelte:head><title>引擎管理 - 声音工作台</title></svelte:head>
 
 <main class="page">
-	<div class="page-head"><div><h1>引擎管理</h1><p class="muted">本地引擎生命周期、能力标签、版本差异和音频诊断</p></div><button class="btn" onclick={refresh}><RotateCcw size={16} /> 刷新</button></div>
+	<div class="page-head"><div><h1>引擎管理</h1><p class="muted">本地引擎生命周期、能力标签、版本差异和试听诊断</p></div><button class="btn" onclick={refresh}><RotateCcw size={16} /> 刷新</button></div>
 	{#if message}<div class="panel muted">{message}</div>{/if}
 	<section class="panel stack" style="margin-bottom:16px">
-		<h2>音频诊断参考音色</h2>
+		<h2>生成试听参考音色</h2>
 		<div class="row">
-			<select bind:value={voiceId} aria-label="诊断参考音色">
-				<option value="">未选择，OmniVoice 可无参考诊断</option>
+			<select bind:value={voiceId} aria-label="生成试听参考音色">
+				<option value="">未选择，OmniVoice 可无参考试听</option>
 				{#each voices as voice}<option value={voice.voice_id}>{voice.name}</option>{/each}
 			</select>
-			<span class="muted">IndexTTS v2 诊断默认跟随参考音色；OmniVoice 可用声音设计做无参考诊断。</span>
+			<span class="muted">IndexTTS v2 试听需要参考音色；OmniVoice 可用声音设计做无参考试听。</span>
 		</div>
 	</section>
 	<section class="panel stack" style="margin-bottom:16px">
@@ -185,12 +239,30 @@
 				</div>
 					<div class="row compact-actions">
 						{#if engine.state.status === 'loaded'}<button class="btn mini-btn" onclick={() => stop(engine.manifest.engine_id)}><Square size={13} /> 停止</button>{:else}<button class="btn primary mini-btn" onclick={() => start(engine.manifest.engine_id)}><Play size={13} /> 启动</button>{/if}
-						<button class="btn mini-btn" onclick={() => check(engine.manifest.engine_id)}><Activity size={13} /> 检查</button>
-						{#if !engine.manifest.capabilities.includes('speech_recognition')}<button class="btn mini-btn" onclick={() => diagnose(engine.manifest.engine_id)}><Volume2 size={13} /> 音频诊断</button>{/if}
+						<button class="btn mini-btn" disabled={checking[engine.manifest.engine_id]} onclick={() => check(engine.manifest.engine_id)}><Activity size={13} /> {checking[engine.manifest.engine_id] ? '检查中' : '环境检查'}</button>
+						{#if !engine.manifest.capabilities.includes('speech_recognition')}<button class="btn mini-btn" disabled={diagnosing[engine.manifest.engine_id]} onclick={() => diagnose(engine.manifest.engine_id)}><Volume2 size={13} /> {diagnosing[engine.manifest.engine_id] ? '试听中' : '生成试听'}</button>{/if}
 					</div>
+				{#if healthChecks[engine.manifest.engine_id]}
+					<div class="status-box">
+						<span class="badge" class:ok={healthChecks[engine.manifest.engine_id].status === 'passed'} class:fail={healthChecks[engine.manifest.engine_id].status === 'failed'}>{healthChecks[engine.manifest.engine_id].title}</span>
+						<p class="muted">{healthChecks[engine.manifest.engine_id].detail}</p>
+					</div>
+				{/if}
+				{#if diagnosing[engine.manifest.engine_id]}
+					<div class="status-box running">
+						<span class="badge">正在生成试听</span>
+						<p class="muted">正在启动引擎并生成一段短音频，首次加载模型可能会比较久。</p>
+					</div>
+				{/if}
+				{#if diagnosisErrors[engine.manifest.engine_id]}
+					<div class="status-box">
+						<span class="badge fail">生成试听失败</span>
+						<p class="muted">{diagnosisErrors[engine.manifest.engine_id]}</p>
+					</div>
+				{/if}
 				{#if diagnosis[engine.manifest.engine_id]}
 					<div class="diagnosis-box">
-						<span class="badge" class:ok={diagnosis[engine.manifest.engine_id].status === 'passed'} class:fail={diagnosis[engine.manifest.engine_id].status === 'failed'}>{diagnosis[engine.manifest.engine_id].status === 'passed' ? '可听门槛通过' : '诊断失败/需复核'}</span>
+						<span class="badge" class:ok={diagnosis[engine.manifest.engine_id].status === 'passed'} class:fail={diagnosis[engine.manifest.engine_id].status === 'failed'}>{diagnosis[engine.manifest.engine_id].status === 'passed' ? '可听门槛通过' : '试听失败/需复核'}</span>
 						<p class="muted">RMS {diagnosis[engine.manifest.engine_id].quality.rms ?? '-'} · 峰值 {diagnosis[engine.manifest.engine_id].quality.peak ?? '-'} · 时长 {diagnosis[engine.manifest.engine_id].quality.duration_ms ?? '-'}ms</p>
 						{#if diagnosis[engine.manifest.engine_id].quality.warnings?.length}
 							<p class="muted">{diagnosis[engine.manifest.engine_id].quality.warnings?.join('；')}</p>
@@ -383,6 +455,27 @@
 		background: #101215;
 		display: grid;
 		gap: 7px;
+	}
+
+	.status-box {
+		border: 1px solid var(--line);
+		border-radius: 7px;
+		padding: 8px;
+		background: rgba(255, 255, 255, 0.025);
+		display: grid;
+		gap: 6px;
+	}
+
+	.status-box.running {
+		border-color: rgba(79, 156, 249, 0.22);
+		background: rgba(79, 156, 249, 0.07);
+	}
+
+	.status-box p {
+		margin: 0;
+		font-size: 11px;
+		line-height: 1.45;
+		overflow-wrap: anywhere;
 	}
 
 	.diagnosis-box p {
