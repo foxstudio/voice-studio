@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-from app.models.schemas import LicenseStatus, VoiceAsset, VoiceAssetCreate, VoiceEngineBinding, VoiceFile, now_iso
+from app.models.schemas import LicenseStatus, VoiceAsset, VoiceAssetCreate, VoiceAssetUpdate, VoiceEngineBinding, VoiceFile, now_iso
 from app.services import audio_tools, database as db, settings_store, voice_aliases
 
 
@@ -37,12 +37,12 @@ def create_voice(data: VoiceAssetCreate) -> VoiceAsset:
     return save_voice(VoiceAsset(**data.model_dump()))
 
 
-def update_voice(voice_id: str, data: VoiceAssetCreate) -> VoiceAsset | None:
+def update_voice(voice_id: str, data: VoiceAssetUpdate) -> VoiceAsset | None:
     old = get_voice(voice_id)
     if not old:
         return None
     merged = old.model_dump()
-    merged.update(data.model_dump())
+    merged.update(data.model_dump(exclude_unset=True))
     merged["voice_id"] = voice_id
     return save_voice(VoiceAsset(**merged))
 

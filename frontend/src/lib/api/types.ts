@@ -88,6 +88,12 @@ export interface VoiceAssetCreate {
 	license_status: string;
 }
 
+export type VoiceAssetUpdate = Partial<VoiceAssetCreate> & {
+	quality_status?: string;
+	quality_notes?: string;
+	favorite?: boolean;
+};
+
 export interface VoiceEngineBinding {
 	engine_id: string;
 	mode: 'reference_audio' | 'preset_voice' | 'voice_design' | 'voice_clone';

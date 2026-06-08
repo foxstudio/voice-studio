@@ -168,6 +168,21 @@ class VoiceAssetCreate(BaseModel):
     license_status: LicenseStatus = LicenseStatus.unknown
 
 
+class VoiceAssetUpdate(BaseModel):
+    name: str | None = None
+    voice_type: VoiceType | None = None
+    description: str | None = None
+    default_language: str | None = None
+    tags: list[str] | None = None
+    reference_text: str | None = None
+    recommended_engine_id: str | None = None
+    reference_audio_ids: list[str] | None = None
+    license_status: LicenseStatus | None = None
+    quality_status: str | None = None
+    quality_notes: str | None = None
+    favorite: bool | None = None
+
+
 class VoiceEngineBinding(BaseModel):
     engine_id: str
     mode: Literal["reference_audio", "preset_voice", "voice_design", "voice_clone"]

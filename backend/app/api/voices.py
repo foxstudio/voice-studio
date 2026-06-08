@@ -4,7 +4,7 @@ from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import FileResponse
 
 from app.models.exceptions import AppException
-from app.models.schemas import VoiceAsset, VoiceAssetCreate
+from app.models.schemas import VoiceAsset, VoiceAssetCreate, VoiceAssetUpdate
 from app.services import voice_store
 
 router = APIRouter()
@@ -29,7 +29,7 @@ async def get_voice(voice_id: str):
 
 
 @router.patch("/{voice_id}", response_model=VoiceAsset)
-async def update_voice(voice_id: str, data: VoiceAssetCreate):
+async def update_voice(voice_id: str, data: VoiceAssetUpdate):
     voice = voice_store.update_voice(voice_id, data)
     if not voice:
         raise AppException(404, "VOICE_NOT_FOUND", "Voice not found")
@@ -54,4 +54,3 @@ async def get_reference_audio(voice_id: str, file_id: str):
     if not voice or file_id not in voice.reference_audio_ids or not vf:
         raise AppException(404, "AUDIO_NOT_FOUND", "Audio not found")
     return FileResponse(vf.path)
-

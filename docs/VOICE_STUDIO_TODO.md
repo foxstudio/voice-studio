@@ -4,10 +4,10 @@ Updated: 2026-06-08
 
 ## Current State
 
-- Active branch: `codex/Soundpackage`
+- Active branch: `main`
 - Frontend dev server: `http://127.0.0.1:5173`
 - Backend API: `http://127.0.0.1:8000/api`
-- `main` and `codex/webui` are merged into `codex/Soundpackage`.
+- `codex/Soundpackage` has been merged into `main`.
 - The generate page now loads from `/Users/foxmacstudio/Projects/mlx-indextts`.
 
 ## Completed
@@ -21,6 +21,9 @@ Updated: 2026-06-08
 - Extended agent CLI parameters in `/Users/foxmacstudio/.cc-switch/skills/local-tts/scripts/generate.py`.
 - Extended `scripts/voice_studio_batch.py` for model-specific batch parameters.
 - Updated shared `local-tts` skill documentation and batch agent documentation.
+- Added partial voice update support for `reference_text`, `quality_status`, `quality_notes`, and `favorite`.
+- Added `scripts/backfill_voice_reference_text.py` to dry-run or apply local ASR reference-text backfill.
+- Merged the Soundpackage branch work into `main`.
 
 ## Verification
 
@@ -29,18 +32,20 @@ Run before merging or after significant edits:
 ```bash
 pnpm --dir frontend check
 .venv/bin/python -m compileall -q backend/app
-.venv/bin/python -m pytest tests/test_reference_features.py tests/test_mimo_cloud_contract.py tests/test_task_queue_stale.py tests/integration/test_three_engines.py -q
+.venv/bin/python -m pytest tests/test_longform_queue.py tests/test_reference_features.py tests/test_mimo_cloud_contract.py tests/test_task_queue_stale.py tests/integration/test_three_engines.py tests/test_voice_store_update.py -q
 python3 /Users/foxmacstudio/.cc-switch/skills/local-tts/scripts/generate.py --check
 python3 /Users/foxmacstudio/.cc-switch/skills/local-tts/scripts/generate.py --list-voices
+python3 scripts/backfill_voice_reference_text.py --limit 5
 ```
 
 Last known result:
 
 - Frontend check: passed, 0 errors / 0 warnings.
 - Backend compile: passed.
-- Tests: 47 passed, 5 warnings.
+- Tests: 50 passed, 5 warnings.
 - CLI health: `ok`.
 - CLI voice list: 74 voices.
+- Reference text dry-run: 5 candidates listed, no writes; local API currently has 48 voices with reference audio but empty `reference_text`.
 
 ## Import Scripts
 
@@ -63,9 +68,9 @@ Many imported character voices have reference audio but empty `reference_text`. 
 
 Recommended path:
 
-- Add a voice-library action or script to transcribe selected reference audio with local ASR.
-- Store the transcript back into `VoiceAsset.reference_text`.
-- Mark uncertain transcripts in `quality_notes` instead of pretending they are exact.
+- Run `scripts/backfill_voice_reference_text.py` in dry-run mode to inspect candidates.
+- Apply it in small batches, for example `--limit 5 --apply`, so generated transcripts can be reviewed.
+- Keep the `ASR待复核` tag and `quality_notes` note until a human verifies the reference line.
 
 ### 2. Persistent Workers
 
@@ -96,10 +101,11 @@ Recommended path:
 - Add a searchable speaker catalog/import UI if the full catalog becomes useful.
 - Keep the default parameter dropdown compact.
 
-### 5. Commit And Merge Hygiene
+### 5. Agent-Facing Usage Notes
 
-After verification:
+Backend and agent instructions now cover the new engines at a high level. The remaining polish is to keep examples current as real presets and worker behavior change.
 
-- Commit the current branch.
-- Merge `codex/Soundpackage` into `main`.
+Recommended path:
+
+- Add one short example per engine after reference-text backfill is verified on real voices.
 - Keep external shared skill changes noted separately because `/Users/foxmacstudio/.cc-switch/skills/local-tts` is outside this repository.

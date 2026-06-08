@@ -28,6 +28,7 @@ import type {
 	UploadResult,
 	VoiceAsset,
 	VoiceAssetCreate,
+	VoiceAssetUpdate,
 	VoiceSeed
 } from './types';
 
@@ -46,7 +47,7 @@ export const Api = {
 	diagnoseEngineAudio: (id: string, body: { reference_audio_path?: string | null; voice_id?: string | null; text?: string; emotion?: string | null }) => api.post<EngineAudioDiagnosis>(`/engines/${id}/diagnose-audio`, body),
 	voices: () => api.get<VoiceAsset[]>('/voices'),
 	createVoice: (voice: VoiceAssetCreate) => api.post<VoiceAsset>('/voices', voice),
-	updateVoice: (id: string, voice: VoiceAssetCreate) => api.patch<VoiceAsset>(`/voices/${id}`, voice),
+	updateVoice: (id: string, voice: VoiceAssetUpdate) => api.patch<VoiceAsset>(`/voices/${id}`, voice),
 	deleteVoice: (id: string) => api.delete<{ status: string }>(`/voices/${id}`),
 	uploadVoice: (file: File) => api.upload<UploadResult>('/voices/upload', file),
 	generatePlan: (body: GeneratePlanRequest) => api.post<GeneratePlanResponse>('/generate/plan', body),
