@@ -116,10 +116,13 @@
 			.slice(0, limit);
 	}
 
-	function textLabel(text: string | null | undefined) {
+	function voiceLineText(text: string | null | undefined) {
 		const value = (text ?? '').trim();
-		if (!value) return '说明';
-		return value.includes('参考音频') || value.includes('用于测试') || value.includes('官方示例') ? '说明' : '台词';
+		if (!value) return '暂无台词。可以点击「编辑」补充参考音频里实际说的话。';
+		if (value.includes('参考音频') || value.includes('用于测试') || value.includes('官方示例')) {
+			return `未记录台词。当前只保存了素材说明：${value}`;
+		}
+		return value;
 	}
 
 	const filteredVoices = $derived.by(() => {
@@ -238,7 +241,7 @@
 						<span>参考音频 {voice.reference_audio_ids.length}</span>
 						<span>{voiceCardKind(voice) === 'cloud' ? '云端' : '本地'}</span>
 						<span>{voice.recommended_engine_id ? bindingLabel(voice.recommended_engine_id) : '自动引擎'}</span>
-						<span class="text-pop text-chip" data-text={voice.reference_text || '暂无参考文本'}><FileText size={13} /> {textLabel(voice.reference_text)}</span>
+						<span class="text-pop text-chip" data-text={voiceLineText(voice.reference_text)}><FileText size={13} /> 台词</span>
 					</div>
 					<div class="binding-row">
 						{#each (voice.engine_bindings ?? []).filter((binding) => binding.engine_id !== 'mimo-v2.5-tts-preset') as binding}
