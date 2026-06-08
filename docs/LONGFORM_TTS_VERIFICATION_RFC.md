@@ -150,24 +150,50 @@
 
 ### `POST /api/longform/generate`
 
-第二阶段实现。执行分段生成、校对、重试和合并。
+已实现。执行分段生成、校对、重试和合并。
 
 关键参数：
 
-- `plan_id` 或内联 `segments`
-- `generate_request`
-- `verify_enabled`
-- `merge_enabled`
-- `max_retries`
-- `stop_merge_on_verification_failed`
+- `generate_request`：原始单条生成参数，服务会把 `text` 替换为每段文本。
+- `segments`：可直接传 `/api/generate/plan` 返回的分段；不传则后端重新规划。
+- `verify_enabled`：每段生成后是否 ASR 校对。
+- `merge_enabled`：全部成功后是否自动合并。
+- `max_retries`：每段失败后最多重试次数，默认 2。
+- `stop_merge_on_verification_failed`：校对失败时是否阻止合并，默认 true。
+- `asr_engine_id`：默认 `qwen3-asr-mlx`。
+- `silence_ms`：合并段间静默，默认 300。
+
+示例：
+
+```json
+{
+  "generate_request": {
+    "text": "完整长文本",
+    "engine_id": "indextts-v2",
+    "voice_id": "voice_id",
+    "language": "zh",
+    "output_format": "mp3"
+  },
+  "segments": [
+    { "index": 1, "text": "第一段。", "char_count": 4, "segment_reason": "sentence_boundary" }
+  ],
+  "verify_enabled": true,
+  "merge_enabled": true,
+  "max_retries": 2
+}
+```
 
 ### `GET /api/longform/{task_id}`
 
-查询父任务、段落状态、校对报告和最终合并音频。
+已实现。查询父任务、段落状态、校对报告、子任务 `task_id`、每段 `result_id` 和最终合并音频。
 
 ### `POST /api/longform/{task_id}/retry-failed`
 
-只重试失败段落。
+已实现。只重试失败段落。
+
+### `GET /api/longform/{task_id}/download`
+
+已实现。下载长文本合并后的音频；只有 `merge_enabled=true` 且合并成功后可用。
 
 ## 前端交互
 
@@ -217,9 +243,10 @@ Agent 调用 Voice Studio 时必须遵守：
 
 ### Phase 3：长文本编排
 
-- 新增 `longform_queue.py`
-- 分段生成、逐段校对、自动重试、通过后合并
-- 结果记录支持父任务与子段落展开
+- 已新增 `longform_queue.py`
+- 已新增 `/api/longform/generate`
+- 已支持分段生成、逐段校对、自动重试、通过后合并
+- 已支持父任务与子段落展开
 
 ### Phase 4：LLM 增强
 
