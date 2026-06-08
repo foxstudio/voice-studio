@@ -13,7 +13,7 @@
 		TTSVerificationResponse,
 		VoiceAsset
 	} from '$lib/api/types';
-	import { engineStatusLabel, taskStatusLabel } from '$lib/labels';
+	import { engineStatusLabel, taskStatusLabel, voiceAuthTags } from '$lib/labels';
 	import {
 		CheckSquare,
 		ChevronLeft,
@@ -323,16 +323,9 @@
 			: speakerOptions
 	);
 	const promptOptions = $derived(selected?.manifest.parameter_schema.find((p) => p.key === 'prompt')?.options ?? []);
-	const voiceChoices = $derived(voices);
-	const voiceAuthTagKeywords = ['测试', '授权', '许可', '商用', '自有', '试用'];
-	function voiceOptionTags(voice: VoiceAsset) {
-		return voice.tags
-			.filter((tag) => voiceAuthTagKeywords.some((keyword) => tag.includes(keyword)))
-			.slice(0, 3);
-	}
 
 	function voiceOptionLabel(voice: VoiceAsset) {
-		const tags = voiceOptionTags(voice);
+		const tags = voiceAuthTags(voice.tags);
 		return tags.length ? `${voice.name}（${tags.join('、')}）` : voice.name;
 	}
 	const hasRunningTasks = $derived(
@@ -558,7 +551,7 @@
 			voiceId = '';
 			return;
 		}
-		if (voiceId && !voiceChoices.some((voice) => voice.voice_id === voiceId)) {
+		if (voiceId && !voices.some((voice) => voice.voice_id === voiceId)) {
 			voiceId = '';
 		}
 	});
@@ -2176,11 +2169,11 @@
 					<label class="param-label" for="voice">声音</label>
 					<div class="param-control">
 						<div class="voice-select-row">
-							<select id="voice" bind:value={voiceId} disabled={voiceChoices.length === 0}>
+							<select id="voice" bind:value={voiceId} disabled={voices.length === 0}>
 								<option value="">
-									{voiceChoices.length === 0 ? '没有可用音色' : '未选择'}
+									{voices.length === 0 ? '没有可用音色' : '未选择'}
 								</option>
-								{#each voiceChoices as voice}
+								{#each voices as voice}
 									<option value={voice.voice_id}>{voiceOptionLabel(voice)}</option>
 								{/each}
 							</select>
@@ -3593,14 +3586,9 @@
 		font-size: 12px;
 	}
 
-	.engine-note small,
-	.warning-text {
+	.engine-note small {
 		color: var(--muted);
 		line-height: 1.45;
-	}
-
-	.warning-text {
-		color: #f6c177;
 	}
 
 	.sticky-aside select,

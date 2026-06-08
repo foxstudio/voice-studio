@@ -77,3 +77,11 @@ export function licenseLabel(license: string) {
 		commercial_forbidden: '禁止商用'
 	}[license] ?? license;
 }
+
+export const VOICE_AUTH_TAG_KEYWORDS = ['测试', '授权', '许可', '商用', '自有', '试用'];
+
+export function voiceAuthTags(tags: string[]) {
+	return tags
+		.filter((tag) => VOICE_AUTH_TAG_KEYWORDS.some((keyword) => tag.includes(keyword)))
+		.slice(0, 3);
+}
