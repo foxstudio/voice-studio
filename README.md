@@ -34,7 +34,7 @@ scripts/            Voice import, batch processing, quality verification
 ### Install
 
 ```bash
-git clone https://github.com/foxmacstudio/voice-studio.git
+git clone https://github.com/foxstudio/voice-studio.git
 cd voice-studio
 
 # Install Python dependencies

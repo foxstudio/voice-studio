@@ -72,9 +72,9 @@ voice-studio = "mlx_indextts.cli:main"
 mlx-indextts = "mlx_indextts.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/foxmacstudio/voice-studio"
-Repository = "https://github.com/foxmacstudio/voice-studio"
-Issues = "https://github.com/foxmacstudio/voice-studio/issues"
+Homepage = "https://github.com/foxstudio/voice-studio"
+Repository = "https://github.com/foxstudio/voice-studio"
+Issues = "https://github.com/foxstudio/voice-studio/issues"
 
 [build-system]
 requires = ["hatchling"]
