@@ -21,9 +21,11 @@ from app.models.schemas import (
     ScriptSegment,
     SegmentStatus,
     TaskStatus,
+    TranscriptionRecord,
+    TTSVerificationResponse,
     now_iso,
 )
-from app.services import audio_tools, database as db, engine_registry, history_store, project_store, settings_store, voice_store
+from app.services import asr_service, audio_tools, database as db, engine_registry, history_store, project_store, settings_store, text_verifier, voice_store
 
 _queue: asyncio.Queue[str] | None = None
 _worker_task: asyncio.Task[None] | None = None
@@ -92,6 +94,101 @@ def list_tasks() -> list[GenerationTask]:
 def get_task(task_id: str) -> GenerationTask | None:
     data = db.get_one("tasks", "task_id", task_id)
     return _reconcile_stale_task(GenerationTask(**data)) if data else None
+
+
+def _verification_language(task: GenerationTask) -> str:
+    value = task.parameters.get("language")
+    return value if value in {"auto", "zh", "en"} else "zh"
+
+
+def _save_history_verification(result_id: str | None, report: TTSVerificationResponse | None, error: str | None = None) -> None:
+    if not result_id:
+        return
+    item = history_store.get(result_id)
+    if not item:
+        return
+    item.verification = report
+    item.verification_error = error
+    history_store.add(item)
+
+
+def attach_verification(task_id: str, report: TTSVerificationResponse | None, error: str | None = None) -> GenerationTask | None:
+    task = get_task(task_id)
+    if not task:
+        return None
+    task.verification = report
+    task.verification_error = error
+    _save_history_verification(task.result_id, report, error)
+    return _save(task)
+
+
+def attach_verification_to_result(result_id: str, report: TTSVerificationResponse | None, error: str | None = None) -> list[GenerationTask]:
+    updated: list[GenerationTask] = []
+    _save_history_verification(result_id, report, error)
+    for row in db.list_all("tasks", "created_at", False):
+        task = GenerationTask(**row)
+        if task.result_id != result_id:
+            continue
+        task.verification = report
+        task.verification_error = error
+        updated.append(_save(task))
+    return updated
+
+
+def _verify_task_output(task: GenerationTask, *, asr_engine_id: str = "qwen3-asr-mlx") -> TTSVerificationResponse:
+    if not task.result_id:
+        raise ValueError("任务没有可校对的生成结果")
+    item = history_store.get(task.result_id)
+    if not item:
+        raise ValueError("生成结果不存在")
+    audio_path = history_store.audio_path(task.result_id)
+    if not audio_path:
+        raise ValueError("结果音频不存在")
+    language = _verification_language(task)
+    suffix = audio_path.suffix.lower() or ".wav"
+    asr_service.validate_request(asr_engine_id, language, suffix)
+    result = asr_service.transcribe(engine_id=asr_engine_id, audio_path=str(audio_path), language=language)
+    record = TranscriptionRecord(
+        engine_id=asr_engine_id,
+        filename=audio_path.name,
+        language=language if language in {"auto", "zh", "en"} else "zh",
+        text=result["text"],
+        segments=asr_service.normalize_segments(result.get("segments")),
+        size_bytes=audio_path.stat().st_size if audio_path.exists() else 0,
+        usage_seconds=result.get("usage_seconds"),
+        provider_response_id=result.get("provider_response_id"),
+    )
+    for key, value in asr_service.timestamp_metadata_for(record.engine_id, record.segments).items():
+        setattr(record, key, value)
+    record.has_source_audio = False
+    db.upsert("transcriptions", record.transcription_id, record.model_dump(), "created_at")
+    return text_verifier.verify_transcript(
+        expected_text=task.input_text,
+        transcript_text=record.text,
+        result_id=task.result_id,
+        transcription_id=record.transcription_id,
+        asr_engine_id=asr_engine_id,
+    )
+
+
+async def _auto_verify_task(task_id: str) -> None:
+    task = get_task(task_id)
+    if not task or not task.result_id or task.verification:
+        return
+    try:
+        report = await asyncio.to_thread(_verify_task_output, task)
+        updated = attach_verification(task_id, report)
+    except Exception as exc:
+        updated = attach_verification(task_id, None, f"自动校对失败：{exc}")
+    if updated:
+        await _broadcast(updated)
+
+
+def schedule_auto_verification(task_id: str) -> None:
+    loop = _worker_loop
+    if not loop or loop.is_closed():
+        return
+    loop.create_task(_auto_verify_task(task_id))
 
 
 def find_longform_export_task(longform_task_id: str, export_id: str | None) -> GenerationTask | None:
@@ -264,7 +361,9 @@ def add_completed_longform_export(
         )
     )
     task.result_id = hist.result_id
-    return _save(task)
+    saved = _save(task)
+    schedule_auto_verification(saved.task_id)
+    return saved
 
 
 def add_completed_longform_segment(
@@ -292,12 +391,17 @@ def add_completed_longform_segment(
         result_id=hist.result_id,
         result_duration_ms=segment.duration_ms or hist.duration_ms,
         generation_time_ms=hist.generation_time_ms,
+        verification=hist.verification or segment.verification,
+        verification_error=hist.verification_error,
         parameters=parameters,
         completed_at=hist.created_at,
     )
     hist.longform_task_id = longform_task.longform_task_id
     hist.longform_segment_index = segment.index
     hist.longform_segment_count = len(longform_task.segments)
+    if segment.verification:
+        hist.verification = segment.verification
+        hist.verification_error = None
     history_store.add(hist)
     return _save(task)
 
@@ -614,6 +718,9 @@ async def _process(task: GenerationTask) -> None:
                 voice_name=voice_store.get_voice(req.voice_id).name if req.voice_id and voice_store.get_voice(req.voice_id) else None,
                 project_id=task.project_id,
                 segment_id=task.segment_id,
+                longform_task_id=task.longform_task_id,
+                longform_segment_index=task.longform_segment_index,
+                longform_segment_count=task.longform_segment_count,
                 input_text=req.text,
                 output_audio_id=audio_id,
                 output_path=str(final_path),
@@ -636,3 +743,5 @@ async def _process(task: GenerationTask) -> None:
     task.completed_at = now_iso()
     _save(task)
     await _broadcast(task)
+    if task.status == TaskStatus.success and task.result_id and not (task.longform_task_id and task.task_type == "segment"):
+        schedule_auto_verification(task.task_id)

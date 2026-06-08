@@ -174,6 +174,55 @@ def test_completed_longform_export_creates_history_result(isolated_db, tmp_path)
     assert history.longform_export_id == "export-a"
 
 
+def test_tts_verification_endpoint_persists_report(isolated_db):
+    client = TestClient(app)
+    task = GenerationTask(
+        task_id="task-verify",
+        task_type="single",
+        engine_id="indextts-v2",
+        voice_id="voice-a",
+        input_text="第一句。第二句。",
+        status=TaskStatus.success,
+        result_id="result-verify",
+        parameters=GenerateRequest(text="第一句。第二句。", engine_id="indextts-v2", voice_id="voice-a").model_dump(),
+    )
+    db.upsert("tasks", task.task_id, task.model_dump())
+    history_store.add(
+        HistoryItem(
+            result_id="result-verify",
+            task_id=task.task_id,
+            engine_id="indextts-v2",
+            voice_id="voice-a",
+            input_text="第一句。第二句。",
+            output_audio_id="audio-a",
+            output_path="/tmp/missing.wav",
+            parameter_snapshot=task.parameters,
+        )
+    )
+
+    response = client.post(
+        "/api/evaluations/tts-verification",
+        json={
+            "result_id": "result-verify",
+            "expected_text": "第一句。第二句。",
+            "transcript_text": "第一句。第二句。",
+            "asr_engine_id": "qwen3-asr-mlx",
+            "language": "zh",
+        },
+    )
+    saved_task = task_queue.get_task("task-verify")
+    saved_history = history_store.get("result-verify")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "passed"
+    assert saved_task is not None
+    assert saved_task.verification is not None
+    assert saved_task.verification.status == "passed"
+    assert saved_history is not None
+    assert saved_history.verification is not None
+    assert saved_history.verification.status == "passed"
+
+
 def test_list_longform_tasks_backfills_existing_export_result(isolated_db, tmp_path):
     merged = tmp_path / "legacy.wav"
     merged.write_bytes(b"fake wav")

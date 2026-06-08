@@ -336,7 +336,8 @@
 		return tags.length ? `${voice.name}（${tags.join('、')}）` : voice.name;
 	}
 	const hasRunningTasks = $derived(
-		tasks.some((task) => taskIsActive(task)) || longformTasks.some((task) => statusIsActive(task.status))
+		tasks.some((task) => taskIsActive(task) || taskVerificationPending(task)) ||
+			longformTasks.some((task) => statusIsActive(task.status))
 	);
 	const visibleLongformTasks = $derived(
 		longformTasks.filter((task) => task.status !== 'success')
@@ -1063,6 +1064,21 @@
 		}[status];
 	}
 
+	function taskVerificationReport(task: GenerationTask) {
+		return verificationReports[task.task_id] ?? task.verification;
+	}
+
+	function taskVerificationError(task: GenerationTask) {
+		return verificationErrors[task.task_id] || task.verification_error || '';
+	}
+
+	function taskVerificationPending(task: GenerationTask) {
+		if (task.status !== 'success' || !task.result_id || taskVerificationReport(task) || taskVerificationError(task)) return false;
+		const completed = new Date(task.completed_at ?? task.created_at).getTime();
+		if (!Number.isFinite(completed)) return false;
+		return Date.now() - completed < 20 * 60 * 1000;
+	}
+
 	async function verifyTask(task: GenerationTask) {
 		if (!task.result_id) return;
 		verificationBusyTaskId = task.task_id;
@@ -1075,6 +1091,9 @@
 				language: taskVerificationLanguage(task)
 			});
 			verificationReports = { ...verificationReports, [task.task_id]: report };
+			tasks = tasks.map((item) =>
+				item.task_id === task.task_id ? { ...item, verification: report, verification_error: null } : item
+			);
 		} catch (cause) {
 			verificationErrors = {
 				...verificationErrors,
@@ -2036,8 +2055,8 @@
 												type="button"
 												onclick={() => verifyTask(task)}
 												disabled={verificationBusyTaskId === task.task_id}
-												title="转录并校对内容完整性"
-												aria-label="转录并校对内容完整性"
+												title={taskVerificationReport(task) ? '重新转录并校对内容完整性' : '转录并校对内容完整性'}
+												aria-label={taskVerificationReport(task) ? '重新转录并校对内容完整性' : '转录并校对内容完整性'}
 											>
 												<CheckSquare size={15} />
 											</button>
@@ -2070,8 +2089,8 @@
 								{#if task.error_message}
 									<p class="muted error-line">{task.error_message}</p>
 								{/if}
-								{#if verificationReports[task.task_id]}
-									{@const report = verificationReports[task.task_id]}
+								{#if taskVerificationReport(task)}
+									{@const report = taskVerificationReport(task)}
 									<div class={`verification-card ${report.status}`}>
 										<div class="row verification-head">
 											<strong>{verificationStatusLabel(report.status)}</strong>
@@ -2091,8 +2110,10 @@
 											</p>
 										{/if}
 									</div>
-								{:else if verificationErrors[task.task_id]}
-									<p class="muted error-line">{verificationErrors[task.task_id]}</p>
+								{:else if taskVerificationPending(task)}
+									<p class="muted verification-pending-line">自动校对中，完成后会显示覆盖率和缺句风险。</p>
+								{:else if taskVerificationError(task)}
+									<p class="muted error-line">{taskVerificationError(task)}</p>
 								{/if}
 							</article>
 						{/each}
@@ -3514,6 +3535,16 @@
 
 	.verification-card.failed {
 		border-color: rgba(248, 113, 113, 0.4);
+	}
+
+	.verification-pending-line {
+		margin: 0;
+		padding: 7px 8px;
+		border: 1px solid rgba(96, 165, 250, 0.24);
+		border-radius: 7px;
+		background: rgba(37, 99, 235, 0.1);
+		font-size: 12px;
+		line-height: 1.5;
 	}
 
 	.pagination-bar {

@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 
 from app.models.exceptions import AppException
 from app.models.schemas import TTSVerificationRequest, TTSVerificationResponse, TranscriptionRecord
-from app.services import asr_service, database as db, history_store, text_verifier
+from app.services import asr_service, database as db, history_store, task_queue, text_verifier
 
 router = APIRouter()
 
@@ -77,13 +77,16 @@ async def verify_tts_output(body: TTSVerificationRequest):
     if not transcript_text:
         raise AppException(400, "TRANSCRIPT_TEXT_REQUIRED", "transcript_text or a result_id with available audio is required")
 
-    return text_verifier.verify_transcript(
+    report = text_verifier.verify_transcript(
         expected_text=expected_text,
         transcript_text=transcript_text,
         result_id=body.result_id,
         transcription_id=transcription_id,
         asr_engine_id=body.asr_engine_id if body.result_id else None,
     )
+    if body.result_id:
+        task_queue.attach_verification_to_result(body.result_id, report)
+    return report
 
 
 @router.get("/latest")

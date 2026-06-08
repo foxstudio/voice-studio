@@ -394,6 +394,8 @@ export interface GenerationTask {
 	result_id: string | null;
 	result_duration_ms: number | null;
 	generation_time_ms: number | null;
+	verification: TTSVerificationResponse | null;
+	verification_error: string | null;
 	parameters: Record<string, unknown>;
 	logs: string[];
 	created_at: string;
@@ -418,6 +420,8 @@ export interface HistoryItem {
 	output_path: string | null;
 	duration_ms: number | null;
 	generation_time_ms: number | null;
+	verification: TTSVerificationResponse | null;
+	verification_error: string | null;
 	parameter_snapshot: Record<string, unknown>;
 	favorite: boolean;
 	created_at: string;

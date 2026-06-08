@@ -282,6 +282,8 @@ async def _process_segment(task: LongformTask, segment: LongformSegmentTask, req
         if task.verify_enabled:
             report = await _verify_segment(segment, task.asr_engine_id, segment_request.language)
             segment.verification = report
+            if segment.task_id:
+                task_queue.attach_verification(segment.task_id, report)
             if report.status == "failed":
                 last_error = "校对失败：检测到缺句或漏段"
                 segment.status = TaskStatus.failed

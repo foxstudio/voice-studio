@@ -515,6 +515,8 @@ class GenerationTask(BaseModel):
     result_id: str | None = None
     result_duration_ms: int | None = None
     generation_time_ms: int | None = None
+    verification: TTSVerificationResponse | None = None
+    verification_error: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
     logs: list[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=now_iso)
@@ -539,6 +541,8 @@ class HistoryItem(BaseModel):
     output_path: str | None = None
     duration_ms: int | None = None
     generation_time_ms: int | None = None
+    verification: TTSVerificationResponse | None = None
+    verification_error: str | None = None
     parameter_snapshot: dict[str, Any] = Field(default_factory=dict)
     favorite: bool = False
     created_at: str = Field(default_factory=now_iso)
