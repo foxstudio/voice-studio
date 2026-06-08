@@ -35,4 +35,10 @@ def audio_path(result_id: str) -> Path | None:
     if not item or not item.output_path:
         return None
     path = Path(item.output_path)
-    return path if path.exists() else None
+    if path.exists():
+        return path
+    for suffix in (".wav", ".mp3", ".flac"):
+        alternate = path.with_suffix(suffix)
+        if alternate.exists():
+            return alternate
+    return None

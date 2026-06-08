@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import builtins
 import sys
 from pathlib import Path
 
+import numpy as np
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,8 +13,8 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
-from app.models.schemas import AppSettings, EngineAudioDiagnosisRequest, GenerateRequest, Project, Role, ScriptSegment  # noqa: E402
-from app.services import batch_queue, community_voice_pack_store, database, engine_registry, settings_store, task_queue, voice_aliases, voice_store  # noqa: E402
+from app.models.schemas import AppSettings, EngineAudioDiagnosisRequest, GenerateRequest, HistoryItem, Project, Role, ScriptSegment  # noqa: E402
+from app.services import audio_tools, batch_queue, community_voice_pack_store, database, engine_registry, history_store, settings_store, task_queue, voice_aliases, voice_store  # noqa: E402
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -592,3 +594,40 @@ def test_cosyvoice_zero_shot_requires_reference_text(tmp_path: Path):
         assert str(exc) == "REFERENCE_TEXT_REQUIRED"
     else:
         raise AssertionError("CosyVoice Zero-Shot should require reference text")
+
+
+def test_mp3_export_fallback_returns_actual_wav_path(tmp_path: Path, monkeypatch):
+    real_import = builtins.__import__
+
+    def block_pydub(name, *args, **kwargs):
+        if name == "pydub" or name.startswith("pydub."):
+            raise ImportError("pydub unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", block_pydub)
+    requested = tmp_path / "outputs" / "sample.mp3"
+
+    actual = audio_tools.write_audio(requested, np.zeros(2205, dtype=np.float32), 22050, "mp3")
+
+    assert actual == requested.with_suffix(".wav")
+    assert actual.exists()
+    assert not requested.exists()
+
+
+def test_history_audio_path_falls_back_to_existing_sibling_file(tmp_path: Path):
+    _client(tmp_path)
+    actual = tmp_path / "outputs" / "result.wav"
+    actual.parent.mkdir(parents=True, exist_ok=True)
+    actual.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ")
+    history_store.add(
+        HistoryItem(
+            result_id="result-with-fallback",
+            task_id="task-with-fallback",
+            engine_id="cosyvoice-zero-shot",
+            input_text="测试一句。",
+            output_audio_id="result",
+            output_path=str(actual.with_suffix(".mp3")),
+        )
+    )
+
+    assert history_store.audio_path("result-with-fallback") == actual

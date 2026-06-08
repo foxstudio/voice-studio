@@ -704,8 +704,9 @@ async def _process(task: GenerationTask) -> None:
             final_path = Path(result["output_path"])
             if req.output_format != "wav":
                 converted = settings_store.output_dir() / f"{audio_id}.{req.output_format}"
-                audio_tools.copy_or_convert(final_path, converted, req.output_format)
-                final_path = converted
+                final_path = audio_tools.copy_or_convert(final_path, converted, req.output_format)
+            if not final_path.exists() or final_path.stat().st_size <= 0:
+                raise RuntimeError(f"生成完成但结果音频不存在：{final_path}")
             task.status = TaskStatus.success
             task.progress = 1.0
             task.result_audio_id = audio_id

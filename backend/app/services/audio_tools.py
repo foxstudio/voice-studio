@@ -52,7 +52,7 @@ def read_audio(path: str | Path) -> tuple[np.ndarray, int]:
     return audio.astype(np.float32), sr
 
 
-def write_audio(path: str | Path, audio: np.ndarray, sr: int, fmt: str = "wav") -> None:
+def write_audio(path: str | Path, audio: np.ndarray, sr: int, fmt: str = "wav") -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     audio = np.clip(audio, -1.0, 1.0)
@@ -64,10 +64,11 @@ def write_audio(path: str | Path, audio: np.ndarray, sr: int, fmt: str = "wav") 
             sf.write(str(tmp), audio, sr, subtype="PCM_16")
             AudioSegment.from_wav(str(tmp)).export(str(path), format="mp3", bitrate="192k")
             tmp.unlink(missing_ok=True)
-            return
+            return path
         except Exception:
             path = path.with_suffix(".wav")
     sf.write(str(path), audio, sr, subtype="PCM_16")
+    return path
 
 
 def normalize(audio: np.ndarray, target_peak: float = 0.92) -> np.ndarray:
@@ -93,8 +94,7 @@ def convert_file(src: str | Path, dest: str | Path, fmt: str = "wav", do_normali
     audio, sr = read_audio(src)
     if do_normalize:
         audio = normalize(audio)
-    write_audio(dest, audio, sr, fmt)
-    return Path(dest)
+    return write_audio(dest, audio, sr, fmt)
 
 
 def merge_files(paths: list[str | Path], dest: str | Path, fmt: str = "wav", silence_ms: int = 300, do_normalize: bool = False) -> Path:
@@ -116,8 +116,7 @@ def merge_files(paths: list[str | Path], dest: str | Path, fmt: str = "wav", sil
     merged = np.concatenate(chunks) if chunks else np.array([], dtype=np.float32)
     if do_normalize:
         merged = normalize(merged)
-    write_audio(dest, merged, target_sr or 24000, fmt)
-    return Path(dest)
+    return write_audio(dest, merged, target_sr or 24000, fmt)
 
 
 def copy_or_convert(src: str | Path, dest: str | Path, fmt: str) -> Path:
