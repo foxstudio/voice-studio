@@ -568,7 +568,7 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
         return {
             "text": req.text,
             "output_path": output_path,
-            "base_url": settings.mimo_base_url,
+            "base_url": settings.mimo_base_url or "https://token-plan-cn.xiaomimimo.com/v1",
             "api_key": api_key,
             "model": model,
             "voice": req.mimo_voice or settings.mimo_default_voice,
