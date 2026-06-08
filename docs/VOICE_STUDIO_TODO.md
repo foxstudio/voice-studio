@@ -50,6 +50,7 @@ Last known result:
 ## Import Scripts
 
 - `scripts/anime_voice_import.py`: HuggingFace streaming import for Genshin and Star Rail character voices with transcripts.
+- `scripts/curated_voice_import.py`: curated 25-character HuggingFace import with transcripts and style tags.
 - `scripts/voice_importer.py`: smaller early HuggingFace character import script; keep as a simple reference or migrate into `anime_voice_import.py` later.
 - `scripts/batch_voice_import.py`: curated local desktop voice-material import.
 - `scripts/full_voice_import.py`: broad local desktop voice-material import.
@@ -57,6 +58,7 @@ Last known result:
 Follow-up cleanup:
 
 - Prefer `anime_voice_import.py` for transcript-bearing character voices.
+- Prefer `curated_voice_import.py` when a small high-signal subset is enough.
 - Prefer `batch_voice_import.py` for curated local material.
 - Treat `full_voice_import.py` as an explicit bulk tool only; it can import many voices and should not be run casually.
 
