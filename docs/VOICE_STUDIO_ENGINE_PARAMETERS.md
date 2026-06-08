@@ -207,6 +207,36 @@ curl -X POST http://127.0.0.1:8000/api/evaluations/tts-verification \
 - `failed`：存在缺句或漏段风险，agent 应报告 `missing_segments` 并建议重试或分段生成。
 - `skipped`：缺少必要文本，无法校对。
 
+当前第三阶段已提供长文本父任务接口：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/longform/generate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "generate_request": {
+      "text": "完整长文本",
+      "engine_id": "indextts-v2",
+      "voice_id": "本地音色 voice_id",
+      "language": "zh",
+      "output_format": "mp3"
+    },
+    "segments": [
+      {"index": 1, "text": "第一段。", "char_count": 4, "segment_reason": "sentence_boundary"}
+    ],
+    "verify_enabled": true,
+    "merge_enabled": true,
+    "max_retries": 2,
+    "stop_merge_on_verification_failed": true
+  }'
+```
+
+查询与重试：
+
+- `GET /api/longform`：列出长文本父任务。
+- `GET /api/longform/{longform_task_id}`：查看父任务、每段子任务、校对结果和合并状态。
+- `POST /api/longform/{longform_task_id}/retry-failed`：只重试失败段。
+- `GET /api/longform/{longform_task_id}/download`：下载合并音频。
+
 agent 规则：
 
 1. 文本超过阈值时，先调 `/api/generate/plan`。
@@ -214,7 +244,8 @@ agent 规则：
 3. MiMo voiceclone 上传参考音频仍需按设置确认。
 4. 不要把明显长文本直接塞进 `/api/generate` 后报告成功。
 5. 对正式输出或长文本结果，生成成功后调用 `/api/evaluations/tts-verification` 校对内容完整性。
-6. 后续长文本编排完成后，只有段落生成和校对都满足条件，才能报告最终成功。
+6. 用户同意分段时，优先使用 `/api/longform/generate`，不要由 agent 自己循环拼多个 `/api/generate`。
+7. 长文本编排完成后，只有段落生成和校对都满足条件，才能报告最终成功。
 
 ## 参数含义
 
