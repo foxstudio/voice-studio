@@ -54,6 +54,7 @@ async def shutdown():
     await longform_queue.shutdown()
     await task_queue.shutdown()
     await batch_queue.shutdown()
+    engine_registry.shutdown_workers()
     qwen_forced_aligner.shutdown()
 
 

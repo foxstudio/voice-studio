@@ -9,8 +9,9 @@ import urllib.request, urllib.error
 
 os.environ.pop("HF_ENDPOINT", None)
 
-from datasets import load_dataset
+from datasets import load_dataset, Audio
 import numpy as np
+import soundfile as sf
 
 API = "http://localhost:8000/api"
 MIN_DUR, MAX_DUR = 4.0, 15.0
@@ -121,10 +122,20 @@ def to_wav_bytes(audio_array, sr):
     return buf.getvalue()
 
 
+def decode_audio_bytes(raw):
+    """用 soundfile 解码原始音频字节，返回 (array, sr)。"""
+    buf = io.BytesIO(raw)
+    arr, sr = sf.read(buf, dtype="float32")
+    if arr.ndim > 1:
+        arr = arr.mean(axis=1)
+    return arr, sr
+
+
 def scan_dataset(dataset_name, speaker_en, max_scan=3000):
-    print(f"  加载数据集 {dataset_name} (流式)...")
+    print(f"  加载数据集 {dataset_name} (流式, decode=False)...")
     try:
         ds = load_dataset(dataset_name, split="train", streaming=True)
+        ds = ds.cast_column("audio", Audio(decode=False))
     except Exception as e:
         print(f"  ✗ 数据集加载失败: {e}")
         return []
@@ -140,10 +151,12 @@ def scan_dataset(dataset_name, speaker_en, max_scan=3000):
         if row.get("language") not in ("Chinese", "zh"):
             continue
         audio = row.get("audio")
-        if not audio or "array" not in audio:
+        if not audio or not audio.get("bytes"):
             continue
-        arr = audio["array"]
-        sr = audio["sampling_rate"]
+        try:
+            arr, sr = decode_audio_bytes(audio["bytes"])
+        except Exception:
+            continue
         dur = len(arr) / sr
         if dur < MIN_DUR or dur > MAX_DUR:
             continue

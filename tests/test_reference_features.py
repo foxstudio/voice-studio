@@ -88,6 +88,24 @@ def test_emotivoice_speaker_catalog_can_be_filtered(tmp_path: Path, monkeypatch)
         engine_registry._emotivoice_speaker_catalog.cache_clear()
 
 
+def test_f5_run_isolated_uses_persistent_worker_by_default(monkeypatch):
+    captured: dict = {}
+
+    def fake_run(kwargs, *, root, python, timeout, cancel_check=None, on_tick=None):
+        captured.update({"kwargs": kwargs, "root": root, "python": python, "timeout": timeout, "cancel_check": cancel_check, "on_tick": on_tick})
+        return {"output_path": kwargs["output_path"], "duration_ms": 1000, "generation_time_ms": 42}
+
+    monkeypatch.delenv("VOICE_STUDIO_F5_PERSISTENT_WORKER", raising=False)
+    monkeypatch.setattr(engine_registry.f5_worker, "run", fake_run)
+
+    result = engine_registry.run_isolated("f5-tts", {"output_path": "/tmp/f5.wav"}, timeout=123)
+
+    assert result["output_path"] == "/tmp/f5.wav"
+    assert captured["timeout"] == 123
+    assert captured["root"].name == "F5-TTS"
+    assert captured["python"].endswith("/.venv/bin/python")
+
+
 def test_custom_presets_can_be_created_updated_and_deleted(tmp_path: Path):
     client = _client(tmp_path)
     payload = {

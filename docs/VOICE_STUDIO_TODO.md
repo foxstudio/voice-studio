@@ -27,6 +27,8 @@ Updated: 2026-06-08
 - Added voice-library review filtering, quality status chips, and a manual reviewed action for ASR-derived reference text.
 - Added `/api/engines/{engine_id}/speakers` and EmotiVoice speaker search in the generate page, backed by the local official voice wiki README.
 - Added longform parent metadata to segment tasks and history records for merged longform exports.
+- Added a persistent F5-TTS worker process that reuses the external `F5TTS` model between requests; set `VOICE_STUDIO_F5_PERSISTENT_WORKER=0` to fall back to per-task isolation.
+- Smoke-tested two real F5-TTS voice-clone generations with the same local reference voice; the second request reused the worker and completed quickly.
 - Merged the Soundpackage branch work into `main`.
 
 ## Verification
@@ -46,9 +48,10 @@ Last known result:
 
 - Frontend check: passed, 0 errors / 0 warnings.
 - Backend compile: passed.
-- Tests: 51 passed, 5 warnings.
+- Tests: 55 passed, 5 warnings.
 - CLI health: `ok`.
 - CLI voice list: 74 voices.
+- F5 real smoke: two `f5-tts` tasks succeeded with voice `c27a673f6db5`; outputs `/tmp/voice-studio-f5-smoke-1.wav` and `/tmp/voice-studio-f5-smoke-2.wav` are both 24 kHz WAV files, about 3.7 seconds each.
 - Reference text backfill: 48 updated, 0 skipped; local API currently has 0 voices with reference audio but empty `reference_text`, 40 voices still tagged `ASR待复核`, and 8 ASR-filled voices already marked `verified`.
 - EmotiVoice speaker catalog: local README has 2,000+ speaker rows; API search and generate-page speaker filtering are available.
 
@@ -81,13 +84,12 @@ Recommended path:
 
 ### 2. Persistent Workers
 
-F5-TTS and CosyVoice currently load their model per task. This is correct but slow.
+F5-TTS now has a persistent external worker that reuses the loaded `F5TTS` model between requests while preserving timeout/cancel reset behavior. CosyVoice still loads per task.
 
 Recommended path:
 
-- Add persistent worker processes or an in-process model cache for external engines.
-- Start with F5-TTS because its API wrapper is simpler.
-- Keep per-engine lock behavior until concurrency is proven stable on MPS.
+- Add a visible worker status/reset control after the first few F5 field tests.
+- Treat CosyVoice persistent workers as a separate task because SFT and Zero-Shot share a heavier `AutoModel` process and need careful MPS memory handling.
 
 ### 3. Voice Quality Evaluation
 

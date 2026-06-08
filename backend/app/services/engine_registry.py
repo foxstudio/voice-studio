@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.models.schemas import EngineDetail, EngineManifest, EngineSpeaker, EngineState, EngineStatus, ParameterSchema
-from app.services import mimo_client, qwen_mlx_asr, settings_store
+from app.services import f5_worker, mimo_client, qwen_mlx_asr, settings_store
 from app.services.paths import PROJECT_ROOT
 
 
@@ -529,6 +529,8 @@ def start_engine(engine_id: str) -> EngineDetail:
 
 def stop_engine(engine_id: str) -> EngineDetail:
     engine_id = _resolve_engine_id(engine_id)
+    if engine_id == "f5-tts":
+        f5_worker.shutdown()
     detail = _ENGINES[engine_id]
     detail.state.status = EngineStatus.stopped
     detail.state.error_message = None
@@ -553,6 +555,17 @@ def run_isolated(
     cancel_check: Callable[[], bool] | None = None,
     on_tick: Callable[[float], None] | None = None,
 ) -> dict[str, Any]:
+    if engine_id == "f5-tts" and os.environ.get("VOICE_STUDIO_F5_PERSISTENT_WORKER", "1") != "0":
+        root = _external_engine_root("f5-tts")
+        return f5_worker.run(
+            kwargs,
+            root=root,
+            python=str(root / ".venv" / "bin" / "python"),
+            timeout=timeout,
+            cancel_check=cancel_check,
+            on_tick=on_tick,
+        )
+
     payload = __import__("json").dumps({"engine_id": engine_id, "kwargs": kwargs}, ensure_ascii=False)
     env = {"PYTHONPATH": f"{PROJECT_ROOT / 'backend'}:{PROJECT_ROOT}", **__import__("os").environ}
     popen_kwargs: dict[str, Any] = {}
@@ -619,3 +632,7 @@ def _terminate_process(proc: subprocess.Popen) -> None:
         except Exception:
             proc.kill()
         proc.wait(timeout=5)
+
+
+def shutdown_workers() -> None:
+    f5_worker.shutdown()
