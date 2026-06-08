@@ -49,7 +49,8 @@ export function capabilityLabel(capability: string) {
 			audio_tags: '音频标签',
 			singing: '唱歌',
 			speech_recognition: '语音识别',
-			transcription: '转写'
+			transcription: '转写',
+			language_identification: '语言识别'
 		}[capability] ?? capability;
 }
 

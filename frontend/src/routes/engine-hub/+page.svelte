@@ -52,10 +52,24 @@
 		'indextts-v2': '当前主力中文口播引擎：支持 8 种情绪、更长文本、S2Mel/BigVGAN2。'
 	};
 
+	const redundantCapabilities = new Set(['local_inference', 'cloud_api']);
+
 	function engineDescription(engine: EngineDetail) {
 		return [engine.manifest.description, engineDescriptionExtras[engine.manifest.engine_id]]
 			.filter(Boolean)
 			.join(' · ');
+	}
+
+	function engineTags(engine: EngineDetail) {
+		const tags = [engine.manifest.engine_type === 'cloud' ? '云端' : '本地'];
+		if (engine.manifest.sample_rate) tags.push(`${engine.manifest.sample_rate} Hz`);
+		tags.push(
+			...engine.manifest.capabilities
+				.filter((cap) => !redundantCapabilities.has(cap))
+				.filter((cap) => !(cap === 'transcription' && engine.manifest.capabilities.includes('speech_recognition')))
+				.map(capabilityLabel)
+		);
+		return tags;
 	}
 
 	function descriptionTooltip(node: HTMLElement, text: string) {
@@ -230,13 +244,8 @@
 				<div class="description-pop" use:descriptionTooltip={engineDescription(engine)}>
 					<p class="muted clamp-text">{engineDescription(engine)}</p>
 				</div>
-				<div class="row compact-tags">
-					<span class="badge">{engine.manifest.sample_rate ?? '-'} Hz</span>
-					<span class="badge badge-kind">{engine.manifest.engine_type === 'local' ? '本地' : '云端'}</span>
-					<span class="badge">{engine.manifest.privacy_level === 'local_only' ? '仅本地' : engine.manifest.privacy_level}</span>
-				</div>
-				<div class="row compact-tags capability-row">
-					{#each engine.manifest.capabilities as cap}<span class="badge">{capabilityLabel(cap)}</span>{/each}
+				<div class="row compact-tags feature-tags">
+					{#each engineTags(engine) as tag, index}<span class="badge" class:badge-kind={index === 0}>{tag}</span>{/each}
 				</div>
 					<div class="row compact-actions">
 						{#if engine.state.status === 'loaded'}<button class="btn mini-btn" onclick={() => stop(engine.manifest.engine_id)}><Square size={13} /> 停止</button>{:else}<button class="btn primary mini-btn" onclick={() => start(engine.manifest.engine_id)}><Play size={13} /> 启动</button>{/if}
