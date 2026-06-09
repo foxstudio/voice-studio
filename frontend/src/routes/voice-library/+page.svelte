@@ -84,7 +84,7 @@
 	}
 
 	async function batchGenerateAsr() {
-		const candidates = filteredVoices.filter(v =>
+		const candidates = voices.filter((v) =>
 			isFakeReferenceText(v.reference_text) && v.reference_audio_ids[0]
 		);
 		if (!candidates.length) return;
@@ -94,6 +94,7 @@
 			await generateAsrForVoice(candidates[i]);
 		}
 		batchAsrProgress = { active: false, current: 0, total: 0 };
+	}
 
 	async function generateSerForVoice(voice: VoiceAsset) {
 		if (!voice.reference_audio_ids?.length) return;
