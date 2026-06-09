@@ -207,10 +207,12 @@ def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
         }
     common = {
         "reference_audio": ref,
-        "ref_text": ref_text,
         "language": req.language,
         "model_dir": str(settings_store.model_path(req.engine_id)),
     }
+    # IndexTTS v2 does not use ref_text
+    if req.engine_id != "indextts-v2":
+        common["ref_text"] = ref_text
     for key in [
         "temperature",
         "top_p",

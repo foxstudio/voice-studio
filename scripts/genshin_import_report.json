@@ -1,0 +1,846 @@
+{
+  "success": [
+    {
+      "name": "丽莎（原神）",
+      "voice_id": "22fd88ff5ac8",
+      "reference_count": 3,
+      "wav_count": 909,
+      "source_dir": "丽莎",
+      "element": "雷",
+      "gender": "女",
+      "va_cn": "钟可"
+    },
+    {
+      "name": "久岐忍（原神）",
+      "voice_id": "7aa63a110017",
+      "reference_count": 3,
+      "wav_count": 682,
+      "source_dir": "久岐忍",
+      "element": "雷",
+      "gender": "女",
+      "va_cn": "陈阳"
+    },
+    {
+      "name": "九条裟罗（原神）",
+      "voice_id": "59565aff1385",
+      "reference_count": 3,
+      "wav_count": 506,
+      "source_dir": "九条裟罗",
+      "element": "雷",
+      "gender": "女",
+      "va_cn": "杨梦吟"
+    },
+    {
+      "name": "云堇（原神）",
+      "voice_id": "4e7f7d6515a2",
+      "reference_count": 3,
+      "wav_count": 764,
+      "source_dir": "云堇",
+      "element": "岩",
+      "gender": "女",
+      "va_cn": "贺文潇"
+    },
+    {
+      "name": "五郎（原神）",
+      "voice_id": "5187897c12ad",
+      "reference_count": 3,
+      "wav_count": 797,
+      "source_dir": "五郎",
+      "element": "岩",
+      "gender": "男",
+      "va_cn": "杨昕燃"
+    },
+    {
+      "name": "伊安珊（原神）",
+      "voice_id": "e4b115f73bbf",
+      "reference_count": 3,
+      "wav_count": 635,
+      "source_dir": "伊安珊",
+      "element": "岩",
+      "gender": "女",
+      "va_cn": "陈婷婷"
+    },
+    {
+      "name": "优菈（原神）",
+      "voice_id": "916271dc47a8",
+      "reference_count": 3,
+      "wav_count": 667,
+      "source_dir": "优菈",
+      "element": "冰",
+      "gender": "女",
+      "va_cn": "子音"
+    },
+    {
+      "name": "克洛琳德（原神）",
+      "voice_id": "66a8621ed095",
+      "reference_count": 3,
+      "wav_count": 653,
+      "source_dir": "克洛琳德",
+      "element": "雷",
+      "gender": "女",
+      "va_cn": "赵娜"
+    },
+    {
+      "name": "凝光（原神）",
+      "voice_id": "b614820ed81b",
+      "reference_count": 3,
+      "wav_count": 1029,
+      "source_dir": "凝光",
+      "element": "岩",
+      "gender": "女",
+      "va_cn": "杜冥鸦"
+    },
+    {
+      "name": "凯亚（原神）",
+      "voice_id": "fce78eb061b3",
+      "reference_count": 3,
+      "wav_count": 1442,
+      "source_dir": "凯亚",
+      "element": "冰",
+      "gender": "男",
+      "va_cn": "孙晔"
+    },
+    {
+      "name": "北斗（原神）",
+      "voice_id": "5de116000b36",
+      "reference_count": 3,
+      "wav_count": 961,
+      "source_dir": "北斗",
+      "element": "雷",
+      "gender": "女",
+      "va_cn": "唐雅菁"
+    },
+    {
+      "name": "千织（原神）",
+      "voice_id": "b15df821e58c",
+      "reference_count": 3,
+      "wav_count": 634,
+      "source_dir": "千织",
+      "element": "岩",
+      "gender": "女",
+      "va_cn": "宋政楠"
+    },
+    {
+      "name": "卡维（原神）",
+      "voice_id": "2e42bc986b13",
+      "reference_count": 3,
+      "wav_count": 1260,
+      "source_dir": "卡维",
+      "element": "草",
+      "gender": "男",
+      "va_cn": "刘三木"
+    },
+    {
+      "name": "卡齐娜（原神）",
+      "voice_id": "ba08a26a2aaf",
+      "reference_count": 3,
+      "wav_count": 792,
+      "source_dir": "卡齐娜",
+      "element": "岩",
+      "gender": "女",
+      "va_cn": "静宸"
+    },
+    {
+      "name": "嘉明（原神）",
+      "voice_id": "b1c48a319168",
+      "reference_count": 3,
+      "wav_count": 430,
+      "source_dir": "嘉明",
+      "element": "火",
+      "gender": "男",
+      "va_cn": "谢莹"
+    },
+    {
+      "name": "坎蒂丝（原神）",
+      "voice_id": "0852d84b7590",
+      "reference_count": 3,
+      "wav_count": 501,
+      "source_dir": "坎蒂丝",
+      "element": "水",
+      "gender": "女",
+      "va_cn": "张雨曦"
+    },
+    {
+      "name": "基尼奇（原神）",
+      "voice_id": "beb7d2148ce3",
+      "reference_count": 3,
+      "wav_count": 762,
+      "source_dir": "基尼奇",
+      "element": "草",
+      "gender": "男",
+      "va_cn": "斑马"
+    },
+    {
+      "name": "夏沃蕾（原神）",
+      "voice_id": "de5b2b516e8c",
+      "reference_count": 3,
+      "wav_count": 687,
+      "source_dir": "夏沃蕾",
+      "element": "火",
+      "gender": "女",
+      "va_cn": "潘丹妮"
+    },
+    {
+      "name": "夏洛蒂（原神）",
+      "voice_id": "4106a81c4d3a",
+      "reference_count": 3,
+      "wav_count": 758,
+      "source_dir": "夏洛蒂",
+      "element": "冰",
+      "gender": "女",
+      "va_cn": "史晓晨"
+    },
+    {
+      "name": "多莉（原神）",
+      "voice_id": "b00671b56a25",
+      "reference_count": 3,
+      "wav_count": 628,
+      "source_dir": "多莉",
+      "element": "雷",
+      "gender": "女",
+      "va_cn": "王晓彤"
+    },
+    {
+      "name": "夜兰（原神）",
+      "voice_id": "0330f8675511",
+      "reference_count": 3,
+      "wav_count": 1052,
+      "source_dir": "夜兰",
+      "element": "水",
+      "gender": "女",
+      "va_cn": "徐慧"
+    },
+    {
+      "name": "妮露（原神）",
+      "voice_id": "a1c86b1a5948",
+      "reference_count": 3,
+      "wav_count": 887,
+      "source_dir": "妮露",
+      "element": "水",
+      "gender": "女",
+      "va_cn": "紫苏九月"
+    },
+    {
+      "name": "娜维娅（原神）",
+      "voice_id": "b22a76ffa73b",
+      "reference_count": 3,
+      "wav_count": 1787,
+      "source_dir": "娜维娅",
+      "element": "岩",
+      "gender": "女",
+      "va_cn": "范哲琛"
+    },
+    {
+      "name": "安柏（原神）",
+      "voice_id": "639a73d81d87",
+      "reference_count": 3,
+      "wav_count": 869,
+      "source_dir": "安柏",
+      "element": "火",
+      "gender": "女",
+      "va_cn": "蔡书瑾"
+    },
+    {
+      "name": "宵宫（原神）",
+      "voice_id": "ceb8f83cc7ec",
+      "reference_count": 3,
+      "wav_count": 1158,
+      "source_dir": "宵宫",
+      "element": "火",
+      "gender": "女",
+      "va_cn": "金娜"
+    },
+    {
+      "name": "希格雯（原神）",
+      "voice_id": "69d0376081f4",
+      "reference_count": 3,
+      "wav_count": 633,
+      "source_dir": "希格雯",
+      "element": "水",
+      "gender": "女",
+      "va_cn": "赵爽"
+    },
+    {
+      "name": "希诺宁（原神）",
+      "voice_id": "9ac4c7937d2b",
+      "reference_count": 3,
+      "wav_count": 1117,
+      "source_dir": "希诺宁",
+      "element": "岩",
+      "gender": "女",
+      "va_cn": "弭洋"
+    },
+    {
+      "name": "恰斯卡（原神）",
+      "voice_id": "41639e3a2070",
+      "reference_count": 3,
+      "wav_count": 1010,
+      "source_dir": "恰斯卡",
+      "element": "风",
+      "gender": "女",
+      "va_cn": "张若瑜"
+    },
+    {
+      "name": "托马（原神）",
+      "voice_id": "eb1f31410615",
+      "reference_count": 3,
+      "wav_count": 1061,
+      "source_dir": "托马",
+      "element": "火",
+      "gender": "男",
+      "va_cn": "张沛"
+    },
+    {
+      "name": "提纳里（原神）",
+      "voice_id": "edbdab5bd51c",
+      "reference_count": 3,
+      "wav_count": 1353,
+      "source_dir": "提纳里",
+      "element": "草",
+      "gender": "男",
+      "va_cn": "莫然"
+    },
+    {
+      "name": "旅行者（原神）",
+      "voice_id": "12e7ab025424",
+      "reference_count": 3,
+      "wav_count": 97,
+      "source_dir": "aether",
+      "element": "无",
+      "gender": "未知",
+      "va_cn": "空:鹿喆安/荧:宴宁"
+    },
+    {
+      "name": "早柚（原神）",
+      "voice_id": "0bbc988f1b6e",
+      "reference_count": 3,
+      "wav_count": 715,
+      "source_dir": "早柚",
+      "element": "风",
+      "gender": "女",
+      "va_cn": "sakula.小舞"
+    },
+    {
+      "name": "林尼（原神）",
+      "voice_id": "7cbe24f79c18",
+      "reference_count": 3,
+      "wav_count": 1336,
+      "source_dir": "林尼",
+      "element": "火",
+      "gender": "男",
+      "va_cn": "锦衣"
+    },
+    {
+      "name": "柯莱（原神）",
+      "voice_id": "a8b8299d8bfb",
+      "reference_count": 3,
+      "wav_count": 1034,
+      "source_dir": "柯莱",
+      "element": "草",
+      "gender": "女",
+      "va_cn": "杨希"
+    },
+    {
+      "name": "梦见月（原神）",
+      "voice_id": "59287263447c",
+      "reference_count": 3,
+      "wav_count": 10,
+      "source_dir": "mizuki",
+      "element": "风",
+      "gender": "女",
+      "va_cn": "藤田茜"
+    },
+    {
+      "name": "欧洛伦（原神）",
+      "voice_id": "bdd00fce9ec9",
+      "reference_count": 3,
+      "wav_count": 790,
+      "source_dir": "欧洛伦",
+      "element": "雷",
+      "gender": "男",
+      "va_cn": "梁达伟"
+    },
+    {
+      "name": "流浪者（原神）",
+      "voice_id": "33c89576d131",
+      "reference_count": 3,
+      "wav_count": 1058,
+      "source_dir": "流浪者",
+      "element": "风",
+      "gender": "男",
+      "va_cn": "鹿喆安"
+    },
+    {
+      "name": "烟绯（原神）",
+      "voice_id": "f1c6c60f2de0",
+      "reference_count": 3,
+      "wav_count": 710,
+      "source_dir": "烟绯",
+      "element": "火",
+      "gender": "女",
+      "va_cn": "苏子怡"
+    },
+    {
+      "name": "玛拉妮（原神）",
+      "voice_id": "8c578062eca2",
+      "reference_count": 3,
+      "wav_count": 1547,
+      "source_dir": "玛拉妮",
+      "element": "水",
+      "gender": "女",
+      "va_cn": "王晓彤"
+    },
+    {
+      "name": "玛薇卡（原神）",
+      "voice_id": "b95ec6c00fa1",
+      "reference_count": 3,
+      "wav_count": 1352,
+      "source_dir": "玛薇卡",
+      "element": "火",
+      "gender": "女",
+      "va_cn": "李晔"
+    },
+    {
+      "name": "珊瑚宫心海（原神）",
+      "voice_id": "23875e7aab78",
+      "reference_count": 3,
+      "wav_count": 832,
+      "source_dir": "珊瑚宫心海",
+      "element": "水",
+      "gender": "女",
+      "va_cn": "龟娘"
+    },
+    {
+      "name": "珐露珊（原神）",
+      "voice_id": "847d5950f1e8",
+      "reference_count": 3,
+      "wav_count": 808,
+      "source_dir": "珐露珊",
+      "element": "风",
+      "gender": "女",
+      "va_cn": "秦文静"
+    },
+    {
+      "name": "班尼特（原神）",
+      "voice_id": "69cc7019951a",
+      "reference_count": 3,
+      "wav_count": 1098,
+      "source_dir": "班尼特",
+      "element": "火",
+      "gender": "男",
+      "va_cn": "穆雪婷"
+    },
+    {
+      "name": "琳妮特（原神）",
+      "voice_id": "0b15560fbf57",
+      "reference_count": 3,
+      "wav_count": 845,
+      "source_dir": "琳妮特",
+      "element": "风",
+      "gender": "女",
+      "va_cn": "可可味"
+    },
+    {
+      "name": "琴（原神）",
+      "voice_id": "3f11b92edfbb",
+      "reference_count": 3,
+      "wav_count": 893,
+      "source_dir": "琴",
+      "element": "风",
+      "gender": "女",
+      "va_cn": "林簌"
+    },
+    {
+      "name": "瑶瑶（原神）",
+      "voice_id": "857dd4447990",
+      "reference_count": 3,
+      "wav_count": 328,
+      "source_dir": "瑶瑶",
+      "element": "草",
+      "gender": "女",
+      "va_cn": "刘一蕾"
+    },
+    {
+      "name": "瓦莱丽（原神）",
+      "voice_id": "ad43389edf8a",
+      "reference_count": 3,
+      "wav_count": 14,
+      "source_dir": "varesa",
+      "element": "雷",
+      "gender": "女",
+      "va_cn": "小敢"
+    },
+    {
+      "name": "申鹤（原神）",
+      "voice_id": "84fb65d713f7",
+      "reference_count": 3,
+      "wav_count": 532,
+      "source_dir": "申鹤",
+      "element": "冰",
+      "gender": "女",
+      "va_cn": "秦紫格"
+    },
+    {
+      "name": "白术（原神）",
+      "voice_id": "76c55eebf8fa",
+      "reference_count": 3,
+      "wav_count": 581,
+      "source_dir": "白术",
+      "element": "草",
+      "gender": "男",
+      "va_cn": "秦且歌"
+    },
+    {
+      "name": "砂糖（原神）",
+      "voice_id": "40bfac1f281c",
+      "reference_count": 3,
+      "wav_count": 842,
+      "source_dir": "砂糖",
+      "element": "风",
+      "gender": "女",
+      "va_cn": "小敢"
+    },
+    {
+      "name": "神里绫人（原神）",
+      "voice_id": "505c872771e7",
+      "reference_count": 3,
+      "wav_count": 656,
+      "source_dir": "神里绫人",
+      "element": "水",
+      "gender": "男",
+      "va_cn": "赵路"
+    },
+    {
+      "name": "米卡（原神）",
+      "voice_id": "eb14a32dca16",
+      "reference_count": 3,
+      "wav_count": 335,
+      "source_dir": "米卡",
+      "element": "冰",
+      "gender": "男",
+      "va_cn": "邓宥希"
+    },
+    {
+      "name": "纳西妲（原神）",
+      "voice_id": "946c32f2a70f",
+      "reference_count": 3,
+      "wav_count": 1673,
+      "source_dir": "纳西妲",
+      "element": "草",
+      "gender": "女",
+      "va_cn": "花玲"
+    },
+    {
+      "name": "绮良良（原神）",
+      "voice_id": "e15485da422c",
+      "reference_count": 3,
+      "wav_count": 497,
+      "source_dir": "绮良良",
+      "element": "草",
+      "gender": "女",
+      "va_cn": "孙艳琦"
+    },
+    {
+      "name": "罗莎莉亚（原神）",
+      "voice_id": "6b0f63893932",
+      "reference_count": 3,
+      "wav_count": 372,
+      "source_dir": "罗莎莉亚",
+      "element": "冰",
+      "gender": "女",
+      "va_cn": "张安琪"
+    },
+    {
+      "name": "艾尔海森（原神）",
+      "voice_id": "d618e3475ef9",
+      "reference_count": 3,
+      "wav_count": 1243,
+      "source_dir": "艾尔海森",
+      "element": "草",
+      "gender": "男",
+      "va_cn": "杨超然"
+    },
+    {
+      "name": "艾梅莉埃（原神）",
+      "voice_id": "3127696e1c79",
+      "reference_count": 3,
+      "wav_count": 449,
+      "source_dir": "艾梅莉埃",
+      "element": "草",
+      "gender": "女",
+      "va_cn": "紫苏九月"
+    },
+    {
+      "name": "芙宁娜（原神）",
+      "voice_id": "1385c62bdbdb",
+      "reference_count": 3,
+      "wav_count": 1286,
+      "source_dir": "芙宁娜",
+      "element": "水",
+      "gender": "女",
+      "va_cn": "钱琛"
+    },
+    {
+      "name": "芭芭拉（原神）",
+      "voice_id": "f1a4a614cd83",
+      "reference_count": 3,
+      "wav_count": 776,
+      "source_dir": "芭芭拉",
+      "element": "水",
+      "gender": "女",
+      "va_cn": "宋芳琦"
+    },
+    {
+      "name": "茜特菈莉（原神）",
+      "voice_id": "30e1167eb7c1",
+      "reference_count": 3,
+      "wav_count": 1386,
+      "source_dir": "茜特菈莉",
+      "element": "冰",
+      "gender": "女",
+      "va_cn": "柳知萧"
+    },
+    {
+      "name": "荒泷一斗（原神）",
+      "voice_id": "2543dbd711de",
+      "reference_count": 3,
+      "wav_count": 1354,
+      "source_dir": "荒泷一斗",
+      "element": "岩",
+      "gender": "男",
+      "va_cn": "刘照坤"
+    },
+    {
+      "name": "莱依拉（原神）",
+      "voice_id": "8d75c37f01ff",
+      "reference_count": 3,
+      "wav_count": 1236,
+      "source_dir": "莱依拉",
+      "element": "冰",
+      "gender": "女",
+      "va_cn": "侯晨晨"
+    },
+    {
+      "name": "莱欧斯利（原神）",
+      "voice_id": "e0fdc5101da2",
+      "reference_count": 3,
+      "wav_count": 1018,
+      "source_dir": "莱欧斯利",
+      "element": "冰",
+      "gender": "男",
+      "va_cn": "刘北辰"
+    },
+    {
+      "name": "菲米尼（原神）",
+      "voice_id": "25bee1a74ce7",
+      "reference_count": 3,
+      "wav_count": 470,
+      "source_dir": "菲米尼",
+      "element": "冰",
+      "gender": "男",
+      "va_cn": "锦衣"
+    },
+    {
+      "name": "菲谢尔（原神）",
+      "voice_id": "3fdf65e66785",
+      "reference_count": 3,
+      "wav_count": 555,
+      "source_dir": "菲谢尔",
+      "element": "雷",
+      "gender": "女",
+      "va_cn": "Mace"
+    },
+    {
+      "name": "蓝砚（原神）",
+      "voice_id": "8179b0c51850",
+      "reference_count": 3,
+      "wav_count": 309,
+      "source_dir": "蓝砚",
+      "element": "风",
+      "gender": "女",
+      "va_cn": "陈婷婷"
+    },
+    {
+      "name": "行秋（原神）",
+      "voice_id": "a6b0df5c225d",
+      "reference_count": 3,
+      "wav_count": 745,
+      "source_dir": "行秋",
+      "element": "水",
+      "gender": "男",
+      "va_cn": "唐雅菁"
+    },
+    {
+      "name": "诺艾尔（原神）",
+      "voice_id": "fe7217858e60",
+      "reference_count": 3,
+      "wav_count": 1015,
+      "source_dir": "诺艾尔",
+      "element": "岩",
+      "gender": "女",
+      "va_cn": "宴宁"
+    },
+    {
+      "name": "赛索斯（原神）",
+      "voice_id": "bb866048cfd4",
+      "reference_count": 3,
+      "wav_count": 434,
+      "source_dir": "赛索斯",
+      "element": "雷",
+      "gender": "男",
+      "va_cn": "马语非"
+    },
+    {
+      "name": "赛诺（原神）",
+      "voice_id": "f9057c54545d",
+      "reference_count": 3,
+      "wav_count": 1414,
+      "source_dir": "赛诺",
+      "element": "雷",
+      "gender": "男",
+      "va_cn": "李轻扬"
+    },
+    {
+      "name": "辛焱（原神）",
+      "voice_id": "fcad9cdec016",
+      "reference_count": 3,
+      "wav_count": 704,
+      "source_dir": "辛焱",
+      "element": "火",
+      "gender": "女",
+      "va_cn": "王雅欣"
+    },
+    {
+      "name": "达达利亚（原神）",
+      "voice_id": "94259c822169",
+      "reference_count": 3,
+      "wav_count": 789,
+      "source_dir": "达达利亚",
+      "element": "水",
+      "gender": "男",
+      "va_cn": "鱼冻"
+    },
+    {
+      "name": "迪卢克（原神）",
+      "voice_id": "4adf9b2e932f",
+      "reference_count": 3,
+      "wav_count": 704,
+      "source_dir": "迪卢克",
+      "element": "火",
+      "gender": "男",
+      "va_cn": "马洋"
+    },
+    {
+      "name": "迪奥娜（原神）",
+      "voice_id": "522d79f66d02",
+      "reference_count": 3,
+      "wav_count": 895,
+      "source_dir": "迪奥娜",
+      "element": "冰",
+      "gender": "女",
+      "va_cn": "诺亚"
+    },
+    {
+      "name": "迪希雅（原神）",
+      "voice_id": "dea26ef2304d",
+      "reference_count": 3,
+      "wav_count": 1204,
+      "source_dir": "迪希雅",
+      "element": "火",
+      "gender": "女",
+      "va_cn": "陈雨"
+    },
+    {
+      "name": "那维莱特（原神）",
+      "voice_id": "30b5250a428d",
+      "reference_count": 3,
+      "wav_count": 1343,
+      "source_dir": "那维莱特",
+      "element": "水",
+      "gender": "男",
+      "va_cn": "桑毓泽"
+    },
+    {
+      "name": "重云（原神）",
+      "voice_id": "daaef44e6076",
+      "reference_count": 3,
+      "wav_count": 759,
+      "source_dir": "重云",
+      "element": "冰",
+      "gender": "男",
+      "va_cn": "kinsen"
+    },
+    {
+      "name": "闲云（原神）",
+      "voice_id": "360acd81a238",
+      "reference_count": 3,
+      "wav_count": 640,
+      "source_dir": "闲云",
+      "element": "风",
+      "gender": "女",
+      "va_cn": "秦紫格"
+    },
+    {
+      "name": "阿蕾奇诺（原神）",
+      "voice_id": "20c722a3005d",
+      "reference_count": 3,
+      "wav_count": 775,
+      "source_dir": "阿蕾奇诺",
+      "element": "火",
+      "gender": "女",
+      "va_cn": "黄莺"
+    },
+    {
+      "name": "阿贝多（原神）",
+      "voice_id": "d625d8f5011f",
+      "reference_count": 3,
+      "wav_count": 1787,
+      "source_dir": "阿贝多",
+      "element": "岩",
+      "gender": "男",
+      "va_cn": "Mace"
+    },
+    {
+      "name": "雷泽（原神）",
+      "voice_id": "f978bc71fa6e",
+      "reference_count": 3,
+      "wav_count": 494,
+      "source_dir": "雷泽",
+      "element": "雷",
+      "gender": "男",
+      "va_cn": "周帅"
+    },
+    {
+      "name": "香菱（原神）",
+      "voice_id": "308f71c66554",
+      "reference_count": 3,
+      "wav_count": 835,
+      "source_dir": "香菱",
+      "element": "火",
+      "gender": "女",
+      "va_cn": "小N"
+    },
+    {
+      "name": "魈（原神）",
+      "voice_id": "d604039b0ba6",
+      "reference_count": 3,
+      "wav_count": 844,
+      "source_dir": "魈",
+      "element": "风",
+      "gender": "男",
+      "va_cn": "kinsen"
+    },
+    {
+      "name": "鹿野院平藏（原神）",
+      "voice_id": "27cd7344433a",
+      "reference_count": 3,
+      "wav_count": 929,
+      "source_dir": "鹿野院平藏",
+      "element": "风",
+      "gender": "男",
+      "va_cn": "林景"
+    }
+  ],
+  "skipped": [],
+  "failed": []
+}
