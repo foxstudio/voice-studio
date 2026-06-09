@@ -189,6 +189,7 @@ class VoiceAssetUpdate(BaseModel):
     quality_status: str | None = None
     quality_notes: str | None = None
     favorite: bool | None = None
+    emotion_tags: list[str] | None = None
 
 
 class VoiceEngineBinding(BaseModel):
@@ -205,6 +206,7 @@ class VoiceAsset(VoiceAssetCreate):
     quality_status: str = "unchecked"
     quality_notes: str = ""
     favorite: bool = False
+    emotion_tags: list[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
     last_used_at: str | None = None
@@ -731,3 +733,19 @@ class EngineAudioDiagnosisRequest(BaseModel):
     language: str = "zh"
     emotion: str | None = None
     emotion_text: str | None = "女，青年，中音调"
+
+
+class SERPredictRequest(BaseModel):
+    voice_id: str
+
+
+class SERBatchPredictRequest(BaseModel):
+    voice_ids: list[str] = Field(default_factory=list)
+    all: bool = False
+
+
+class SEREmotionResult(BaseModel):
+    voice_id: str
+    top_emotion: str | None = None
+    emotion_scores: dict[str, float] = Field(default_factory=dict)
+    error: str | None = None

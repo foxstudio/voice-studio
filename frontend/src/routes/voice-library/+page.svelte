@@ -2,7 +2,7 @@
 	import { Api } from '$lib/api';
 	import type { VoiceAsset } from '$lib/api/types';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
-	import { ArrowRight, Check, Database, FileText, FileAudio, Pencil, Pause, Plus, Search, ShieldCheck, Trash2, Upload, Volume2, X } from 'lucide-svelte';
+	import { ArrowRight, Check, Database, FileText, FileAudio, Heart, Pencil, Pause, Plus, Search, ShieldCheck, Trash2, Upload, Volume2, X } from 'lucide-svelte';
 	import { licenseLabel } from '$lib/labels';
 	import { onMount } from 'svelte';
 
@@ -17,14 +17,19 @@
 	let uploadMessage = $state('');
 	let editingVoice = $state<VoiceAsset | null>(null);
 	let voiceQuery = $state('');
+	function hashStr(s: string) { let h = 0; for (let i = 0; i < s.length; i++) { h = ((h << 5) - h + s.charCodeAt(i)) | 0; } return h; }
+
 	let voiceEngineFilter = $state('all');
 	let voiceLicenseFilter = $state('all');
-	let voiceSort = $state<'updated' | 'name'>('updated');
+	let voiceSort = $state<'random' | 'updated' | 'name'>('random');
+	let randomSeed = $state(Math.floor(Math.random() * 1e9));
 	let voicePreviewAudio = $state<HTMLAudioElement | null>(null);
 	let playingVoiceId = $state('');
 
 	let batchAsrProgress = $state({ active: false, current: 0, total: 0 });
 	let voiceAsrStatus = $state(new Map<string, 'idle' | 'generating' | 'done' | 'error'>());
+	let voiceSerStatus = $state(new Map<string, 'idle' | 'generating' | 'done' | 'error'>());
+	let batchSerProgress = $state({ active: false, current: 0, total: 0 });
 	let showVoiceModal = $state(false);
 
 	async function refresh() {
@@ -287,7 +292,11 @@
 			})
 			.sort((a, b) => {
 				if (voiceSort === 'name') return a.name.localeCompare(b.name, 'zh-Hans-CN');
-				return b.updated_at.localeCompare(a.updated_at);
+				if (voiceSort === 'updated') return b.updated_at.localeCompare(a.updated_at);
+				/* seeded shuffle: stable within a session until re-randomized */
+				const ha = ((randomSeed * 2654435761 + hashStr(a.voice_id || a.name)) >>> 0);
+				const hb = ((randomSeed * 2654435761 + hashStr(b.voice_id || b.name)) >>> 0);
+				return ha - hb;
 			});
 	});
 
@@ -365,7 +374,8 @@
 					</label>
 					<label class="field">
 						<span>排序</span>
-						<select bind:value={voiceSort}>
+						<select bind:value={voiceSort} onchange={() => { if (voiceSort === 'random') randomSeed++; }}>
+							<option value="random">随机</option>
 							<option value="updated">最近更新</option>
 							<option value="name">名称</option>
 						</select>
@@ -428,7 +438,7 @@
 							<span class="badge license" class:ok={voice.license_status === 'self_voice'}>{licenseLabel(voice.license_status)}</span>
 						</div>
 					</div>
-					<p class="muted voice-desc desc-pop" data-text={voice.description || '暂无描述'}>{voice.description || '暂无描述'}</p>
+					<p class="muted voice-desc" data-text={voice.description || '暂无描述'}>{voice.description || '暂无描述'}</p>
 					<div class="tag-row">
 						{#each cleanTags(voice.tags, expandedCards.has(voice.voice_id) ? 99 : 4) as tag}
 							<button class={`badge tag-filter ${tagClass(tag)}`} type="button" title={`添加到搜索：${tag}`} onclick={() => appendVoiceQueryTag(tag)}>{tag}<span class="tag-count">{tagCounts.get(tag)}</span></button>
@@ -538,6 +548,7 @@
 		display: flex;
 		align-items: center;
 		gap: 6px;
+		color: var(--text);
 	}
 	.modal-body {
 		gap: 10px;
@@ -681,7 +692,7 @@
 	}
 
 	.voice-toolbar {
-		grid-template-columns: minmax(220px, 1.35fr) repeat(4, minmax(118px, 0.72fr));
+			grid-template-columns: 1fr repeat(3, auto);
 	}
 
 
@@ -689,10 +700,6 @@
 		grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 	}
 
-	.desc-pop {
-		position: relative;
-		cursor: help;
-	}
 
 
 	.tag-row,
@@ -935,16 +942,14 @@
 		flex: 0 0 auto;
 	}
 
-	.voice-desc {
-		margin: 0;
-		min-height: 38px;
-		line-height: 1.45;
-		display: -webkit-box;
-		line-clamp: 2;
-		-webkit-line-clamp: 2;
-		-webkit-box-orient: vertical;
-		overflow: hidden;
-	}
+		.voice-desc {
+			margin: 0;
+			min-height: 38px;
+			max-height: 58px;
+			line-height: 1.45;
+			overflow-y: auto;
+			scrollbar-width: thin;
+		}
 
 	.voice-audio-compact {
 		display: inline-flex;
@@ -1040,7 +1045,7 @@
 			display: inline-grid;
 			place-items: center;
 			opacity: 0;
-			transition: opacity 0.15s, color 0.15s, background 0.15s;
+			transition: opacity 0.15s, color 0.15s, background 0.15s, transform 0.1s ease;
 		}
 		.voice-card:hover .icon-btn-sm {
 			opacity: 1;
@@ -1052,6 +1057,10 @@
 		.icon-btn-sm.danger:hover {
 			color: #ff6b6b;
 			background: rgba(255, 80, 80, 0.12);
+		}
+		.icon-btn-sm:active {
+			transform: scale(0.88);
+			opacity: 0.7;
 		}
 		/* Batch ASR button */
 		.btn-asr-batch {

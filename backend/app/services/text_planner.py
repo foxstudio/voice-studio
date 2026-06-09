@@ -18,12 +18,12 @@ class EnginePlanPolicy:
 
 _POLICIES = {
     "omnivoice": EnginePlanPolicy(
-        threshold=120,
-        hard_threshold=220,
-        target_chars=70,
-        max_chars=90,
+        threshold=80,
+        hard_threshold=150,
+        target_chars=50,
+        max_chars=65,
         recommended_action="split_generate",
-        warning="OmniVoice 更适合短句确认音色和语气；当前文本较长，建议分段生成。",
+        warning="OmniVoice 单句不宜过长，建议分段生成以获得更稳定的输出。",
     ),
     "indextts-v2": EnginePlanPolicy(
         threshold=300,

@@ -100,6 +100,7 @@ export type VoiceAssetUpdate = Partial<VoiceAssetCreate> & {
 	quality_status?: string;
 	quality_notes?: string;
 	favorite?: boolean;
+	emotion_tags?: string[];
 };
 
 export interface VoiceEngineBinding {
@@ -116,6 +117,7 @@ export interface VoiceAsset extends VoiceAssetCreate {
 	quality_status: string;
 	quality_notes: string;
 	favorite: boolean;
+	emotion_tags: string[];
 	created_at: string;
 	updated_at: string;
 	last_used_at: string | null;
@@ -586,4 +588,11 @@ export interface EvaluationReport {
 	};
 	audio_samples: EvaluationAudioSample[];
 	file_sizes: Record<string, number>;
+}
+
+export interface SEREmotionResult {
+	voice_id: string;
+	top_emotion: string | null;
+	emotion_scores: Record<string, number>;
+	error?: string;
 }

@@ -29,6 +29,7 @@ import type {
 	UploadResult,
 	VoiceAsset,
 	VoiceAssetCreate,
+	SEREmotionResult,
 	VoiceAssetUpdate,
 	VoiceSeed
 } from './types';
@@ -127,6 +128,8 @@ export const Api = {
 	retryTranscriptionTask: (taskId: string) => api.post<{ task_id: string; status: string }>(`/asr/tasks/${taskId}/retry`),
 	deleteTranscriptionTask: (taskId: string) => api.delete<{ status: string; task_id: string }>(`/asr/tasks/${taskId}`),
 	transcriptionHistory: () => api.get<TranscriptionRecord[]>('/asr/history'),
+	predictEmotion: (voiceId: string) => api.post<SEREmotionResult>('/ser/predict', { voice_id: voiceId }),
+	batchPredictAllEmotions: () => api.post<{ results: SEREmotionResult[] }>('/ser/batch-predict', { all: true }),
 	splitText: (text: string) => api.post<{ segments: string[] }>('/text-tools/split', { text }),
 	cleanText: (text: string) => api.post<{ text: string }>('/text-tools/clean', { text }),
 	normalizeNumbers: (text: string) => api.post<{ text: string }>('/text-tools/normalize-numbers', { text })

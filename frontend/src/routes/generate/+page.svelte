@@ -31,6 +31,7 @@
 		Scissors,
 		Search,
 		Send,
+		Settings,
 		SlidersHorizontal,
 		Sparkles,
 		Square,
@@ -124,6 +125,7 @@
 	let cfgRate = $state(0.7);
 	let outputFormat = $state<'wav' | 'mp3' | 'flac'>('wav');
 	let showAdvanced = $state(false);
+	let showMoreParams = $state(false);
 
 	let tasks = $state<GenerationTask[]>([]);
 	let longformTasks = $state<LongformTask[]>([]);
@@ -1557,6 +1559,415 @@
 				<p class="input-subtitle">{inputSubtitle}</p>
 			</div>
 			<textarea id="generate-text" bind:value={text} placeholder="输入要合成的文本"></textarea>
+
+			<!-- 核心参数行（始终可见） -->
+			<div class="param-inline-row">
+				<label class="param-inline">
+					<span>引擎</span>
+					<select bind:value={engineId}>
+						{#each ttsEngines as engine}
+							<option value={engine.manifest.engine_id}>{engine.manifest.display_name}</option>
+						{/each}
+					</select>
+				</label>
+				{#if usesReferenceVoice}
+				<label class="param-inline">
+					<span>声音</span>
+					<div class="voice-inline">
+						<select bind:value={voiceId} disabled={voices.length === 0}>
+							<option value="">{voices.length === 0 ? '无音色' : '未选择'}</option>
+							{#each voices as voice}
+								<option value={voice.voice_id}>{voiceOptionLabel(voice)}</option>
+							{/each}
+						</select>
+						<button
+							class="icon-btn mini"
+							type="button"
+							onclick={previewSelectedVoice}
+							disabled={!selectedVoicePreviewUrl}
+							title="试听"
+							aria-label="试听当前音色"
+						>
+							<Play size={13} />
+						</button>
+					</div>
+				</label>
+				{#if selectedVoicePreviewUrl}
+					<audio bind:this={voicePreviewAudio} src={selectedVoicePreviewUrl} preload="metadata"></audio>
+				{/if}
+				{/if}
+				{#if activeParamKeys.has('speed')}
+				<label class="param-inline-range">
+					<span>语速 {speed.toFixed(1)}x</span>
+					<input type="range" min="0.5" max="2" step="0.1" bind:value={speed} />
+				</label>
+				{/if}
+				<label class="param-inline">
+					<span>格式</span>
+					<select bind:value={outputFormat}>
+						<option value="wav">WAV</option>
+						<option value="mp3">MP3</option>
+						<option value="flac">FLAC</option>
+					</select>
+				</label>
+				<button class="btn" type="button" onclick={() => (showMoreParams = !showMoreParams)}>
+					<Settings size={14} /> {showMoreParams ? '收起' : '更多'}
+				</button>
+			</div>
+
+			{#if showMoreParams}
+			<div class="more-params-panel">
+				{#if isEmotiVoice}
+					<div class="engine-note">
+						<strong>EmotiVoice 参数</strong>
+						<small>使用官方说话人和情绪提示，不读取本地参考音色。</small>
+					</div>
+				{:else if isF5}
+					<div class="engine-note">
+						<strong>F5-TTS 参数</strong>
+						<small>使用本地参考音频和准确参考台词。</small>
+					</div>
+				{:else if isCosyVoice}
+					<div class="engine-note">
+						<strong>CosyVoice SFT 参数</strong>
+						<small>使用官方 SFT 预置音色。</small>
+					</div>
+				{:else if isCosyVoiceZeroShot}
+					<div class="engine-note">
+						<strong>CosyVoice Zero-Shot 参数</strong>
+						<small>使用本地参考音频和准确参考台词。</small>
+					</div>
+				{/if}
+
+				{#if isMimoClone}
+					<small>显示本地音色库中带参考音频的全部音色；生成前会按设置确认上传云端。</small>
+				{/if}
+				{#if isF5}
+					<small>F5 使用本地参考音频和对应台词；缺少 reference_text 的音色会在生成前提示。</small>
+				{/if}
+				{#if isCosyVoiceZeroShot}
+					<small>CosyVoice Zero-Shot 使用本地参考音频和对应台词。</small>
+				{/if}
+				{#if isMimoClone && settings?.mimo_voiceclone_confirm_upload}
+					<small>生成前会再次提醒：本次参考音频将发送到 MiMo 云端。</small>
+				{/if}
+
+				{#if activeParamKeys.has('speaker_id')}
+				<div class="field param-field">
+					<label class="param-label" for="speaker-id">音色</label>
+					<div class="param-control">
+						{#if isEmotiVoice}
+							<div class="speaker-catalog-tools">
+								<div class="search-field speaker-search">
+									<Search size={14} />
+									<input bind:value={speakerQuery} placeholder="搜索 ID、名字、描述" />
+									{#if speakerQuery.trim()}
+										<button class="search-clear" type="button" aria-label="清空说话人搜索" title="清空说话人搜索" onclick={() => (speakerQuery = '')}>
+											<X size={13} />
+										</button>
+									{/if}
+								</div>
+								<select class="speaker-gender" bind:value={speakerGenderFilter} aria-label="筛选说话人性别">
+									<option value="all">全部</option>
+									<option value="F">女声</option>
+									<option value="M">男声</option>
+								</select>
+							</div>
+						{/if}
+						<select id="speaker-id" bind:value={speakerId}>
+							{#each speakerChoices as option}
+								<option value={option.value}>{option.label}</option>
+							{/each}
+						</select>
+						{#if isEmotiVoice}
+							<small>{speakerCatalogLoading ? '正在读取说话人目录' : `目录结果 ${speakerCatalog.length} 条`}</small>
+						{/if}
+					</div>
+				</div>
+				{/if}
+
+				{#if activeParamKeys.has('prompt')}
+				<div class="field param-field">
+					<label class="param-label" for="voice-prompt">情绪提示</label>
+					<div class="param-control">
+						<select id="voice-prompt" bind:value={voicePrompt}>
+							{#each promptOptions as option}
+								<option value={option.value}>{option.label}</option>
+							{/each}
+						</select>
+					</div>
+				</div>
+				{/if}
+
+				{#if isMimoPreset}
+				<div class="field param-field">
+					<label class="param-label" for="mimo-voice">MiMo 音色</label>
+					<div class="param-control">
+						<select id="mimo-voice" bind:value={mimoVoice}>
+							{#each mimoVoiceOptions as option}
+								<option value={option.value}>{option.label}</option>
+							{/each}
+						</select>
+					</div>
+				</div>
+				{/if}
+
+				{#if activeParamKeys.has('language')}
+				<div class="field param-field">
+					<label class="param-label" for="language">语言</label>
+					<div class="param-control">
+						<select id="language" bind:value={language}>
+							<option value="zh">中文</option>
+							<option value="en">英文</option>
+							<option value="auto">自动</option>
+						</select>
+					</div>
+				</div>
+				{/if}
+
+				{#if isMimo}
+					{#if isMimoDesign}
+					<div class="field param-field">
+						<label class="param-label" for="voice-design-prompt">音色描述</label>
+						<div class="param-control">
+							<textarea id="voice-design-prompt" bind:value={voiceDesignPrompt}></textarea>
+							<small>描述声音本身，例如年龄、性别、质感、语速和情绪底色。</small>
+						</div>
+					</div>
+					{:else}
+					<div class="field param-field">
+						<label class="param-label" for="style-instruction">风格指令</label>
+						<div class="param-control">
+							<textarea
+								id="style-instruction"
+								bind:value={styleInstruction}
+								placeholder="例如：语速稍慢，语气温柔，像知识视频旁白。"
+							></textarea>
+						</div>
+					</div>
+					{/if}
+				{/if}
+
+				{#if supportsEmotion}
+				<div class="field param-field">
+					<label class="param-label" for="emotion">情绪</label>
+					<div class="param-control">
+						<select id="emotion" bind:value={emotion}>
+							<option value="">跟随参考音色</option>
+							<option value="calm">自然 calm</option>
+							<option value="happy">高兴 happy</option>
+							<option value="sad">悲伤 sad</option>
+							<option value="angry">愤怒 angry</option>
+							<option value="afraid">恐惧 afraid</option>
+							<option value="disgusted">反感 disgusted</option>
+							<option value="melancholic">低落 melancholic</option>
+							<option value="surprised">惊讶 surprised</option>
+						</select>
+						<small>
+							{followsReferenceEmotion
+								? '当前不会额外叠加情绪向量，会尽量贴近参考音色本身。'
+								: '当前会叠加情绪控制；如果想更贴参考音色，改回"跟随参考音色"。'}
+						</small>
+					</div>
+				</div>
+				{#if isIndexTTS && !followsReferenceEmotion}
+				<div class="field param-slider">
+					<div class="field-head">
+						<label for="emo-alpha">情绪强度</label>
+						<input class="field-number" aria-label="情绪强度数值" type="number" min="0" max="1" step="0.05" bind:value={emoAlpha} />
+					</div>
+					<div class="range-control">
+						<input id="emo-alpha" type="range" min="0" max="1" step="0.05" bind:value={emoAlpha} />
+						<div class="range-scale"><span>0</span><span>1</span></div>
+					</div>
+				</div>
+				{/if}
+				{/if}
+
+				{#if isOmniVoice && !voiceId}
+				<div class="field param-field">
+					<label class="param-label" for="voice-design">设计标签</label>
+					<div class="param-control">
+						<select id="voice-design" bind:value={voiceDesign}>
+							<option value="女，青年，中音调">女，青年，中音调</option>
+							<option value="男，青年，中音调">男，青年，中音调</option>
+							<option value="女，中年，高音调">女，中年，高音调</option>
+							<option value="男，中年，低音调">男，中年，低音调</option>
+							<option value="女，青年，耳语">女，青年，耳语</option>
+						</select>
+					</div>
+				</div>
+				{/if}
+
+				{#if hasAdvancedParameters}
+				<div class="advanced-divider"><span>高级参数</span></div>
+				{/if}
+
+				{#if isMimoDesign && activeParamKeys.has('optimize_text_preview')}
+				<label class="toggle-field" for="optimize-text-preview">
+					<input id="optimize-text-preview" type="checkbox" bind:checked={optimizeTextPreview} />
+					<span>
+						<strong>润色播报文本</strong>
+						<small>MiMo VoiceDesign 官方可选项，会根据音色描述优化目标文本。</small>
+					</span>
+				</label>
+				{/if}
+
+				{#if activeParamKeys.has('nfe_step')}
+				<div class="field param-slider">
+					<div class="field-head">
+						<label for="nfe-step">采样步数 NFE</label>
+						<input class="field-number" aria-label="NFE 数值" type="number" min="4" max="64" step="1" bind:value={nfeStep} />
+					</div>
+					<div class="range-control">
+						<input id="nfe-step" type="range" min="4" max="64" step="1" bind:value={nfeStep} />
+						<div class="range-scale"><span>4</span><span>64</span></div>
+					</div>
+				</div>
+				{/if}
+
+				{#if activeParamKeys.has('cfg_strength')}
+				<div class="field param-slider">
+					<div class="field-head">
+						<label for="cfg-strength">引导强度 CFG</label>
+						<input class="field-number" aria-label="F5 CFG 数值" type="number" min="0.1" max="5" step="0.1" bind:value={cfgStrength} />
+					</div>
+					<div class="range-control">
+						<input id="cfg-strength" type="range" min="0.1" max="5" step="0.1" bind:value={cfgStrength} />
+						<div class="range-scale"><span>0.1</span><span>5</span></div>
+					</div>
+				</div>
+				{/if}
+
+				{#if activeParamKeys.has('target_rms')}
+				<div class="field param-slider">
+					<div class="field-head">
+						<label for="target-rms">响度目标 RMS</label>
+						<input class="field-number" aria-label="RMS 数值" type="number" min="0.01" max="0.5" step="0.01" bind:value={targetRms} />
+					</div>
+					<div class="range-control">
+						<input id="target-rms" type="range" min="0.01" max="0.5" step="0.01" bind:value={targetRms} />
+						<div class="range-scale"><span>0.01</span><span>0.5</span></div>
+					</div>
+				</div>
+				{/if}
+
+				{#if activeParamKeys.has('cross_fade_duration')}
+				<div class="field param-slider">
+					<div class="field-head">
+						<label for="cross-fade">交叉淡化</label>
+						<input class="field-number" aria-label="交叉淡化秒数" type="number" min="0" max="1" step="0.05" bind:value={crossFadeDuration} />
+					</div>
+					<div class="range-control">
+						<input id="cross-fade" type="range" min="0" max="1" step="0.05" bind:value={crossFadeDuration} />
+						<div class="range-scale"><span>0s</span><span>1s</span></div>
+					</div>
+				</div>
+				{/if}
+
+				{#if activeParamKeys.has('remove_silence')}
+				<label class="toggle-field" for="remove-silence">
+					<input id="remove-silence" type="checkbox" bind:checked={removeSilence} />
+					<span>
+						<strong>移除静音</strong>
+						<small>生成后裁掉较长静音；需要保留自然停顿时关闭。</small>
+					</span>
+				</label>
+				{/if}
+
+				{#if activeParamKeys.has('temperature')}
+				<div class="field param-slider">
+					<div class="field-head">
+						<label for="temp">随机性 Temperature</label>
+						<input class="field-number" aria-label="Temperature 数值" type="number" min={isMimo ? 0 : 0.1} max={isMimo ? 1.5 : 2} step="0.05" bind:value={temperature} />
+					</div>
+					<div class="range-control">
+						<input id="temp" type="range" min={isMimo ? 0 : 0.1} max={isMimo ? 1.5 : 2} step="0.05" bind:value={temperature} />
+						<div class="range-scale"><span>{isMimo ? '0' : '0.1'}</span><span>{isMimo ? '1.5' : '2'}</span></div>
+					</div>
+				</div>
+				{/if}
+
+				{#if activeParamKeys.has('top_p')}
+				<div class="field param-slider">
+					<div class="field-head">
+						<label for="top-p">采样范围 Top-P</label>
+						<input class="field-number" aria-label="Top-P 数值" type="number" min={isMimo ? 0.01 : 0} max="1" step={isMimo ? 0.01 : 0.05} bind:value={topP} />
+					</div>
+					<div class="range-control">
+						<input id="top-p" type="range" min={isMimo ? 0.01 : 0} max="1" step={isMimo ? 0.01 : 0.05} bind:value={topP} />
+						<div class="range-scale"><span>{isMimo ? '0.01' : '0'}</span><span>1</span></div>
+					</div>
+				</div>
+				{/if}
+
+				{#if activeParamKeys.has('top_k')}
+				<div class="field param-slider">
+					<div class="field-head">
+						<label for="top-k">候选数量 Top-K</label>
+						<input class="field-number" aria-label="Top-K 数值" type="number" min="1" max="100" step="1" bind:value={topK} />
+					</div>
+					<div class="range-control">
+						<input id="top-k" type="range" min="1" max="100" step="1" bind:value={topK} />
+						<div class="range-scale"><span>1</span><span>100</span></div>
+					</div>
+				</div>
+				{/if}
+
+				{#if activeParamKeys.has('max_text_tokens_per_segment')}
+				<div class="field param-slider">
+					<div class="field-head">
+						<label for="segment">分段长度 Token</label>
+						<input class="field-number" aria-label="分段长度数值" type="number" min="20" max="500" step="10" bind:value={maxTextTokensPerSegment} />
+					</div>
+					<div class="range-control">
+						<input id="segment" type="range" min="20" max="500" step="10" bind:value={maxTextTokensPerSegment} />
+						<div class="range-scale"><span>20</span><span>500</span></div>
+					</div>
+				</div>
+				{/if}
+
+				{#if activeParamKeys.has('interval_silence')}
+				<div class="field param-slider">
+					<div class="field-head">
+						<label for="silence">段间静默</label>
+						<input class="field-number" aria-label="段间静默数值" type="number" min="0" max="2000" step="50" bind:value={intervalSilence} />
+					</div>
+					<div class="range-control">
+						<input id="silence" type="range" min="0" max="2000" step="50" bind:value={intervalSilence} />
+						<div class="range-scale"><span>0ms</span><span>2000ms</span></div>
+					</div>
+				</div>
+				{/if}
+
+				{#if activeParamKeys.has('cfg_rate')}
+				<div class="field param-slider">
+					<div class="field-head">
+						<label for="cfg">引导强度 CFG Rate</label>
+						<input class="field-number" aria-label="CFG 数值" type="number" min="0" max="1" step="0.05" bind:value={cfgRate} />
+					</div>
+					<div class="range-control">
+						<input id="cfg" type="range" min="0" max="1" step="0.05" bind:value={cfgRate} />
+						<div class="range-scale"><span>0</span><span>1</span></div>
+					</div>
+				</div>
+				{/if}
+
+				{#if activeParamKeys.has('diffusion_steps')}
+				<div class="field param-slider">
+					<div class="field-head">
+						<label for="diffusion">扩散步数</label>
+						<input class="field-number" aria-label="扩散步数数值" type="number" min="5" max="60" step="1" bind:value={diffusionSteps} />
+					</div>
+					<div class="range-control">
+						<input id="diffusion" type="range" min="5" max="60" step="1" bind:value={diffusionSteps} />
+						<div class="range-scale"><span>5</span><span>60</span></div>
+					</div>
+				</div>
+				{/if}
+			</div>
+			{/if}
+
 			<div class="row tool-row" id="text-tools">
 				<div class="row wrap tool-actions">
 					<span class="muted">{text.length} 字</span>
@@ -1732,11 +2143,16 @@
 				}}
 			></audio>
 
-			<div class="result-panel stack" id="records">
+			<div class="result-panel stack section-divider" id="records">
 				<div class="row section-head result-headline">
-					<div class="result-title-line">
-						<h2>结果与记录</h2>
-						<p class="muted">统一查看成功、失败和进行中的任务；支持搜索、筛选、分页、删除。</p>
+					<h2>结果与记录</h2>
+					<div class="records-row-summary">
+						<span class="muted">{filteredTasks.length} 条</span>
+						{#if statusCounts.active}
+							<span class="badge">生成中 {queueCounts.processing}</span>
+							<span class="badge">等待 {queueCounts.waiting}</span>
+						{/if}
+						{#if selectedTaskIds.length}<span class="badge ok">已选 {selectedTaskIds.length}</span>{/if}
 					</div>
 				</div>
 
@@ -1799,65 +2215,39 @@
 								{/if}
 							</div>
 						</div>
-						<div class="records-row-summary">
-							<span class="muted">{filteredTasks.length} 条匹配</span>
-							{#if statusCounts.active}
-								<span class="badge">生成中 {queueCounts.processing}</span>
-								<span class="badge">等待 {queueCounts.waiting}</span>
-							{/if}
-							{#if selectedTaskIds.length}<span class="badge ok">已选 {selectedTaskIds.length}</span>{/if}
-						</div>
 					</div>
 
-					<div class="records-filter-row">
-					<label class="field">
-						<span>搜索</span>
+					<div class="records-filter-inline">
 						<div class="search-field">
-							<Search size={15} />
-							<input bind:value={taskQuery} placeholder="文本、音色、引擎" oninput={() => (currentPage = 1)} />
+							<Search size={14} />
+							<input bind:value={taskQuery} placeholder="搜索文本、音色、引擎" oninput={() => (currentPage = 1)} />
 						</div>
-					</label>
-					<label class="field">
-						<span>引擎</span>
 						<select bind:value={taskEngineFilter} onchange={() => (currentPage = 1)}>
 							{#each taskEngineOptions as option}
 								<option value={option}>{option === 'all' ? '全部引擎' : engineMap.get(option)?.manifest.display_name ?? option}</option>
 							{/each}
 						</select>
-					</label>
-					<label class="field">
-						<span>来源</span>
 						<select bind:value={taskSourceFilter} onchange={() => (currentPage = 1)}>
-							<option value="all">全部</option>
+							<option value="all">全部来源</option>
 							<option value="local">本地</option>
 							<option value="cloud">云端</option>
 						</select>
-					</label>
-					<label class="field">
-						<span>日期</span>
 						<select bind:value={taskDateFilter} onchange={() => (currentPage = 1)}>
 							<option value="all">全部时间</option>
-							<option value="today">最近 24 小时</option>
-							<option value="7d">最近 7 天</option>
-							<option value="30d">最近 30 天</option>
+							<option value="today">24小时</option>
+							<option value="7d">7天</option>
+							<option value="30d">30天</option>
 						</select>
-					</label>
-					<label class="field">
-						<span>排序</span>
 						<select bind:value={taskSortBy} onchange={() => (currentPage = 1)}>
-							<option value="latest">最新优先</option>
-							<option value="oldest">最早优先</option>
-							<option value="duration_desc">音频时长最长</option>
+							<option value="latest">最新</option>
+							<option value="oldest">最早</option>
+							<option value="duration_desc">时长↓</option>
 						</select>
-					</label>
-					<label class="field">
-						<span>每页</span>
 						<select bind:value={pageSize} onchange={() => (currentPage = 1)}>
-							<option value={8}>8 条</option>
-							<option value={12}>12 条</option>
-							<option value={24}>24 条</option>
+							<option value={8}>8条</option>
+							<option value={12}>12条</option>
+							<option value={24}>24条</option>
 						</select>
-					</label>
 					</div>
 				</div>
 
@@ -2119,460 +2509,6 @@
 			</div>
 		</section>
 
-		<aside class="panel stack sticky-aside param-aside">
-			<div class="param-head">
-				<h2><Play size={16} /> 参数</h2>
-				{#if hasAdvancedParameters}
-					<button class="btn" type="button" onclick={() => (showAdvanced = !showAdvanced)}>
-						{showAdvanced ? '收起高级' : '高级参数'}
-					</button>
-				{/if}
-			</div>
-
-			<div class="field param-field">
-				<label class="param-label" for="engine">引擎</label>
-				<div class="param-control">
-					<select id="engine" bind:value={engineId}>
-						{#each ttsEngines as engine}
-							<option value={engine.manifest.engine_id}>
-								{engine.manifest.display_name} · {engineStatusLabel(engine.state.status)}
-							</option>
-						{/each}
-					</select>
-				</div>
-			</div>
-
-			{#if isEmotiVoice}
-				<div class="engine-note">
-					<strong>EmotiVoice 参数</strong>
-					<small>使用官方说话人和情绪提示，不读取本地参考音色；请选择下方“音色”和“情绪提示”。</small>
-				</div>
-			{:else if isF5}
-				<div class="engine-note">
-					<strong>F5-TTS 参数</strong>
-					<small>使用本地参考音频和准确参考台词；列表只显示可用于 F5 的音色。</small>
-				</div>
-			{:else if isCosyVoice}
-				<div class="engine-note">
-					<strong>CosyVoice SFT 参数</strong>
-					<small>使用官方 SFT 预置音色，不读取本地参考音色；如需参考音色请选择 CosyVoice Zero-Shot。</small>
-				</div>
-			{:else if isCosyVoiceZeroShot}
-				<div class="engine-note">
-					<strong>CosyVoice Zero-Shot 参数</strong>
-					<small>使用本地参考音频和准确参考台词；列表只显示可用于 Zero-Shot 的音色。</small>
-				</div>
-			{/if}
-
-			{#if usesReferenceVoice}
-				<div class="field param-field">
-					<label class="param-label" for="voice">声音</label>
-					<div class="param-control">
-						<div class="voice-select-row">
-							<select id="voice" bind:value={voiceId} disabled={voices.length === 0}>
-								<option value="">
-									{voices.length === 0 ? '没有可用音色' : '未选择'}
-								</option>
-								{#each voices as voice}
-									<option value={voice.voice_id}>{voiceOptionLabel(voice)}</option>
-								{/each}
-							</select>
-							<button
-								class="icon-btn voice-preview-btn"
-								type="button"
-								onclick={previewSelectedVoice}
-								disabled={!selectedVoicePreviewUrl}
-								title={selectedVoicePreviewUrl ? `试听 ${selectedVoice?.name ?? '当前音色'}` : '当前音色没有可试听的参考音频'}
-								aria-label={selectedVoicePreviewUrl ? `试听 ${selectedVoice?.name ?? '当前音色'}` : '当前音色没有可试听的参考音频'}
-							>
-								<Play size={15} />
-							</button>
-						</div>
-						{#if selectedVoicePreviewUrl}
-							<audio bind:this={voicePreviewAudio} src={selectedVoicePreviewUrl} preload="metadata"></audio>
-						{/if}
-						{#if isMimoClone}
-							<small>显示本地音色库中带参考音频的全部音色；生成前会按设置确认上传云端。</small>
-						{/if}
-						{#if isF5}
-							<small>F5 使用本地参考音频和对应台词；这里显示全部音色，缺少 reference_text 的音色会在生成前提示。</small>
-						{/if}
-						{#if isCosyVoiceZeroShot}
-							<small>CosyVoice Zero-Shot 使用本地参考音频和对应台词；这里显示全部音色，SFT 预置音色不使用这里的参考音色。</small>
-						{/if}
-					</div>
-				</div>
-			{/if}
-
-			{#if activeParamKeys.has('speaker_id')}
-				<div class="field param-field">
-					<label class="param-label" for="speaker-id">音色</label>
-					<div class="param-control">
-						{#if isEmotiVoice}
-							<div class="speaker-catalog-tools">
-								<div class="search-field speaker-search">
-									<Search size={14} />
-									<input bind:value={speakerQuery} placeholder="搜索 ID、名字、描述" />
-									{#if speakerQuery.trim()}
-										<button class="search-clear" type="button" aria-label="清空说话人搜索" title="清空说话人搜索" onclick={() => (speakerQuery = '')}>
-											<X size={13} />
-										</button>
-									{/if}
-								</div>
-								<select class="speaker-gender" bind:value={speakerGenderFilter} aria-label="筛选说话人性别">
-									<option value="all">全部</option>
-									<option value="F">女声</option>
-									<option value="M">男声</option>
-								</select>
-							</div>
-						{/if}
-						<select id="speaker-id" bind:value={speakerId}>
-							{#each speakerChoices as option}
-								<option value={option.value}>{option.label}</option>
-							{/each}
-						</select>
-						{#if isEmotiVoice}
-							<small>{speakerCatalogLoading ? '正在读取说话人目录' : `目录结果 ${speakerCatalog.length} 条`}</small>
-						{/if}
-					</div>
-				</div>
-			{/if}
-
-			{#if activeParamKeys.has('prompt')}
-				<div class="field param-field">
-					<label class="param-label" for="voice-prompt">情绪提示</label>
-					<div class="param-control">
-						<select id="voice-prompt" bind:value={voicePrompt}>
-							{#each promptOptions as option}
-								<option value={option.value}>{option.label}</option>
-							{/each}
-						</select>
-					</div>
-				</div>
-			{/if}
-
-			{#if isMimoPreset}
-				<div class="field param-field">
-					<label class="param-label" for="mimo-voice">MiMo 音色</label>
-					<div class="param-control">
-						<select id="mimo-voice" bind:value={mimoVoice}>
-							{#each mimoVoiceOptions as option}
-								<option value={option.value}>{option.label}</option>
-							{/each}
-						</select>
-					</div>
-				</div>
-			{/if}
-
-			{#if activeParamKeys.has('language')}
-				<div class="field param-field">
-					<label class="param-label" for="language">语言</label>
-					<div class="param-control">
-						<select id="language" bind:value={language}>
-							<option value="zh">中文</option>
-							<option value="en">英文</option>
-							<option value="auto">自动</option>
-						</select>
-					</div>
-				</div>
-			{/if}
-
-			{#if isMimo}
-				{#if isMimoDesign}
-					<div class="field param-field">
-						<label class="param-label" for="voice-design-prompt">音色描述</label>
-						<div class="param-control">
-							<textarea id="voice-design-prompt" bind:value={voiceDesignPrompt}></textarea>
-							<small>描述声音本身，例如年龄、性别、质感、语速和情绪底色。</small>
-						</div>
-					</div>
-				{:else}
-					<div class="field param-field">
-						<label class="param-label" for="style-instruction">风格指令</label>
-						<div class="param-control">
-							<textarea
-								id="style-instruction"
-								bind:value={styleInstruction}
-								placeholder="例如：语速稍慢，语气温柔，像知识视频旁白。"
-							></textarea>
-						</div>
-					</div>
-				{/if}
-				{#if isMimoClone && settings?.mimo_voiceclone_confirm_upload}
-					<small>生成前会再次提醒：本次参考音频将发送到 MiMo 云端。</small>
-				{/if}
-			{/if}
-
-			{#if supportsEmotion}
-				<div class="field param-field">
-					<label class="param-label" for="emotion">情绪</label>
-					<div class="param-control">
-						<select id="emotion" bind:value={emotion}>
-							<option value="">跟随参考音色</option>
-							<option value="calm">自然 calm</option>
-							<option value="happy">高兴 happy</option>
-							<option value="sad">悲伤 sad</option>
-							<option value="angry">愤怒 angry</option>
-							<option value="afraid">恐惧 afraid</option>
-							<option value="disgusted">反感 disgusted</option>
-							<option value="melancholic">低落 melancholic</option>
-							<option value="surprised">惊讶 surprised</option>
-						</select>
-						<small>
-							{followsReferenceEmotion
-								? '当前不会额外叠加情绪向量，会尽量贴近参考音色本身。'
-								: '当前会叠加情绪控制；如果想更贴参考音色，改回“跟随参考音色”。'}
-						</small>
-					</div>
-				</div>
-
-				{#if isIndexTTS && !followsReferenceEmotion}
-					<div class="field param-slider">
-						<div class="field-head">
-							<label for="emo-alpha">情绪强度</label>
-							<input class="field-number" aria-label="情绪强度数值" type="number" min="0" max="1" step="0.05" bind:value={emoAlpha} />
-						</div>
-						<div class="range-control">
-							<input id="emo-alpha" type="range" min="0" max="1" step="0.05" bind:value={emoAlpha} />
-							<div class="range-scale"><span>0</span><span>1</span></div>
-						</div>
-						<small>数值越高，表演感越强；长文本通常不宜过高。</small>
-					</div>
-				{/if}
-			{/if}
-
-			{#if isOmniVoice && !voiceId}
-				<div class="field param-field">
-					<label class="param-label" for="voice-design">设计标签</label>
-					<div class="param-control">
-						<select id="voice-design" bind:value={voiceDesign}>
-							<option value="女，青年，中音调">女，青年，中音调</option>
-							<option value="男，青年，中音调">男，青年，中音调</option>
-							<option value="女，中年，高音调">女，中年，高音调</option>
-							<option value="男，中年，低音调">男，中年，低音调</option>
-							<option value="女，青年，耳语">女，青年，耳语</option>
-						</select>
-					</div>
-				</div>
-			{/if}
-
-			{#if activeParamKeys.has('speed')}
-				<div class="field param-slider">
-					<div class="field-head">
-						<label for="speed">语速</label>
-						<input class="field-number" aria-label="语速数值" type="number" min="0.5" max="2" step="0.05" bind:value={speed} />
-					</div>
-					<div class="range-control">
-						<input id="speed" type="range" min="0.5" max="2" step="0.05" bind:value={speed} />
-						<div class="range-scale"><span>0.5</span><span>2</span></div>
-					</div>
-					<small>低于 1 更稳更慢，高于 1 更适合短视频快讲。</small>
-				</div>
-			{/if}
-
-			<div class="field param-field">
-				<label class="param-label" for="format">输出格式</label>
-				<div class="param-control">
-					<select id="format" bind:value={outputFormat}>
-						<option value="wav">WAV</option>
-						<option value="mp3">MP3</option>
-						<option value="flac">FLAC</option>
-					</select>
-				</div>
-			</div>
-
-			{#if showAdvanced && hasAdvancedParameters}
-				<div class="advanced-panel stack">
-					{#if isMimoDesign && activeParamKeys.has('optimize_text_preview')}
-						<label class="toggle-field" for="optimize-text-preview">
-							<input id="optimize-text-preview" type="checkbox" bind:checked={optimizeTextPreview} />
-							<span>
-								<strong>润色播报文本</strong>
-								<small>MiMo VoiceDesign 官方可选项，会根据音色描述优化目标文本；需要严格保留原文时关闭。</small>
-							</span>
-						</label>
-					{/if}
-
-					{#if activeParamKeys.has('nfe_step')}
-						<div class="field param-slider">
-							<div class="field-head">
-								<label for="nfe-step">采样步数 NFE</label>
-								<input class="field-number" aria-label="NFE 数值" type="number" min="4" max="64" step="1" bind:value={nfeStep} />
-							</div>
-							<div class="range-control">
-								<input id="nfe-step" type="range" min="4" max="64" step="1" bind:value={nfeStep} />
-								<div class="range-scale"><span>4</span><span>64</span></div>
-							</div>
-							<small>F5 采样步数越高越细致但更慢；官方默认 32。</small>
-						</div>
-					{/if}
-
-					{#if activeParamKeys.has('cfg_strength')}
-						<div class="field param-slider">
-							<div class="field-head">
-								<label for="cfg-strength">引导强度 CFG</label>
-								<input class="field-number" aria-label="F5 CFG 数值" type="number" min="0.1" max="5" step="0.1" bind:value={cfgStrength} />
-							</div>
-							<div class="range-control">
-								<input id="cfg-strength" type="range" min="0.1" max="5" step="0.1" bind:value={cfgStrength} />
-								<div class="range-scale"><span>0.1</span><span>5</span></div>
-							</div>
-							<small>控制 F5 贴合参考条件的力度；过高可能带来不自然的发音。</small>
-						</div>
-					{/if}
-
-					{#if activeParamKeys.has('target_rms')}
-						<div class="field param-slider">
-							<div class="field-head">
-								<label for="target-rms">响度目标 RMS</label>
-								<input class="field-number" aria-label="RMS 数值" type="number" min="0.01" max="0.5" step="0.01" bind:value={targetRms} />
-							</div>
-							<div class="range-control">
-								<input id="target-rms" type="range" min="0.01" max="0.5" step="0.01" bind:value={targetRms} />
-								<div class="range-scale"><span>0.01</span><span>0.5</span></div>
-							</div>
-							<small>F5 官方响度归一化参数；默认 0.1。</small>
-						</div>
-					{/if}
-
-					{#if activeParamKeys.has('cross_fade_duration')}
-						<div class="field param-slider">
-							<div class="field-head">
-								<label for="cross-fade">交叉淡化</label>
-								<input class="field-number" aria-label="交叉淡化秒数" type="number" min="0" max="1" step="0.05" bind:value={crossFadeDuration} />
-							</div>
-							<div class="range-control">
-								<input id="cross-fade" type="range" min="0" max="1" step="0.05" bind:value={crossFadeDuration} />
-								<div class="range-scale"><span>0s</span><span>1s</span></div>
-							</div>
-							<small>F5 分段合成时的衔接参数；默认 0.15 秒。</small>
-						</div>
-					{/if}
-
-					{#if activeParamKeys.has('remove_silence')}
-						<label class="toggle-field" for="remove-silence">
-							<input id="remove-silence" type="checkbox" bind:checked={removeSilence} />
-							<span>
-								<strong>移除静音</strong>
-								<small>F5 生成后裁掉较长静音；需要保留自然停顿时关闭。</small>
-							</span>
-						</label>
-					{/if}
-
-					{#if activeParamKeys.has('temperature')}
-						<div class="field param-slider">
-							<div class="field-head">
-								<label for="temp">随机性 Temperature</label>
-								<input class="field-number" aria-label="Temperature 数值" type="number" min={isMimo ? 0 : 0.1} max={isMimo ? 1.5 : 2} step="0.05" bind:value={temperature} />
-							</div>
-							<div class="range-control">
-								<input
-									id="temp"
-									type="range"
-									min={isMimo ? 0 : 0.1}
-									max={isMimo ? 1.5 : 2}
-									step="0.05"
-									bind:value={temperature}
-								/>
-								<div class="range-scale"><span>{isMimo ? '0' : '0.1'}</span><span>{isMimo ? '1.5' : '2'}</span></div>
-							</div>
-							<small>{isMimo ? 'MiMo 官方超参。默认 0.6；越低越稳定，越高越有变化。' : '越低越稳定，越高变化越多，也更可能口齿漂移。'}</small>
-						</div>
-					{/if}
-
-					{#if activeParamKeys.has('top_p')}
-						<div class="field param-slider">
-							<div class="field-head">
-								<label for="top-p">采样范围 Top-P</label>
-								<input class="field-number" aria-label="Top-P 数值" type="number" min={isMimo ? 0.01 : 0} max="1" step={isMimo ? 0.01 : 0.05} bind:value={topP} />
-							</div>
-							<div class="range-control">
-								<input
-									id="top-p"
-									type="range"
-									min={isMimo ? 0.01 : 0}
-									max="1"
-									step={isMimo ? 0.01 : 0.05}
-									bind:value={topP}
-								/>
-								<div class="range-scale"><span>{isMimo ? '0.01' : '0'}</span><span>1</span></div>
-							</div>
-							<small>{isMimo ? 'MiMo 官方超参。默认 0.95；数值越高，采样范围越开放。' : '限制模型从多大概率范围里选声音片段；默认 0.8 较稳。'}</small>
-						</div>
-					{/if}
-
-					{#if activeParamKeys.has('top_k')}
-						<div class="field param-slider">
-							<div class="field-head">
-								<label for="top-k">候选数量 Top-K</label>
-								<input class="field-number" aria-label="Top-K 数值" type="number" min="1" max="100" step="1" bind:value={topK} />
-							</div>
-							<div class="range-control">
-								<input id="top-k" type="range" min="1" max="100" step="1" bind:value={topK} />
-								<div class="range-scale"><span>1</span><span>100</span></div>
-							</div>
-							<small>每一步最多保留多少候选；过大更自由，过小更保守。</small>
-						</div>
-					{/if}
-
-					{#if activeParamKeys.has('max_text_tokens_per_segment')}
-						<div class="field param-slider">
-							<div class="field-head">
-								<label for="segment">分段长度 Token</label>
-								<input class="field-number" aria-label="分段长度数值" type="number" min="20" max="500" step="10" bind:value={maxTextTokensPerSegment} />
-							</div>
-							<div class="range-control">
-								<input id="segment" type="range" min="20" max="500" step="10" bind:value={maxTextTokensPerSegment} />
-								<div class="range-scale"><span>20</span><span>500</span></div>
-							</div>
-							<small>长文本会被拆段生成；短分段更利于剪辑和稳定停顿。</small>
-						</div>
-					{/if}
-
-					{#if activeParamKeys.has('interval_silence')}
-						<div class="field param-slider">
-							<div class="field-head">
-								<label for="silence">段间静默</label>
-								<input class="field-number" aria-label="段间静默数值" type="number" min="0" max="2000" step="50" bind:value={intervalSilence} />
-							</div>
-							<div class="range-control">
-								<input id="silence" type="range" min="0" max="2000" step="50" bind:value={intervalSilence} />
-								<div class="range-scale"><span>0ms</span><span>2000ms</span></div>
-							</div>
-							<small>控制分段之间的留白，便于字幕和剪辑卡点。</small>
-						</div>
-					{/if}
-
-					{#if activeParamKeys.has('cfg_rate')}
-						<div class="field param-slider">
-							<div class="field-head">
-								<label for="cfg">引导强度 CFG Rate</label>
-								<input class="field-number" aria-label="CFG 数值" type="number" min="0" max="1" step="0.05" bind:value={cfgRate} />
-							</div>
-							<div class="range-control">
-								<input id="cfg" type="range" min="0" max="1" step="0.05" bind:value={cfgRate} />
-								<div class="range-scale"><span>0</span><span>1</span></div>
-							</div>
-							<small>控制生成时贴合条件的力度；默认 0.7 适合大多数旁白。</small>
-						</div>
-					{/if}
-
-					{#if activeParamKeys.has('diffusion_steps')}
-						<div class="field param-slider">
-							<div class="field-head">
-								<label for="diffusion">扩散步数 Diffusion Steps</label>
-								<input class="field-number" aria-label="扩散步数数值" type="number" min="5" max="60" step="1" bind:value={diffusionSteps} />
-							</div>
-							<div class="range-control">
-								<input id="diffusion" type="range" min="5" max="60" step="1" bind:value={diffusionSteps} />
-								<div class="range-scale"><span>5</span><span>60</span></div>
-							</div>
-							<small>步数越多越细致但更慢；25 是当前主力基线。</small>
-						</div>
-					{/if}
-				</div>
-			{/if}
-		</aside>
 	</div>
 </main>
 
@@ -3167,23 +3103,6 @@
 		min-width: 0;
 	}
 
-	.records-filter-row {
-		display: grid;
-		grid-template-columns:
-			minmax(160px, 1.4fr)
-			minmax(120px, 1fr)
-			minmax(94px, 0.7fr)
-			minmax(124px, 0.9fr)
-			minmax(120px, 0.9fr)
-			minmax(86px, 0.55fr);
-		gap: 8px;
-		align-items: end;
-	}
-
-	.records-filter-row > .field {
-		min-width: 0;
-	}
-
 	.compact-tabs {
 		max-width: 100%;
 	}
@@ -3543,45 +3462,10 @@
 		padding-top: 4px;
 	}
 
-	.sticky-aside {
-		position: sticky;
-		top: 72px;
-	}
-
-	.param-aside {
-		gap: 8px;
-		padding: 12px;
-	}
-
-	.param-head {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 10px;
-	}
-
-	.param-head h2 {
-		min-width: 0;
-	}
-
 	.field small {
 		color: var(--muted);
 		font-size: 11px;
 		line-height: 1.45;
-	}
-
-	.sticky-aside .field {
-		gap: 4px;
-		padding: 7px 0;
-		border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-	}
-
-	.param-aside .param-field {
-		display: grid;
-		grid-template-columns: 66px minmax(0, 1fr);
-		align-items: start;
-		gap: 8px;
-		padding: 7px 0;
 	}
 
 	.engine-note {
@@ -3603,21 +3487,6 @@
 		line-height: 1.45;
 	}
 
-	.sticky-aside select,
-	.sticky-aside input:not([type='checkbox']):not([type='radio']):not([type='range']):not(.field-number) {
-		min-height: 30px;
-		padding: 5px 9px;
-		border-radius: 6px;
-		font-size: 13px;
-		line-height: 1.25;
-	}
-
-	.sticky-aside input[type='range'] {
-		min-height: 18px;
-		padding: 0;
-	}
-
-	.sticky-aside .field > label,
 	.field-head label {
 		color: var(--text);
 		font-size: 13px;
@@ -3625,14 +3494,6 @@
 		min-width: 0;
 		flex: 1 1 auto;
 		line-height: 1.3;
-	}
-
-	.param-aside .param-label {
-		display: flex;
-		align-items: center;
-		min-height: 32px;
-		white-space: nowrap;
-		line-height: 1.2;
 	}
 
 	.param-control {
@@ -3704,20 +3565,10 @@
 		color: #d6deea;
 		font-size: 11.5px;
 		line-height: 1.2;
-		text-align: right;
-	}
-
-	.param-aside input.field-number {
-		height: 28px;
 		min-height: 28px;
 	}
 
 	.range-control {
-		display: grid;
-		gap: 3px;
-	}
-
-	.param-aside input[type='range'] {
 		width: 100%;
 		margin: 0;
 	}
@@ -3729,12 +3580,6 @@
 		color: var(--muted);
 		font-size: 10.5px;
 		line-height: 1;
-	}
-
-	.advanced-panel {
-		gap: 0;
-		padding: 4px 0 0;
-		border-top: 1px solid rgba(255, 255, 255, 0.06);
 	}
 
 	.toggle-field {
@@ -3833,23 +3678,118 @@
 		overflow-wrap: anywhere;
 	}
 
-	@media (max-width: 1380px) {
-		.records-filter-row {
-			grid-template-columns: repeat(3, minmax(0, 1fr));
-		}
+	/* ── 区域分隔线 ── */
+	.section-divider {
+		border-top: 1px solid var(--line);
+		padding-top: 14px;
 	}
 
-	@media (max-width: 1180px) {
-		.sticky-aside {
-			position: static;
-		}
+	/* ── 内联参数行 ── */
+	.param-inline-row {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+		padding: 6px 0;
 	}
 
+	.param-inline {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		font-size: 12px;
+		color: var(--muted);
+	}
+
+	.param-inline select {
+		min-height: 28px;
+		padding: 3px 8px;
+		border-radius: 6px;
+		font-size: 12px;
+		min-width: 90px;
+	}
+
+	.param-inline-range {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		font-size: 12px;
+		color: var(--muted);
+	}
+
+	.param-inline-range input[type='range'] {
+		width: 80px;
+		height: 4px;
+	}
+
+	.voice-inline {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+
+	.voice-inline select {
+		min-height: 28px;
+		padding: 3px 8px;
+		border-radius: 6px;
+		font-size: 12px;
+		min-width: 100px;
+	}
+
+	/* ── 更多参数折叠面板 ── */
+	.more-params-panel {
+		padding: 10px 12px;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: var(--panel-2);
+		display: grid;
+		gap: 8px;
+	}
+
+	.advanced-divider {
+		border-top: 1px dashed var(--line);
+		margin: 6px 0 0;
+		text-align: center;
+	}
+
+	.advanced-divider span {
+		background: var(--panel-2);
+		padding: 0 8px;
+		font-size: 11px;
+		color: var(--muted);
+		position: relative;
+		top: -8px;
+	}
+
+	/* ── 结果筛选行（单行内联） ── */
+	.records-filter-inline {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+
+	.records-filter-inline select {
+		min-height: 28px;
+		padding: 3px 8px;
+		border-radius: 6px;
+		font-size: 12px;
+		min-width: 80px;
+	}
+
+	.records-filter-inline .search-field {
+		flex: 1;
+		min-width: 140px;
+	}
+
+	/* ── 响应式 ── */
 	@media (max-width: 900px) {
-		.records-filter-row,
-		.preset-editor-grid,
-		.strategy-grid {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
+		.param-inline-row {
+			gap: 6px;
+		}
+
+		.records-filter-inline {
+			gap: 6px;
 		}
 
 		.tool-row,
@@ -3863,10 +3803,24 @@
 		.result-info-right {
 			margin-left: 0;
 		}
+
+		.preset-editor-grid,
+		.strategy-grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
 	}
 
 	@media (max-width: 640px) {
-		.records-filter-row,
+		.param-inline-row {
+			flex-direction: column;
+			align-items: flex-start;
+		}
+
+		.records-filter-inline {
+			flex-direction: column;
+			align-items: stretch;
+		}
+
 		.preset-editor-grid,
 		.strategy-grid {
 			grid-template-columns: 1fr;
@@ -3883,12 +3837,12 @@
 			grid-template-columns: auto minmax(0, 1fr);
 		}
 
-		.param-aside .param-field {
+		.param-field {
 			grid-template-columns: 1fr;
 			gap: 4px;
 		}
 
-		.param-aside .param-label {
+		.param-label {
 			min-height: auto;
 		}
 	}

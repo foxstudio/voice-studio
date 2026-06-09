@@ -55,7 +55,7 @@ h2 { font-size: 16px; margin: 0 0 12px; }
 h3 { font-size: 14px; margin: 0 0 8px; }
 .muted { color: var(--muted); font-size: 13px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
-.workbench { display: grid; grid-template-columns: minmax(420px, 1fr) minmax(280px, 340px); gap: 14px; align-items: start; }
+.workbench { display: grid; grid-template-columns: 1fr; gap: 0; align-items: start; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -228,8 +228,4 @@ textarea { resize: vertical; min-height: 120px; line-height: 1.5; }
 	.sidebar-collapsed .brand span,
 	.sidebar-collapsed .nav a span { display: inline; }
 	.sidebar-collapsed .nav a { justify-content: flex-start; padding-inline: 10px; }
-}
-
-@media (max-width: 1180px) {
-	.workbench { grid-template-columns: 1fr; }
 }
