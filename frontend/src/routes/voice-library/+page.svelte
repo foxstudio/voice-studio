@@ -94,8 +94,37 @@
 			await generateAsrForVoice(candidates[i]);
 		}
 		batchAsrProgress = { active: false, current: 0, total: 0 };
+
+	async function generateSerForVoice(voice: VoiceAsset) {
+		if (!voice.reference_audio_ids?.length) return;
+		voiceSerStatus = new Map([...voiceSerStatus, [voice.voice_id, 'generating']]);
+		try {
+			const result = await Api.predictEmotion(voice.voice_id);
+			if (result.top_emotion) {
+				const tags = [result.top_emotion];
+				for (const [emo, score] of Object.entries(result.emotion_scores)) {
+					if (emo !== result.top_emotion && score > 0.15) tags.push(emo);
+				}
+				await Api.updateVoice(voice.voice_id, { emotion_tags: tags.slice(0, 3) });
+			}
+			voiceSerStatus = new Map([...voiceSerStatus, [voice.voice_id, 'done']]);
+			await refresh();
+		} catch (e: any) {
+			voiceSerStatus = new Map([...voiceSerStatus, [voice.voice_id, 'error']]);
+			console.error('SER 识别失败:', e);
+		}
 	}
 
+	async function batchGenerateSer() {
+		const candidates = voices.filter(v => v.reference_audio_ids?.length);
+		if (!candidates.length) return;
+		batchSerProgress = { active: true, current: 0, total: candidates.length };
+		for (let i = 0; i < candidates.length; i++) {
+			batchSerProgress = { ...batchSerProgress, current: i + 1 };
+			await generateSerForVoice(candidates[i]);
+		}
+		batchSerProgress = { active: false, current: 0, total: 0 };
+	}
 	function resetForm() {
 		name = '';
 		description = '';
@@ -232,6 +261,10 @@
 	function voiceTypeLabel(type: string): string {
 		return { real_person: '真人', virtual_character: '虚拟', host: '主持', singer: '歌手', narrator: '旁白', emotion_reference: '情绪', test_sample: '测试' }[type] ?? '';
 	}
+	function emotionLabel(e: string): string {
+		const map: Record<string, string> = { happy: "开心", angry: "愤怒", sad: "悲伤", afraid: "恐惧", disgusted: "反感", melancholic: "忧郁", surprised: "惊讶", calm: "平静", neutral: "平静" };
+		return map[e] ?? e;
+	}
 
 	function queryTokens(query: string) {
 		return query
@@ -332,6 +365,13 @@
 				{:else}
 					<button class="btn-asr-batch" onclick={batchGenerateAsr} disabled={batchAsrProgress.active}>
 						<FileAudio size={13} /> 批量ASR
+					</button>
+				{/if}
+				{#if batchSerProgress.active}
+					<span class="batch-asr-progress"><Heart size={13} /> SER {batchSerProgress.current}/{batchSerProgress.total}</span>
+				{:else}
+					<button class="btn-ser-batch" onclick={batchGenerateSer} disabled={batchSerProgress.active}>
+						<Heart size={13} /> 批量情绪识别
 					</button>
 				{/if}
 			</div>
@@ -455,6 +495,13 @@
 						<span>{voice.recommended_engine_id ? bindingLabel(voice.recommended_engine_id) : '自动引擎'}</span>
 						<span class="text-pop text-chip" data-text={voiceLineText(voice.reference_text)}><FileText size={13} /> 台词</span>
 					</div>
+				{#if voice.emotion_tags?.length}
+					<div class="emotion-tags-row">
+						{#each voice.emotion_tags as tag}
+							<span class="badge emotion">{emotionLabel(tag)}</span>
+						{/each}
+					</div>
+				{/if}
 					<div class="card-actions">
 					{#if voice.reference_audio_ids[0]}
 						<button class={`btn icon-text ${playingVoiceId === voice.voice_id ? 'playing' : ''}`} onclick={() => toggleVoicePlayback(voice)} title={playingVoiceId === voice.voice_id ? '暂停' : '试听'}>
@@ -1105,4 +1152,41 @@
 			color: #c0dfff;
 		}
 
+
+		/* SER emotion styles */
+		.btn-ser-batch {
+			appearance: none;
+			border: 1px solid rgba(224, 173, 66, 0.3);
+			background: rgba(224, 173, 66, 0.06);
+			color: #d4b96a;
+			border-radius: 999px;
+			padding: 3px 10px;
+			font-size: 11px;
+			line-height: 1.5;
+			cursor: pointer;
+			display: inline-flex;
+			align-items: center;
+			gap: 4px;
+			transition: all 0.15s;
+		}
+		.btn-ser-batch:hover:not(:disabled) {
+			border-color: rgba(224, 173, 66, 0.6);
+			background: rgba(224, 173, 66, 0.14);
+			color: #f0d78a;
+		}
+		.btn-ser-batch:disabled { opacity: 0.4; cursor: not-allowed; }
+		.emotion-tags-row {
+			display: flex;
+			gap: 4px;
+			flex-wrap: wrap;
+			margin-top: 4px;
+		}
+		.badge.emotion {
+			background: rgba(224, 173, 66, 0.12);
+			color: #d4b96a;
+			border: 1px solid rgba(224, 173, 66, 0.2);
+			padding: 1px 6px;
+			border-radius: 4px;
+			font-size: 10px;
+		}
 </style>
