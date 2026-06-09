@@ -2,7 +2,7 @@
 	import { Api } from '$lib/api';
 	import type { VoiceAsset } from '$lib/api/types';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
-	import { Check, CircleCheck, Database, FileText, Pencil, Pause, Play, Plus, Search, ShieldCheck, Trash2, Upload, X } from 'lucide-svelte';
+	import { ArrowRight, Check, Database, FileText, FileAudio, Pencil, Pause, Plus, Search, ShieldCheck, Trash2, Upload, Volume2, X } from 'lucide-svelte';
 	import { licenseLabel } from '$lib/labels';
 	import { onMount } from 'svelte';
 
@@ -19,10 +19,13 @@
 	let voiceQuery = $state('');
 	let voiceEngineFilter = $state('all');
 	let voiceLicenseFilter = $state('all');
-	let voiceQualityFilter = $state('all');
 	let voiceSort = $state<'updated' | 'name'>('updated');
 	let voicePreviewAudio = $state<HTMLAudioElement | null>(null);
 	let playingVoiceId = $state('');
+
+	let batchAsrProgress = $state({ active: false, current: 0, total: 0 });
+	let voiceAsrStatus = $state(new Map<string, 'idle' | 'generating' | 'done' | 'error'>());
+	let showVoiceModal = $state(false);
 
 	async function refresh() {
 		voices = await Api.voices();
@@ -52,6 +55,42 @@
 		refresh();
 	});
 
+
+	async function generateAsrForVoice(voice: VoiceAsset) {
+		if (!voice.reference_audio_ids[0]) return;
+		voiceAsrStatus = new Map([...voiceAsrStatus, [voice.voice_id, 'generating']]);
+		try {
+			const audioUrl = `/api/voices/${voice.voice_id}/audio/${voice.reference_audio_ids[0]}`;
+			const resp = await fetch(audioUrl);
+			const blob = await resp.blob();
+			const file = new File([blob], 'audio.wav', { type: blob.type });
+			const result = await Api.transcribeAudio(file);
+			const text = result.text?.trim();
+			if (!text) throw new Error('空转写结果');
+			await Api.updateVoice(voice.voice_id, {
+				reference_text: text,
+			});
+			voice.reference_text = text;
+			voiceAsrStatus = new Map([...voiceAsrStatus, [voice.voice_id, 'done']]);
+		} catch (e) {
+			console.error('ASR failed for', voice.name, e);
+			voiceAsrStatus = new Map([...voiceAsrStatus, [voice.voice_id, 'error']]);
+		}
+	}
+
+	async function batchGenerateAsr() {
+		const candidates = filteredVoices.filter(v =>
+			isFakeReferenceText(v.reference_text) && v.reference_audio_ids[0]
+		);
+		if (!candidates.length) return;
+		batchAsrProgress = { active: true, current: 0, total: candidates.length };
+		for (let i = 0; i < candidates.length; i++) {
+			batchAsrProgress = { ...batchAsrProgress, current: i + 1 };
+			await generateAsrForVoice(candidates[i]);
+		}
+		batchAsrProgress = { active: false, current: 0, total: 0 };
+	}
+
 	function resetForm() {
 		name = '';
 		description = '';
@@ -61,6 +100,7 @@
 		engine = 'indextts-v2';
 		file = null;
 		editingVoice = null;
+	showVoiceModal = false;
 	}
 
 	function editVoice(voice: VoiceAsset) {
@@ -73,6 +113,7 @@
 		engine = voice.recommended_engine_id;
 		file = null;
 		uploadMessage = '';
+	showVoiceModal = true;
 	}
 
 	async function saveVoice() {
@@ -108,19 +149,6 @@
 		await refresh();
 	}
 
-	async function markVoiceReviewed(voice: VoiceAsset) {
-		const tags = voice.tags.filter((tag) => tag !== 'ASR待复核');
-		const reviewedNote = '人工已复核 reference_text。';
-		const quality_notes = voice.quality_notes?.includes(reviewedNote)
-			? voice.quality_notes
-			: [voice.quality_notes, reviewedNote].filter(Boolean).join('\n');
-		await Api.updateVoice(voice.voice_id, {
-			tags,
-			quality_status: 'verified',
-			quality_notes
-		});
-		await refresh();
-	}
 
 	const NOISE_TAGS = new Set([
 		'官方示例', '参考声音', '社区音色', 'Apache 2.0', '中文',
@@ -190,19 +218,14 @@
 		return value;
 	}
 
-	function needsReview(voice: VoiceAsset) {
-		return voice.quality_status === 'needs_review' || voice.tags.includes('ASR待复核');
+	function isFakeReferenceText(text: string | null | undefined): boolean {
+		const value = (text ?? '').trim();
+		if (!value) return true;
+		return value.includes('参考音频') || value.includes('用于测试') || value.includes('官方示例');
 	}
 
-	function qualityLabel(voice: VoiceAsset) {
-		if (needsReview(voice)) return 'ASR待复核';
-		if (voice.quality_status === 'verified') return '已复核';
-		if (voice.quality_status === 'unchecked') return '未质检';
-		return voice.quality_status || '未质检';
-	}
-
-	function qualityNoteText(voice: VoiceAsset) {
-		return voice.quality_notes?.trim() || '暂无质检备注';
+	function voiceTypeLabel(type: string): string {
+		return { real_person: '真人', virtual_character: '虚拟', host: '主持', singer: '歌手', narrator: '旁白', emotion_reference: '情绪', test_sample: '测试' }[type] ?? '';
 	}
 
 	function queryTokens(query: string) {
@@ -258,9 +281,6 @@
 			.filter((voice) => {
 				if (voiceEngineFilter !== 'all' && !voice.engine_bindings?.some((binding) => binding.engine_id === voiceEngineFilter && binding.available)) return false;
 				if (voiceLicenseFilter !== 'all' && voice.license_status !== voiceLicenseFilter) return false;
-				if (voiceQualityFilter === 'needs_review' && !needsReview(voice)) return false;
-				if (voiceQualityFilter === 'verified' && voice.quality_status !== 'verified') return false;
-				if (voiceQualityFilter === 'unchecked' && voice.quality_status !== 'unchecked') return false;
 				if (!tokens.length) return true;
 				const haystack = [voice.name, voice.description, voice.tags.join(' '), voice.reference_text].join(' ').toLowerCase();
 				return tokens.every((token) => haystack.includes(token));
@@ -274,8 +294,6 @@
 	const selfOrAuthorizedCount = $derived(
 		voices.filter((voice) => ['self_voice', 'authorized', 'company_authorized'].includes(voice.license_status)).length
 	);
-	const referenceAudioCount = $derived(voices.reduce((total, voice) => total + voice.reference_audio_ids.length, 0));
-	const needsReviewCount = $derived(voices.filter((voice) => needsReview(voice)).length);
 	const canSaveVoice = $derived(Boolean(name.trim()) && (Boolean(editingVoice) || Boolean(file)));
 
 	const help = [
@@ -283,40 +301,36 @@
 		{ title: '音色库怎么用', body: '音色库里的声音主要作为声音克隆参考。IndexTTS v2 通常需要选择一个参考声音；F5-TTS 和 CosyVoice Zero-Shot 需要参考音频和准确参考台词；OmniVoice 可以选择参考声音，也可以不选，改用声音设计标签。' },
 		{ title: '参考文本', body: '参考文本是参考音频里大概说了什么。克隆或多语言模型有时会用它理解发音和音色；卡片里的文本按钮可以快速查看，不会撑大卡片。' },
 		{ title: '编辑声音', body: '卡片上的“编辑”会把名称、描述、标签、参考文本和推荐引擎载入右侧表单。这里保存的是同一个声音名称，生成页下拉菜单会同步显示。' },
-		{ title: 'ASR 待复核', body: '用本地 ASR 回填的参考文本会保留 ASR待复核 标签。人工听过参考音频并确认台词后，可以在卡片上标记为已复核。' }
 	];
 </script>
 
 <svelte:head><title>音色管理 - 声音工作台</title></svelte:head>
 
 <main class="page">
-	<div class="page-head"><div><h1>音色管理</h1><p class="muted">上传、管理、试听和授权标记自己的参考声音；内容多起来时也能按授权和可用引擎查找。</p></div><HelpDrawer title="音色管理" sections={help} /></div>
-	<section class="voice-overview">
-		<div class="metric-card">
-			<Database size={17} />
-			<div><span>本地音色</span><strong>{voices.length}</strong></div>
+		<div class="page-head">
+			<div class="page-title-row">
+				<h1>音色管理</h1>
+				<div class="stat-pills">
+					<span class="stat-pill"><Database size={14} /> {voices.length} 音色</span>
+					<span class="stat-pill"><ShieldCheck size={14} /> {selfOrAuthorizedCount} 授权</span>
+				</div>
+				<HelpDrawer title="音色管理" sections={help} />
+			</div>
+			<div class="page-title-actions">
+				<button class="btn-add-voice" onclick={() => { resetForm(); showVoiceModal = true; }}><Plus size={13} /> 新增声音</button>
+				{#if batchAsrProgress.active}
+					<span class="batch-asr-progress"><FileAudio size={13} /> ASR {batchAsrProgress.current}/{batchAsrProgress.total}</span>
+				{:else}
+					<button class="btn-asr-batch" onclick={batchGenerateAsr} disabled={batchAsrProgress.active}>
+						<FileAudio size={13} /> 批量ASR
+					</button>
+				{/if}
+			</div>
 		</div>
-		<div class="metric-card">
-			<ShieldCheck size={17} />
-			<div><span>授权可用</span><strong>{selfOrAuthorizedCount}</strong></div>
-		</div>
-		<div class="metric-card">
-			<Play size={17} />
-			<div><span>参考音频</span><strong>{referenceAudioCount}</strong></div>
-		</div>
-		<div class="metric-card">
-			<CircleCheck size={17} />
-			<div><span>待复核</span><strong>{needsReviewCount}</strong></div>
-		</div>
-	</section>
 
 	<div class="workbench">
 		<section class="stack">
 			<section class="panel stack library-toolbar">
-				<div class="row" style="justify-content:space-between">
-					<h2>本地音色库</h2>
-					<span class="muted">{filteredVoices.length} 条</span>
-				</div>
 				<div class="toolbar-grid voice-toolbar">
 					<label class="field">
 						<span>搜索</span>
@@ -350,15 +364,6 @@
 						</select>
 					</label>
 					<label class="field">
-						<span>复核</span>
-						<select bind:value={voiceQualityFilter}>
-							<option value="all">全部</option>
-							<option value="needs_review">ASR待复核</option>
-							<option value="verified">已复核</option>
-							<option value="unchecked">未质检</option>
-						</select>
-					</label>
-					<label class="field">
 						<span>排序</span>
 						<select bind:value={voiceSort}>
 							<option value="updated">最近更新</option>
@@ -366,13 +371,13 @@
 						</select>
 					</label>
 				</div>
+					<span class="toolbar-count muted">{filteredVoices.length} / {voices.length} 条结果</span>
 			</section>
 
 			{#if Object.keys(tagsByCategory).length > 0}
 			<section class="tag-cloud-section">
 				<div class="tag-cloud-header">
 					<span>标签筛选</span>
-					<span class="muted">{filteredVoices.length} / {voices.length} 条结果</span>
 				</div>
 				{#each [
 					{ key: 'gender', label: '性别' },
@@ -407,53 +412,46 @@
 
 			<section class="grid voice-grid">
 			{#each filteredVoices as voice}
-				<article class={`card stack voice-card engine-surface ${voiceCardKind(voice) === 'cloud' ? 'engine-cloud' : 'engine-local'}`}>
+				<article class={`card stack voice-card engine-surface ${voiceCardKind(voice) === 'cloud' ? 'engine-cloud' : 'engine-local'} ${playingVoiceId === voice.voice_id ? 'playing' : ''}`}>
 					<div class="voice-card-head">
 						<h2 title={voice.name}>{voice.name}</h2>
-						<span class="badge license" class:ok={voice.license_status === 'self_voice'}>{licenseLabel(voice.license_status)}</span>
+						<div class="card-head-actions">
+							<button class="icon-btn-sm" title="ASR" onclick={() => generateAsrForVoice(voice)} disabled={voiceAsrStatus.get(voice.voice_id) === 'generating'}>
+								<FileAudio size={13} />
+							</button>
+							<button class="icon-btn-sm" title="编辑" onclick={() => editVoice(voice)}>
+								<Pencil size={13} />
+							</button>
+							<button class="icon-btn-sm danger" title="删除" onclick={() => remove(voice.voice_id)}>
+								<Trash2 size={13} />
+							</button>
+							<span class="badge license" class:ok={voice.license_status === 'self_voice'}>{licenseLabel(voice.license_status)}</span>
+						</div>
 					</div>
 					<p class="muted voice-desc desc-pop" data-text={voice.description || '暂无描述'}>{voice.description || '暂无描述'}</p>
 					<div class="tag-row">
 						{#each cleanTags(voice.tags, expandedCards.has(voice.voice_id) ? 99 : 4) as tag}
-							<button class={`badge tag-filter ${tagClass(tag)}`} type="button" title={`添加到搜索：${tag}`} onclick={() => appendVoiceQueryTag(tag)}>{tag}</button>
+							<button class={`badge tag-filter ${tagClass(tag)}`} type="button" title={`添加到搜索：${tag}`} onclick={() => appendVoiceQueryTag(tag)}>{tag}<span class="tag-count">{tagCounts.get(tag)}</span></button>
 						{/each}
 						{#if cleanTags(voice.tags, 99).length > 4 && !expandedCards.has(voice.voice_id)}
 							<button class="tag-expand-btn" type="button" onclick={() => { expandedCards = new Set([...expandedCards, voice.voice_id]); }}>+{cleanTags(voice.tags, 99).length - 4}</button>
 						{/if}
 					</div>
 					<div class="asset-meta">
-						<span>×{voice.reference_audio_ids.length} 音频</span>
+						{#if voiceTypeLabel(voice.voice_type)}
+							<span>{voiceTypeLabel(voice.voice_type)}</span>
+						{/if}
 						<span>{voiceCardKind(voice) === 'cloud' ? '云端' : '本地'}</span>
 						<span>{voice.recommended_engine_id ? bindingLabel(voice.recommended_engine_id) : '自动引擎'}</span>
-						<span class={`quality-chip ${needsReview(voice) ? 'warn' : voice.quality_status === 'verified' ? 'ok' : ''}`} title={qualityNoteText(voice)}>
-							<CircleCheck size={13} /> {qualityLabel(voice)}
-						</span>
 						<span class="text-pop text-chip" data-text={voiceLineText(voice.reference_text)}><FileText size={13} /> 台词</span>
 					</div>
-					{#if voice.reference_audio_ids[0]}
-						<div class="voice-audio-compact">
-							<button
-								class="icon-btn voice-play-btn"
-								onclick={() => toggleVoicePlayback(voice)}
-								title={playingVoiceId === voice.voice_id ? '暂停' : '播放'}
-								aria-label={playingVoiceId === voice.voice_id ? '暂停' : '播放'}
-							>
-								{#if playingVoiceId === voice.voice_id}
-									<Pause size={14} />
-								{:else}
-									<Play size={14} />
-								{/if}
-							</button>
-							<span class="muted voice-audio-label">{playingVoiceId === voice.voice_id ? '播放中…' : '试听'}</span>
-						</div>
-					{/if}
 					<div class="card-actions">
-						<a class="btn primary" href={`/generate?voice=${voice.voice_id}`}><Play size={15} /> 去合成</a>
-						{#if needsReview(voice)}
-							<button class="btn" onclick={() => markVoiceReviewed(voice)}><CircleCheck size={15} /> 已复核</button>
-						{/if}
-						<button class="btn" onclick={() => editVoice(voice)}><Pencil size={15} /> 编辑</button>
-						<button class="btn danger" onclick={() => remove(voice.voice_id)}><Trash2 size={15} /> 删除</button>
+					{#if voice.reference_audio_ids[0]}
+						<button class={`btn icon-text ${playingVoiceId === voice.voice_id ? 'playing' : ''}`} onclick={() => toggleVoicePlayback(voice)} title={playingVoiceId === voice.voice_id ? '暂停' : '试听'}>
+							{#if playingVoiceId === voice.voice_id}<Pause size={14} /> 暂停{:else}<Volume2 size={14} /> 试听{/if}
+						</button>
+					{/if}
+					<a class="btn btn-goto" href={`/generate?voice=${voice.voice_id}`}><ArrowRight size={14} /> 去合成</a>
 					</div>
 				</article>
 			{:else}
@@ -461,28 +459,33 @@
 			{/each}
 			</section>
 		</section>
-		<aside class="panel stack">
-			<div class="row" style="justify-content:space-between">
-				<h2>{#if editingVoice}<Pencil size={16} /> 编辑声音{:else}<Plus size={16} /> 新增声音{/if}</h2>
-				{#if editingVoice}<button class="btn icon-text" onclick={resetForm}><X size={15} /> 取消</button>{/if}
-			</div>
-			<div class="field"><label for="voice-name">名称</label><input id="voice-name" bind:value={name} /></div>
-			<div class="field"><label for="voice-desc">描述</label><input id="voice-desc" bind:value={description} /></div>
-			<div class="field"><label for="voice-tags">标签</label><input id="voice-tags" bind:value={tags} placeholder="温柔, 女声" /></div>
-			<div class="field"><label for="voice-ref">参考文本</label><input id="voice-ref" bind:value={referenceText} /></div>
-			<div class="field"><label for="voice-license">授权</label><select id="voice-license" bind:value={license}><option value="unknown">未知</option><option value="self_voice">本人声音</option><option value="authorized">已授权</option><option value="test_only">仅测试</option></select></div>
-				<div class="field"><label for="voice-engine">推荐引擎</label><select id="voice-engine" bind:value={engine}><option value="indextts-v2">IndexTTS v2</option><option value="omnivoice">OmniVoice</option><option value="mimo-v2.5-tts-voiceclone">MiMo V2.5 VoiceClone</option></select></div>
-			<div class="field">
-				<label for="voice-file">{editingVoice ? '追加参考音频' : '参考音频'}</label>
-				<div class="file-row">
-					<label class="btn file-picker" for="voice-file"><Upload size={14} /> 选择音频</label>
-					<span class="muted file-name">{file?.name ?? '未选择文件'}</span>
-					<input id="voice-file" class="sr-only" type="file" accept="audio/*" onchange={(e) => (file = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)} />
+			{#if showVoiceModal}
+			<div class="modal-backdrop" onclick={() => resetForm()}></div>
+			<dialog class="modal" open>
+				<div class="modal-header">
+					<h2>{#if editingVoice}<Pencil size={16} /> 编辑声音{:else}<Plus size={16} /> 新增声音{/if}</h2>
+					<button class="btn icon-text" onclick={resetForm}><X size={15} /></button>
 				</div>
-			</div>
-			{#if uploadMessage}<p class="muted"><Check size={13} /> {uploadMessage}</p>{/if}
-			<button class="btn primary" disabled={!canSaveVoice} onclick={saveVoice}><Upload size={15} /> {editingVoice ? '保存修改' : '保存声音'}</button>
-		</aside>
+				<div class="modal-body stack">
+					<div class="field"><label for="voice-name">名称</label><input id="voice-name" bind:value={name} /></div>
+					<div class="field"><label for="voice-desc">描述</label><input id="voice-desc" bind:value={description} /></div>
+					<div class="field"><label for="voice-tags">标签</label><input id="voice-tags" bind:value={tags} placeholder="温柔, 女声" /></div>
+					<div class="field"><label for="voice-ref">参考文本</label><input id="voice-ref" bind:value={referenceText} /></div>
+					<div class="field"><label for="voice-license">授权</label><select id="voice-license" bind:value={license}><option value="unknown">未知</option><option value="self_voice">本人声音</option><option value="authorized">已授权</option><option value="test_only">仅测试</option></select></div>
+					<div class="field"><label for="voice-engine">推荐引擎</label><select id="voice-engine" bind:value={engine}><option value="indextts-v2">IndexTTS v2</option><option value="omnivoice">OmniVoice</option><option value="mimo-v2.5-tts-voiceclone">MiMo V2.5 VoiceClone</option></select></div>
+					<div class="field">
+						<label for="voice-file">{editingVoice ? '追加参考音频' : '参考音频'}</label>
+						<div class="file-row">
+							<label class="btn file-picker" for="voice-file"><Upload size={14} /> 选择音频</label>
+							<span class="muted file-name">{file?.name ?? '未选择文件'}</span>
+							<input id="voice-file" class="sr-only" type="file" accept="audio/*" onchange={(e) => (file = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)} />
+						</div>
+					</div>
+					{#if uploadMessage}<p class="muted"><Check size={13} /> {uploadMessage}</p>{/if}
+					<button class="btn primary" disabled={!canSaveVoice} onclick={saveVoice}><Upload size={15} /> {editingVoice ? '保存修改' : '保存声音'}</button>
+				</div>
+			</dialog>
+			{/if}
 	</div>
 	<audio
 		bind:this={voicePreviewAudio}
@@ -495,42 +498,120 @@
 </main>
 
 <style>
-	.voice-overview {
-		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 12px;
+	/* Workbench override: full width (no sidebar) */
+	.workbench {
+		grid-template-columns: 1fr;
+	}
+
+	/* Modal */
+	.modal-backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.5);
+		backdrop-filter: blur(4px);
+		z-index: 100;
+	}
+	.modal {
+		position: fixed;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		z-index: 101;
+		width: min(480px, 92vw);
+		max-height: 85vh;
+		overflow-y: auto;
+		border: 1px solid var(--line);
+		border-radius: 16px;
+		background: #14181f;
+		padding: 20px;
+		box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+	}
+	.modal-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
 		margin-bottom: 16px;
 	}
-
-	.metric-card {
+	.modal-header h2 {
+		margin: 0;
+		font-size: 16px;
 		display: flex;
 		align-items: center;
+		gap: 6px;
+	}
+	.modal-body {
 		gap: 10px;
-		min-width: 0;
-		border: 1px solid var(--line);
-		border-radius: 8px;
-		background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.018));
-		padding: 12px;
 	}
 
-	.metric-card :global(svg) {
-		color: var(--accent);
-		flex: 0 0 auto;
+	/* Add voice button */
+	.btn-add-voice {
+		appearance: none;
+		border: 1px solid rgba(78, 163, 255, 0.3);
+		background: rgba(78, 163, 255, 0.08);
+		color: #7cb8f0;
+		border-radius: 999px;
+		padding: 3px 10px;
+		font-size: 11px;
+		line-height: 1.5;
+		cursor: pointer;
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		transition: all 0.15s;
+	}
+	.btn-add-voice:hover {
+		border-color: rgba(78, 163, 255, 0.6);
+		background: rgba(78, 163, 255, 0.18);
+		color: #b0d4ff;
+	}
+	.btn-add-voice :global(svg) {
+		flex-shrink: 0;
 	}
 
-	.metric-card span {
-		display: block;
-		color: var(--muted);
-		font-size: 12px;
-	}
-
-	.metric-card strong {
-		display: block;
-		margin-top: 3px;
-		font-size: 20px;
-		line-height: 1;
-	}
-
+		.page-head {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			flex-wrap: wrap;
+			gap: 8px;
+			padding-bottom: 12px;
+		}
+		.page-title-row {
+			display: flex;
+			align-items: center;
+			gap: 14px;
+		}
+		.page-title-row h1 {
+			margin: 0;
+			font-size: 18px;
+		}
+		.stat-pills {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+		}
+		.stat-pill {
+			display: inline-flex;
+			align-items: center;
+			gap: 4px;
+			font-size: 12px;
+			color: var(--muted);
+		}
+		.stat-pill :global(svg) {
+			color: var(--accent);
+			opacity: 0.6;
+			flex-shrink: 0;
+		}
+		.page-title-actions {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+		}
+		.toolbar-count {
+			display: block;
+			font-size: 11px;
+			padding-top: 4px;
+		}
 	.voice-card-head {
 		display: flex;
 		justify-content: space-between;
@@ -603,17 +684,6 @@
 		grid-template-columns: minmax(220px, 1.35fr) repeat(4, minmax(118px, 0.72fr));
 	}
 
-	.quality-chip.warn {
-		color: #ffd08a;
-		border-color: rgba(167, 111, 35, 0.56);
-		background: rgba(108, 75, 30, 0.24);
-	}
-
-	.quality-chip.ok {
-		color: #a7e9be;
-		border-color: rgba(56, 142, 89, 0.55);
-		background: rgba(44, 104, 65, 0.24);
-	}
 
 	.voice-grid {
 		grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -624,27 +694,6 @@
 		cursor: help;
 	}
 
-	.desc-pop:hover::after,
-	.desc-pop:focus::after {
-		content: attr(data-text);
-		position: absolute;
-		left: 0;
-		bottom: calc(100% + 8px);
-		width: min(320px, 76vw);
-		max-height: 240px;
-		overflow: auto;
-		white-space: pre-wrap;
-		line-height: 1.65;
-		padding: 11px 12px;
-		border-radius: 12px;
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		background: rgba(12, 15, 20, 0.92);
-		backdrop-filter: blur(18px);
-		color: #eef3fb;
-		font-size: 11.5px;
-		box-shadow: 0 18px 42px rgba(0, 0, 0, 0.38);
-		z-index: 50;
-	}
 
 	.tag-row,
 	.binding-row,
@@ -733,9 +782,6 @@
 		}
 
 		.tag-cloud-header {
-			display: flex;
-			justify-content: space-between;
-			align-items: center;
 			margin-bottom: 8px;
 			font-size: 12px;
 			font-weight: 500;
@@ -840,23 +886,40 @@
 	.asset-meta {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 6px;
+		gap: 4px;
 		color: var(--muted);
-		font-size: 12px;
+		font-size: 11px;
 	}
 
 	.asset-meta span {
 		display: inline-flex;
 		align-items: center;
-		gap: 4px;
+		gap: 3px;
 		border: 1px solid rgba(255, 255, 255, 0.06);
 		border-radius: 999px;
 		background: rgba(255, 255, 255, 0.025);
+		padding: 1px 5px;
+		font-size: 10.5px;
+		white-space: nowrap;
 	}
 
-	.voice-card {
-		gap: 9px;
-	}
+
+		.voice-card {
+			gap: 9px;
+			transition: border-color 200ms ease, box-shadow 200ms ease;
+		}
+
+		.voice-card.playing {
+			border-color: rgba(79, 156, 249, 0.35);
+			box-shadow: 0 0 0 1px rgba(79, 156, 249, 0.12), 0 4px 18px rgba(79, 156, 249, 0.1);
+		}
+
+		.voice-card .btn.icon-text.playing {
+			background: var(--accent);
+			border-color: var(--accent);
+			color: #07121f;
+			font-weight: 600;
+		}
 
 	.voice-card-head h2 {
 		margin: 0;
@@ -958,4 +1021,79 @@
 			grid-template-columns: 1fr;
 		}
 	}
+
+		/* Icon buttons in card head */
+		.card-head-actions {
+			display: flex;
+			align-items: center;
+			gap: 2px;
+			flex-shrink: 0;
+		}
+		.icon-btn-sm {
+			appearance: none;
+			border: none;
+			background: transparent;
+			color: var(--muted);
+			cursor: pointer;
+			padding: 4px;
+			border-radius: 6px;
+			display: inline-grid;
+			place-items: center;
+			opacity: 0;
+			transition: opacity 0.15s, color 0.15s, background 0.15s;
+		}
+		.voice-card:hover .icon-btn-sm {
+			opacity: 1;
+		}
+		.icon-btn-sm:hover {
+			background: rgba(255, 255, 255, 0.08);
+			color: var(--text);
+		}
+		.icon-btn-sm.danger:hover {
+			color: #ff6b6b;
+			background: rgba(255, 80, 80, 0.12);
+		}
+		/* Batch ASR button */
+		.btn-asr-batch {
+			appearance: none;
+			border: 1px solid rgba(78, 163, 255, 0.3);
+			background: rgba(78, 163, 255, 0.06);
+			color: #7cb8f0;
+			border-radius: 999px;
+			padding: 3px 10px;
+			font-size: 11px;
+			line-height: 1.5;
+			cursor: pointer;
+			display: inline-flex;
+			align-items: center;
+			gap: 4px;
+			transition: all 0.15s;
+		}
+		.btn-asr-batch:hover:not(:disabled) {
+			border-color: rgba(78, 163, 255, 0.6);
+			background: rgba(78, 163, 255, 0.14);
+			color: #b0d4ff;
+		}
+		.btn-asr-batch:disabled {
+			opacity: 0.4;
+			cursor: not-allowed;
+		}
+		.batch-asr-progress {
+			font-size: 11px;
+			color: var(--accent);
+			display: inline-flex;
+			align-items: center;
+			gap: 4px;
+		}
+		.btn-goto {
+			border-color: rgba(78, 163, 255, 0.22);
+			background: rgba(78, 163, 255, 0.06);
+			color: #8ec5f5;
+		}
+		.btn-goto:hover {
+			border-color: rgba(78, 163, 255, 0.48);
+			background: rgba(78, 163, 255, 0.14);
+			color: #c0dfff;
+		}
+
 </style>

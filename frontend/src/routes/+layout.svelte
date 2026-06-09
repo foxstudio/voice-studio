@@ -4,6 +4,7 @@
 	import { Api } from '$lib/api';
 	import { engineStatusLabel } from '$lib/labels';
 	import { onMount } from 'svelte';
+	import { initTooltips } from '$lib/tooltip';
 
 	let { children } = $props();
 	let status = $state('checking');
@@ -24,6 +25,7 @@
 	});
 
 	onMount(() => {
+		initTooltips();
 		sidebarCollapsed = localStorage.getItem('voice-studio-sidebar') === 'collapsed';
 		const onPlay = (event: Event) => {
 			const current = event.target;

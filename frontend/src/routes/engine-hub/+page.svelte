@@ -432,27 +432,6 @@
 		border-radius: 4px;
 	}
 
-	.description-pop.has-tooltip:hover::after,
-	.description-pop.has-tooltip:focus::after {
-		content: attr(data-text);
-		position: absolute;
-		left: 0;
-		bottom: calc(100% + 8px);
-		width: min(320px, 76vw);
-		max-height: 240px;
-		overflow: auto;
-		white-space: pre-wrap;
-		line-height: 1.65;
-		padding: 11px 12px;
-		border-radius: 12px;
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		background: rgba(12, 15, 20, 0.9);
-		backdrop-filter: blur(18px);
-		color: #eef3fb;
-		font-size: 11.5px;
-		box-shadow: 0 18px 42px rgba(0, 0, 0, 0.38);
-		z-index: 5;
-	}
 
 	.compact-tags {
 		gap: 5px;

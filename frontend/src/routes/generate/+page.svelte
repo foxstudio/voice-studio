@@ -1917,7 +1917,7 @@
 				{#if pagedTasks.length}
 					<div class="result-grid">
 						{#each pagedTasks as task}
-							<article class={`card stack result-card engine-surface ${engineKind(task.engine_id) === 'cloud' ? 'engine-cloud' : 'engine-local'}`}>
+							<article class={`card stack result-card engine-surface ${engineKind(task.engine_id) === 'cloud' ? 'engine-cloud' : 'engine-local'}${playingResultTaskId === task.task_id ? ' playing' : ''}`}>
 								<div class="row result-head">
 									<div class="row title-row">
 										<input
@@ -2033,7 +2033,7 @@
 									{#if task.result_id}
 										<div class="result-audio-compact">
 											<button
-												class="icon-btn result-play-btn"
+												class=`icon-btn result-play-btn ${playingResultTaskId === task.task_id ? 'playing' : ''}`
 												type="button"
 												onclick={() => toggleResultPlayback(task)}
 												title={playingResultTaskId === task.task_id ? '暂停播放' : '播放结果'}
@@ -3310,11 +3310,17 @@
 		overflow: visible;
 	}
 
-	.result-card {
-		gap: 9px;
-		padding: 10px;
-		min-width: 0;
-	}
+		.result-card {
+			gap: 9px;
+			padding: 10px;
+			min-width: 0;
+			transition: border-color 200ms ease, box-shadow 200ms ease;
+		}
+
+		.result-card.playing {
+			border-color: rgba(79, 156, 249, 0.35);
+			box-shadow: 0 0 0 1px rgba(79, 156, 249, 0.12), 0 4px 18px rgba(79, 156, 249, 0.1);
+		}
 
 	.result-head {
 		flex-wrap: nowrap;
@@ -3398,6 +3404,12 @@
 		height: 30px;
 		border-radius: 7px;
 	}
+
+		.result-play-btn.playing {
+			background: var(--accent);
+			border-color: var(--accent);
+			color: #07121f;
+		}
 
 	.audio-compact-label {
 		min-width: 0;
