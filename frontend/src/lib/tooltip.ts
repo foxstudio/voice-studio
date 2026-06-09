@@ -34,7 +34,7 @@ function ensureContainer() {
 }
 
 function show(target: Element) {
-	const text = target.dataset.text;
+	const text = (target as HTMLElement).dataset.text;
 	if (!text) return;
 
 	if (hideTimer) clearTimeout(hideTimer);

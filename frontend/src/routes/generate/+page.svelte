@@ -2033,7 +2033,7 @@
 									{#if task.result_id}
 										<div class="result-audio-compact">
 											<button
-												class=`icon-btn result-play-btn ${playingResultTaskId === task.task_id ? 'playing' : ''}`
+												class="icon-btn result-play-btn {playingResultTaskId === task.task_id ? 'playing' : ''}"
 												type="button"
 												onclick={() => toggleResultPlayback(task)}
 												title={playingResultTaskId === task.task_id ? '暂停播放' : '播放结果'}
