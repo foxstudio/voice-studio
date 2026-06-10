@@ -18,6 +18,8 @@
 		CheckSquare,
 		ChevronLeft,
 		ChevronRight,
+		ChevronsLeft,
+		ChevronsRight,
 		Download,
 		FileText,
 		Hash,
@@ -138,6 +140,7 @@
 	let taskSortBy = $state<TaskSortBy>('latest');
 	let currentPage = $state(1);
 	let pageSize = $state(12);
+	let pageJumpInput = $state('');
 	let actionBusyTaskId = $state('');
 	let verificationBusyTaskId = $state('');
 	let verificationReports = $state<Record<string, TTSVerificationResponse>>({});
@@ -1219,6 +1222,14 @@
 		currentPage = Math.min(pageCount, Math.max(1, next));
 	}
 
+	function jumpToPage() {
+		const n = parseInt(pageJumpInput, 10);
+		if (Number.isFinite(n) && n >= 1 && n <= pageCount) {
+			currentPage = n;
+		}
+		pageJumpInput = '';
+	}
+
 	function progressLabel(task: GenerationTask) {
 		if (taskIsWaiting(task)) {
 			const position = taskQueuePosition(task);
@@ -2246,9 +2257,12 @@
 								<option value="duration_desc">时长↓</option>
 							</select>
 							<select bind:value={pageSize} onchange={() => (currentPage = 1)}>
-								<option value={8}>8条</option>
-								<option value={12}>12条</option>
-								<option value={24}>24条</option>
+								<option value={8}>8条/页</option>
+								<option value={12}>12条/页</option>
+								<option value={16}>16条/页</option>
+								<option value={24}>24条/页</option>
+								<option value={32}>32条/页</option>
+								<option value={48}>48条/页</option>
 							</select>
 						</div>
 					</div>
@@ -2495,12 +2509,23 @@
 
 					{#if pageCount > 1}
 						<div class="pagination-bar">
+							<button class="btn" onclick={() => currentPage = 1} disabled={currentPage <= 1}>
+								<ChevronsLeft size={15} /> 首页
+							</button>
 							<button class="btn" onclick={() => taskPageJump(-1)} disabled={currentPage <= 1}>
 								<ChevronLeft size={15} /> 上一页
 							</button>
 							<span class="muted">第 {currentPage} / {pageCount} 页</span>
+							<div class="page-jump">
+								<span class="muted">跳至</span>
+								<input type="number" min="1" max={pageCount} bind:value={pageJumpInput} onkeydown={(e) => e.key === 'Enter' && jumpToPage()} />
+								<span class="muted">页</span>
+							</div>
 							<button class="btn" onclick={() => taskPageJump(1)} disabled={currentPage >= pageCount}>
 								下一页 <ChevronRight size={15} />
+							</button>
+							<button class="btn" onclick={() => currentPage = pageCount} disabled={currentPage >= pageCount}>
+								尾页 <ChevronsRight size={15} />
 							</button>
 						</div>
 					{/if}
@@ -3479,6 +3504,26 @@
 		align-items: center;
 		justify-content: flex-start;
 		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.page-jump {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+	.page-jump input[type='number'] {
+		width: 52px;
+		min-height: 26px;
+		padding: 2px 6px;
+		font-size: 12px;
+		text-align: center;
+		border-radius: 5px;
+		-moz-appearance: textfield;
+	}
+	.page-jump input[type='number']::-webkit-inner-spin-button,
+	.page-jump input[type='number']::-webkit-outer-spin-button {
+		-webkit-appearance: none;
+		margin: 0;
 	}
 
 	.field small {
