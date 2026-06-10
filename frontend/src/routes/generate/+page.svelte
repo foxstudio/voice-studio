@@ -3176,7 +3176,7 @@
 		gap: 8px;
 		flex: 1 1 0;
 		min-width: 0;
-		flex-wrap: wrap;
+		flex-wrap: nowrap;
 	}
 
 	.compact-tabs {
@@ -3316,10 +3316,12 @@
 
 	.pagination-bar-top {
 		display: flex;
+		flex-direction: row;
 		align-items: center;
 		gap: 3px;
 		flex-wrap: nowrap;
 		flex-shrink: 0;
+		min-width: max-content;
 	}
 
 	.pagination-bar .icon-text-btn {
@@ -3563,7 +3565,8 @@
 		align-items: center;
 		justify-content: flex-start;
 		gap: 8px;
-		flex-wrap: wrap;
+		flex-wrap: nowrap;
+		min-width: max-content;
 	}
 	.page-jump {
 		display: flex;
@@ -3917,8 +3920,7 @@
 
 		.tool-row,
 		.result-headline,
-		.result-info,
-		.pagination-bar {
+		.result-info {
 			flex-direction: column;
 			align-items: flex-start;
 		}
