@@ -88,10 +88,37 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	function jumpToPage() { const n = parseInt($store.pageJumpInput, 10); if (Number.isFinite(n) && n >= 1 && n <= pageCount) $store.currentPage = n; $store.pageJumpInput = ''; }
 	function recalcAutoPageSize() { if (!$store.pageSizeAuto || !$store.resultGridEl) return; const fc = $store.resultGridEl.querySelector('.result-card') as HTMLElement | null; const cH = fc ? fc.offsetHeight + 12 : 260; const cols = Math.max(1, Math.floor($store.resultGridEl.getBoundingClientRect().width / 260)); const rows = Math.max(1, Math.floor((window.innerHeight - 200 - 60) / cH)); let ideal = Math.max(cols, rows * cols); if (ideal !== $store.pageSize) { $store.pageSize = ideal; if ($store.currentPage > Math.max(1, Math.ceil(filteredTasks.length / $store.pageSize))) $store.currentPage = 1; } }
 
-	onMount(() => { refreshPageData(); const id = setInterval(() => { if (hasRunningTasks) refreshPageData(); }, 2000); const or = () => recalcAutoPageSize(); window.addEventListener('resize', or); _autoResizeRO = new ResizeObserver(or); return () => { clearInterval(id); window.removeEventListener('resize', or); _autoResizeRO?.disconnect(); }; });
+	onMount(() => {
+		async function initLoad() {
+			for (let i = 0; i < 10; i++) {
+				try {
+					await refreshPageData();
+					return;
+				} catch {
+					await new Promise(r => setTimeout(r, 2000));
+				}
+			}
+		}
+		initLoad();
+		const id = setInterval(() => {
+			if (hasRunningTasks || !$store.initialized) refreshPageData();
+		}, 2000);
+		const slowId = setInterval(() => {
+			if (!hasRunningTasks && $store.initialized) refreshPageData();
+		}, 15000);
+		const or = () => recalcAutoPageSize();
+		window.addEventListener('resize', or);
+		_autoResizeRO = new ResizeObserver(or);
+		return () => {
+			clearInterval(id);
+			clearInterval(slowId);
+			window.removeEventListener('resize', or);
+			_autoResizeRO?.disconnect();
+		};
+	});
 	$effect(() => { if ($store.engineId !== $store.lastEngineId) store.setEngine($store.engineId); });
-	$effect(() => { const eid = $store.engineId; const q = $store.speakerQuery.trim(); const g = $store.speakerGenderFilter; untrack(() => loadSpeakerCatalog(eid, q, g)); });
-	$effect(() => { if (!$store.initialized) return; if (!usesReferenceVoice) { $store.voiceId = ''; return; } if ($store.voiceId && !$store.voices.some(v => v.voice_id === $store.voiceId)) $store.voiceId = ''; });
+	$effect(() => { const eid = $store.engineId; const q = $store.speakerQuery.trim(); const g = $store.speakerGenderFilter; setTimeout(() => loadSpeakerCatalog(eid, q, g), 0); });
+	$effect(() => { if (!$store.initialized) return; if (!usesReferenceVoice) { untrack(() => { $store.voiceId = ''; }); return; } if ($store.voiceId && !$store.voices.some(v => v.voice_id === $store.voiceId)) untrack(() => { $store.voiceId = ''; }); });
 	$effect(() => { if ($store.currentPage > pageCount) $store.currentPage = pageCount; });
 	$effect(() => { if ($store.pageSizeAuto && $store.resultGridEl) recalcAutoPageSize(); });
 	$effect(() => { if (_autoResizeRO) _autoResizeRO.disconnect(); if ($store.resultGridEl && _autoResizeRO) _autoResizeRO.observe($store.resultGridEl); });
