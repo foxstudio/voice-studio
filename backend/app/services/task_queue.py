@@ -136,6 +136,8 @@ def attach_verification_to_result(result_id: str, report: TTSVerificationRespons
 
 
 def _verify_task_output(task: GenerationTask, *, asr_engine_id: str = "qwen3-asr-mlx") -> TTSVerificationResponse:
+    import tempfile
+
     if not task.result_id:
         raise ValueError("任务没有可校对的生成结果")
     item = history_store.get(task.result_id)
@@ -146,8 +148,22 @@ def _verify_task_output(task: GenerationTask, *, asr_engine_id: str = "qwen3-asr
         raise ValueError("结果音频不存在")
     language = _verification_language(task)
     suffix = audio_path.suffix.lower() or ".wav"
-    asr_service.validate_request(asr_engine_id, language, suffix)
-    result = asr_service.transcribe(engine_id=asr_engine_id, audio_path=str(audio_path), language=language)
+    # FLAC 等非 WAV/MP3 格式 → 临时转为 WAV 再送 ASR
+    asr_path = audio_path
+    tmp_path: str | None = None
+    if suffix not in asr_service.SUPPORTED_SUFFIXES:
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp_path = tmp.name
+        tmp.close()
+        audio_tools.convert_file(audio_path, tmp_path, "wav")
+        asr_path = Path(tmp_path)
+        suffix = ".wav"
+    try:
+        asr_service.validate_request(asr_engine_id, language, suffix)
+        result = asr_service.transcribe(engine_id=asr_engine_id, audio_path=str(asr_path), language=language)
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
     record = TranscriptionRecord(
         engine_id=asr_engine_id,
         filename=audio_path.name,

@@ -2156,100 +2156,102 @@
 					</div>
 				</div>
 
-				<div class="records-toolbar">
-					<div class="records-tabs-row">
-						<div class="records-tabs-left">
-							<div class="segmented compact-tabs" role="tablist" aria-label="任务筛选">
-								<button class:active={taskStatusTab === 'all'} type="button" onclick={() => { taskStatusTab = 'all'; currentPage = 1; }}>
-									全部
-									<span>{statusCounts.all}</span>
-								</button>
-								<button class:active={taskStatusTab === 'active'} type="button" onclick={() => { taskStatusTab = 'active'; currentPage = 1; }}>
-									队列
-									<span>{statusCounts.active}</span>
-								</button>
-								<button class:active={taskStatusTab === 'success'} type="button" onclick={() => { taskStatusTab = 'success'; currentPage = 1; }}>
-									成功
-									<span>{statusCounts.success}</span>
-								</button>
-								<button class:active={taskStatusTab === 'failed'} type="button" onclick={() => { taskStatusTab = 'failed'; currentPage = 1; }}>
-									异常
-									<span>{statusCounts.failed}</span>
-								</button>
+					<div class="records-toolbar">
+						<div class="toolbar-row-1">
+							<div class="toolbar-tabs">
+								<div class="segmented compact-tabs" role="tablist" aria-label="任务筛选">
+									<button class:active={taskStatusTab === 'all'} type="button" onclick={() => { taskStatusTab = 'all'; currentPage = 1; }}>
+										全部
+										<span>{statusCounts.all}</span>
+									</button>
+									<button class:active={taskStatusTab === 'active'} type="button" onclick={() => { taskStatusTab = 'active'; currentPage = 1; }}>
+										队列
+										<span>{statusCounts.active}</span>
+									</button>
+									<button class:active={taskStatusTab === 'success'} type="button" onclick={() => { taskStatusTab = 'success'; currentPage = 1; }}>
+										成功
+										<span>{statusCounts.success}</span>
+									</button>
+									<button class:active={taskStatusTab === 'failed'} type="button" onclick={() => { taskStatusTab = 'failed'; currentPage = 1; }}>
+										异常
+										<span>{statusCounts.failed}</span>
+									</button>
+								</div>
 							</div>
-							<div class="toolbar-actions" aria-label="批量操作">
-								<button
-									class="icon-btn"
-									type="button"
-									onclick={toggleVisibleSelection}
-									disabled={!visibleSelectableTasks.length}
-									title={allVisibleSelected ? '取消全选当前页' : '全选当前页'}
-									aria-label={allVisibleSelected ? '取消全选当前页' : '全选当前页'}
-								>
-									{#if allVisibleSelected}
-										<CheckSquare size={15} />
-									{:else}
-										<Square size={15} />
-									{/if}
-								</button>
-								<button
-									class="icon-btn danger"
-									type="button"
-									onclick={deleteSelectedTasks}
-									disabled={!selectedTaskIds.length}
-									title="删除已选记录"
-									aria-label="删除已选记录"
-								>
-									<Trash2 size={15} />
-								</button>
-								{#if hasActiveFilters}
+							<div class="toolbar-right">
+								<div class="toolbar-actions" aria-label="批量操作">
 									<button
 										class="icon-btn"
 										type="button"
-										onclick={clearTaskFilters}
-										title="重置筛选"
-										aria-label="重置筛选"
+										onclick={toggleVisibleSelection}
+										disabled={!visibleSelectableTasks.length}
+										title={allVisibleSelected ? '取消全选当前页' : '全选当前页'}
+										aria-label={allVisibleSelected ? '取消全选当前页' : '全选当前页'}
 									>
-										<RotateCcw size={15} />
+										{#if allVisibleSelected}
+											<CheckSquare size={15} />
+										{:else}
+											<Square size={15} />
+										{/if}
 									</button>
-								{/if}
+									<button
+										class="icon-btn danger"
+										type="button"
+										onclick={deleteSelectedTasks}
+										disabled={!selectedTaskIds.length}
+										title="删除已选记录"
+										aria-label="删除已选记录"
+									>
+										<Trash2 size={15} />
+									</button>
+									{#if hasActiveFilters}
+										<button
+											class="icon-btn"
+											type="button"
+											onclick={clearTaskFilters}
+											title="重置筛选"
+											aria-label="重置筛选"
+										>
+											<RotateCcw size={15} />
+										</button>
+									{/if}
+								</div>
 							</div>
 						</div>
-					</div>
 
-					<div class="records-filter-inline">
-						<div class="search-field">
-							<Search size={14} />
-							<input bind:value={taskQuery} placeholder="搜索文本、音色、引擎" oninput={() => (currentPage = 1)} />
+						<div class="records-filter-inline">
+							<div class="search-field">
+								<Search size={14} />
+								<input bind:value={taskQuery} placeholder="搜索文本、音色、引擎" oninput={() => (currentPage = 1)} />
+							</div>
+							<select bind:value={taskEngineFilter} onchange={() => (currentPage = 1)}>
+								{#each taskEngineOptions as option}
+									<option value={option}>{option === 'all' ? '全部引擎' : engineMap.get(option)?.manifest.display_name ?? option}</option>
+								{/each}
+							</select>
+							<select bind:value={taskSourceFilter} onchange={() => (currentPage = 1)}>
+								<option value="all">全部来源</option>
+								<option value="local">本地</option>
+								<option value="cloud">云端</option>
+							</select>
+							<select bind:value={taskDateFilter} onchange={() => (currentPage = 1)}>
+								<option value="all">全部时间</option>
+								<option value="today">24小时</option>
+								<option value="7d">7天</option>
+								<option value="30d">30天</option>
+							</select>
+							<select bind:value={taskSortBy} onchange={() => (currentPage = 1)}>
+								<option value="latest">最新</option>
+								<option value="oldest">最早</option>
+								<option value="duration_desc">时长↓</option>
+							</select>
+							<select bind:value={pageSize} onchange={() => (currentPage = 1)}>
+								<option value={8}>8条</option>
+								<option value={12}>12条</option>
+								<option value={24}>24条</option>
+							</select>
 						</div>
-						<select bind:value={taskEngineFilter} onchange={() => (currentPage = 1)}>
-							{#each taskEngineOptions as option}
-								<option value={option}>{option === 'all' ? '全部引擎' : engineMap.get(option)?.manifest.display_name ?? option}</option>
-							{/each}
-						</select>
-						<select bind:value={taskSourceFilter} onchange={() => (currentPage = 1)}>
-							<option value="all">全部来源</option>
-							<option value="local">本地</option>
-							<option value="cloud">云端</option>
-						</select>
-						<select bind:value={taskDateFilter} onchange={() => (currentPage = 1)}>
-							<option value="all">全部时间</option>
-							<option value="today">24小时</option>
-							<option value="7d">7天</option>
-							<option value="30d">30天</option>
-						</select>
-						<select bind:value={taskSortBy} onchange={() => (currentPage = 1)}>
-							<option value="latest">最新</option>
-							<option value="oldest">最早</option>
-							<option value="duration_desc">时长↓</option>
-						</select>
-						<select bind:value={pageSize} onchange={() => (currentPage = 1)}>
-							<option value={8}>8条</option>
-							<option value={12}>12条</option>
-							<option value={24}>24条</option>
-						</select>
 					</div>
-				</div>
 
 				{#if visibleLongformTasks.length}
 					<section class="longform-list" aria-label="长文本任务">
@@ -2356,6 +2358,11 @@
 									<div class="row wrap result-info-right">
 										{#if task.result_duration_ms}
 											<span class="badge">{formatAudioDuration(task.result_duration_ms)}</span>
+										{/if}
+										{#if taskIsActive(task)}
+											<button class="icon-btn danger" onclick={() => cancel(task)} disabled={actionBusyTaskId === task.task_id} title="取消" aria-label="取消">
+												<X size={14} />
+											</button>
 										{/if}
 										<button
 											type="button"
@@ -2470,11 +2477,7 @@
 												<RotateCcw size={15} /> 复用
 											</button>
 										{/if}
-										{#if taskIsActive(task)}
-											<button class="btn danger" onclick={() => cancel(task)} disabled={actionBusyTaskId === task.task_id}>
-												取消
-											</button>
-										{:else}
+										{#if !taskIsActive(task)}
 											<button class="btn danger" onclick={() => deleteTaskRecord(task)} disabled={actionBusyTaskId === task.task_id}>
 												<Trash2 size={15} /> 删除
 											</button>
@@ -3087,24 +3090,41 @@
 		gap: 8px;
 	}
 
-	.records-tabs-row {
+	.toolbar-row-1 {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
 		gap: 8px;
-		flex-wrap: wrap;
 	}
 
-	.records-tabs-left {
-		display: inline-flex;
+	.toolbar-tabs {
+		display: flex;
 		align-items: center;
-		gap: 7px;
-		flex-wrap: wrap;
+		flex: 0 1 auto;
 		min-width: 0;
+	}
+
+	.toolbar-right {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 8px;
+		flex: 1 1 0;
+		min-width: 0;
+		flex-wrap: wrap;
 	}
 
 	.compact-tabs {
 		max-width: 100%;
+	}
+
+	.records-filter-inline select {
+		min-height: 28px;
+		padding: 3px 8px;
+		border-radius: 6px;
+		font-size: 12px;
+		min-width: 72px;
+		flex-shrink: 0;
+		width: auto;
 	}
 
 	.search-field {
@@ -3164,11 +3184,11 @@
 	}
 
 	.toolbar-actions {
-		display: inline-flex;
+		display: flex;
 		align-items: center;
 		justify-content: flex-start;
 		gap: 5px;
-		min-height: 31px;
+		min-height: 30px;
 	}
 
 	.icon-btn {
@@ -3457,9 +3477,8 @@
 	.pagination-bar {
 		display: flex;
 		align-items: center;
-		justify-content: center;
-		gap: 12px;
-		padding-top: 4px;
+		justify-content: flex-start;
+		gap: 8px;
 	}
 
 	.field small {

@@ -8,7 +8,7 @@
  * 4. 全页面统一行为（text-pop / desc-pop / description-pop）
  */
 
-const SELECTOR = '.text-pop, .meta-pop, .desc-pop, .description-pop.has-tooltip';
+const SELECTOR = '.text-pop, .meta-pop, .desc-pop, .description-pop.has-tooltip, .param-tip';
 const HIDE_DELAY = 280; // ms — 给鼠标从触发器移到悬浮框留够时间
 
 let container: HTMLDivElement | null = null;
@@ -43,6 +43,7 @@ function show(target: Element) {
 
 	ensureContainer();
 	container!.textContent = text;
+
 	container!.style.display = 'block';
 	container!.style.opacity = '0';
 

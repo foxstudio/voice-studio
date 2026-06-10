@@ -2,7 +2,7 @@
 	import { Api } from '$lib/api';
 	import type { VoiceAsset } from '$lib/api/types';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
-	import { ArrowRight, Check, Database, FileText, FileAudio, Heart, Pencil, Pause, Plus, Search, ShieldCheck, Trash2, Upload, Volume2, X } from 'lucide-svelte';
+	import { ArrowRight, Check, ClipboardCopy, Database, FileText, FileAudio, Heart, Pencil, Pause, Plus, Search, ShieldCheck, Trash2, Upload, Volume2, X } from 'lucide-svelte';
 	import { licenseLabel } from '$lib/labels';
 	import { onMount } from 'svelte';
 
@@ -31,6 +31,13 @@
 	let voiceSerStatus = $state(new Map<string, 'idle' | 'generating' | 'done' | 'error'>());
 	let batchSerProgress = $state({ active: false, current: 0, total: 0 });
 	let showVoiceModal = $state(false);
+	let copiedId = $state("");
+
+	function checkOverflow(node) {
+		const check = () => node.classList.toggle('fade-overflow', node.scrollHeight > node.offsetHeight);
+		requestAnimationFrame(check);
+		return { update: () => requestAnimationFrame(check), destroy: () => {} };
+	}
 
 	async function refresh() {
 		voices = await Api.voices();
@@ -117,7 +124,7 @@
 	}
 
 	async function batchGenerateSer() {
-		const candidates = voices.filter(v => v.reference_audio_ids?.length);
+		const candidates = voices.filter(v => v.reference_audio_ids?.length && (!v.emotion_tags || v.emotion_tags.length === 0));
 		if (!candidates.length) return;
 		batchSerProgress = { active: true, current: 0, total: candidates.length };
 		for (let i = 0; i < candidates.length; i++) {
@@ -241,6 +248,7 @@
 			.filter((tag) => !/^(seed|pack|community|voice_design|design_prompt|user|source|emotion):/.test(tag))
 			.filter((tag) => !NOISE_TAGS.has(tag))
 			.filter((tag) => !names.has(tag))
+			.filter((tag) => !tag.match(/^[⭐🌟✨]/))
 			.slice(0, limit);
 	}
 
@@ -362,14 +370,20 @@
 			<div class="page-title-actions">
 				<button class="btn-add-voice" onclick={() => { resetForm(); showVoiceModal = true; }}><Plus size={13} /> 新增声音</button>
 				{#if batchAsrProgress.active}
-					<span class="batch-asr-progress"><FileAudio size={13} /> ASR {batchAsrProgress.current}/{batchAsrProgress.total}</span>
+					<span class="batch-indicator asr">
+						<span class="batch-bar" style="width: {(batchAsrProgress.current / batchAsrProgress.total * 100).toFixed(0)}%"></span>
+						<span class="batch-label"><FileAudio size={12} /> ASR {batchAsrProgress.current}/{batchAsrProgress.total}</span>
+					</span>
 				{:else}
 					<button class="btn-asr-batch" onclick={batchGenerateAsr} disabled={batchAsrProgress.active}>
 						<FileAudio size={13} /> 批量ASR
 					</button>
 				{/if}
 				{#if batchSerProgress.active}
-					<span class="batch-asr-progress"><Heart size={13} /> SER {batchSerProgress.current}/{batchSerProgress.total}</span>
+					<span class="batch-indicator ser">
+						<span class="batch-bar" style="width: {(batchSerProgress.current / batchSerProgress.total * 100).toFixed(0)}%"></span>
+						<span class="batch-label"><Heart size={12} /> SER {batchSerProgress.current}/{batchSerProgress.total}</span>
+					</span>
 				{:else}
 					<button class="btn-ser-batch" onclick={batchGenerateSer} disabled={batchSerProgress.active}>
 						<Heart size={13} /> 批量情绪识别
@@ -470,18 +484,32 @@
 							<button class="icon-btn-sm" title="ASR" onclick={() => generateAsrForVoice(voice)} disabled={voiceAsrStatus.get(voice.voice_id) === 'generating'}>
 								<FileAudio size={13} />
 							</button>
+							<button class="icon-btn-sm ser-card-btn" title="情绪识别" onclick={() => generateSerForVoice(voice)} disabled={voiceSerStatus.get(voice.voice_id) === 'generating'}>
+								<Heart size={13} />
+							</button>
+							<button class="icon-btn-sm" title="复制音色ID" onclick={() => navigator.clipboard.writeText(voice.voice_id).then(() => { copiedId = voice.voice_id; setTimeout(() => copiedId = '', 1500); })}>
+								{#if copiedId === voice.voice_id}
+									<Check size={13} />
+								{:else}
+									<ClipboardCopy size={13} />
+								{/if}
+							</button>
 							<button class="icon-btn-sm" title="编辑" onclick={() => editVoice(voice)}>
 								<Pencil size={13} />
 							</button>
 							<button class="icon-btn-sm danger" title="删除" onclick={() => remove(voice.voice_id)}>
 								<Trash2 size={13} />
 							</button>
-							<span class="badge license" class:ok={voice.license_status === 'self_voice'}>{licenseLabel(voice.license_status)}</span>
-						</div>
 					</div>
-					<p class="muted voice-desc" data-text={voice.description || '暂无描述'}>{voice.description || '暂无描述'}</p>
+				</div>
+					<p class="muted voice-desc" use:checkOverflow={voice.description || "暂无描述"} data-text={voice.description || '暂无描述'}>{voice.description || '暂无描述'}</p>
 					<div class="tag-row">
-						{#each cleanTags(voice.tags, expandedCards.has(voice.voice_id) ? 99 : 4) as tag}
+						{#if voice.emotion_tags?.length}
+								{#each voice.emotion_tags as tag}
+									<span class="badge tag-filter tag-emotion">{emotionLabel(tag)}</span>
+								{/each}
+							{/if}
+							{#each cleanTags(voice.tags, expandedCards.has(voice.voice_id) ? 99 : 4) as tag}
 							<button class={`badge tag-filter ${tagClass(tag)}`} type="button" title={`添加到搜索：${tag}`} onclick={() => appendVoiceQueryTag(tag)}>{tag}<span class="tag-count">{tagCounts.get(tag)}</span></button>
 						{/each}
 						{#if cleanTags(voice.tags, 99).length > 4 && !expandedCards.has(voice.voice_id)}
@@ -496,13 +524,6 @@
 						<span>{voice.recommended_engine_id ? bindingLabel(voice.recommended_engine_id) : '自动引擎'}</span>
 						<span class="text-pop text-chip" data-text={voiceLineText(voice.reference_text)}><FileText size={13} /> 台词</span>
 					</div>
-				{#if voice.emotion_tags?.length}
-					<div class="emotion-tags-row">
-						{#each voice.emotion_tags as tag}
-							<span class="badge emotion">{emotionLabel(tag)}</span>
-						{/each}
-					</div>
-				{/if}
 					<div class="card-actions">
 					{#if voice.reference_audio_ids[0]}
 						<button class={`btn icon-text ${playingVoiceId === voice.voice_id ? 'playing' : ''}`} onclick={() => toggleVoicePlayback(voice)} title={playingVoiceId === voice.voice_id ? '暂停' : '试听'}>
@@ -511,6 +532,7 @@
 					{/if}
 					<a class="btn btn-goto" href={`/generate?voice=${voice.voice_id}`}><ArrowRight size={14} /> 去合成</a>
 					</div>
+					<span class="dog-ear" class:ok={voice.license_status === "self_voice"}>{licenseLabel(voice.license_status)}</span>
 				</article>
 			{:else}
 				<div class="empty">还没有声音资产</div>
@@ -689,12 +711,11 @@
 	.search-field {
 		display: flex;
 		align-items: center;
-		gap: 8px;
+		gap: 6px;
 		border: 1px solid var(--line);
 		border-radius: 7px;
-		padding: 0 10px;
+		padding: 0 8px;
 		background: #0f1216;
-		height: 34px;
 		min-height: 34px;
 		overflow: hidden;
 	}
@@ -703,11 +724,11 @@
 		border: 0;
 		background: transparent;
 		width: 100%;
-		height: 30px;
 		min-height: 30px;
 		padding: 0;
 		color: inherit;
 		outline: none;
+		font-size: 12px;
 	}
 
 	.search-clear {
@@ -758,6 +779,30 @@
 		gap: 5px;
 		align-items: center;
 	}
+
+		/* 折角标签 - 右下角 */
+		.dog-ear {
+			position: absolute;
+			right: 0;
+			bottom: 0;
+			width: 56px;
+			height: 24px;
+			background: linear-gradient(225deg, transparent 45%, rgba(255,255,255,0.06) 45%);
+			display: flex;
+			align-items: flex-end;
+			justify-content: center;
+			font-size: 10px;
+			color: var(--muted);
+			letter-spacing: 0.3px;
+			padding-bottom: 3px;
+			pointer-events: none;
+			user-select: none;
+		}
+		.dog-ear.ok {
+			color: #4ade80;
+			background: linear-gradient(225deg, transparent 45%, rgba(74,222,128,0.08) 45%);
+		}
+
 
 	.tag-row .badge,
 	.binding-row .badge,
@@ -960,6 +1005,8 @@
 
 
 		.voice-card {
+			position: relative;
+			overflow: hidden;
 			gap: 9px;
 			transition: border-color 200ms ease, box-shadow 200ms ease;
 		}
@@ -986,11 +1033,17 @@
 		line-height: 1.25;
 	}
 
-	.voice-card-head .badge {
-		flex: 0 0 auto;
-	}
-
 		.voice-desc {
+			max-height: 58px;
+			overflow-y: auto;
+			scrollbar-width: thin;
+		}
+		.voice-desc.fade-overflow {
+			mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+			-webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+		}
+
+	.voice-card-head .badge {
 			margin: 0;
 			min-height: 38px;
 			max-height: 58px;
@@ -1135,12 +1188,47 @@
 			opacity: 0.4;
 			cursor: not-allowed;
 		}
-		.batch-asr-progress {
+		.batch-indicator {
+			position: relative;
+			display: inline-flex;
+			align-items: center;
+			gap: 5px;
+			padding: 3px 10px;
+			border-radius: 999px;
 			font-size: 11px;
-			color: var(--accent);
+			line-height: 1.5;
+			overflow: hidden;
+			isolation: isolate;
+		}
+		.batch-indicator .batch-bar {
+			position: absolute;
+			inset: 0;
+			border-radius: inherit;
+			transition: width 0.3s ease;
+		}
+		.batch-indicator .batch-label {
+			position: relative;
+			z-index: 1;
 			display: inline-flex;
 			align-items: center;
 			gap: 4px;
+			animation: batch-pulse 1.8s ease-in-out infinite;
+		}
+		.batch-indicator.asr {
+			color: #8ec5f5;
+			background: rgba(78, 163, 255, 0.08);
+			border: 1px solid rgba(78, 163, 255, 0.25);
+		}
+		.batch-indicator.asr .batch-bar { background: rgba(78, 163, 255, 0.12); }
+		.batch-indicator.ser {
+			color: #f0d78a;
+			background: rgba(224, 173, 66, 0.08);
+			border: 1px solid rgba(224, 173, 66, 0.25);
+		}
+		.batch-indicator.ser .batch-bar { background: rgba(224, 173, 66, 0.12); }
+		@keyframes batch-pulse {
+			0%, 100% { opacity: 1; }
+			50% { opacity: 0.6; }
 		}
 		.btn-goto {
 			border-color: rgba(78, 163, 255, 0.22);
@@ -1176,18 +1264,7 @@
 			color: #f0d78a;
 		}
 		.btn-ser-batch:disabled { opacity: 0.4; cursor: not-allowed; }
-		.emotion-tags-row {
-			display: flex;
-			gap: 4px;
-			flex-wrap: wrap;
-			margin-top: 4px;
-		}
-		.badge.emotion {
-			background: rgba(224, 173, 66, 0.12);
-			color: #d4b96a;
-			border: 1px solid rgba(224, 173, 66, 0.2);
-			padding: 1px 6px;
-			border-radius: 4px;
-			font-size: 10px;
-		}
+		.ser-card-btn { color: #d4b96a; }
+		.ser-card-btn:hover:not(:disabled) { color: #f0d78a; background: rgba(224, 173, 66, 0.1); }
+		.ser-card-btn:disabled { opacity: 0.4; }
 </style>

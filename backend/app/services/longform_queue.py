@@ -26,6 +26,8 @@ _worker_task: asyncio.Task[None] | None = None
 _worker_loop: asyncio.AbstractEventLoop | None = None
 _lock = threading.Lock()
 _queued_task_ids: set[str] = set()
+_cancelled_longform: set[str] = set()
+_cancelled_segments: dict[str, set[int]] = {}
 
 _TERMINAL_STATUSES = {TaskStatus.success, TaskStatus.failed, TaskStatus.cancelled}
 
@@ -125,6 +127,75 @@ async def retry_failed(longform_task_id: str) -> LongformTask:
     return task
 
 
+def cancel_longform(longform_task_id: str) -> dict:
+    """取消整个长文本任务：所有剩余段落取消，不合并"""
+    task = get_task(longform_task_id)
+    if not task:
+        raise AppException(404, "LONGFORM_TASK_NOT_FOUND", "Longform task not found")
+    if task.status in _TERMINAL_STATUSES:
+        raise AppException(409, "LONGFORM_TASK_TERMINAL", "Longform task is already in a terminal state")
+    _cancelled_longform.add(longform_task_id)
+    for seg in task.segments:
+        if seg.status not in _TERMINAL_STATUSES:
+            seg.status = TaskStatus.cancelled
+            seg.error_message = "已取消"
+        if seg.task_id and seg.status != TaskStatus.success:
+            task_queue.cancel_task(seg.task_id)
+    task.status = TaskStatus.cancelled
+    task.completed_at = now_iso()
+    _save(task)
+    _notify_clients()
+    return {"longform_task_id": longform_task_id, "status": "cancelled"}
+
+
+def cancel_longform_segment(longform_task_id: str, segment_index: int) -> dict:
+    """取消单个分段：跳过它，继续其余段落"""
+    task = get_task(longform_task_id)
+    if not task:
+        raise AppException(404, "LONGFORM_TASK_NOT_FOUND", "Longform task not found")
+    if task.status in _TERMINAL_STATUSES:
+        raise AppException(409, "LONGFORM_TASK_TERMINAL", "Longform task is already in a terminal state")
+    if segment_index < 0 or segment_index >= len(task.segments):
+        raise AppException(400, "INVALID_SEGMENT_INDEX", f"Segment index {segment_index} out of range")
+    seg = task.segments[segment_index]
+    if seg.status in _TERMINAL_STATUSES:
+        raise AppException(409, "SEGMENT_TERMINAL", "Segment is already in a terminal state")
+    if longform_task_id not in _cancelled_segments:
+        _cancelled_segments[longform_task_id] = set()
+    _cancelled_segments[longform_task_id].add(segment_index)
+    seg.status = TaskStatus.cancelled
+    seg.error_message = "已取消"
+    if seg.task_id:
+        task_queue.cancel_task(seg.task_id)
+    _save(task)
+    _notify_clients()
+    return {"longform_task_id": longform_task_id, "segment_index": segment_index, "status": "cancelled"}
+
+
+def dismiss_longform(longform_task_id: str) -> dict:
+    """关闭已终止的长文本任务：清理非终态分段，从数据库删除记录"""
+    task = get_task(longform_task_id)
+    if not task:
+        raise AppException(404, "LONGFORM_TASK_NOT_FOUND", "Longform task not found")
+    if task.status not in _TERMINAL_STATUSES:
+        raise AppException(409, "LONGFORM_TASK_NOT_TERMINAL", "Only terminal tasks can be dismissed")
+    for seg in task.segments:
+        if seg.status not in _TERMINAL_STATUSES:
+            seg.status = TaskStatus.cancelled
+            seg.error_message = "用户关闭"
+    db.delete_one("longform_tasks", "longform_task_id", longform_task_id)
+    _notify_clients()
+    return {"longform_task_id": longform_task_id, "status": "dismissed"}
+
+
+def _notify_clients() -> None:
+    """推送 WebSocket 通知"""
+    try:
+        task_queue._notify_clients()
+    except Exception:
+        pass
+
+
 def _segments_from_request(req: LongformGenerateRequest) -> list[PlannedTextSegment]:
     if req.segments:
         return req.segments
@@ -209,7 +280,23 @@ async def _process(task: LongformTask) -> None:
         req = LongformGenerateRequest(**task.parameters)
         total = max(1, len(task.segments))
         for index, segment in enumerate(task.segments):
+            # 检查整个任务是否被取消
+            if task.longform_task_id in _cancelled_longform:
+                task.status = TaskStatus.cancelled
+                task.completed_at = now_iso()
+                _save(task)
+                return
+
+            # 跳过已成功的段落
             if segment.status == TaskStatus.success and segment.result_id:
+                task.progress = (index + 1) / total * 0.9
+                _save(task)
+                continue
+
+            # 检查当前段落是否被单独取消
+            if index in _cancelled_segments.get(task.longform_task_id, set()):
+                segment.status = TaskStatus.cancelled
+                segment.error_message = "已取消"
                 task.progress = (index + 1) / total * 0.9
                 _save(task)
                 continue
@@ -221,7 +308,12 @@ async def _process(task: LongformTask) -> None:
         success_segments = [segment for segment in task.segments if segment.status == TaskStatus.success and segment.result_id]
         failed_segments = [segment for segment in task.segments if segment.status == TaskStatus.failed]
         task.result_ids = [segment.result_id for segment in success_segments if segment.result_id]
-        if failed_segments:
+
+        # 整个任务被取消 → 不合并，直接标记 cancelled
+        if task.longform_task_id in _cancelled_longform:
+            task.status = TaskStatus.cancelled
+            task.error_message = "任务已取消"
+        elif failed_segments:
             task.status = TaskStatus.failed
             task.error_message = f"{len(failed_segments)} 个段落生成或校对失败"
         elif task.merge_enabled and len(task.result_ids) > 1:

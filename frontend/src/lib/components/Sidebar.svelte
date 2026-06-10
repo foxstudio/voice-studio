@@ -2,7 +2,7 @@
 	import { AudioLines, BookOpenText, ChartNoAxesColumn, ChevronsLeft, ChevronsRight, Clock3, FileAudio, Gauge, Library, Settings, SlidersHorizontal } from 'lucide-svelte';
 	import { page } from '$app/state';
 
-	let { collapsed = false, onToggle = () => {} }: { collapsed?: boolean; onToggle?: () => void } = $props();
+	let { collapsed = false, onToggle = () => {}, onNavClick = () => {} }: { collapsed?: boolean; onToggle?: () => void; onNavClick?: () => void } = $props();
 
 	const items = [
 		{ href: '/', label: '总览', icon: Gauge },
@@ -26,7 +26,7 @@
 	</div>
 	<nav class="nav">
 		{#each items as item}
-			<a href={item.href} class:active={page.url.pathname === item.href} title={item.label}>
+			<a href={item.href} class:active={page.url.pathname === item.href} title={item.label} onclick={onNavClick}>
 				<item.icon size={17} />
 				<span>{item.label}</span>
 			</a>

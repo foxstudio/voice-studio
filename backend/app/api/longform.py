@@ -33,6 +33,21 @@ async def retry_failed_segments(longform_task_id: str):
     return await longform_queue.retry_failed(longform_task_id)
 
 
+@router.post("/{longform_task_id}/cancel")
+async def cancel_longform_task(longform_task_id: str):
+    return longform_queue.cancel_longform(longform_task_id)
+
+
+@router.post("/{longform_task_id}/segments/{segment_index}/cancel")
+async def cancel_longform_segment(longform_task_id: str, segment_index: int):
+    return longform_queue.cancel_longform_segment(longform_task_id, segment_index)
+
+
+@router.delete("/{longform_task_id}")
+async def dismiss_longform_task(longform_task_id: str):
+    return longform_queue.dismiss_longform(longform_task_id)
+
+
 @router.get("/{longform_task_id}/download")
 async def download_longform_export(longform_task_id: str):
     task = longform_queue.get_task(longform_task_id)

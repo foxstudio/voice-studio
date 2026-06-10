@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from typing import Literal
 
@@ -9,7 +10,7 @@ from fastapi.responses import FileResponse
 
 from app.models.exceptions import AppException
 from app.models.schemas import TTSVerificationRequest, TTSVerificationResponse, TranscriptionRecord
-from app.services import asr_service, database as db, history_store, task_queue, text_verifier
+from app.services import asr_service, audio_tools, database as db, history_store, task_queue, text_verifier
 
 router = APIRouter()
 
@@ -53,8 +54,16 @@ async def verify_tts_output(body: TTSVerificationRequest):
             if not audio_path:
                 raise AppException(404, "AUDIO_NOT_FOUND", "Result audio not found")
             suffix = audio_path.suffix.lower() or ".wav"
+            asr_path = audio_path
+            if suffix not in {".wav", ".mp3"}:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                    audio_tools.convert_file(audio_path, tmp.name, "wav")
+                    asr_path = Path(tmp.name)
+                    suffix = ".wav"
             asr_service.validate_request(body.asr_engine_id, body.language, suffix)
-            result = asr_service.transcribe(engine_id=body.asr_engine_id, audio_path=str(audio_path), language=body.language)
+            result = asr_service.transcribe(engine_id=body.asr_engine_id, audio_path=str(asr_path), language=body.language)
+            if asr_path != audio_path:
+                asr_path.unlink(missing_ok=True)
             record = TranscriptionRecord(
                 engine_id=body.asr_engine_id,
                 filename=audio_path.name,

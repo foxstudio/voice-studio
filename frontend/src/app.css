@@ -144,9 +144,9 @@ textarea { resize: vertical; min-height: 120px; line-height: 1.5; }
 
 .engine-surface.engine-cloud .badge.engine,
 .engine-surface.engine-cloud .badge.badge-kind {
-	color: #9cc9ff;
-	border-color: #27527e;
-	background: #101d2d;
+	color: var(--muted);
+	border-color: var(--line);
+	background: #1c2026;
 }
 
 .text-pop,
@@ -220,12 +220,54 @@ textarea { resize: vertical; min-height: 120px; line-height: 1.5; }
 #tooltip-container::-webkit-scrollbar-track { background: transparent; }
 #tooltip-container::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 2px; }
 
+
+/* ── 汉堡按钮：桌面隐藏 ── */
+.hamburger-btn {
+	display: none;
+}
+
+/* ── 侧边栏遮罩 ── */
+.sidebar-overlay {
+	display: none;
+}
+
 @media (max-width: 900px) {
 	.app-shell { grid-template-columns: 1fr; }
 	.app-shell.sidebar-collapsed { grid-template-columns: 1fr; }
-	.sidebar { height: auto; position: static; }
 	.workbench, .split { grid-template-columns: 1fr; }
-	.sidebar-collapsed .brand span,
-	.sidebar-collapsed .nav a span { display: inline; }
-	.sidebar-collapsed .nav a { justify-content: flex-start; padding-inline: 10px; }
+
+	/* 汉堡按钮 */
+	.hamburger-btn { display: grid; }
+
+	/* 侧边栏变为固定抽屉 */
+	.sidebar {
+		position: fixed;
+		top: 0;
+		left: 0;
+		height: 100vh;
+		width: 236px;
+		z-index: 100;
+		transform: translateX(-100%);
+		transition: transform 250ms ease;
+	}
+	/* 移动端始终显示完整文字 */
+	.sidebar .brand span,
+	.sidebar .nav a span { display: inline; }
+	.sidebar .brand { justify-content: flex-start; }
+	.sidebar .nav a { justify-content: flex-start; padding-inline: 10px; }
+	.sidebar .collapse-btn { margin-left: auto; }
+
+	/* 展开状态 */
+	.sidebar-mobile-open .sidebar {
+		transform: translateX(0);
+	}
+
+	/* 遮罩 */
+	.sidebar-overlay {
+		display: block;
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.55);
+		z-index: 99;
+	}
 }

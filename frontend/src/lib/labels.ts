@@ -19,7 +19,7 @@ export function taskStatusLabel(status: TaskStatus | string) {
 		postprocessing: '后处理',
 		success: '成功',
 		failed: '失败',
-		cancelled: '已取消',
+		cancelled: '取消',
 		retrying: '重试中'
 	}[status] ?? status;
 }
