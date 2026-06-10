@@ -1697,22 +1697,22 @@
 			{#if showMoreParams}
 			<div class="more-params-panel">
 				{#if isEmotiVoice}
-					<div class="engine-note">
+					<div class="engine-note span-full">
 						<strong>EmotiVoice 参数</strong>
 						<small>使用官方说话人和情绪提示，不读取本地参考音色。</small>
 					</div>
 				{:else if isF5}
-					<div class="engine-note">
+					<div class="engine-note span-full">
 						<strong>F5-TTS 参数</strong>
 						<small>使用本地参考音频和准确参考台词。</small>
 					</div>
 				{:else if isCosyVoice}
-					<div class="engine-note">
+					<div class="engine-note span-full">
 						<strong>CosyVoice SFT 参数</strong>
 						<small>使用官方 SFT 预置音色。</small>
 					</div>
 				{:else if isCosyVoiceZeroShot}
-					<div class="engine-note">
+					<div class="engine-note span-full">
 						<strong>CosyVoice Zero-Shot 参数</strong>
 						<small>使用本地参考音频和准确参考台词。</small>
 					</div>
@@ -1806,7 +1806,7 @@
 
 				{#if isMimo}
 					{#if isMimoDesign}
-					<div class="field param-field">
+					<div class="field param-field span-full">
 						<label class="param-label" for="voice-design-prompt">音色描述</label>
 						<div class="param-control">
 							<textarea id="voice-design-prompt" bind:value={voiceDesignPrompt}></textarea>
@@ -1814,7 +1814,7 @@
 						</div>
 					</div>
 					{:else}
-					<div class="field param-field">
+					<div class="field param-field span-full">
 						<label class="param-label" for="style-instruction">风格指令</label>
 						<div class="param-control">
 							<textarea
@@ -3239,6 +3239,11 @@
 		flex-shrink: 0;
 		width: auto;
 	}
+	.records-filter-inline select:nth-of-type(1) { min-width: 90px; }
+	.records-filter-inline select:nth-of-type(2) { min-width: 70px; }
+	.records-filter-inline select:nth-of-type(3) { min-width: 80px; }
+	.records-filter-inline select:nth-of-type(4) { min-width: 70px; }
+	.records-filter-inline select:nth-of-type(5) { min-width: 60px; }
 
 	.search-field {
 		display: flex;
@@ -3861,13 +3866,13 @@
 	}
 
 	.param-inline {
+		flex: 0 0 auto;
 		display: flex;
 		align-items: center;
 		gap: 4px;
 		font-size: 12px;
 		color: var(--muted);
 	}
-
 	.param-inline select {
 		min-height: 28px;
 		padding: 3px 8px;
@@ -3875,32 +3880,36 @@
 		font-size: 12px;
 		min-width: 90px;
 	}
-
 	.param-inline-range {
+		flex: 0 0 140px;
 		display: flex;
 		align-items: center;
 		gap: 4px;
 		font-size: 12px;
 		color: var(--muted);
 	}
-
 	.param-inline-range input[type='range'] {
-		width: 80px;
+		width: 100%;
 		height: 4px;
 	}
-
 	.voice-inline {
 		display: flex;
 		align-items: center;
 		gap: 4px;
+		flex: 1 1 auto;
+		min-width: 140px;
 	}
-
 	.voice-inline select {
 		min-height: 28px;
 		padding: 3px 8px;
 		border-radius: 6px;
 		font-size: 12px;
 		min-width: 100px;
+		flex: 1 1 auto;
+	}
+	.param-inline:last-of-type select {
+		flex: 0 0 auto;
+		min-width: 70px;
 	}
 
 	/* ── 更多参数折叠面板 ── */
@@ -3910,8 +3919,10 @@
 		border-radius: 8px;
 		background: var(--panel-2);
 		display: grid;
-		gap: 8px;
+		grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+		gap: 8px 12px;
 	}
+	.more-params-panel .span-full { grid-column: 1 / -1; }
 
 	.advanced-divider {
 		border-top: 1px dashed var(--line);
@@ -3943,6 +3954,11 @@
 		font-size: 12px;
 		min-width: 80px;
 	}
+	.records-filter-inline select:nth-of-type(1) { min-width: 90px; }
+	.records-filter-inline select:nth-of-type(2) { min-width: 70px; }
+	.records-filter-inline select:nth-of-type(3) { min-width: 80px; }
+	.records-filter-inline select:nth-of-type(4) { min-width: 70px; }
+	.records-filter-inline select:nth-of-type(5) { min-width: 60px; }
 
 	.records-filter-inline .search-field {
 		flex: 1;
