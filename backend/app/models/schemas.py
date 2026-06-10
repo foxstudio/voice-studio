@@ -87,6 +87,7 @@ EMOTIONS = ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surp
 class ParameterSchema(BaseModel):
     key: str
     label: str
+    description: str | None = None
     type: Literal["text", "textarea", "number", "slider", "select", "toggle", "file"]
     level: Literal["basic", "advanced", "developer"] = "basic"
     default: Any = None

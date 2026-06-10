@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import threading
 from contextlib import suppress
 from pathlib import Path
@@ -28,6 +29,7 @@ _lock = threading.Lock()
 _queued_task_ids: set[str] = set()
 _cancelled_longform: set[str] = set()
 _cancelled_segments: dict[str, set[int]] = {}
+_cancelled_lock = threading.Lock()
 
 _TERMINAL_STATUSES = {TaskStatus.success, TaskStatus.failed, TaskStatus.cancelled}
 
@@ -134,7 +136,8 @@ def cancel_longform(longform_task_id: str) -> dict:
         raise AppException(404, "LONGFORM_TASK_NOT_FOUND", "Longform task not found")
     if task.status in _TERMINAL_STATUSES:
         raise AppException(409, "LONGFORM_TASK_TERMINAL", "Longform task is already in a terminal state")
-    _cancelled_longform.add(longform_task_id)
+    with _cancelled_lock:
+        _cancelled_longform.add(longform_task_id)
     for seg in task.segments:
         if seg.status not in _TERMINAL_STATUSES:
             seg.status = TaskStatus.cancelled
@@ -160,9 +163,10 @@ def cancel_longform_segment(longform_task_id: str, segment_index: int) -> dict:
     seg = task.segments[segment_index]
     if seg.status in _TERMINAL_STATUSES:
         raise AppException(409, "SEGMENT_TERMINAL", "Segment is already in a terminal state")
-    if longform_task_id not in _cancelled_segments:
-        _cancelled_segments[longform_task_id] = set()
-    _cancelled_segments[longform_task_id].add(segment_index)
+    with _cancelled_lock:
+        if longform_task_id not in _cancelled_segments:
+            _cancelled_segments[longform_task_id] = set()
+        _cancelled_segments[longform_task_id].add(segment_index)
     seg.status = TaskStatus.cancelled
     seg.error_message = "已取消"
     if seg.task_id:
@@ -281,7 +285,9 @@ async def _process(task: LongformTask) -> None:
         total = max(1, len(task.segments))
         for index, segment in enumerate(task.segments):
             # 检查整个任务是否被取消
-            if task.longform_task_id in _cancelled_longform:
+            with _cancelled_lock:
+                longform_cancelled = task.longform_task_id in _cancelled_longform
+            if longform_cancelled:
                 task.status = TaskStatus.cancelled
                 task.completed_at = now_iso()
                 _save(task)
@@ -294,7 +300,9 @@ async def _process(task: LongformTask) -> None:
                 continue
 
             # 检查当前段落是否被单独取消
-            if index in _cancelled_segments.get(task.longform_task_id, set()):
+            with _cancelled_lock:
+                segment_cancelled = index in _cancelled_segments.get(task.longform_task_id, set())
+            if segment_cancelled:
                 segment.status = TaskStatus.cancelled
                 segment.error_message = "已取消"
                 task.progress = (index + 1) / total * 0.9
@@ -310,7 +318,9 @@ async def _process(task: LongformTask) -> None:
         task.result_ids = [segment.result_id for segment in success_segments if segment.result_id]
 
         # 整个任务被取消 → 不合并，直接标记 cancelled
-        if task.longform_task_id in _cancelled_longform:
+        with _cancelled_lock:
+            longform_cancelled = task.longform_task_id in _cancelled_longform
+        if longform_cancelled:
             task.status = TaskStatus.cancelled
             task.error_message = "任务已取消"
         elif failed_segments:
@@ -362,7 +372,14 @@ async def _process_segment(task: LongformTask, segment: LongformSegmentTask, req
         )
         segment.status = TaskStatus.running
         _save(task)
-        generated = await _wait_for_generation(segment.task_id)
+        try:
+            generated = await _wait_for_generation(segment.task_id)
+        except TimeoutError as e:
+            last_error = str(e)
+            segment.status = TaskStatus.failed
+            segment.error_message = last_error
+            _save(task)
+            continue
         if not generated or generated.status != TaskStatus.success or not generated.result_id:
             last_error = generated.error_message if generated else "生成任务不存在"
             segment.status = TaskStatus.failed
@@ -418,13 +435,16 @@ def _segment_request(base: GenerateRequest, text: str) -> GenerateRequest:
     return GenerateRequest(**values)
 
 
-async def _wait_for_generation(task_id: str):
+async def _wait_for_generation(task_id: str, timeout: float = 300.0):
+    start = time.monotonic()
     for _ in range(1800):
         task = task_queue.get_task(task_id)
         if task and task.status in _TERMINAL_STATUSES:
             return task
+        if time.monotonic() - start > timeout:
+            raise TimeoutError(f"任务 {task_id} 生成超时（{timeout:.0f}s）")
         await asyncio.sleep(1)
-    return task_queue.get_task(task_id)
+    raise TimeoutError(f"任务 {task_id} 生成超时（超过最大轮询次数）")
 
 
 async def _verify_segment(segment: LongformSegmentTask, asr_engine_id: str, language: str) -> TTSVerificationResponse:

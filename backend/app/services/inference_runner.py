@@ -5,6 +5,8 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+import logging
 import tempfile
 import time
 import traceback
@@ -20,7 +22,15 @@ BACKEND_ROOT = PROJECT_ROOT / "backend"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+logger = logging.getLogger(__name__)
+_model_cache: dict = {}
+_model_cache_lock = threading.Lock()
 
+
+def evict_cache(engine_id: str) -> None:
+    """Remove a model from the cache when its engine stops."""
+    with _model_cache_lock:
+        _model_cache.pop(engine_id, None)
 def _audio_meta(path: str, sample_rate: int) -> dict:
     try:
         import soundfile as sf
@@ -39,13 +49,13 @@ def _external_root(engine_id: str) -> Path:
         "cosyvoice-sft": "VOICE_STUDIO_COSYVOICE_ROOT",
         "cosyvoice-zero-shot": "VOICE_STUDIO_COSYVOICE_ROOT",
     }
-    defaults = {
-        "emotivoice": "/Users/foxmacstudio/Projects/tts-engine-lab/EmotiVoice",
-        "f5-tts": "/Users/foxmacstudio/Projects/tts-engine-lab/F5-TTS",
-        "cosyvoice-sft": "/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice",
-        "cosyvoice-zero-shot": "/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice",
-    }
-    return Path(os.environ.get(env_names[engine_id], defaults[engine_id])).expanduser()
+    env_value = os.environ.get(env_names[engine_id])
+    if not env_value:
+        raise RuntimeError(
+            f"Environment variable {env_names[engine_id]} is not set. "
+            f"Please set it to the root directory of the {engine_id} engine."
+        )
+    return Path(env_value).expanduser()
 
 
 def _external_python(root: Path) -> str:
@@ -64,16 +74,16 @@ def _file_lock(path: Path):
             import fcntl
 
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("File lock acquire failed for %s: %s", path, e)
         yield
     finally:
         try:
             import fcntl
 
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("File lock release failed for %s: %s", path, e)
         handle.close()
 
 
@@ -86,36 +96,61 @@ def _run_external(cmd: list[str], cwd: Path, env: dict[str, str] | None = None) 
     return proc
 
 
+def _build_indextts_v2_kwargs(**kwargs):
+    engine_id = kwargs.pop("engine_id", "indextts-v2")
+    output_path = kwargs.pop("output_path")
+    model_dir = kwargs.pop("model_dir")
+    device = kwargs.pop("device", "mps")
+    return engine_id, output_path, model_dir, device, kwargs
+
+
 def run_indextts_v2(**kwargs):
     from mlx_indextts.generate_v2 import IndexTTSv2
 
-    output_path = kwargs.pop("output_path")
-    model_dir = kwargs.pop("model_dir")
+    engine_id, output_path, model_dir, device, gen_kwargs = _build_indextts_v2_kwargs(**kwargs)
     start = time.perf_counter()
-    model = IndexTTSv2(model_dir, device=kwargs.pop("device", "mps"))
-    model.generate(output_path=output_path, **kwargs)
+    with _model_cache_lock:
+        model = _model_cache.get(engine_id)
+    if model is None:
+        model = IndexTTSv2(model_dir, device=device)
+        with _model_cache_lock:
+            _model_cache[engine_id] = model
+    model.generate(output_path=output_path, **gen_kwargs)
     meta = _audio_meta(output_path, 22050)
     meta.update({"output_path": output_path, "generation_time_ms": int((time.perf_counter() - start) * 1000)})
     return meta
 
 
-def run_indextts_v1(**kwargs):
-    from mlx_indextts.generate import IndexTTS
 
+def _build_indextts_v1_kwargs(**kwargs):
+    engine_id = kwargs.pop("engine_id", "indextts")
     output_path = kwargs.pop("output_path")
     model_dir = kwargs.pop("model_dir")
     ref_audio = kwargs.pop("reference_audio")
     text = kwargs.pop("text")
+    return engine_id, output_path, model_dir, ref_audio, text, kwargs
+
+def run_indextts_v1(**kwargs):
+    from mlx_indextts.generate import IndexTTS
+
+    engine_id, output_path, model_dir, ref_audio, text, gen_kwargs = _build_indextts_v1_kwargs(**kwargs)
     start = time.perf_counter()
-    model = IndexTTS.load_model(model_dir)
-    audio = model.generate(text=text, ref_audio=ref_audio, **kwargs)
+    with _model_cache_lock:
+        model = _model_cache.get(engine_id)
+    if model is None:
+        model = IndexTTS.load_model(model_dir)
+        with _model_cache_lock:
+            _model_cache[engine_id] = model
+    audio = model.generate(text=text, ref_audio=ref_audio, **gen_kwargs)
     model.save_audio(audio, output_path)
     meta = _audio_meta(output_path, 24000)
     meta.update({"output_path": output_path, "generation_time_ms": int((time.perf_counter() - start) * 1000)})
     return meta
 
 
-def run_omnivoice(**kwargs):
+
+def _build_omnivoice_kwargs(**kwargs):
+    engine_id = kwargs.pop("engine_id", "omnivoice")
     output_path = kwargs.pop("output_path")
     text = kwargs.pop("text")
     ref_audio = kwargs.pop("reference_audio", None)
@@ -125,16 +160,7 @@ def run_omnivoice(**kwargs):
     speed = kwargs.pop("speed", 1.0)
     device = kwargs.pop("device", "mps")
     diffusion_steps = kwargs.pop("diffusion_steps", None) or kwargs.pop("num_step", None)
-    start = time.perf_counter()
-    from omnivoice import OmniVoice
 
-    load_kwargs = {"device_map": device}
-    if str(device).startswith("mps"):
-        import torch
-
-        load_kwargs["attn_implementation"] = "eager"
-        load_kwargs["dtype"] = torch.float32
-    model = OmniVoice.from_pretrained("k2-fsa/OmniVoice", **load_kwargs)
     gen_kwargs = {"text": text}
     if language and language != "auto":
         gen_kwargs["language"] = language
@@ -148,6 +174,26 @@ def run_omnivoice(**kwargs):
         gen_kwargs["speed"] = speed
     if diffusion_steps:
         gen_kwargs["num_step"] = int(diffusion_steps)
+
+    return engine_id, output_path, device, gen_kwargs
+
+def run_omnivoice(**kwargs):
+    engine_id, output_path, device, gen_kwargs = _build_omnivoice_kwargs(**kwargs)
+    start = time.perf_counter()
+    with _model_cache_lock:
+        model = _model_cache.get(engine_id)
+    if model is None:
+        from omnivoice import OmniVoice
+
+        load_kwargs = {"device_map": device}
+        if str(device).startswith("mps"):
+            import torch
+
+            load_kwargs["attn_implementation"] = "eager"
+            load_kwargs["dtype"] = torch.float32
+        model = OmniVoice.from_pretrained("k2-fsa/OmniVoice", **load_kwargs)
+        with _model_cache_lock:
+            _model_cache[engine_id] = model
     result = model.generate(**gen_kwargs)
     if isinstance(result, (str, Path)):
         shutil.copy2(str(result), output_path)
@@ -161,39 +207,49 @@ def run_omnivoice(**kwargs):
     return meta
 
 
+
+def _build_mimo_kwargs(**kwargs):
+    output_path = kwargs.pop("output_path")
+    fmt = Path(output_path).suffix.lstrip(".") or "wav"
+    return {
+        "output_path": output_path,
+        "audio_format": fmt,
+        "base_url": kwargs.get("base_url", ""),
+        "api_key": kwargs.get("api_key", ""),
+        "text": kwargs["text"],
+        "voice": kwargs.get("voice", "mimo_default"),
+        "instruction": kwargs.get("instruction"),
+        "model": kwargs.get("model", "mimo-v2.5-tts"),
+        "voice_design_prompt": kwargs.get("voice_design_prompt"),
+        "optimize_text_preview": kwargs.get("optimize_text_preview", False),
+        "reference_audio_path": kwargs.get("reference_audio_path"),
+        "temperature": kwargs.get("temperature"),
+        "top_p": kwargs.get("top_p"),
+    }
+
 def run_mimo_tts(**kwargs):
     from app.services import mimo_client
 
-    output_path = kwargs.pop("output_path")
+    params = _build_mimo_kwargs(**kwargs)
     start = time.perf_counter()
-    fmt = Path(output_path).suffix.lstrip(".") or "wav"
-    result = mimo_client.generate_tts(
-        output_path=output_path,
-        audio_format=fmt,
-        base_url=kwargs.get("base_url", ""),
-        api_key=kwargs.get("api_key", ""),
-        text=kwargs["text"],
-        voice=kwargs.get("voice", "mimo_default"),
-        instruction=kwargs.get("instruction"),
-        model=kwargs.get("model", "mimo-v2.5-tts"),
-        voice_design_prompt=kwargs.get("voice_design_prompt"),
-        optimize_text_preview=kwargs.get("optimize_text_preview", False),
-        reference_audio_path=kwargs.get("reference_audio_path"),
-        temperature=kwargs.get("temperature"),
-        top_p=kwargs.get("top_p"),
-    )
-    meta = _audio_meta(output_path, 24000)
+    result = mimo_client.generate_tts(**params)
+    meta = _audio_meta(params["output_path"], 24000)
     meta.update({"output_path": result["output_path"], "generation_time_ms": int((time.perf_counter() - start) * 1000)})
     return meta
 
 
-def run_emotivoice(**kwargs):
+
+def _build_emotivoice_kwargs(**kwargs):
     root = _external_root("emotivoice")
     output_path = kwargs.pop("output_path")
     text = kwargs.pop("text").strip()
     speaker_id = str(kwargs.pop("speaker_id", "") or "8051")
     prompt = str(kwargs.pop("prompt", "") or kwargs.pop("emotion", "") or "开心")
     python = _external_python(root)
+    return root, output_path, text, speaker_id, prompt, python
+
+def run_emotivoice(**kwargs):
+    root, output_path, text, speaker_id, prompt, python = _build_emotivoice_kwargs(**kwargs)
     if not text:
         raise RuntimeError("Text is empty")
     start = time.perf_counter()
@@ -231,7 +287,8 @@ def run_emotivoice(**kwargs):
     return meta
 
 
-def run_f5_tts(**kwargs):
+
+def _build_f5_tts_kwargs(**kwargs):
     root = _external_root("f5-tts")
     output_path = kwargs.pop("output_path")
     text = kwargs.pop("text").strip()
@@ -244,6 +301,10 @@ def run_f5_tts(**kwargs):
     cross_fade_duration = float(kwargs.pop("cross_fade_duration", 0.15) or 0.15)
     remove_silence = bool(kwargs.pop("remove_silence", False))
     seed = kwargs.pop("seed", None)
+    return root, output_path, text, ref_audio, ref_text, speed, nfe_step, cfg_strength, target_rms, cross_fade_duration, remove_silence, seed
+
+def run_f5_tts(**kwargs):
+    root, output_path, text, ref_audio, ref_text, speed, nfe_step, cfg_strength, target_rms, cross_fade_duration, remove_silence, seed = _build_f5_tts_kwargs(**kwargs)
     if not ref_audio:
         raise RuntimeError("REFERENCE_AUDIO_REQUIRED")
     if not ref_text:
@@ -300,12 +361,17 @@ model.infer(
     return meta
 
 
-def run_cosyvoice_sft(**kwargs):
+
+def _build_cosyvoice_sft_kwargs(**kwargs):
     root = _external_root("cosyvoice-sft")
     output_path = kwargs.pop("output_path")
     text = kwargs.pop("text").strip()
     speaker_id = str(kwargs.pop("speaker_id", "") or "中文女")
     speed = float(kwargs.pop("speed", 1.0) or 1.0)
+    return root, output_path, text, speaker_id, speed
+
+def run_cosyvoice_sft(**kwargs):
+    root, output_path, text, speaker_id, speed = _build_cosyvoice_sft_kwargs(**kwargs)
     if not text:
         raise RuntimeError("Text is empty")
     python = _external_python(root)
@@ -346,13 +412,18 @@ for item in model.inference_sft(payload["text"], speaker, stream=False, speed=pa
     return meta
 
 
-def run_cosyvoice_zero_shot(**kwargs):
+
+def _build_cosyvoice_zero_shot_kwargs(**kwargs):
     root = _external_root("cosyvoice-zero-shot")
     output_path = kwargs.pop("output_path")
     text = kwargs.pop("text").strip()
     ref_audio = kwargs.pop("reference_audio", None)
     ref_text = (kwargs.pop("ref_text", None) or "").strip()
     speed = float(kwargs.pop("speed", 1.0) or 1.0)
+    return root, output_path, text, ref_audio, ref_text, speed
+
+def run_cosyvoice_zero_shot(**kwargs):
+    root, output_path, text, ref_audio, ref_text, speed = _build_cosyvoice_zero_shot_kwargs(**kwargs)
     if not ref_audio:
         raise RuntimeError("REFERENCE_AUDIO_REQUIRED")
     if not ref_text:
@@ -419,7 +490,9 @@ RUNNERS = {
 def main() -> None:
     try:
         payload = json.loads(sys.stdin.read())
-        result = RUNNERS[payload["engine_id"]](**payload["kwargs"])
+        kwargs = payload["kwargs"]
+        kwargs["engine_id"] = payload["engine_id"]
+        result = RUNNERS[payload["engine_id"]](**kwargs)
         print(json.dumps(result, ensure_ascii=False))
     except Exception as exc:
         print(json.dumps({"error": str(exc), "traceback": traceback.format_exc()[-3000:]}, ensure_ascii=False))

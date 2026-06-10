@@ -34,6 +34,7 @@ _lock = threading.Lock()
 _cancelled: set[str] = set()
 _queued_task_ids: set[str] = set()
 _clients: list[WebSocket] = []
+_clients_lock = threading.Lock()
 
 _TERMINAL_STATUSES = {TaskStatus.success, TaskStatus.failed, TaskStatus.cancelled}
 _RECOVERABLE_STATUSES = {
@@ -88,7 +89,7 @@ def _reconcile_stale_task(task: GenerationTask) -> GenerationTask:
 
 
 def list_tasks() -> list[GenerationTask]:
-    return [_reconcile_stale_task(GenerationTask(**d)) for d in db.list_all("tasks", "created_at")]
+    return [_reconcile_stale_task(GenerationTask(**d)) for d in db.list_all("tasks", "created_at", limit=-1)]
 
 
 def get_task(task_id: str) -> GenerationTask | None:
@@ -125,7 +126,7 @@ def attach_verification(task_id: str, report: TTSVerificationResponse | None, er
 def attach_verification_to_result(result_id: str, report: TTSVerificationResponse | None, error: str | None = None) -> list[GenerationTask]:
     updated: list[GenerationTask] = []
     _save_history_verification(result_id, report, error)
-    for row in db.list_all("tasks", "created_at", False):
+    for row in db.list_all("tasks", "created_at", False, limit=-1):
         task = GenerationTask(**row)
         if task.result_id != result_id:
             continue
@@ -208,7 +209,7 @@ def schedule_auto_verification(task_id: str) -> None:
 
 
 def find_longform_export_task(longform_task_id: str, export_id: str | None) -> GenerationTask | None:
-    for row in db.list_all("tasks", "created_at", False):
+    for row in db.list_all("tasks", "created_at", False, limit=-1):
         task = GenerationTask(**row)
         if task.task_type == "export" and task.longform_task_id == longform_task_id:
             if not export_id or task.longform_export_id == export_id:
@@ -236,14 +237,18 @@ def update_longform_segment_metadata(task_id: str, *, longform_task_id: str, seg
 async def _broadcast(task: GenerationTask) -> None:
     dead = []
     payload = task.model_dump_json()
-    for ws in _clients:
+    with _clients_lock:
+        clients = list(_clients)
+    for ws in clients:
         try:
             await ws.send_text(payload)
         except Exception:
             dead.append(ws)
-    for ws in dead:
-        if ws in _clients:
-            _clients.remove(ws)
+    if dead:
+        with _clients_lock:
+            for ws in dead:
+                if ws in _clients:
+                    _clients.remove(ws)
 
 
 def _broadcast_from_thread(task: GenerationTask) -> None:
@@ -257,12 +262,14 @@ def _broadcast_from_thread(task: GenerationTask) -> None:
 
 
 def add_ws_client(ws: WebSocket) -> None:
-    _clients.append(ws)
+    with _clients_lock:
+        _clients.append(ws)
 
 
 def remove_ws_client(ws: WebSocket) -> None:
-    if ws in _clients:
-        _clients.remove(ws)
+    with _clients_lock:
+        if ws in _clients:
+            _clients.remove(ws)
 
 
 def start_worker() -> None:
@@ -288,7 +295,8 @@ async def shutdown() -> None:
     _worker_task = None
     _cancelled.clear()
     _queued_task_ids.clear()
-    _clients.clear()
+    with _clients_lock:
+        _clients.clear()
     if task and not task.done():
         task.cancel()
         with suppress(asyncio.CancelledError):
@@ -525,7 +533,7 @@ def _enqueue_task_id(task_id: str) -> None:
 
 def _recover_incomplete_tasks() -> list[str]:
     task_ids: list[str] = []
-    for row in db.list_all("tasks", "created_at", False):
+    for row in db.list_all("tasks", "created_at", False, limit=-1):
         task = _reconcile_stale_task(GenerationTask(**row))
         if task.status in _TERMINAL_STATUSES or task.status not in _RECOVERABLE_STATUSES:
             continue

@@ -26,7 +26,7 @@ class FakeDb:
     def delete_one(self, table: str, key_field: str, key: str):
         self.tables.get(table, {}).pop(key, None)
 
-    def list_all(self, table: str, *_args):
+    def list_all(self, table: str, *_args, **kwargs):
         return list(self.tables.get(table, {}).values())
 
 

@@ -1,0 +1,237 @@
+<script lang="ts">
+	import type { ParameterSchema } from '$lib/api/types';
+	import Field from '$lib/components/shared/Field.svelte';
+	import Slider from '$lib/components/shared/Slider.svelte';
+	import Select from '$lib/components/shared/Select.svelte';
+	import Toggle from '$lib/components/shared/Toggle.svelte';
+
+	interface Props {
+		parameterSchema: ParameterSchema[];
+		values: Record<string, unknown>;
+		onChange?: (key: string, value: unknown) => void;
+	}
+
+	let {
+		parameterSchema = [],
+		values = {},
+		onChange = () => {}
+	}: Props = $props();
+
+	const basicParams = $derived(parameterSchema.filter((p) => p.level === 'basic'));
+	const advancedParams = $derived(
+		parameterSchema.filter((p) => p.level === 'advanced' || p.level === 'developer')
+	);
+
+	let showAdvanced = $state(false);
+
+	function getValue(param: ParameterSchema): unknown {
+		return param.key in values ? values[param.key] : param.default;
+	}
+
+	function handleChange(param: ParameterSchema, value: unknown) {
+		onChange(param.key, value);
+	}
+</script>
+
+<div class="parameter-panel">
+	{#each basicParams as param}
+		<Field label={param.label} tooltip={param.description}>
+			{#if param.type === 'slider'}
+				{#if param.key === 'speed'}
+					<input
+						class="param-input"
+						type="number"
+						value={Number(getValue(param))}
+						min={param.min ?? undefined}
+						max={param.max ?? undefined}
+						step="0.01"
+						oninput={(e) => {
+							const raw = (e.currentTarget as HTMLInputElement).value;
+							handleChange(param, raw === '' ? 0 : Number(raw));
+						}}
+						onblur={(e) => {
+							const input = e.currentTarget as HTMLInputElement;
+							const val = parseFloat(input.value);
+							if (!isNaN(val)) {
+								input.value = val.toFixed(2);
+							}
+						}}
+					/>
+				{:else}
+					<Slider
+						value={Number(getValue(param))}
+						min={param.min ?? undefined}
+						max={param.max ?? undefined}
+						step={param.step ?? undefined}
+						onChange={(v: number) => handleChange(param, v)}
+					/>
+				{/if}
+			{:else if param.type === 'select'}
+				<Select
+					value={String(getValue(param))}
+					options={param.options}
+					onChange={(v: string) => handleChange(param, v)}
+				/>
+			{:else if param.type === 'toggle'}
+				<Toggle
+					checked={Boolean(getValue(param))}
+					onChange={(v: boolean) => handleChange(param, v)}
+				/>
+			{:else if param.type === 'number'}
+				<input
+					class="param-input"
+					type="number"
+					value={Number(getValue(param))}
+					min={param.min ?? undefined}
+					max={param.max ?? undefined}
+					step={param.step ?? undefined}
+					oninput={(e) => handleChange(param, Number((e.currentTarget as HTMLInputElement).value))}
+				/>
+			{:else if param.type === 'textarea'}
+				<textarea
+					class="param-textarea"
+					value={String(getValue(param))}
+					oninput={(e) => handleChange(param, (e.currentTarget as HTMLTextAreaElement).value)}
+				></textarea>
+			{:else if param.type === 'text'}
+				<input
+					class="param-input"
+					type="text"
+					value={String(getValue(param))}
+					oninput={(e) => handleChange(param, (e.currentTarget as HTMLInputElement).value)}
+				/>
+			{/if}
+		</Field>
+	{/each}
+
+	{#if advancedParams.length > 0}
+		<button
+			class="advanced-toggle"
+			type="button"
+			aria-expanded={showAdvanced}
+			onclick={() => (showAdvanced = !showAdvanced)}
+		>
+			{showAdvanced ? '收起' : '更多'}高级参数
+			<span class="toggle-count">({advancedParams.length})</span>
+		</button>
+
+		{#if showAdvanced}
+			<div class="advanced-section">
+				{#each advancedParams as param}
+					<Field label={param.label} tooltip={param.description}>
+						{#if param.type === 'slider'}
+							{#if param.key === 'speed'}
+								<input
+									class="param-input"
+									type="number"
+									value={Number(getValue(param))}
+									min={param.min ?? undefined}
+									max={param.max ?? undefined}
+									step="0.01"
+									oninput={(e) => {
+										const raw = (e.currentTarget as HTMLInputElement).value;
+										handleChange(param, raw === '' ? 0 : Number(raw));
+									}}
+									onblur={(e) => {
+										const input = e.currentTarget as HTMLInputElement;
+										const val = parseFloat(input.value);
+										if (!isNaN(val)) {
+											input.value = val.toFixed(2);
+										}
+									}}
+								/>
+							{:else}
+								<Slider
+									value={Number(getValue(param))}
+									min={param.min ?? undefined}
+									max={param.max ?? undefined}
+									step={param.step ?? undefined}
+									onChange={(v: number) => handleChange(param, v)}
+								/>
+							{/if}
+						{:else if param.type === 'select'}
+							<Select
+								value={String(getValue(param))}
+								options={param.options}
+								onChange={(v: string) => handleChange(param, v)}
+							/>
+						{:else if param.type === 'toggle'}
+							<Toggle
+								checked={Boolean(getValue(param))}
+								onChange={(v: boolean) => handleChange(param, v)}
+							/>
+						{:else if param.type === 'number'}
+							<input
+								class="param-input"
+								type="number"
+								value={Number(getValue(param))}
+								min={param.min ?? undefined}
+								max={param.max ?? undefined}
+								step={param.step ?? undefined}
+								oninput={(e) => handleChange(param, Number((e.currentTarget as HTMLInputElement).value))}
+							/>
+						{:else if param.type === 'textarea'}
+							<textarea
+								class="param-textarea"
+								value={String(getValue(param))}
+								oninput={(e) =>
+									handleChange(param, (e.currentTarget as HTMLTextAreaElement).value)}
+							></textarea>
+						{:else if param.type === 'text'}
+							<input
+								class="param-input"
+								type="text"
+								value={String(getValue(param))}
+								oninput={(e) => handleChange(param, (e.currentTarget as HTMLInputElement).value)}
+							/>
+						{/if}
+					</Field>
+				{/each}
+			</div>
+		{/if}
+	{/if}
+</div>
+
+<style>
+	.parameter-panel {
+		display: grid;
+		gap: 10px;
+	}
+
+	.advanced-toggle {
+		width: 100%;
+		border: 1px solid var(--line);
+		border-radius: 7px;
+		background: var(--panel-2);
+		color: var(--muted);
+		padding: 7px 12px;
+		font-size: 12px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 4px;
+		transition: color 160ms ease, border-color 160ms ease;
+	}
+
+	.advanced-toggle:hover,
+	.advanced-toggle:focus-visible {
+		color: var(--accent);
+		border-color: var(--accent);
+	}
+
+	.toggle-count {
+		font-variant-numeric: tabular-nums;
+	}
+
+	.advanced-section {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+		gap: 10px;
+		padding-top: 2px;
+	}
+
+	:global(.field) .param-input,
+	:global(.field) .param-textarea {
+		width: 100%;
+	}
+</style>

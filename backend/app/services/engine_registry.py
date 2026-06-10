@@ -127,12 +127,12 @@ def list_speakers(engine_id: str, query: str = "", gender: str = "all", limit: i
 
 def _common_params(v2: bool = False) -> list[ParameterSchema]:
     params = [
-        ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05),
-        ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.8 if v2 else 1.0, min=0.1, max=2.0, step=0.05),
-        ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.8, min=0, max=1, step=0.05, level="advanced"),
-        ParameterSchema(key="top_k", label="候选数量 Top-K", type="slider", default=30, min=1, max=100, step=1, level="advanced"),
-        ParameterSchema(key="max_text_tokens_per_segment", label="分段 Token", type="slider", default=120, min=20, max=500, step=10, level="advanced"),
-        ParameterSchema(key="interval_silence", label="段间静默 ms", type="slider", default=200, min=0, max=2000, step=50, level="advanced"),
+        ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="控制说话速度。1.0=正常语速，大于1加速，小于1减速"),
+        ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.8 if v2 else 1.0, min=0.1, max=2.0, step=0.05, description="控制语音随机性，越低越稳定，越高越有变化"),
+        ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.8, min=0, max=1, step=0.05, level="advanced", description="核采样概率，控制词汇选择范围"),
+        ParameterSchema(key="top_k", label="候选数量 Top-K", type="slider", default=30, min=1, max=100, step=1, level="advanced", description="保留最高概率的词汇数量"),
+        ParameterSchema(key="max_text_tokens_per_segment", label="分段 Token", type="slider", default=120, min=20, max=500, step=10, level="advanced", description="每段文本最大token数，影响分段长度"),
+        ParameterSchema(key="interval_silence", label="段间静默 ms", type="slider", default=200, min=0, max=2000, step=50, level="advanced", description="段落间静音时长(毫秒)"),
     ]
     if v2:
         params.extend([
@@ -143,10 +143,11 @@ def _common_params(v2: bool = False) -> list[ParameterSchema]:
                 default="calm",
                 options=_EMOTION_OPTIONS,
                 capability="emotion_control",
+                description="选择情感类型，如高兴、悲伤、愤怒等",
             ),
-            ParameterSchema(key="emo_alpha", label="情绪强度", type="slider", default=0.6, min=0, max=1, step=0.05, capability="emotion_control"),
-            ParameterSchema(key="diffusion_steps", label="扩散步数 Diffusion Steps", type="slider", default=25, min=5, max=60, step=1, level="advanced"),
-            ParameterSchema(key="cfg_rate", label="引导强度 CFG Rate", type="slider", default=0.7, min=0, max=1, step=0.05, level="advanced"),
+            ParameterSchema(key="emo_alpha", label="情绪强度", type="slider", default=0.6, min=0, max=1, step=0.05, capability="emotion_control", description="情感强度，0.0=无情感，1.0=最大情感表达"),
+            ParameterSchema(key="diffusion_steps", label="扩散步数 Diffusion Steps", type="slider", default=25, min=5, max=60, step=1, level="advanced", description="扩散模型步数，越高音质越好但速度越慢"),
+            ParameterSchema(key="cfg_rate", label="引导强度 CFG Rate", type="slider", default=0.7, min=0, max=1, step=0.05, level="advanced", description="无分类器引导率，控制生成与提示的匹配度"),
         ])
     return params
 
@@ -180,9 +181,9 @@ _ENGINES: dict[str, EngineDetail] = {
             sample_rate=24000,
             default_use_case="多语言克隆与声音设计",
             parameter_schema=[
-                ParameterSchema(key="language", label="语言", type="select", default="auto", options=[{"label": x, "value": x} for x in ["auto", "zh", "en", "ja", "ko", "fr", "de", "es"]]),
-                ParameterSchema(key="emotion_text", label="声音描述/指令", type="textarea", default="", capability="voice_design"),
-                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05),
+                ParameterSchema(key="language", label="语言", type="select", default="auto", options=[{"label": x, "value": x} for x in ["auto", "zh", "en", "ja", "ko", "fr", "de", "es"]], description="选择语言，如中文、英文等"),
+                ParameterSchema(key="emotion_text", label="声音描述/指令", type="textarea", default="", capability="voice_design", description="用文字描述想要的声音特征"),
+                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="控制说话速度"),
             ],
         ),
         state=EngineState(engine_id="omnivoice", status=EngineStatus.stopped),
@@ -207,6 +208,7 @@ _ENGINES: dict[str, EngineDetail] = {
                     options=_EMOTIVOICE_SPEAKERS,
                     required=True,
                     capability="preset_voice",
+                    description="选择说话人ID",
                 ),
                 ParameterSchema(
                     key="prompt",
@@ -215,6 +217,7 @@ _ENGINES: dict[str, EngineDetail] = {
                     default="开心",
                     options=_EMOTIVOICE_PROMPTS,
                     capability="emotion_control",
+                    description="情感提示词，如'开心地'、'悲伤地'",
                 ),
             ],
         ),
@@ -233,12 +236,12 @@ _ENGINES: dict[str, EngineDetail] = {
             default_use_case="已授权参考音频的音色迁移和中英文生成研究",
             privacy_level="local_only_noncommercial_model",
             parameter_schema=[
-                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05),
-                ParameterSchema(key="nfe_step", label="采样步数 NFE", type="slider", default=32, min=4, max=64, step=1, level="advanced"),
-                ParameterSchema(key="cfg_strength", label="引导强度 CFG", type="slider", default=2.0, min=0.1, max=5.0, step=0.1, level="advanced"),
-                ParameterSchema(key="target_rms", label="响度目标 RMS", type="slider", default=0.1, min=0.01, max=0.5, step=0.01, level="advanced"),
-                ParameterSchema(key="cross_fade_duration", label="分段交叉淡化", type="slider", default=0.15, min=0, max=1, step=0.05, level="advanced"),
-                ParameterSchema(key="remove_silence", label="移除静音", type="toggle", default=False, level="advanced"),
+                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="控制说话速度"),
+                ParameterSchema(key="nfe_step", label="采样步数 NFE", type="slider", default=32, min=4, max=64, step=1, level="advanced", description="流匹配步数，越高音质越好"),
+                ParameterSchema(key="cfg_strength", label="引导强度 CFG", type="slider", default=2.0, min=0.1, max=5.0, step=0.1, level="advanced", description="无分类器引导强度"),
+                ParameterSchema(key="target_rms", label="响度目标 RMS", type="slider", default=0.1, min=0.01, max=0.5, step=0.01, level="advanced", description="目标音量(RMS)，控制输出响度"),
+                ParameterSchema(key="cross_fade_duration", label="分段交叉淡化", type="slider", default=0.15, min=0, max=1, step=0.05, level="advanced", description="交叉淡入淡出时长(秒)"),
+                ParameterSchema(key="remove_silence", label="移除静音", type="toggle", default=False, level="advanced", description="是否自动去除静音段"),
             ],
         ),
         state=EngineState(engine_id="f5-tts", status=EngineStatus.stopped),
@@ -263,8 +266,9 @@ _ENGINES: dict[str, EngineDetail] = {
                     options=_COSYVOICE_SPEAKERS,
                     required=True,
                     capability="preset_voice",
+                    description="选择预设说话人",
                 ),
-                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05),
+                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="控制说话速度"),
             ],
         ),
         state=EngineState(engine_id="cosyvoice-sft", status=EngineStatus.stopped),
@@ -281,7 +285,7 @@ _ENGINES: dict[str, EngineDetail] = {
             sample_rate=22050,
             default_use_case="使用已授权参考音频做 CosyVoice 本地音色复刻",
             parameter_schema=[
-                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05),
+                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="控制说话速度"),
             ],
         ),
         state=EngineState(engine_id="cosyvoice-zero-shot", status=EngineStatus.stopped),
@@ -307,10 +311,11 @@ _ENGINES: dict[str, EngineDetail] = {
                     options=[{"label": item["label"], "value": item["voice_id"]} for item in mimo_client.MIMO_PRESET_VOICES],
                     required=True,
                     capability="preset_voice",
+                    description="选择预设音色",
                 ),
-                ParameterSchema(key="style_instruction", label="风格指令", type="textarea", default="", capability="natural_language_control"),
-                ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.6, min=0, max=1.5, step=0.05, level="advanced"),
-                ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.95, min=0.01, max=1.0, step=0.01, level="advanced"),
+                ParameterSchema(key="style_instruction", label="风格指令", type="textarea", default="", capability="natural_language_control", description="风格指令，描述想要的说话风格"),
+                ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.6, min=0, max=1.5, step=0.05, level="advanced", description="控制语音随机性，越低越稳定，越高越有变化"),
+                ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.95, min=0.01, max=1.0, step=0.01, level="advanced", description="核采样概率，控制词汇选择范围"),
             ],
         ),
         state=EngineState(engine_id="mimo-v2.5-tts-preset", status=EngineStatus.stopped),
@@ -328,7 +333,7 @@ _ENGINES: dict[str, EngineDetail] = {
             default_use_case="探索角色音色、一次性生成定制声音样本",
             privacy_level="cloud_required",
             parameter_schema=[
-                ParameterSchema(key="voice_design_prompt", label="音色描述", type="textarea", default="", required=True, capability="voice_design"),
+                ParameterSchema(key="voice_design_prompt", label="音色描述", type="textarea", default="", required=True, capability="voice_design", description="声音设计提示，描述声音特征"),
                 ParameterSchema(
                     key="optimize_text_preview",
                     label="润色播报文本",
@@ -336,9 +341,10 @@ _ENGINES: dict[str, EngineDetail] = {
                     default=False,
                     level="advanced",
                     capability="voice_design",
+                    description="是否自动润色播报文本内容",
                 ),
-                ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.6, min=0, max=1.5, step=0.05, level="advanced"),
-                ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.95, min=0.01, max=1.0, step=0.01, level="advanced"),
+                ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.6, min=0, max=1.5, step=0.05, level="advanced", description="控制语音随机性，越低越稳定，越高越有变化"),
+                ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.95, min=0.01, max=1.0, step=0.01, level="advanced", description="核采样概率，控制词汇选择范围"),
             ],
         ),
         state=EngineState(engine_id="mimo-v2.5-tts-voicedesign", status=EngineStatus.stopped),
@@ -356,9 +362,9 @@ _ENGINES: dict[str, EngineDetail] = {
             default_use_case="使用已授权的本地参考音色做云端复刻合成",
             privacy_level="cloud_required",
             parameter_schema=[
-                ParameterSchema(key="style_instruction", label="风格指令", type="textarea", default="", capability="natural_language_control"),
-                ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.6, min=0, max=1.5, step=0.05, level="advanced"),
-                ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.95, min=0.01, max=1.0, step=0.01, level="advanced"),
+                ParameterSchema(key="style_instruction", label="风格指令", type="textarea", default="", capability="natural_language_control", description="风格指令，描述想要的说话风格"),
+                ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.6, min=0, max=1.5, step=0.05, level="advanced", description="控制语音随机性，越低越稳定，越高越有变化"),
+                ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.95, min=0.01, max=1.0, step=0.01, level="advanced", description="核采样概率，控制词汇选择范围"),
             ],
         ),
         state=EngineState(engine_id="mimo-v2.5-tts-voiceclone", status=EngineStatus.stopped),
@@ -376,7 +382,7 @@ _ENGINES: dict[str, EngineDetail] = {
             default_use_case="会议、录音和素材音频转文字",
             privacy_level="cloud_required",
             parameter_schema=[
-                ParameterSchema(key="language", label="识别语言", type="select", default="auto", options=[{"label": x, "value": x} for x in ["auto", "zh", "en"]]),
+                ParameterSchema(key="language", label="识别语言", type="select", default="auto", options=[{"label": x, "value": x} for x in ["auto", "zh", "en"]], description="选择识别语言，auto 自动检测"),
             ],
         ),
         state=EngineState(engine_id="mimo-v2.5-asr", status=EngineStatus.stopped),
@@ -392,7 +398,7 @@ _ENGINES: dict[str, EngineDetail] = {
             capabilities=["local_inference", "speech_recognition", "transcription", "language_identification"],
             default_use_case="离线音频转写与云端 ASR 备选",
             parameter_schema=[
-                ParameterSchema(key="language", label="识别语言", type="select", default="auto", options=[{"label": x, "value": x} for x in ["auto", "zh", "en"]]),
+                ParameterSchema(key="language", label="识别语言", type="select", default="auto", options=[{"label": x, "value": x} for x in ["auto", "zh", "en"]], description="选择识别语言，auto 自动检测")
             ],
         ),
         state=EngineState(engine_id="qwen3-asr-mlx", status=EngineStatus.stopped),
@@ -425,14 +431,13 @@ def _external_engine_root(engine_id: str) -> Path:
         "cosyvoice-sft": "VOICE_STUDIO_COSYVOICE_ROOT",
         "cosyvoice-zero-shot": "VOICE_STUDIO_COSYVOICE_ROOT",
     }
-    defaults = {
-        "emotivoice": "/Users/foxmacstudio/Projects/tts-engine-lab/EmotiVoice",
-        "f5-tts": "/Users/foxmacstudio/Projects/tts-engine-lab/F5-TTS",
-        "cosyvoice-sft": "/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice",
-        "cosyvoice-zero-shot": "/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice",
-    }
-    value = os.environ.get(env_names[engine_id], defaults[engine_id])
-    return Path(value).expanduser()
+    env_value = os.environ.get(env_names[engine_id])
+    if not env_value:
+        raise RuntimeError(
+            f"Environment variable {env_names[engine_id]} is not set. "
+            f"Please set it to the root directory of the {engine_id} engine."
+        )
+    return Path(env_value).expanduser()
 
 
 def _health_external_engine(engine_id: str) -> dict[str, Any]:

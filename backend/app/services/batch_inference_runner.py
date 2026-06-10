@@ -52,8 +52,27 @@ def _finalize_wav(wav_path: Path, output_path: Path, sample_rate: int) -> dict[s
 def run_indextts_v2(payload: dict[str, Any]) -> list[dict[str, Any]]:
     from mlx_indextts.generate_v2 import IndexTTSv2
 
+    allowed_keys = {
+        "reference_audio",
+        "max_mel_tokens",
+        "max_text_tokens_per_segment",
+        "interval_silence",
+        "temperature",
+        "top_p",
+        "top_k",
+        "repetition_penalty",
+        "diffusion_steps",
+        "cfg_rate",
+        "emotion",
+        "emo_alpha",
+        "seed",
+        "verbose",
+        "segment_overlap_ms",
+        "speed",
+    }
     common = dict(payload["common"])
     model_dir = common.pop("model_dir")
+    common = {key: value for key, value in common.items() if key in allowed_keys and value is not None}
     model = IndexTTSv2(model_dir, device=common.pop("device", "mps"))
     results = []
     for segment in payload["segments"]:
@@ -61,7 +80,7 @@ def run_indextts_v2(payload: dict[str, Any]) -> list[dict[str, Any]]:
         out = _target_path(segment["output_path"])
         wav_out = out if out.suffix.lower() == ".wav" else out.with_suffix(".batch-tmp.wav")
         kwargs = dict(common)
-        kwargs.update({k: v for k, v in segment.get("parameters", {}).items() if v is not None})
+        kwargs.update({k: v for k, v in segment.get("parameters", {}).items() if k in allowed_keys and v is not None})
         kwargs["text"] = segment["text"]
         try:
             model.generate(output_path=str(wav_out), **kwargs)

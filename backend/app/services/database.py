@@ -85,6 +85,12 @@ CREATE TABLE IF NOT EXISTS presets (
 );
 """
 
+INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_longform ON tasks(json_extract(data, '$.longform_task_id'));
+CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(json_extract(data, '$.task_type'));
+"""
+
 
 def set_db_path(path: str | Path) -> None:
     global DB_PATH
@@ -102,6 +108,7 @@ def conn():
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
     db.executescript(SCHEMA)
+    db.executescript(INDEX_DDL)
     try:
         yield db
         db.commit()
@@ -174,10 +181,13 @@ def get_one(table: str, key_field: str, key: str) -> dict[str, Any] | None:
     return _load(row)
 
 
-def list_all(table: str, order_field: str = "created_at", desc: bool = True) -> list[dict[str, Any]]:
+def list_all(table: str, order_field: str = "created_at", desc: bool = True, offset: int = 0, limit: int = 100) -> list[dict[str, Any]]:
     direction = "DESC" if desc else "ASC"
     with conn() as db:
-        rows = db.execute(f"SELECT data FROM {table} ORDER BY {order_field} {direction}").fetchall()
+        if limit < 0:
+            rows = db.execute(f"SELECT data FROM {table} ORDER BY {order_field} {direction}").fetchall()
+        else:
+            rows = db.execute(f"SELECT data FROM {table} ORDER BY {order_field} {direction} LIMIT ? OFFSET ?", (limit, offset)).fetchall()
     return [json.loads(r["data"]) for r in rows]
 
 

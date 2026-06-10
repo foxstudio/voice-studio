@@ -10,8 +10,6 @@ Architecture:
 - MLX: GPT v2, S2Mel (CFM), BigVGAN v2, vq2emb
 """
 
-import os
-import sys
 import time
 import warnings
 from pathlib import Path
@@ -150,10 +148,9 @@ class IndexTTSv2:
             self.s2mel_weights_path = str(self.mlx_model_dir / "s2mel.safetensors")
             self.bigvgan_weights_path = str(self.mlx_model_dir / "bigvgan.safetensors")
         else:
-            # Legacy structure (separate directories)
-            self.gpt_weights_path = "models/gpt_v2/gpt_v2.safetensors"
-            self.s2mel_weights_path = "models/s2mel_v2/s2mel.safetensors"
-            self.bigvgan_weights_path = "models/bigvgan_v2/bigvgan_v2.safetensors"
+            self.gpt_weights_path = str(self.mlx_model_dir / "gpt_v2" / "gpt_v2.safetensors")
+            self.s2mel_weights_path = str(self.mlx_model_dir / "s2mel_v2" / "s2mel.safetensors")
+            self.bigvgan_weights_path = str(self.mlx_model_dir / "bigvgan_v2" / "bigvgan_v2.safetensors")
 
         # Load config
         self.cfg = OmegaConf.load(self.config_path)
@@ -237,7 +234,11 @@ class IndexTTSv2:
         return out
 
     def _init_semantic_codec(self):
-        """Initialize semantic codec (always needed for vq2emb during generation)."""
+        """Initialize semantic codec for .wav preprocessing only.
+
+        Generation uses the MLX vq2emb path; this PyTorch module is kept only for
+        extracting S_ref from raw reference audio.
+        """
         from mlx_indextts.indextts.utils.maskgct_utils import build_semantic_codec
 
         print("Loading Semantic Codec...")
@@ -252,48 +253,6 @@ class IndexTTSv2:
             print(f"Warning: Failed to load semantic_codec weights: {e}")
         self.semantic_codec = self.semantic_codec.to(self.device)
         self.semantic_codec.eval()
-
-    def _init_pytorch_modules(self):
-        """Initialize PyTorch modules for .wav preprocessing.
-
-        Loads W2V-BERT, CAMPPlus, and emotion matrices.
-        Called lazily when processing .wav files (not needed for .npz).
-        """
-        from mlx_indextts.indextts.utils.maskgct_utils import build_semantic_model
-        from mlx_indextts.indextts.s2mel.modules.campplus.DTDNN import CAMPPlus as CAMPPlusModel
-        from transformers import AutoFeatureExtractor
-
-        # Find w2v stats file
-        w2v_stat_path = self.mlx_model_dir / self.cfg.w2v_stat
-        if not w2v_stat_path.exists():
-            w2v_stat_path = self.model_dir / self.cfg.w2v_stat
-        if not w2v_stat_path.exists():
-            raise FileNotFoundError(f"W2V stats file not found: {self.cfg.w2v_stat}")
-
-        # W2V-BERT (Semantic Model)
-        print("Loading W2V-BERT...")
-        self.semantic_model, self.semantic_mean, self.semantic_std = build_semantic_model(
-            path_=str(w2v_stat_path)
-        )
-        self.semantic_model = self.semantic_model.to(self.device)
-        self.semantic_mean = self.semantic_mean.to(self.device)
-        self.semantic_std = self.semantic_std.to(self.device)
-        self.extract_features = AutoFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0")
-
-        # CAMPPlus
-        print("Loading CAMPPlus...")
-        try:
-            from huggingface_hub import hf_hub_download
-            campplus_path = hf_hub_download("funasr/campplus", filename="campplus_cn_common.bin")
-            self.campplus = CAMPPlusModel(feat_dim=80, embedding_size=192)
-            state_dict = torch.load(campplus_path, map_location=self.device)
-            self.campplus.load_state_dict(state_dict)
-            print(f"  CAMPPlus weights restored from: {campplus_path}")
-        except Exception as e:
-            print(f"Warning: Failed to load CAMPPlus weights: {e}")
-            self.campplus = CAMPPlusModel(feat_dim=80, embedding_size=192)
-        self.campplus = self.campplus.to(self.device)
-        self.campplus.eval()
 
     def _load_emotion_matrices(self):
         """Load emotion matrices for emotion control (small .pt files)."""
@@ -385,9 +344,6 @@ class IndexTTSv2:
             with open(config_json_path) as f:
                 config_dict = json.load(f)
                 saved_quantize_bits = config_dict.get("quantize_bits")
-
-        # Determine effective quantization
-        effective_quantize = saved_quantize_bits or self.quantize_bits
 
         # GPT v2 (MLX)
         print("Loading GPT v2 (MLX)...")
@@ -660,8 +616,8 @@ class IndexTTSv2:
         style = self.campplus(feat.unsqueeze(0))
 
         # Prompt condition via length regulator (MLX)
-        S_ref_mx = mx.array(S_ref.cpu().numpy())
-        ref_target_lengths_mx = mx.array(ref_target_lengths.cpu().numpy())
+        S_ref_mx = mx.array(S_ref.detach().cpu())
+        ref_target_lengths_mx = mx.array(ref_target_lengths.detach().cpu())
         prompt_condition_mx, _, _, _, _ = self.s2mel_mlx.length_regulator(
             S_ref_mx, ylens=ref_target_lengths_mx, n_quantizers=3, f0=None
         )
@@ -796,7 +752,7 @@ class IndexTTSv2:
         ref_mel_pt = ref_data['ref_mel']
 
         # Convert to MLX for GPT
-        spk_cond_emb = mx.array(spk_cond_emb_pt.cpu().numpy())  # (1, T, 1024)
+        spk_cond_emb = mx.array(spk_cond_emb_pt.detach().cpu())  # (1, T, 1024)
         # GPT expects NCL format: (batch, 1024, time)
         spk_cond_emb_ncl = spk_cond_emb.transpose(0, 2, 1)
 
@@ -842,7 +798,7 @@ class IndexTTSv2:
             # In PyTorch, emovec_mat is used DIRECTLY without any projection layers.
             # It's already in model_dim (1280) space from feat2.pt.
             emovec_mat_pt = self._compute_emotion_vector(emotion_weights, style_pt)
-            emovec_mat = mx.array(emovec_mat_pt.cpu().numpy())
+            emovec_mat = mx.array(emovec_mat_pt.detach().cpu())
 
             # PyTorch formula (infer_v2.py:561):
             #   emovec = emovec_mat + (1 - sum(weight_vector)) * emovec
@@ -860,9 +816,9 @@ class IndexTTSv2:
         conditioning = self.gpt.prepare_conditioning_latents(speech_cond, emo_vec, batch_size=1)
 
         # Pre-compute MLX arrays for reuse
-        prompt_condition = mx.array(prompt_condition_pt.cpu().numpy())
-        ref_mel = mx.array(ref_mel_pt.cpu().numpy())
-        style = mx.array(style_pt.cpu().numpy())
+        prompt_condition = mx.array(prompt_condition_pt.detach().cpu())
+        ref_mel = mx.array(ref_mel_pt.detach().cpu())
+        style = mx.array(style_pt.detach().cpu())
 
         # 4. Generate audio for each segment
         all_audio = []
@@ -1065,4 +1021,3 @@ class IndexTTSv2:
             sf.write(output_path, audio, sample_rate)
 
         return audio
-

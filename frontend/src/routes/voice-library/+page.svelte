@@ -771,13 +771,28 @@
 
 
 
-	.tag-row,
-	.binding-row,
+	.tag-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 5px;
+		align-items: center;
+		min-height: 22px;
+	}
+
+	.binding-row {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 5px;
+		align-items: center;
+		min-height: 22px;
+	}
+
 	.card-actions {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 5px;
 		align-items: center;
+		justify-content: flex-start;
 	}
 
 		/* 折角标签 - 右下角 */
@@ -989,6 +1004,7 @@
 		gap: 4px;
 		color: var(--muted);
 		font-size: 11px;
+		min-height: 22px;
 	}
 
 	.asset-meta span {

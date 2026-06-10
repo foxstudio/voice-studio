@@ -16,6 +16,7 @@ export interface AudioQualityResult {
 export interface ParameterSchema {
 	key: string;
 	label: string;
+	description?: string | null;
 	type: 'text' | 'textarea' | 'number' | 'slider' | 'select' | 'toggle' | 'file';
 	level: 'basic' | 'advanced' | 'developer';
 	default: unknown;

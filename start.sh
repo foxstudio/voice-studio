@@ -13,12 +13,12 @@
 set -u
 # 不使用 set -e，手动处理错误
 
-BACKEND_PORT=8000
-FRONTEND_PORT=5173
-BACKEND_DIR="backend"
-FRONTEND_DIR="frontend"
-BACKEND_LOG="/tmp/voice-studio-backend.log"
-FRONTEND_LOG="/tmp/voice-studio-frontend.log"
+BACKEND_PORT="${VOICE_STUDIO_BACKEND_PORT:-8000}"
+FRONTEND_PORT="${VOICE_STUDIO_FRONTEND_PORT:-5173}"
+BACKEND_DIR="${VOICE_STUDIO_BACKEND_DIR:-backend}"
+FRONTEND_DIR="${VOICE_STUDIO_FRONTEND_DIR:-frontend}"
+BACKEND_LOG="${VOICE_STUDIO_BACKEND_LOG:-/tmp/voice-studio-backend.log}"
+FRONTEND_LOG="${VOICE_STUDIO_FRONTEND_LOG:-/tmp/voice-studio-frontend.log}"
 BACKEND_HEALTH_URL="http://localhost:${BACKEND_PORT}/api/health"
 FRONTEND_HEALTH_URL="http://localhost:${FRONTEND_PORT}/"
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"

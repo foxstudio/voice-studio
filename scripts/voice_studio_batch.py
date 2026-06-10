@@ -96,7 +96,7 @@ def main() -> None:
     parser.add_argument("--ref-text", help="本批次默认参考音频台词。")
     parser.add_argument("--language", default=None, help="默认语言，例如 zh/en/auto。")
     parser.add_argument("--output-dir", help="输出目录，例如 presentation/public/audio。")
-    parser.add_argument("--format", default="mp3", choices=["wav", "mp3", "flac"], help="默认输出格式。")
+    parser.add_argument("--format", default=None, choices=["wav", "mp3", "flac"], help="默认输出格式。")
     parser.add_argument("--emotion", help="IndexTTS 情绪，例如 happy/calm/sad。")
     parser.add_argument("--emotion-text", help="OmniVoice 声音设计指令。")
     parser.add_argument("--style-instruction", help="MiMo 风格指令。")

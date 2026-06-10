@@ -27,7 +27,7 @@ class FakeDb:
         assert table == "tasks"
         return self.rows.get(key)
 
-    def list_all(self, table: str, *_args):
+    def list_all(self, table: str, *_args, **kwargs):
         assert table == "tasks"
         return list(self.rows.values())
 

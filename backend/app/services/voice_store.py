@@ -9,6 +9,7 @@ from app.services import audio_tools, database as db, settings_store, voice_alia
 
 
 def list_voices() -> list[VoiceAsset]:
+    return [_normalize_voice(VoiceAsset(**d)) for d in db.list_all("voices", "updated_at", limit=-1)]
     return [_normalize_voice(VoiceAsset(**d)) for d in db.list_all("voices", "updated_at")]
 
 
@@ -50,10 +51,17 @@ def update_voice(voice_id: str, data: VoiceAssetUpdate) -> VoiceAsset | None:
 def delete_voice(voice_id: str) -> None:
     voice = get_voice(voice_id)
     if voice:
+        voice_dir = settings_store.voice_dir().resolve()
         for file_id in voice.reference_audio_ids:
             vf = get_file(file_id)
             if vf:
-                Path(vf.path).unlink(missing_ok=True)
+                file_path = Path(vf.path).resolve()
+                try:
+                    file_path.relative_to(voice_dir)
+                except ValueError:
+                    pass
+                else:
+                    file_path.unlink(missing_ok=True)
                 db.delete_one("voice_files", "file_id", file_id)
     db.delete_one("voices", "voice_id", voice_id)
 
