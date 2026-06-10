@@ -24,10 +24,13 @@
 		FileText,
 		Hash,
 		Info,
+		Mic,
+		Cpu,
 		Pencil,
 		Pause,
 		Play,
 		Plus,
+		Repeat,
 		RotateCcw,
 		Save,
 		Scissors,
@@ -140,6 +143,8 @@
 	let taskSortBy = $state<TaskSortBy>('latest');
 	let currentPage = $state(1);
 	let pageSize = $state(12);
+	let pageSizeAuto = $state(true);
+	let resultGridEl: HTMLDivElement | undefined = $state();
 	let pageJumpInput = $state('');
 	let actionBusyTaskId = $state('');
 	let verificationBusyTaskId = $state('');
@@ -1222,6 +1227,33 @@
 		currentPage = Math.min(pageCount, Math.max(1, next));
 	}
 
+	// 自适应 pageSize：根据 resultGrid 可用高度和列数计算最佳条数
+	$effect(() => {
+		if (!pageSizeAuto || !resultGridEl) return;
+		const observer = new ResizeObserver(() => {
+			if (!resultGridEl) return;
+			const rect = resultGridEl.getBoundingClientRect();
+			const availableHeight = window.innerHeight - rect.top - 40;
+			const cols = Math.max(1, Math.floor(rect.width / 260));
+			const cardHeight = 95;
+			const rows = Math.max(1, Math.floor(availableHeight / cardHeight));
+			let ideal = Math.max(12, rows * cols);
+			ideal = Math.ceil(ideal / cols) * cols;
+			if (ideal !== pageSize) {
+				pageSize = ideal;
+				if (currentPage > Math.max(1, Math.ceil(filteredTasks.length / pageSize))) {
+					currentPage = 1;
+				}
+			}
+		});
+		observer.observe(resultGridEl);
+		return () => observer.disconnect();
+	});
+
+	function taskPageGoTo(page: number) {
+		currentPage = Math.min(pageCount, Math.max(1, page));
+	}
+
 	function jumpToPage() {
 		const n = parseInt(pageJumpInput, 10);
 		if (Number.isFinite(n) && n >= 1 && n <= pageCount) {
@@ -2190,6 +2222,23 @@
 								</div>
 							</div>
 							<div class="toolbar-right">
+								{#if pageCount > 1}
+								<div class="pagination-bar pagination-bar-top">
+									<button class="btn icon-text-btn" onclick={() => taskPageGoTo(1)} disabled={currentPage <= 1}>
+										<ChevronsLeft size={15} />
+									</button>
+									<button class="btn icon-text-btn" onclick={() => taskPageJump(-1)} disabled={currentPage <= 1}>
+										<ChevronLeft size={15} />
+									</button>
+									<span class="muted page-info">{currentPage} / {pageCount}</span>
+									<button class="btn icon-text-btn" onclick={() => taskPageJump(1)} disabled={currentPage >= pageCount}>
+										<ChevronRight size={15} />
+									</button>
+									<button class="btn icon-text-btn" onclick={() => taskPageGoTo(pageCount)} disabled={currentPage >= pageCount}>
+										<ChevronsRight size={15} />
+									</button>
+								</div>
+								{/if}
 								<div class="toolbar-actions" aria-label="批量操作">
 									<button
 										class="icon-btn"
@@ -2321,7 +2370,7 @@
 				{/if}
 
 				{#if pagedTasks.length}
-					<div class="result-grid">
+					<div class="result-grid" bind:this={resultGridEl}>
 						{#each pagedTasks as task}
 							<article class={`card stack result-card engine-surface ${engineKind(task.engine_id) === 'cloud' ? 'engine-cloud' : 'engine-local'}${playingResultTaskId === task.task_id ? ' playing' : ''}`}>
 								<div class="row result-head">
@@ -2349,7 +2398,10 @@
 								</div>
 
 								<div class="row wrap result-meta">
-									<span class="badge badge-kind">{engineTypeLabel(task.engine_id)}</span>
+									{#if voiceName(task)}<span class="badge"><Mic size={11} /> {voiceName(task)}</span>{/if}
+									<span class="text-pop text-chip result-script-chip" data-text={displayTitle(task)}>
+										<FileText size={13} /> 台词
+									</span>
 									{#if longformResultLabel(task)}
 										<span
 											class="badge longform-result-badge"
@@ -2359,12 +2411,10 @@
 											{longformResultLabel(task)}
 										</span>
 									{/if}
-									<span class="badge engine">{engineMap.get(task.engine_id)?.manifest.display_name ?? task.engine_id}</span>
-									{#if voiceName(task)}<span class="badge">{voiceName(task)}</span>{/if}
+									<span class="meta-line-break"></span>
+									<span class="badge engine"><Cpu size={11} /> {engineMap.get(task.engine_id)?.manifest.display_name ?? task.engine_id}</span>
+									<span class="badge badge-kind">{engineTypeLabel(task.engine_id)}</span>
 									{#if task.created_at}<span class="badge">{formatTime(task.created_at)}</span>{/if}
-									<span class="text-pop text-chip result-script-chip" data-text={displayTitle(task)}>
-										<FileText size={13} /> 台词
-									</span>
 								</div>
 
 								<div class="row result-info">
@@ -2467,33 +2517,24 @@
 											>
 												<Download size={15} />
 											</a>
-											<button
-												class="icon-btn result-verify-btn"
-												type="button"
-												onclick={() => verifyTask(task)}
-												disabled={verificationBusyTaskId === task.task_id}
-												title={taskVerificationReport(task) ? '重新转录并校对内容完整性' : '转录并校对内容完整性'}
-												aria-label={taskVerificationReport(task) ? '重新转录并校对内容完整性' : '转录并校对内容完整性'}
-											>
-												<CheckSquare size={15} />
-											</button>
+											
 										</div>
 									{/if}
 
 									<div class="row wrap card-actions">
 										{#if task.status === 'failed'}
-											<button class="btn" onclick={() => retry(task)} disabled={actionBusyTaskId === task.task_id}>
-												<RotateCcw size={15} /> 重试
+											<button class="icon-btn" onclick={() => retry(task)} disabled={actionBusyTaskId === task.task_id} title="重试" aria-label="重试">
+												<RotateCcw size={15} />
 											</button>
 										{/if}
 										{#if taskCanDelete(task)}
-											<button class="btn" onclick={() => reuse(task)} disabled={actionBusyTaskId === task.task_id}>
-												<RotateCcw size={15} /> 复用
+											<button class="icon-btn" onclick={() => reuse(task)} disabled={actionBusyTaskId === task.task_id} title="复用" aria-label="复用">
+												<Repeat size={15} />
 											</button>
 										{/if}
 										{#if !taskIsActive(task)}
-											<button class="btn danger" onclick={() => deleteTaskRecord(task)} disabled={actionBusyTaskId === task.task_id}>
-												<Trash2 size={15} /> 删除
+											<button class="icon-btn danger" onclick={() => deleteTaskRecord(task)} disabled={actionBusyTaskId === task.task_id} title="删除" aria-label="删除">
+												<Trash2 size={15} />
 											</button>
 										{/if}
 									</div>
@@ -3267,6 +3308,25 @@
 		cursor: not-allowed;
 	}
 
+	.meta-line-break {
+		flex-basis: 100%;
+		height: 0;
+		overflow: hidden;
+	}
+
+	.pagination-bar-top {
+		display: flex;
+		align-items: center;
+		gap: 3px;
+		flex-wrap: nowrap;
+		flex-shrink: 0;
+	}
+
+	.pagination-bar .icon-text-btn {
+		min-width: auto;
+		padding: 4px 8px;
+	}
+
 	.result-grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -3362,8 +3422,7 @@
 	}
 
 	.result-play-btn,
-	.result-download-btn,
-	.result-verify-btn {
+	.result-download-btn {
 		width: 30px;
 		height: 30px;
 		border-radius: 7px;
