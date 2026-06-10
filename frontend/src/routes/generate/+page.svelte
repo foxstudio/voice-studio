@@ -78,6 +78,7 @@
 	let presets = $state<PresetTemplate[]>([]);
 	let settings = $state<AppSettings | null>(null);
 	let voicePreviewAudio = $state<HTMLAudioElement | null>(null);
+	let voicePreviewPlaying = $state(false);
 	let resultPreviewAudio = $state<HTMLAudioElement | null>(null);
 	let playingResultTaskId = $state('');
 	let showPresetEditor = $state(false);
@@ -835,8 +836,14 @@
 
 	async function previewSelectedVoice() {
 		if (!voicePreviewAudio || !selectedVoicePreviewUrl) return;
-		voicePreviewAudio.currentTime = 0;
-		await voicePreviewAudio.play();
+		if (voicePreviewPlaying) {
+			voicePreviewAudio.pause();
+			voicePreviewPlaying = false;
+		} else {
+			voicePreviewAudio.currentTime = 0;
+			voicePreviewAudio.play();
+			voicePreviewPlaying = true;
+		}
 	}
 
 	function resultAudioUrl(task: GenerationTask) {
@@ -1227,27 +1234,56 @@
 		currentPage = Math.min(pageCount, Math.max(1, next));
 	}
 
-	// 自适应 pageSize：根据 resultGrid 可用高度和列数计算最佳条数
-	$effect(() => {
+	// 自适应 pageSize：根据视口高度和实际卡片尺寸动态计算
+	function recalcAutoPageSize() {
 		if (!pageSizeAuto || !resultGridEl) return;
-		const observer = new ResizeObserver(() => {
-			if (!resultGridEl) return;
-			const rect = resultGridEl.getBoundingClientRect();
-			const availableHeight = window.innerHeight - rect.top - 40;
-			const cols = Math.max(1, Math.floor(rect.width / 260));
-			const cardHeight = 95;
-			const rows = Math.max(1, Math.floor(availableHeight / cardHeight));
-			let ideal = Math.max(12, rows * cols);
-			ideal = Math.ceil(ideal / cols) * cols;
-			if (ideal !== pageSize) {
-				pageSize = ideal;
-				if (currentPage > Math.max(1, Math.ceil(filteredTasks.length / pageSize))) {
-					currentPage = 1;
-				}
+		const firstCard = resultGridEl.querySelector('.result-card') as HTMLElement | null;
+		const cardH = firstCard ? firstCard.offsetHeight + 12 : 260;
+		const gridRect = resultGridEl.getBoundingClientRect();
+		const cols = Math.max(1, Math.floor(gridRect.width / 260));
+		const bottomPadding = 60;
+		// 使用 offsetTop 获取 grid 相对于页面顶部的距离（不受滚动影响）
+		const gridTopFromPage = resultGridEl.offsetTop;
+		// 如果 offsetTop 不够准确，回退到 getBoundingClientRect + scrollY
+		const effectiveTop = gridTopFromPage > 0 ? gridTopFromPage : (gridRect.top + window.scrollY);
+		const availableHeight = window.innerHeight - effectiveTop + window.scrollY - bottomPadding;
+		// 更简单的算法：假设用户滚到结果区域时，grid 顶部紧贴视口顶部下方一小段距离
+		// 用 toolbar/topbar 的近似高度作为 gridTop 偏移
+		const topOffset = 200; // topbar + 筛选栏的大致高度
+		const realAvailable = window.innerHeight - topOffset - bottomPadding;
+		const rows = Math.max(1, Math.floor(realAvailable / cardH));
+		let ideal = rows * cols;
+		ideal = Math.max(cols, ideal);
+		if (ideal !== pageSize) {
+			pageSize = ideal;
+			if (currentPage > Math.max(1, Math.ceil(filteredTasks.length / pageSize))) {
+				currentPage = 1;
 			}
-		});
-		observer.observe(resultGridEl);
-		return () => observer.disconnect();
+		}
+	}
+
+	// 用 $effect 在 grid 元素和 pageSizeAuto 就绪后立即计算一次
+	$effect(() => {
+		if (pageSizeAuto && resultGridEl) {
+			recalcAutoPageSize();
+		}
+	});
+
+	// 用 onMount 注册全局 resize 监听（只注册一次，不依赖 $effect 生命周期）
+	let _autoResizeRO: ResizeObserver | undefined;
+	onMount(() => {
+		const onResize = () => recalcAutoPageSize();
+		window.addEventListener('resize', onResize);
+		_autoResizeRO = new ResizeObserver(onResize);
+		return () => {
+			window.removeEventListener('resize', onResize);
+			_autoResizeRO?.disconnect();
+		};
+	});
+	// 当 resultGridEl 变化时，重新观察
+	$effect(() => {
+		if (_autoResizeRO) _autoResizeRO.disconnect();
+		if (resultGridEl && _autoResizeRO) _autoResizeRO.observe(resultGridEl);
 	});
 
 	function taskPageGoTo(page: number) {
@@ -1628,15 +1664,15 @@
 							type="button"
 							onclick={previewSelectedVoice}
 							disabled={!selectedVoicePreviewUrl}
-							title="试听"
-							aria-label="试听当前音色"
+							title={voicePreviewPlaying ? '停止' : '试听'}
+							aria-label={voicePreviewPlaying ? '停止试听' : '试听当前音色'}
 						>
-							<Play size={13} />
+							{#if voicePreviewPlaying}<Pause size={13} />{:else}<Play size={13} />{/if}
 						</button>
 					</div>
 				</label>
 				{#if selectedVoicePreviewUrl}
-					<audio bind:this={voicePreviewAudio} src={selectedVoicePreviewUrl} preload="metadata"></audio>
+					<audio bind:this={voicePreviewAudio} src={selectedVoicePreviewUrl} preload="metadata" onended={() => (voicePreviewPlaying = false)}></audio>
 				{/if}
 				{/if}
 				{#if activeParamKeys.has('speed')}
@@ -2305,7 +2341,18 @@
 								<option value="oldest">最早</option>
 								<option value="duration_desc">时长↓</option>
 							</select>
-							<select bind:value={pageSize} onchange={() => (currentPage = 1)}>
+							<select value={pageSizeAuto ? 'auto' : pageSize} onchange={(e) => {
+								const v = (e.currentTarget as HTMLSelectElement).value;
+								if (v === 'auto') {
+									pageSizeAuto = true;
+									recalcAutoPageSize();
+								} else {
+									pageSizeAuto = false;
+									pageSize = Number(v);
+								}
+								currentPage = 1;
+							}}>
+								<option value={'auto'}>自动</option>
 								<option value={8}>8条/页</option>
 								<option value={12}>12条/页</option>
 								<option value={16}>16条/页</option>
@@ -3508,13 +3555,7 @@
 		flex-wrap: wrap;
 	}
 
-	.result-footer.without-audio {
-		justify-content: flex-start;
-	}
 
-	.result-footer.without-audio .card-actions {
-		margin-left: 0;
-	}
 
 	.error-line {
 		margin: 0;
