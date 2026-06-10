@@ -3959,17 +3959,6 @@
 			gap: 6px;
 		}
 
-		.tool-row,
-		.result-headline,
-		.result-info {
-			flex-direction: column;
-			align-items: flex-start;
-		}
-
-		.result-info-right {
-			margin-left: 0;
-		}
-
 		.preset-editor-grid,
 		.strategy-grid {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
