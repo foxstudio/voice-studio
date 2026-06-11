@@ -313,7 +313,7 @@ def convert_model(
     s2mel_path = model_dir / cfg.s2mel_checkpoint
     if s2mel_path.exists():
         print(f"\n[2/3] Converting S2Mel weights from {s2mel_path}...")
-        state = torch.load(str(s2mel_path), map_location="cpu")
+        state = torch.load(str(s2mel_path), map_location="cpu", weights_only=True)
         s2mel_params = state["net"]
 
         # Flatten nested structure

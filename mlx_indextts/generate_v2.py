@@ -271,8 +271,8 @@ class IndexTTSv2:
                 break
 
         if emo_matrix_path and spk_matrix_path:
-            self.emo_matrix = torch.load(str(emo_matrix_path), map_location=self.device)
-            self.spk_matrix = torch.load(str(spk_matrix_path), map_location=self.device)
+            self.emo_matrix = torch.load(str(emo_matrix_path), map_location=self.device, weights_only=True)
+            self.spk_matrix = torch.load(str(spk_matrix_path), map_location=self.device, weights_only=True)
             self.emo_matrix_split = torch.split(self.emo_matrix, EMO_NUM)
             self.spk_matrix_split = torch.split(self.spk_matrix, EMO_NUM)
         else:
@@ -317,7 +317,7 @@ class IndexTTSv2:
             from huggingface_hub import hf_hub_download
             campplus_path = hf_hub_download("funasr/campplus", filename="campplus_cn_common.bin")
             self.campplus = CAMPPlusModel(feat_dim=80, embedding_size=192)
-            state_dict = torch.load(campplus_path, map_location=self.device)
+            state_dict = torch.load(campplus_path, map_location=self.device, weights_only=True)
             self.campplus.load_state_dict(state_dict)
             print(f"  CAMPPlus weights restored from: {campplus_path}")
         except Exception as e:

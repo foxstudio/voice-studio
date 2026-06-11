@@ -21,7 +21,7 @@ def load_pytorch_weights(checkpoint_path: Union[str, Path]) -> Dict[str, np.ndar
     """
     import torch
 
-    state_dict = torch.load(checkpoint_path, map_location="cpu")
+    state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
 
     # Handle different checkpoint formats
     if "model" in state_dict:

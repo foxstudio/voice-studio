@@ -193,11 +193,7 @@ def dismiss_longform(longform_task_id: str) -> dict:
 
 
 def _notify_clients() -> None:
-    """推送 WebSocket 通知"""
-    try:
-        task_queue._notify_clients()
-    except Exception:
-        pass
+    """Longform state changed — frontend polls via Api.longformTasks()."""
 
 
 def _segments_from_request(req: LongformGenerateRequest) -> list[PlannedTextSegment]:
