@@ -8,8 +8,9 @@ from app.schemas.voice_studio import LicenseStatus, VoiceAsset, VoiceAssetCreate
 from app.services import audio_tools, database as db, settings_store, voice_aliases
 
 
-def list_voices() -> list[VoiceAsset]:
-    return [_normalize_voice(VoiceAsset(**d)) for d in db.list_all("voices", "updated_at", limit=-1)]
+def list_voices(offset: int = 0, limit: int = 100) -> list[VoiceAsset]:
+    all_voices = [_normalize_voice(VoiceAsset(**d)) for d in db.list_all("voices", "updated_at", limit=-1)]
+    return all_voices[offset:offset + limit]
 
 
 def get_voice(voice_id: str) -> VoiceAsset | None:

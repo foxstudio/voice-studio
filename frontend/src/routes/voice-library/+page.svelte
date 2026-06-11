@@ -6,7 +6,13 @@
 	import { licenseLabel } from '$lib/labels';
 	import { onMount } from 'svelte';
 
-	let voices = $state<VoiceAsset[]>([]);
+	const PAGE_SIZE = 40;
+
+	let allVoices = $state<VoiceAsset[]>([]);
+	let displayedCount = $state(0);
+	let loading = $state(false);
+	let hasMore = $state(true);
+	let sentinel = $state<HTMLElement | null>(null);
 	let name = $state('');
 	let description = $state('');
 	let tags = $state('');
@@ -22,7 +28,7 @@
 	let voiceEngineFilter = $state('all');
 	let voiceLicenseFilter = $state('all');
 	let voiceSort = $state<'random' | 'updated' | 'name'>('random');
-	let randomSeed = $state(Math.floor(Math.random() * 1e9));
+	const sessionRandomSeed = Math.floor(Math.random() * 1e9);
 	let voicePreviewAudio = $state<HTMLAudioElement | null>(null);
 	let playingVoiceId = $state('');
 
@@ -55,8 +61,25 @@
 	}
 
 
+	async function loadInitial() {
+		loading = true;
+		allVoices = await Api.voices({ offset: 0, limit: 1000 });
+		displayedCount = Math.min(PAGE_SIZE, allVoices.length);
+		hasMore = displayedCount < allVoices.length;
+		loading = false;
+	}
+
+	async function loadMore() {
+		if (loading || !hasMore) return;
+		loading = true;
+		await new Promise(r => setTimeout(r, 50));
+		displayedCount = Math.min(displayedCount + PAGE_SIZE, allVoices.length);
+		hasMore = displayedCount < allVoices.length;
+		loading = false;
+	}
+
 	async function refresh() {
-		voices = await Api.voices();
+		await loadInitial();
 	}
 
 	async function toggleVoicePlayback(voice: VoiceAsset) {
@@ -80,7 +103,12 @@
 		}
 	}
 	onMount(() => {
-		refresh();
+		loadInitial();
+		const observer = new IntersectionObserver((entries) => {
+			if (entries[0].isIntersecting) loadMore();
+		}, { rootMargin: '200px' });
+		if (sentinel) observer.observe(sentinel);
+		return () => observer.disconnect();
 	});
 
 
@@ -107,7 +135,7 @@
 	}
 
 	async function batchGenerateAsr() {
-		const candidates = voices.filter((v) =>
+		const candidates = allVoices.filter((v) =>
 			isFakeReferenceText(v.reference_text) && v.reference_audio_ids[0]
 		);
 		if (!candidates.length) return;
@@ -140,7 +168,7 @@
 	}
 
 	async function batchGenerateSer() {
-		const candidates = voices.filter(v => v.reference_audio_ids?.length && (!v.emotion_tags || v.emotion_tags.length === 0));
+		const candidates = allVoices.filter(v => v.reference_audio_ids?.length && (!v.emotion_tags || v.emotion_tags.length === 0));
 		if (!candidates.length) return;
 		batchSerProgress = { active: true, current: 0, total: candidates.length };
 		for (let i = 0; i < candidates.length; i++) {
@@ -259,7 +287,7 @@
 	}
 
 	function cleanTags(voiceTags: string[], limit = 5) {
-		const names = new Set(voices.map((v) => v.name));
+		const names = new Set(allVoices.map((v) => v.name));
 		return voiceTags
 			.filter((tag) => !/^(seed|pack|community|voice_design|design_prompt|user|source|emotion):/.test(tag))
 			.filter((tag) => !NOISE_TAGS.has(tag))
@@ -307,10 +335,10 @@
 	let expandedCards = $state(new Set<string>());
 	let expandedCategories = $state(new Set<string>());
 
-	const { tagsByCategory, tagCounts } = $derived.by(() => {
+		const { tagsByCategory, tagCounts } = $derived.by(() => {
 		const counts = new Map<string, number>();
 		const groups: Record<string, string[]> = {};
-		for (const voice of voices) {
+		for (const voice of allVoices) {
 			for (const tag of cleanTags(voice.tags, 99)) {
 				counts.set(tag, (counts.get(tag) ?? 0) + 1);
 				const cat = tagCategory(tag);
@@ -340,7 +368,7 @@
 
 	const filteredVoices = $derived.by(() => {
 		const tokens = queryTokens(voiceQuery);
-		return [...voices]
+		return allVoices
 			.filter((voice) => {
 				if (voiceEngineFilter !== 'all' && !voice.engine_bindings?.some((binding) => binding.engine_id === voiceEngineFilter && binding.available)) return false;
 				if (voiceLicenseFilter !== 'all' && voice.license_status !== voiceLicenseFilter) return false;
@@ -351,15 +379,16 @@
 			.sort((a, b) => {
 				if (voiceSort === 'name') return a.name.localeCompare(b.name, 'zh-Hans-CN');
 				if (voiceSort === 'updated') return b.updated_at.localeCompare(a.updated_at);
-				/* seeded shuffle: stable within a session until re-randomized */
-				const ha = ((randomSeed * 2654435761 + hashStr(a.voice_id || a.name)) >>> 0);
-				const hb = ((randomSeed * 2654435761 + hashStr(b.voice_id || b.name)) >>> 0);
+				const ha = ((sessionRandomSeed * 2654435761 + hashStr(a.voice_id || a.name)) >>> 0);
+				const hb = ((sessionRandomSeed * 2654435761 + hashStr(b.voice_id || b.name)) >>> 0);
 				return ha - hb;
 			});
 	});
 
+	const visibleVoices = $derived(filteredVoices.slice(0, displayedCount));
+
 	const selfOrAuthorizedCount = $derived(
-		voices.filter((voice) => ['self_voice', 'authorized', 'company_authorized'].includes(voice.license_status)).length
+		allVoices.filter((voice) => ['self_voice', 'authorized', 'company_authorized'].includes(voice.license_status)).length
 	);
 	const canSaveVoice = $derived(Boolean(name.trim()) && (Boolean(editingVoice) || Boolean(file)));
 
@@ -378,7 +407,7 @@
 			<div class="page-title-row">
 				<h1>音色管理</h1>
 				<div class="stat-pills">
-					<span class="stat-pill"><Database size={14} /> {voices.length} 音色</span>
+					<span class="stat-pill"><Database size={14} /> {allVoices.length} 音色</span>
 					<span class="stat-pill"><ShieldCheck size={14} /> {selfOrAuthorizedCount} 授权</span>
 				</div>
 				<HelpDrawer title="音色管理" sections={help} />
@@ -445,14 +474,14 @@
 					</label>
 					<label class="field">
 						<span>排序</span>
-						<select bind:value={voiceSort} onchange={() => { if (voiceSort === 'random') randomSeed++; }}>
+						<select bind:value={voiceSort}>
 							<option value="random">随机</option>
 							<option value="updated">最近更新</option>
 							<option value="name">名称</option>
 						</select>
 					</label>
 				</div>
-					<span class="toolbar-count muted">{filteredVoices.length} / {voices.length} 条结果</span>
+					<span class="toolbar-count muted">{visibleVoices.length} / {filteredVoices.length} / {allVoices.length} 条结果</span>
 			</section>
 
 			{#if Object.keys(tagsByCategory).length > 0}
@@ -491,8 +520,8 @@
 			</section>
 			{/if}
 
-			<section class="grid voice-grid">
-			{#each filteredVoices as voice}
+		<section class="grid voice-grid">
+		{#each visibleVoices as voice}
 				<article class={`card stack voice-card engine-surface ${voiceCardKind(voice) === 'cloud' ? 'engine-cloud' : 'engine-local'} ${playingVoiceId === voice.voice_id ? 'playing' : ''}`}>
 					<div class="voice-card-head">
 						<h2 title={voice.name}>{voice.name}</h2>
@@ -550,10 +579,12 @@
 					</div>
 					<span class="dog-ear" class:ok={voice.license_status === "self_voice"}>{licenseLabel(voice.license_status)}</span>
 				</article>
-			{:else}
-				<div class="empty">还没有声音资产</div>
-			{/each}
-			</section>
+		{:else}
+			<div class="empty">还没有声音资产</div>
+		{/each}
+		{#if hasMore}<div bind:this={sentinel} class="scroll-sentinel"></div>{/if}
+		{#if loading}<div class="loading-indicator">加载中...</div>{/if}
+		</section>
 		</section>
 			{#if showVoiceModal}
 			<div
@@ -1311,4 +1342,16 @@
 		.ser-card-btn { color: #d4b96a; }
 		.ser-card-btn:hover:not(:disabled) { color: #f0d78a; background: rgba(224, 173, 66, 0.1); }
 		.ser-card-btn:disabled { opacity: 0.4; }
+
+		.scroll-sentinel {
+			height: 1px;
+			width: 100%;
+		}
+
+		.loading-indicator {
+			text-align: center;
+			padding: 16px;
+			color: var(--muted);
+			font-size: 13px;
+		}
 </style>

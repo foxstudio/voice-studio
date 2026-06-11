@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from app.errors import AppException
@@ -11,8 +11,8 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[VoiceAsset])
-async def list_voices():
-    return voice_store.list_voices()
+async def list_voices(offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500)):
+    return voice_store.list_voices(offset=offset, limit=limit)
 
 
 @router.post("", response_model=VoiceAsset)

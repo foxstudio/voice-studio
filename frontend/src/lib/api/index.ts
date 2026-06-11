@@ -55,7 +55,13 @@ export const Api = {
 	stopEngine: (id: string) => api.post<EngineDetail>(`/engines/${id}/stop`),
 	healthEngine: (id: string) => api.post<Record<string, unknown>>(`/engines/${id}/health-check`),
 	diagnoseEngineAudio: (id: string, body: { reference_audio_path?: string | null; voice_id?: string | null; text?: string; emotion?: string | null }) => api.post<EngineAudioDiagnosis>(`/engines/${id}/diagnose-audio`, body),
-	voices: () => api.get<VoiceAsset[]>('/voices'),
+	voices: (params?: { offset?: number; limit?: number }) => {
+		const search = new URLSearchParams();
+		if (params?.offset !== undefined) search.set('offset', String(params.offset));
+		if (params?.limit !== undefined) search.set('limit', String(params.limit));
+		const suffix = search.toString() ? `?${search}` : '';
+		return api.get<VoiceAsset[]>(`/voices${suffix}`);
+	},
 	createVoice: (voice: VoiceAssetCreate) => api.post<VoiceAsset>('/voices', voice),
 	updateVoice: (id: string, voice: VoiceAssetUpdate) => api.patch<VoiceAsset>(`/voices/${id}`, voice),
 	deleteVoice: (id: string) => api.delete<{ status: string }>(`/voices/${id}`),
