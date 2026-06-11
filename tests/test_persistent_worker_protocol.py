@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 import sys
+import time
 
 import pytest
 
@@ -55,11 +56,12 @@ class _FakeClock:
 @pytest.mark.parametrize("worker_module", [f5_worker, cosyvoice_worker], ids=["f5", "cosyvoice"])
 def test_worker_read_response_returns_json_after_noisy_non_json(worker_module, monkeypatch):
     worker = _FakeWorker('INFO worker bootstrap\n{"ready": true}\n')
-    monkeypatch.setattr(worker_module.select, "select", lambda rlist, wlist, xlist, timeout: (rlist, [], []))
-    result = worker_module._read_response(
+    import select as _select_mod
+    monkeypatch.setattr(_select_mod, "select", lambda rlist, wlist, xlist, timeout: (rlist, [], []))
+    result = worker_module._worker._read_response(
         worker=worker,
         timeout=10,
-        started=worker_module.time.monotonic(),
+        started=time.monotonic(),
         cancel_check=None,
         on_tick=None,
     )
@@ -72,14 +74,15 @@ def test_worker_read_response_tail_included_on_exit(worker_module, tmp_path, mon
     stderr_path = tmp_path / "worker-stderr.log"
     stderr_path.write_text("stderr from worker\n")
 
-    monkeypatch.setattr(worker_module, "_worker_log_handle", _FakeLogHandle(stderr_path))
-    monkeypatch.setattr(worker_module.select, "select", lambda rlist, wlist, xlist, timeout: (rlist, [], []))
+    monkeypatch.setattr(worker_module._worker, "_log_handle", _FakeLogHandle(stderr_path))
+    import select as _select_mod
+    monkeypatch.setattr(_select_mod, "select", lambda rlist, wlist, xlist, timeout: (rlist, [], []))
 
     with pytest.raises(RuntimeError, match="unexpected model message") as exc:
-        worker_module._read_response(
+        worker_module._worker._read_response(
             worker=worker,
             timeout=10,
-            started=worker_module.time.monotonic(),
+            started=time.monotonic(),
             cancel_check=None,
             on_tick=None,
         )
@@ -95,12 +98,13 @@ def test_worker_read_response_timeout_includes_tail(worker_module, tmp_path, mon
     stderr_path.write_text("timeout stderr trace\n")
     clock = _FakeClock([0.0, 0.2, 1.5])
 
-    monkeypatch.setattr(worker_module, "_worker_log_handle", _FakeLogHandle(stderr_path))
-    monkeypatch.setattr(worker_module.time, "monotonic", clock)
-    monkeypatch.setattr(worker_module.select, "select", lambda rlist, wlist, xlist, timeout: (rlist, [], []))
+    monkeypatch.setattr(worker_module._worker, "_log_handle", _FakeLogHandle(stderr_path))
+    monkeypatch.setattr(time, "monotonic", clock)
+    import select as _select_mod
+    monkeypatch.setattr(_select_mod, "select", lambda rlist, wlist, xlist, timeout: (rlist, [], []))
 
     with pytest.raises(RuntimeError, match="timed out after 1s") as exc:
-        worker_module._read_response(
+        worker_module._worker._read_response(
             worker=worker,
             timeout=1,
             started=0.0,
@@ -122,15 +126,16 @@ def test_worker_ready_false_includes_tail(worker_module, tmp_path, monkeypatch):
     stderr_path = tmp_path / "worker-ready-stderr.log"
     stderr_path.write_text("ready failed details\n")
 
-    monkeypatch.setattr(worker_module, "_worker", None)
-    monkeypatch.setattr(worker_module, "_worker_log_handle", _FakeLogHandle(stderr_path))
-    monkeypatch.setattr(worker_module, "_safe_stderr_tail", lambda _worker: "ready failed details")
-    monkeypatch.setattr(worker_module.subprocess, "Popen", lambda *args, **kwargs: _FakePopen())
-    monkeypatch.setattr(worker_module, "_read_response", lambda *args, **kwargs: {"ready": False, "error": ""})
-    monkeypatch.setattr(worker_module, "_reset_worker", lambda: None)
+    monkeypatch.setattr(worker_module._worker, "_worker", None)
+    monkeypatch.setattr(worker_module._worker, "_log_handle", _FakeLogHandle(stderr_path))
+    monkeypatch.setattr(worker_module._worker, "_safe_stderr_tail", lambda _worker: "ready failed details")
+    import subprocess as _subprocess_mod
+    monkeypatch.setattr(_subprocess_mod, "Popen", lambda *args, **kwargs: _FakePopen())
+    monkeypatch.setattr(worker_module._worker, "_read_response", lambda *args, **kwargs: {"ready": False, "error": ""})
+    monkeypatch.setattr(worker_module._worker, "_reset_worker", lambda: None)
 
     with pytest.raises(RuntimeError, match="failed to start") as exc:
-        worker_module._ensure_worker(
+        worker_module._worker._ensure_worker(
             root=tmp_path,
             python=str(sys.executable),
             timeout=10,
