@@ -131,6 +131,8 @@ def scan_references(entries: list[InventoryEntry]) -> dict[str, list[ReferenceHi
             continue
         for line_no, line in enumerate(path.read_text(encoding="utf-8", errors="ignore").splitlines(), start=1):
             for source in moved_sources:
+                if rel == source:
+                    continue
                 if source in line:
                     reference_hits[source].append(ReferenceHit(path=rel, line=line_no, text=line.strip()))
 

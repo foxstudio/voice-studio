@@ -25,14 +25,14 @@ Voice/corpus import and ingestion scripts:
 
 | Current path | Proposed path | Notes |
 | --- | --- | --- |
-| `scripts/anime_voice_import.py` | `scripts/imports/anime_voice_import.py` | HuggingFace/anime voice import. |
+| `scripts/anime_voice_import.py` | `scripts/anime_voice_import.py` | Stable user-facing import entrypoint; group later only with wrapper. |
 | `scripts/batch_import_local.py` | `scripts/imports/batch_import_local.py` | Local batch import. |
-| `scripts/batch_voice_import.py` | `scripts/imports/batch_voice_import.py` | Local curated voice import. |
-| `scripts/curated_voice_import.py` | `scripts/imports/curated_voice_import.py` | Curated import. |
-| `scripts/full_voice_import.py` | `scripts/imports/full_voice_import.py` | Broad local import. |
+| `scripts/batch_voice_import.py` | `scripts/batch_voice_import.py` | Stable user-facing import entrypoint; group later only with wrapper. |
+| `scripts/curated_voice_import.py` | `scripts/curated_voice_import.py` | Stable user-facing import entrypoint; group later only with wrapper. |
+| `scripts/full_voice_import.py` | `scripts/full_voice_import.py` | Stable user-facing import entrypoint; group later only with wrapper. |
 | `scripts/genshin_batch_import.py` | `scripts/imports/genshin_batch_import.py` | Uses env/default source and report paths. |
 | `scripts/genshin_npc_import.py` | `scripts/imports/genshin_npc_import.py` | Uses env/default source and report paths. |
-| `scripts/voice_importer.py` | `scripts/imports/voice_importer.py` | Early/smaller importer. |
+| `scripts/voice_importer.py` | `scripts/voice_importer.py` | Stable user-facing import entrypoint; group later only with wrapper. |
 
 ### maintenance
 
@@ -40,12 +40,12 @@ Backfill, cleanup, data audit, and repair scripts:
 
 | Current path | Proposed path | Notes |
 | --- | --- | --- |
-| `scripts/backfill_voice_reference_text.py` | `scripts/maintenance/backfill_voice_reference_text.py` | Referenced by docs. |
+| `scripts/backfill_voice_reference_text.py` | `scripts/backfill_voice_reference_text.py` | Stable user-facing maintenance entrypoint; group later only with wrapper. |
 | `scripts/genshin_cleanup_refs.py` | `scripts/maintenance/genshin_cleanup_refs.py` | Review generated report dependencies. |
 | `scripts/genshin_ref_text_check.py` | `scripts/maintenance/genshin_ref_text_check.py` | Review generated report dependencies. |
 | `scripts/genshin_reorder_refs.py` | `scripts/maintenance/genshin_reorder_refs.py` | Review generated report dependencies. |
 | `scripts/replace_short_refs.py` | `scripts/maintenance/replace_short_refs.py` | Review before move. |
-| `scripts/migration/audit_voice_studio_data.py` | `scripts/maintenance/migration/audit_voice_studio_data.py` | Keep current path until docs and handoff instructions are updated. |
+| `scripts/migration/audit_voice_studio_data.py` | `scripts/migration/audit_voice_studio_data.py` | Stable migration entrypoint. |
 
 ### evaluation
 
@@ -54,9 +54,9 @@ Alignment, quality, model verification, and eval scripts:
 | Current path | Proposed path | Notes |
 | --- | --- | --- |
 | `scripts/alignment_test.py` | `scripts/evaluation/alignment_test.py` | Review CLI examples before move. |
-| `scripts/alignment_test_v2.py` | `scripts/evaluation/alignment_test_v2.py` | References `scripts/dump_pytorch_outputs_v2.py`. |
+| `scripts/alignment_test_v2.py` | `scripts/evaluation/alignment_test_v2.py` | Self-contained usage examples now ignored by checker. |
 | `scripts/dump_pytorch_outputs.py` | `scripts/evaluation/dump_pytorch_outputs.py` | Review CLI examples before move. |
-| `scripts/dump_pytorch_outputs_v2.py` | `scripts/evaluation/dump_pytorch_outputs_v2.py` | Referenced by alignment script. |
+| `scripts/dump_pytorch_outputs_v2.py` | `scripts/dump_pytorch_outputs_v2.py` | Stable paired entrypoint for `alignment_test_v2.py`; group later only with wrapper. |
 | `scripts/run_voice_studio_deep_eval.py` | `scripts/evaluation/run_voice_studio_deep_eval.py` | Evaluation entrypoint. |
 | `scripts/run_voice_studio_quality_suite.py` | `scripts/evaluation/run_voice_studio_quality_suite.py` | Evaluation entrypoint. |
 | `scripts/verify_mlx_v2.py` | `scripts/evaluation/verify_mlx_v2.py` | Model verification. |
@@ -71,7 +71,7 @@ Local smoke/debug helpers:
 | `scripts/genshin_asr_check.py` | `scripts/dev/genshin_asr_check.py` | Debug utility. |
 | `scripts/genshin_asr_fix.py` | `scripts/dev/genshin_asr_fix.py` | Debug/repair utility. |
 | `scripts/qwen_forced_align_worker.py` | `scripts/dev/qwen_forced_align_worker.py` | Worker helper; check caller paths before move. |
-| `scripts/webui_smoke_playwright.mjs` | `scripts/dev/webui_smoke_playwright.mjs` | Referenced by docs. |
+| `scripts/webui_smoke_playwright.mjs` | `scripts/webui_smoke_playwright.mjs` | Stable smoke-test entrypoint; group later only with wrapper. |
 
 ### reports
 
@@ -94,7 +94,7 @@ Generated JSON reports or analysis outputs:
 - `docs/VOICE_STUDIO_BATCH_AGENT.md` references `scripts/voice_studio_batch.py`.
 - `docs/VOICE_STUDIO_ENGINE_PARAMETERS.md` references `scripts/voice_studio_batch.py`.
 - `docs/MIMO_V2_5_CLOUD_API_RFC.md` references `scripts/webui_smoke_playwright.mjs`.
-- Planned script moves still have references in docs or usage examples.
+- Stable top-level entrypoints remain in place until wrapper migrations are explicitly planned.
 
 Current checker summary:
 
@@ -102,9 +102,9 @@ Current checker summary:
 - Missing inventory sources: 0
 - Unmanaged scripts/artifacts: 0
 - Absolute path hits: 0
-- Proposed moved scripts with references: 10
+- Proposed moved scripts with references: 0
 
-The current `--fail-on-risk` result is expected to fail until references to proposed moved scripts are patched or intentionally waived.
+The current `--fail-on-risk` result is expected to pass after the stable-entrypoint waivers above.
 
 ## Special Case: `voice_studio_batch.py`
 
@@ -121,8 +121,8 @@ Recommended later migration:
 Before moving any script:
 
 1. Run `scripts/migration/check_script_paths.py --fail-on-risk`.
-2. Patch docs and usage examples that still reference proposed moved script paths.
-3. Move one group at a time only after compatibility wrappers are planned.
+2. Move one group at a time only after compatibility wrappers are planned.
+3. Keep stable top-level entrypoints until their wrappers are tested.
 4. Run:
    - `.venv/bin/python -m compileall -q scripts`
    - docs reference `rg` checks for old paths.

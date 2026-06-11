@@ -24,8 +24,8 @@ def test_inventory_parser_finds_planned_script_moves():
     entries = checker.parse_inventory()
     by_current = {entry.current: entry.proposed for entry in entries}
 
-    assert by_current["scripts/voice_importer.py"] == "scripts/imports/voice_importer.py"
-    assert by_current["scripts/webui_smoke_playwright.mjs"] == "scripts/dev/webui_smoke_playwright.mjs"
+    assert by_current["scripts/genshin_batch_import.py"] == "scripts/imports/genshin_batch_import.py"
+    assert by_current["scripts/analyze_genshin_pack.py"] == "scripts/dev/analyze_genshin_pack.py"
     assert by_current["scripts/genshin_analysis.json"] == "scripts/reports/genshin_analysis.json"
 
 
