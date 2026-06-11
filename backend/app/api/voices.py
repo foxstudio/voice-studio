@@ -11,7 +11,7 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[VoiceAsset])
-async def list_voices(offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500)):
+async def list_voices(offset: int = Query(0, ge=0), limit: int = Query(100, ge=1)):
     return voice_store.list_voices(offset=offset, limit=limit)
 
 

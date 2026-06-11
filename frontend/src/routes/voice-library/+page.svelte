@@ -63,7 +63,7 @@
 
 	async function loadInitial() {
 		loading = true;
-		allVoices = await Api.voices({ offset: 0, limit: 1000 });
+		allVoices = await Api.voices({ offset: 0, limit: 2000 });
 		displayedCount = Math.min(PAGE_SIZE, allVoices.length);
 		hasMore = displayedCount < allVoices.length;
 		loading = false;
