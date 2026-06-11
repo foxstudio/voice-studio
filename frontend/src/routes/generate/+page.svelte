@@ -158,14 +158,21 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		<div class="result-panel stack section-divider" id="records">
 			<div class="row gen-section-head result-headline"><h2>结果与记录</h2><div class="records-row-summary"><span class="muted">{filteredTasks.length} 条</span>{#if statusCounts.active}<span class="badge">生成中 {queueCounts.processing}</span><span class="badge">等待 {queueCounts.waiting}</span>{/if}{#if $store.selectedTaskIds.length}<span class="badge ok">已选 {$store.selectedTaskIds.length}</span>{/if}</div></div>
 			<div class="records-toolbar">
-				<div class="toolbar-row-1">
-					<div class="toolbar-tabs">
-						<div class="gen-segmented compact-tabs" role="tablist">
-							<button class:active={$store.taskStatusTab === 'all'} type="button" onclick={() => { $store.taskStatusTab = 'all'; $store.currentPage = 1; }}>全部<span>{statusCounts.all}</span></button>
-							<button class:active={$store.taskStatusTab === 'active'} type="button" onclick={() => { $store.taskStatusTab = 'active'; $store.currentPage = 1; }}>队列<span>{statusCounts.active}</span></button>
-							<button class:active={$store.taskStatusTab === 'success'} type="button" onclick={() => { $store.taskStatusTab = 'success'; $store.currentPage = 1; }}>成功<span>{statusCounts.success}</span></button>
-							<button class:active={$store.taskStatusTab === 'failed'} type="button" onclick={() => { $store.taskStatusTab = 'failed'; $store.currentPage = 1; }}>异常<span>{statusCounts.failed}</span></button>
-						</div>
+				<div class="toolbar-tabs">
+					<div class="gen-segmented compact-tabs" role="tablist">
+						<button class:active={$store.taskStatusTab === 'all'} type="button" onclick={() => { $store.taskStatusTab = 'all'; $store.currentPage = 1; }}>全部<span>{statusCounts.all}</span></button>
+						<button class:active={$store.taskStatusTab === 'active'} type="button" onclick={() => { $store.taskStatusTab = 'active'; $store.currentPage = 1; }}>队列<span>{statusCounts.active}</span></button>
+						<button class:active={$store.taskStatusTab === 'success'} type="button" onclick={() => { $store.taskStatusTab = 'success'; $store.currentPage = 1; }}>成功<span>{statusCounts.success}</span></button>
+						<button class:active={$store.taskStatusTab === 'failed'} type="button" onclick={() => { $store.taskStatusTab = 'failed'; $store.currentPage = 1; }}>异常<span>{statusCounts.failed}</span></button>
+					</div>
+				</div>
+				<div class="toolbar-control-row">
+					<div class="records-filter-inline">
+						<div class="gen-search-field compact"><Search size={13} /><input bind:value={$store.taskQuery} placeholder="搜索台词、模型、音色、状态" /></div>
+						<select class="compact-filter" bind:value={$store.taskEngineFilter}>{#each taskEngineOptions as o}<option value={o}>{o === 'all' ? '全部模型' : o}</option>{/each}</select>
+						<select class="compact-filter" bind:value={$store.taskSourceFilter}><option value="all">全部来源</option><option value="local">本地</option><option value="cloud">云端</option></select>
+						<select class="compact-filter" bind:value={$store.taskDateFilter}><option value="all">全部时间</option><option value="today">今天</option><option value="7d">最近 7 天</option><option value="30d">最近 30 天</option></select>
+						<select class="compact-filter" bind:value={$store.taskSortBy}><option value="latest">最新</option><option value="oldest">最旧</option><option value="duration_desc">时长↓</option></select>
 					</div>
 					<div class="toolbar-right">
 						{#if pageCount > 1}
@@ -184,13 +191,6 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 							<button class="gen-icon-btn" type="button" onclick={refreshPageData} disabled={$store.busy}><RotateCcw size={15} /></button>
 						</div>
 					</div>
-				</div>
-				<div class="records-filter-inline">
-					<div class="gen-search-field compact"><Search size={13} /><input bind:value={$store.taskQuery} placeholder="搜索台词、模型、音色、状态" /></div>
-					<select class="compact-filter" bind:value={$store.taskEngineFilter}>{#each taskEngineOptions as o}<option value={o}>{o === 'all' ? '全部模型' : o}</option>{/each}</select>
-					<select class="compact-filter" bind:value={$store.taskSourceFilter}><option value="all">全部来源</option><option value="local">本地</option><option value="cloud">云端</option></select>
-					<select class="compact-filter" bind:value={$store.taskDateFilter}><option value="all">全部时间</option><option value="today">今天</option><option value="7d">最近 7 天</option><option value="30d">最近 30 天</option></select>
-					<select class="compact-filter" bind:value={$store.taskSortBy}><option value="latest">最新</option><option value="oldest">最旧</option><option value="duration_desc">时长↓</option></select>
 				</div>
 			</div>
 			{#if H.queueSummaryText(queueCounts, queueOrderedTasks, engineMap)}<div class="queue-insight"><Info size={14} /><span>{H.queueSummaryText(queueCounts, queueOrderedTasks, engineMap)}</span></div>{/if}
