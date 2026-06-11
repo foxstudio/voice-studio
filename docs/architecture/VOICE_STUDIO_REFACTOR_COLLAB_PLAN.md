@@ -158,38 +158,59 @@
 
 ### Phase 5: WebUI 产品化
 
+状态：第一轮产品化已完成并进入稳定收尾。`/generate` 工作台结果卡片、筛选工具栏、分页、滚动和错误信息展示已按当前反馈修正；`/history` 已从 redirect 改为独立历史页面；无文字图标按钮已统一使用延迟 tooltip，避免浏览器原生 title 立即弹出。
+
 目标：把 WebUI 整理为工作台、资产库、历史管理。
 
 顺序：
 
-1. `/history` 独立页面。
-2. `/voice-library` 资产库升级。
-3. `/generate` 工作台整理。
+1. `/generate` 工作台整理
+   - 当前状态：已完成当前可见布局修复。
+   - 已修复结果卡片 header：checkbox 左上、标题单行省略、状态 badge 右上。
+   - 已修复播放/下载左对齐，复用/删除/重试固定右下。
+   - 已修复结果工具栏：状态 tabs 独立一行；筛选左对齐；分页/批量操作右对齐并自适应。
+   - 已修复页面滚动、错误信息最大高度滚动和渐变提示。
+   - 已补充 active queue 等待/运行提示，让“排队”说明正在等谁。
+
+2. `/history` 独立页面
+   - 当前状态：已完成第一版独立页面。
+   - 不再从 `/history` redirect 到 generate。
+   - 支持搜索、模型筛选、时间筛选、排序、播放、下载、复用参数、删除确认。
+   - generate 页面支持从 history 复用参数回填。
+
+3. `/voice-library` 资产库升级
+   - 当前状态：既有页面已具备搜索、模型筛选、授权筛选、排序、标签筛选、引擎/来源/台词标签、播放、编辑、删除、去合成。
+   - 已将卡片头部 icon-only 操作、搜索清空、侧边栏和公共 drawer/参考音频下载按钮统一改为延迟 tooltip。
+   - 后续可选增强：把编辑弹窗扩展为详情侧栏；将“去合成”文案统一为“用于合成”；进一步按 capabilities 驱动引擎兼容提示。
 
 ## 5. 下一批建议指令
 
-Phase 4 后端抽象与目录治理当前安全批次已完成：policy / manifest / health / runner / request builder / provider skeleton 已拆分，`docs/models` 已迁到 `docs/engines`，schema compatibility imports 已分层迁移，script path dry-run checker 的 `--fail-on-risk` 门禁已清零。下一步进入 Phase 5 WebUI 产品化，优先处理 `/generate` 工作台当前可见布局和交互问题，再逐步拆 `/history` 与 `/voice-library`。
+Phase 5 第一轮已完成：`/generate`、`/history`、`/voice-library` 的当前高频可见问题已收敛。下一批建议只做验收与小修，不再大改页面结构；优先等 GitHub Actions 完整通过，再根据浏览器 smoke 或用户现场反馈开小批次。
 
 ```text
 你现在在 /Users/foxmacstudio/Projects/mlx-indextts 工作。
 
-本轮进入 Phase 5 Batch 1：稳定 `/generate` 工作台结果卡片与筛选工具栏。不要修改后端 API、DB schema、真实数据或模型权重。
+本轮进入 Phase 5 验收收尾：不要修改后端 API、DB schema、真实数据或模型权重。
 
 目标：
-1. 保留当前用户已在本地看到的 `/generate` 页面改动，先读取 diff，不覆盖未提交前端修改。
-2. 修复结果卡片 header：checkbox 左上、标题单行省略、状态 badge 右上。
-3. 修复音频播放/下载按钮左对齐，与复用/删除按钮尺寸一致。
-4. 修复结果工具栏：状态 tabs 单独一行；搜索/模型/来源/时间/排序左对齐并自适应；分页和批量操作右对齐并自适应折行。
-5. 保证页面可滚动，所有无文字图标按钮有延迟 tooltip。
+1. 等待并检查 GitHub Actions 的 Ruff / Test 是否全部通过。
+2. 浏览器 smoke `/generate`、`/history`、`/voice-library`：
+   - 页面可滚动。
+   - 筛选、分页、播放/下载、复用、删除确认入口可见且布局不重叠。
+   - icon-only 按钮悬停延迟后显示统一 tooltip。
+3. 若发现小问题，只做局部修复；不要重写页面结构。
+4. 更新本文档的当前进度和剩余风险。
 
 验证：
 - pnpm --dir frontend check
 - pnpm --dir frontend build
-- 浏览器打开 http://localhost:5173/generate 做桌面宽屏和窄屏截图检查。
+- .venv/bin/python -m compileall -q backend/app
+- .venv/bin/python -m pytest tests -q
+- 浏览器打开 http://localhost:5173/generate、/history、/voice-library 做桌面宽屏和窄屏截图检查。
 
 交付必须包含：
 - 修改文件列表
-- WebUI 布局/交互摘要
+- WebUI smoke 摘要
 - 是否改变后端实现逻辑、外部 API/DB schema
 - 验证命令与结果
 - 是否触碰真实数据、模型权重、~/VoiceStudio
