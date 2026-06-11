@@ -569,18 +569,20 @@
 
 	.records-toolbar {
 		display: grid;
-		gap: 8px;
+		grid-template-columns: auto minmax(460px, 1fr) auto;
+		align-items: center;
+		gap: 8px 10px;
 	}
 
 	.toolbar-row-1 {
-		display: flex;
-		align-items: center;
-		gap: 8px;
+		display: contents;
 	}
 
 	.toolbar-tabs {
 		display: flex;
 		align-items: center;
+		grid-column: 1;
+		grid-row: 1;
 		flex: 0 1 auto;
 		min-width: 0;
 	}
@@ -590,7 +592,8 @@
 		align-items: center;
 		justify-content: flex-end;
 		gap: 8px;
-		flex: 1 1 0;
+		grid-column: 3;
+		grid-row: 1;
 		min-width: 0;
 		flex-wrap: nowrap;
 	}
@@ -604,15 +607,13 @@
 		padding: 3px 8px;
 		border-radius: 6px;
 		font-size: 12px;
-		min-width: 72px;
-		flex-shrink: 0;
-		width: auto;
+		width: 100%;
+		min-width: 0;
 	}
-	.records-filter-inline select:nth-of-type(1) { min-width: 90px; }
-	.records-filter-inline select:nth-of-type(2) { min-width: 70px; }
-	.records-filter-inline select:nth-of-type(3) { min-width: 80px; }
-	.records-filter-inline select:nth-of-type(4) { min-width: 70px; }
-	.records-filter-inline select:nth-of-type(5) { min-width: 60px; }
+	.records-filter-inline select:nth-of-type(1) { min-width: 108px; }
+	.records-filter-inline select:nth-of-type(2) { min-width: 88px; }
+	.records-filter-inline select:nth-of-type(3) { min-width: 98px; }
+	.records-filter-inline select:nth-of-type(4) { min-width: 82px; }
 
 	.gen-search-field {
 		display: flex;
@@ -1390,19 +1391,41 @@
 
 	/* ── 结果筛选行（单行内联） ── */
 	.records-filter-inline {
-		display: flex;
+		display: grid;
+		grid-column: 2;
+		grid-row: 1;
+		grid-template-columns: minmax(180px, 1fr) minmax(108px, 0.42fr) minmax(88px, 0.32fr) minmax(98px, 0.36fr) minmax(82px, 0.28fr);
 		align-items: center;
 		gap: 8px;
-		flex-wrap: wrap;
+		min-width: 0;
 	}
 
 
 	.records-filter-inline .gen-search-field {
-		flex: 1;
-		min-width: 140px;
+		min-width: 0;
 	}
 
 	/* ── 响应式 ── */
+	@media (max-width: 1180px) {
+		.records-toolbar {
+			grid-template-columns: minmax(0, 1fr) auto;
+		}
+
+		.toolbar-tabs {
+			grid-column: 1;
+		}
+
+		.toolbar-right {
+			grid-column: 2;
+		}
+
+		.records-filter-inline {
+			grid-column: 1 / -1;
+			grid-row: 2;
+			grid-template-columns: minmax(220px, 1fr) repeat(4, minmax(92px, 0.35fr));
+		}
+	}
+
 	@media (max-width: 900px) {
 		.param-inline-row {
 			gap: 6px;
@@ -1410,6 +1433,7 @@
 
 		.records-filter-inline {
 			gap: 6px;
+			grid-template-columns: minmax(0, 1fr) repeat(2, minmax(92px, 0.42fr));
 		}
 
 		.preset-editor-grid,
@@ -1429,7 +1453,7 @@
 		}
 
 		.records-filter-inline {
-			flex-direction: column;
+			grid-template-columns: 1fr;
 			align-items: stretch;
 		}
 
