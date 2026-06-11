@@ -111,6 +111,13 @@
 		text-align: left;
 	}
 
+	.select-trigger span:first-child {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		min-width: 0;
+	}
+
 	.placeholder {
 		color: var(--muted);
 	}

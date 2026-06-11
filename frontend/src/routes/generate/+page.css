@@ -1372,17 +1372,18 @@
 	.param-inline-row {
 		display: flex;
 		align-items: center;
-		gap: 10px;
+		gap: 14px;
 		flex-wrap: wrap;
-		padding: 6px 0;
+		padding: 8px 0;
 	}
 
 	.param-inline {
-		flex: 0 1 200px;
-		min-width: 200px;
+		flex: 1 1 180px;
+		max-width: 280px;
+		min-width: 0;
 		display: flex;
 		align-items: center;
-		gap: 4px;
+		gap: 6px;
 		font-size: 12px;
 		color: var(--muted);
 	}
@@ -1398,11 +1399,12 @@
 		min-width: 90px;
 	}
 	.param-inline-range {
-		flex: 0 1 200px;
-		min-width: 200px;
+		flex: 1 1 220px;
+		max-width: 320px;
+		min-width: 0;
 		display: flex;
 		align-items: center;
-		gap: 4px;
+		gap: 6px;
 		font-size: 12px;
 		color: var(--muted);
 	}
@@ -1410,16 +1412,41 @@
 		white-space: nowrap;
 		flex-shrink: 0;
 	}
+	.param-inline-range input[type='number'] {
+		width: 60px;
+		min-height: 26px;
+		padding: 2px 4px;
+		border: 1px solid var(--line);
+		border-radius: 5px;
+		background: #101215;
+		color: var(--text);
+		font-size: 12px;
+		text-align: center;
+	}
 	.param-inline-range input[type='range'] {
-		width: 100%;
+		flex: 1 1 80px;
+		min-width: 60px;
 		height: 4px;
+	}
+	.param-inline-range .speed-number {
+		width: 52px;
+		min-width: 52px;
+		min-height: 26px;
+		padding: 2px 4px;
+		border: 1px solid var(--line);
+		border-radius: 5px;
+		background: #101215;
+		color: var(--text);
+		font-size: 12px;
+		text-align: center;
+		font-variant-numeric: tabular-nums;
 	}
 	.voice-inline {
 		display: flex;
 		align-items: center;
 		gap: 4px;
 		flex: 1 1 auto;
-		min-width: 160px;
+		min-width: 0;
 	}
 	.voice-inline select {
 		min-height: 28px;
@@ -1429,9 +1456,12 @@
 		min-width: 100px;
 		flex: 1 1 auto;
 	}
-	.param-inline:last-of-type select {
+	.param-inline-format {
 		flex: 0 0 auto;
-		min-width: 70px;
+		min-width: 0;
+	}
+	.param-inline-format select {
+		min-width: 64px;
 	}
 
 	/* ── 更多参数折叠面板 ── */
@@ -1502,7 +1532,21 @@
 
 	@media (max-width: 900px) {
 		.param-inline-row {
-			gap: 6px;
+			gap: 8px 12px;
+		}
+
+		.param-inline {
+			flex: 1 1 160px;
+			min-width: 160px;
+		}
+
+		.param-inline-range {
+			flex: 1 1 180px;
+			min-width: 180px;
+		}
+
+		.voice-inline {
+			min-width: 120px;
 		}
 
 		.records-filter-inline {
@@ -1532,6 +1576,10 @@
 		.param-inline,
 		.param-inline-range {
 			min-width: 100%;
+		}
+
+		.param-inline-format {
+			min-width: 100px;
 		}
 
 		.records-filter-inline {
