@@ -8,8 +8,8 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-from app.models.exceptions import AppException
-from app.models.schemas import TaskStatus, TranscriptionRecord, TranscriptionTask, now_iso
+from app.errors import AppException
+from app.schemas.voice_studio import TaskStatus, TranscriptionRecord, TranscriptionTask, now_iso
 from app.services import asr_service, audio_tools, database as db
 
 _queue: queue.Queue[str | None] | None = None

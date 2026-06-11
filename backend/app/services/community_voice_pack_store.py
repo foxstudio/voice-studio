@@ -4,7 +4,7 @@ import urllib.request
 from urllib.parse import urlencode
 from pathlib import Path
 
-from app.models.schemas import (
+from app.schemas.voice_studio import (
     AudioQualityResult,
     CommunityVoiceCandidate,
     CommunityVoicePack,

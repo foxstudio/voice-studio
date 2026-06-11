@@ -4,7 +4,7 @@ import time
 from functools import lru_cache
 from typing import Any, Callable
 
-from app.models.schemas import EngineDetail, EngineSpeaker, EngineStatus
+from app.schemas.voice_studio import EngineDetail, EngineSpeaker, EngineStatus
 from app.services import cosyvoice_worker, engine_health, engine_manifests, engine_provider, engine_runner, f5_worker
 
 

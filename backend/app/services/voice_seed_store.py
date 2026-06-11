@@ -3,7 +3,7 @@ from __future__ import annotations
 import urllib.request
 from pathlib import Path
 
-from app.models.schemas import AudioQualityResult, LicenseStatus, VoiceAssetCreate, VoiceFile, VoiceSeed, VoiceType
+from app.schemas.voice_studio import AudioQualityResult, LicenseStatus, VoiceAssetCreate, VoiceFile, VoiceSeed, VoiceType
 from app.services import audio_tools, database as db, settings_store, voice_aliases, voice_store
 
 INDEX_EXAMPLE_RAW = "https://media.githubusercontent.com/media/index-tts/index-tts/main/examples"

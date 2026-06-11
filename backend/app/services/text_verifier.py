@@ -3,7 +3,7 @@ from __future__ import annotations
 import difflib
 import re
 
-from app.models.schemas import TTSVerificationResponse, TTSVerificationSegment
+from app.schemas.voice_studio import TTSVerificationResponse, TTSVerificationSegment
 
 _SENTENCE_RE = re.compile(r"(?<=[。！？!?；;…])\s*|\n+")
 _PUNCT_RE = re.compile(r"[\s`~!@#$%^&*()_\-+=\[\]{}\\|;:'\",<.>/?，。！？；：、“”‘’（）《》【】—…·]+")

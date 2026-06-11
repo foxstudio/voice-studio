@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-from app.models.schemas import LicenseStatus, VoiceAsset, VoiceAssetCreate, VoiceAssetUpdate, VoiceEngineBinding, VoiceFile, now_iso
+from app.schemas.voice_studio import LicenseStatus, VoiceAsset, VoiceAssetCreate, VoiceAssetUpdate, VoiceEngineBinding, VoiceFile, now_iso
 from app.services import audio_tools, database as db, settings_store, voice_aliases
 
 

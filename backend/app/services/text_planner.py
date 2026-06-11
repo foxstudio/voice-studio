@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from app.models.schemas import GeneratePlanResponse, PlannedTextSegment
+from app.schemas.voice_studio import GeneratePlanResponse, PlannedTextSegment
 
 
 @dataclass(frozen=True)

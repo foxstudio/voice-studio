@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import WebSocket
 
-from app.models.schemas import (
+from app.schemas.voice_studio import (
     ExportRecord,
     GenerateRequest,
     GenerationTask,

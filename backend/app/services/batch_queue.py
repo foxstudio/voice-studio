@@ -10,7 +10,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from app.models.schemas import (
+from app.schemas.voice_studio import (
     BatchGenerateRequest,
     BatchSegmentInput,
     BatchSegmentResult,

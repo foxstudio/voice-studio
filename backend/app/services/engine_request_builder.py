@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.models.schemas import BatchGenerateRequest, GenerateRequest
+from app.schemas.voice_studio import BatchGenerateRequest, GenerateRequest
 from app.services import settings_store
 
 MIMO_DEFAULT_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"

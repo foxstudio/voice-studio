@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.models.schemas import HistoryItem
+from app.schemas.voice_studio import HistoryItem
 from app.services import database as db
 
 

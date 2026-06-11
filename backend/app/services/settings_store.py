@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.models.schemas import AppSettings
+from app.schemas.voice_studio import AppSettings
 from app.services import database as db
 from app.services.paths import PROJECT_ROOT, expand_path
 

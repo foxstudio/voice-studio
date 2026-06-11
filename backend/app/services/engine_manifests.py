@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models.schemas import EngineDetail, EngineManifest, EngineState, EngineStatus, ParameterSchema
+from app.schemas.voice_studio import EngineDetail, EngineManifest, EngineState, EngineStatus, ParameterSchema
 from app.services import mimo_client
 
 

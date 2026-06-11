@@ -111,6 +111,16 @@ Validation:
 - Do not mix with behavior changes.
 - Run focused tests for queues, engine provider, and parameter contracts.
 
+Current status: completed for `backend/app/services`. API routers and `backend/app/main.py` still use legacy imports pending Batch D.
+
+Validation:
+
+```bash
+.venv/bin/python -m compileall -q backend/app
+.venv/bin/python -m pytest tests/test_reference_features.py tests/test_task_orchestration_contract.py tests/test_engine_provider.py tests/test_engine_policy.py tests/test_engine_parameter_contract.py tests/test_longform_queue.py tests/test_asr_tasks.py tests/test_task_queue_stale.py tests/test_voice_store_update.py tests/test_mimo_cloud_contract.py -q
+.venv/bin/python -m ruff check backend/app/services
+```
+
 ### Batch D: API Import Migration
 
 - Update FastAPI routers after services are stable.

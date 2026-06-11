@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.models.schemas import ExportRecord, ExportRequest
+from app.schemas.voice_studio import ExportRecord, ExportRequest
 from app.services import audio_tools, database as db, history_store, settings_store
 
 

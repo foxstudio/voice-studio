@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.models.schemas import EngineDetail, EngineManifest
+from app.schemas.voice_studio import EngineDetail, EngineManifest
 from app.services import engine_health, engine_manifests, engine_policy
 
 

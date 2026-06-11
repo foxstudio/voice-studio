@@ -4,8 +4,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from app.models.exceptions import AppException
-from app.models.schemas import TimestampMode, TranscriptionRecord, TranscriptionSegment
+from app.errors import AppException
+from app.schemas.voice_studio import TimestampMode, TranscriptionRecord, TranscriptionSegment
 from app.services import engine_registry, mimo_client, qwen_forced_aligner, qwen_mlx_asr, settings_store
 
 

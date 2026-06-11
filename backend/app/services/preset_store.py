@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models.schemas import PresetTemplate, PresetTemplateUpsert, new_id, now_iso
+from app.schemas.voice_studio import PresetTemplate, PresetTemplateUpsert, new_id, now_iso
 from app.services import database
 
 

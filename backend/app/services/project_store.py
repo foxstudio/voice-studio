@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from app.models.schemas import (
+from app.schemas.voice_studio import (
     Project,
     ProjectCreate,
     ProjectTranscriptionImportRequest,

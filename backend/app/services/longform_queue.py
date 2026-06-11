@@ -6,8 +6,8 @@ import threading
 from contextlib import suppress
 from pathlib import Path
 
-from app.models.exceptions import AppException
-from app.models.schemas import (
+from app.errors import AppException
+from app.schemas.voice_studio import (
     ExportRecord,
     ExportRequest,
     GenerateRequest,
