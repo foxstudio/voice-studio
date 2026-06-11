@@ -11,7 +11,7 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.models.schemas import TaskStatus
+from app.schemas.voice_studio import TaskStatus
 from app.services import task_queue
 
 

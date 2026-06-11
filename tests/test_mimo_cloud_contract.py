@@ -15,7 +15,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
-from app.models.schemas import AppSettings, VoiceAssetCreate  # noqa: E402
+from app.schemas.voice_studio import AppSettings, VoiceAssetCreate  # noqa: E402
 from app.services import database, engine_registry, mimo_client, qwen_forced_aligner, settings_store, voice_store  # noqa: E402
 
 

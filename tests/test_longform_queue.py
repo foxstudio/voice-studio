@@ -12,7 +12,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
-from app.models.schemas import ExportRecord, GenerateRequest, GenerationTask, HistoryItem, LongformSegmentTask, LongformTask, TaskStatus  # noqa: E402
+from app.schemas.voice_studio import ExportRecord, GenerateRequest, GenerationTask, HistoryItem, LongformSegmentTask, LongformTask, TaskStatus  # noqa: E402
 from app.services import database as db  # noqa: E402
 from app.services import longform_queue  # noqa: E402
 from app.services import history_store, task_queue  # noqa: E402

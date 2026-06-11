@@ -97,6 +97,14 @@ Validation:
 - Keep production code unchanged.
 - Run full backend tests.
 
+Current status: completed for backend tests that do not intentionally assert old import compatibility. `tests/test_schema_compatibility.py` still imports `app.models.*` by design to prove the legacy facade remains stable.
+
+Validation:
+
+```bash
+.venv/bin/python -m pytest tests/test_reference_features.py tests/test_task_orchestration_contract.py tests/test_mimo_cloud_contract.py tests/test_longform_queue.py tests/test_schema_compatibility.py tests/test_asr_tasks.py tests/test_voice_store_update.py tests/test_task_queue_stale.py tests/test_engine_parameter_contract.py -q
+```
+
 ### Batch C: Service Import Migration
 
 - Update service modules gradually.

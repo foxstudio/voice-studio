@@ -13,7 +13,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
-from app.models.schemas import AppSettings, EngineAudioDiagnosisRequest, GenerateRequest, HistoryItem, Project, Role, ScriptSegment  # noqa: E402
+from app.schemas.voice_studio import AppSettings, EngineAudioDiagnosisRequest, GenerateRequest, HistoryItem, Project, Role, ScriptSegment  # noqa: E402
 from app.services import audio_tools, batch_queue, community_voice_pack_store, database, engine_registry, history_store, settings_store, task_queue, voice_aliases, voice_store  # noqa: E402
 
 

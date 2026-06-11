@@ -11,7 +11,7 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.models.schemas import AppSettings, BatchGenerateRequest, BatchSegmentInput, BatchSegmentResult, BatchTask, GenerateRequest, GenerationTask, LongformGenerateRequest, LongformSegmentTask, LongformTask, TaskStatus  # noqa: E402
+from app.schemas.voice_studio import AppSettings, BatchGenerateRequest, BatchSegmentInput, BatchSegmentResult, BatchTask, GenerateRequest, GenerationTask, LongformGenerateRequest, LongformSegmentTask, LongformTask, TaskStatus  # noqa: E402
 from app.services import batch_queue, longform_queue, task_queue  # noqa: E402
 
 

@@ -10,7 +10,7 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.models.schemas import AppSettings, BatchSegmentInput, BatchGenerateRequest, GenerateRequest
+from app.schemas.voice_studio import AppSettings, BatchSegmentInput, BatchGenerateRequest, GenerateRequest
 from app.services import batch_queue, inference_runner, task_queue
 
 

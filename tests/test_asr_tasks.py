@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from app.models.exceptions import AppException
-from app.models.schemas import TaskStatus
+from app.errors import AppException
+from app.schemas.voice_studio import TaskStatus
 from app.services import asr_tasks
 
 

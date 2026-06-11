@@ -10,7 +10,7 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.models.schemas import LicenseStatus, VoiceAssetCreate, VoiceAssetUpdate  # noqa: E402
+from app.schemas.voice_studio import LicenseStatus, VoiceAssetCreate, VoiceAssetUpdate  # noqa: E402
 from app.services import database as db, voice_store  # noqa: E402
 
 
