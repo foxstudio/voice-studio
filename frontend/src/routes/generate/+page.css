@@ -695,6 +695,7 @@
 		border-radius: 7px;
 		background: #12161c;
 		color: #d6deea;
+		transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
 	}
 
 	.gen-icon-btn.mini {
@@ -723,6 +724,10 @@
 	.gen-icon-btn:hover:not(:disabled) {
 		border-color: rgba(79, 156, 249, 0.45);
 		background: #17202b;
+	}
+
+	.gen-icon-btn:active:not(:disabled) {
+		transform: translateY(1px) scale(0.97);
 	}
 
 	.gen-icon-btn.danger {

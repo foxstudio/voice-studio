@@ -226,7 +226,7 @@ textarea { resize: vertical; min-height: 120px; line-height: 1.5; }
 	box-shadow: 0 18px 42px rgba(0, 0, 0, 0.38);
 	opacity: 0;
 	transition: opacity 120ms ease;
-	pointer-events: auto;
+	pointer-events: none;
 }
 #tooltip-container::-webkit-scrollbar { width: 4px; }
 #tooltip-container::-webkit-scrollbar-track { background: transparent; }
