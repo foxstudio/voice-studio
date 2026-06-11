@@ -4137,7 +4137,7 @@ wheels = [
 
 [[package]]
 name = "voice-studio"
-version = "1.0.0"
+version = "1.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "bigvgan" },
@@ -4166,6 +4166,7 @@ convert = [
 ]
 dev = [
     { name = "pytest" },
+    { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "ruff" },
     { name = "safetensors" },
@@ -4211,6 +4212,7 @@ requires-dist = [
     { name = "omnivoice", specifier = ">=0.1.5" },
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.4.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "python-multipart", marker = "extra == 'server'", specifier = ">=0.0.5" },
     { name = "pyyaml", specifier = ">=6.0" },

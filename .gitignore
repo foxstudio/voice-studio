@@ -68,6 +68,12 @@ htmlcov/
 # Claude Code
 .claude/
 
+# Local agent/tool state
+.mimocode/
+.omo/
+.playwright-cli/
+.sisyphus/
+
 # Docs — 只排除内部 RFC/TODO
 docs/ASR_PRODUCT_ROADMAP.md
 docs/LONGFORM_TTS_VERIFICATION_RFC.md

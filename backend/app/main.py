@@ -13,7 +13,7 @@ from app.models.exceptions import AppException
 from app.services import asr_tasks, batch_queue, engine_registry, longform_queue, qwen_forced_aligner, settings_store, task_queue
 
 START = time.monotonic()
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 
 @asynccontextmanager
