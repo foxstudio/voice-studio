@@ -77,7 +77,7 @@ def classify_text(text: str) -> str:
         return "empty"
     cleaned = text.strip()
     # 去掉标点和波浪号
-    no_punct = re.sub(r"[~～!！.。，,？?、：:；;""''\"'\s]", "", cleaned)
+    no_punct = re.sub(r"[~～!！.。，,？?、：:；;\x22\x27\s]", "", cleaned)
     if not no_punct:
         return "empty"
     if PURE_SYMBOLS.match(cleaned):

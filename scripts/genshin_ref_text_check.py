@@ -8,7 +8,7 @@ import urllib.request
 API_BASE = "http://localhost:8000"
 
 INTERJECTION_RE = re.compile(
-    r"^[啊哦嗯哈嘿呃唔哇噢咦呀哎唉哟嘟呜啵呵哼喵汪嗷噢~～!！.。，,？?、：:；;""''\"'\s]*$"
+    r"^[啊哦嗯哈嘿呃唔哇噢咦呀哎唉哟嘟呜啵呵哼喵汪嗷噢~～!！.。，,？?、：:；;\x22\x27\s]*$"
 )
 PURE_SYMBOL_RE = re.compile(r"^[^a-zA-Z一-鿿0-9]*$")
 
@@ -21,7 +21,7 @@ def api_get(path):
 def classify(text):
     if not text or not text.strip():
         return "empty"
-    cleaned = re.sub(r"[~～!！.。，,？?、：:；;""''\"'\s]", "", text.strip())
+    cleaned = re.sub(r"[~～!！.。，,？?、：:；;\x22\x27\s]", "", text.strip())
     if not cleaned:
         return "empty"
     if PURE_SYMBOL_RE.match(text.strip()):

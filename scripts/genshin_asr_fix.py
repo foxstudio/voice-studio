@@ -19,7 +19,7 @@ API_BASE = "http://localhost:8000"
 GENSHIN_DIR = Path("/Users/foxmacstudio/Desktop/音色下载/原神语音包6.3（中）")
 
 INTERJECTION_RE = re.compile(
-    r"^[啊哦嗯哈嘿呃唔哇噢咦呀哎唉哟嘟呜啵呵哼喵汪嗷噢~～!！.。，,？?、：:；;""''\"'\s]*$"
+    r"^[啊哦嗯哈嘿呃唔哇噢咦呀哎唉哟嘟呜啵呵哼喵汪嗷噢~～!！.。，,？?、：:；;\x22\x27\s]*$"
 )
 PURE_SYMBOL_RE = re.compile(r"^[^a-zA-Z一-鿿0-9]*$")
 
@@ -94,7 +94,7 @@ def text_score(text):
     """给转录文本打分，越高越好"""
     if not text or not text.strip():
         return -1
-    cleaned = re.sub(r"[~～!！.。，,？?、：:；;""''\"'\s]", "", text.strip())
+    cleaned = re.sub(r"[~～!！.。，,？?、：:；;\x22\x27\s]", "", text.strip())
     if not cleaned or PURE_SYMBOL_RE.match(text.strip()):
         return -1
     if INTERJECTION_RE.match(text.strip()):
@@ -105,7 +105,7 @@ def text_score(text):
 def classify(text):
     if not text or not text.strip():
         return "empty"
-    cleaned = re.sub(r"[~～!！.。，,？?、：:；;""''\"'\s]", "", text.strip())
+    cleaned = re.sub(r"[~～!！.。，,？?、：:；;\x22\x27\s]", "", text.strip())
     if not cleaned:
         return "empty"
     if PURE_SYMBOL_RE.match(text.strip()):
