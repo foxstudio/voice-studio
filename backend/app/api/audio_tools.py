@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.models.exceptions import AppException
+from app.errors import AppException
 from app.services import audio_tools, settings_store
 
 router = APIRouter()

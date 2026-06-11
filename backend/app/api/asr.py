@@ -5,8 +5,8 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, UploadFile
 from fastapi.responses import PlainTextResponse
 
-from app.models.exceptions import AppException
-from app.models.schemas import (
+from app.errors import AppException
+from app.schemas.voice_studio import (
     TimestampSupplementRequest,
     TranscriptionBatchDeleteRequest,
     TranscriptionBatchSupplementRequest,

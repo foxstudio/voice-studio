@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.models.exceptions import AppException
-from app.models.schemas import Project, ProjectCreate, ProjectTranscriptionImportRequest, ProjectTranscriptionImportResponse, Role, ScriptSegment
+from app.errors import AppException
+from app.schemas.voice_studio import Project, ProjectCreate, ProjectTranscriptionImportRequest, ProjectTranscriptionImportResponse, Role, ScriptSegment
 from app.services import project_store, task_queue
 
 router = APIRouter()

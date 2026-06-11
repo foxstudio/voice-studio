@@ -6,8 +6,8 @@ from pathlib import Path
 from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse
 
-from app.models.exceptions import AppException
-from app.models.schemas import EngineAudioDiagnosisRequest, EngineDetail, EngineSpeaker
+from app.errors import AppException
+from app.schemas.voice_studio import EngineAudioDiagnosisRequest, EngineDetail, EngineSpeaker
 from app.services import audio_tools, engine_registry, settings_store, voice_store
 
 router = APIRouter()

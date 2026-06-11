@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
 
-from app.models.exceptions import AppException
-from app.models.schemas import ExportRecord, ExportRequest
+from app.errors import AppException
+from app.schemas.voice_studio import ExportRecord, ExportRequest
 from app.services import export_store
 
 router = APIRouter()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.models.schemas import GeneratePlanRequest, GeneratePlanResponse, GenerateRequest, GenerateResponse
+from app.schemas.voice_studio import GeneratePlanRequest, GeneratePlanResponse, GenerateRequest, GenerateResponse
 from app.services import task_queue, text_planner
 
 router = APIRouter()

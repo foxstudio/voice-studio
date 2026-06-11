@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.models.exceptions import AppException
-from app.models.schemas import PresetTemplate, PresetTemplateUpsert
+from app.errors import AppException
+from app.schemas.voice_studio import PresetTemplate, PresetTemplateUpsert
 from app.services import preset_store
 
 router = APIRouter()

@@ -6,8 +6,8 @@ import logging
 
 from fastapi import APIRouter
 
-from app.models.exceptions import AppException
-from app.models.schemas import SERPredictRequest, SERBatchPredictRequest, SEREmotionResult
+from app.errors import AppException
+from app.schemas.voice_studio import SERPredictRequest, SERBatchPredictRequest, SEREmotionResult
 from app.services import ser_service, voice_store
 
 log = logging.getLogger(__name__)

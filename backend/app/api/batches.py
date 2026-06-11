@@ -4,8 +4,8 @@ from typing import Any
 
 from fastapi import APIRouter, Body
 
-from app.models.exceptions import AppException
-from app.models.schemas import BatchTask
+from app.errors import AppException
+from app.schemas.voice_studio import BatchTask
 from app.services import batch_queue
 
 router = APIRouter()

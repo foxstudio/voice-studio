@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.models.exceptions import AppException
-from app.models.schemas import VoiceSeed, VoiceSeedImportRequest
+from app.errors import AppException
+from app.schemas.voice_studio import VoiceSeed, VoiceSeedImportRequest
 from app.services import voice_seed_store
 
 router = APIRouter()

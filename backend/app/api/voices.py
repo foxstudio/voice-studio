@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import FileResponse
 
-from app.models.exceptions import AppException
-from app.models.schemas import VoiceAsset, VoiceAssetCreate, VoiceAssetUpdate
+from app.errors import AppException
+from app.schemas.voice_studio import VoiceAsset, VoiceAssetCreate, VoiceAssetUpdate
 from app.services import voice_store
 
 router = APIRouter()

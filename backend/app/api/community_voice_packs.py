@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.models.exceptions import AppException
-from app.models.schemas import CommunityVoicePack, CommunityVoicePackImportRequest
+from app.errors import AppException
+from app.schemas.voice_studio import CommunityVoicePack, CommunityVoicePackImportRequest
 from app.services import community_voice_pack_store
 
 router = APIRouter()

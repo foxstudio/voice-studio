@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.models.exceptions import AppException
-from app.models.schemas import GenerationTask
+from app.errors import AppException
+from app.schemas.voice_studio import GenerationTask
 from app.services import task_queue
 
 router = APIRouter()

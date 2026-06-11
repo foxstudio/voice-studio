@@ -126,6 +126,16 @@ Validation:
 - Update FastAPI routers after services are stable.
 - Run API contract tests.
 
+Current status: completed for `backend/app/api` and `backend/app/main.py`.
+
+Validation:
+
+```bash
+.venv/bin/python -m compileall -q backend/app
+.venv/bin/python -m pytest tests/test_reference_features.py tests/test_longform_queue.py tests/test_mimo_cloud_contract.py tests/test_schema_compatibility.py tests/test_asr_tasks.py -q
+.venv/bin/python -m ruff check backend/app/api backend/app/main.py
+```
+
 ### Batch E: Deprecation Notice
 
 - Keep `app.models.*` for the rest of 1.x.

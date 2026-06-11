@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.models.schemas import AppSettings, MimoSecretUpdate
+from app.schemas.voice_studio import AppSettings, MimoSecretUpdate
 from app.services import settings_store
 
 router = APIRouter()

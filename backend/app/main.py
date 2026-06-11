@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api import asr, audio_tools, batches, community_voice_packs, engines, evaluations, exports, generate, history, longform, presets, projects, ser, settings, tasks, text_tools, voice_seeds, voices
-from app.models.exceptions import AppException
+from app.errors import AppException
 from app.services import asr_tasks, batch_queue, engine_registry, longform_queue, qwen_forced_aligner, settings_store, task_queue
 
 START = time.monotonic()

@@ -8,8 +8,8 @@ from typing import Literal
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
 
-from app.models.exceptions import AppException
-from app.models.schemas import TTSVerificationRequest, TTSVerificationResponse, TranscriptionRecord
+from app.errors import AppException
+from app.schemas.voice_studio import TTSVerificationRequest, TTSVerificationResponse, TranscriptionRecord
 from app.services import asr_service, audio_tools, database as db, history_store, task_queue, text_verifier
 
 router = APIRouter()
