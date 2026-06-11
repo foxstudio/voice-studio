@@ -173,6 +173,7 @@ def _result_segments(req: BatchGenerateRequest) -> list[BatchSegmentResult]:
 
 
 async def submit(payload: Any) -> BatchTask:
+    global _queue
     req = normalize_payload(payload)
     start_worker()
     batch = BatchTask(
@@ -187,7 +188,9 @@ async def submit(payload: Any) -> BatchTask:
     )
     _save(batch)
     if _queue is None:
-        globals()["_queue"] = asyncio.Queue()
+        with _lock:
+            if _queue is None:
+                _queue = asyncio.Queue()
     await _queue.put(batch.batch_task_id)
     return batch
 

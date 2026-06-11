@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import threading
 import time
 from functools import lru_cache
 from typing import Any, Callable
 
 from app.schemas.voice_studio import EngineDetail, EngineSpeaker, EngineStatus
 from app.services import cosyvoice_worker, engine_health, engine_manifests, engine_provider, engine_runner, f5_worker
+
+_engine_state_lock = threading.Lock()
 
 
 def _speaker_option_to_detail(option: dict[str, str]) -> EngineSpeaker:
@@ -98,27 +101,30 @@ def health_check(engine_id: str) -> dict[str, Any]:
 
 def start_engine(engine_id: str) -> EngineDetail:
     engine_id = _resolve_engine_id(engine_id)
-    detail = _ENGINES[engine_id]
-    detail.state.status = EngineStatus.loading
+    with _engine_state_lock:
+        detail = _ENGINES[engine_id]
+        detail.state.status = EngineStatus.loading
     hc = health_check(engine_id)
-    if not hc.get("healthy"):
-        detail.state.status = EngineStatus.error
-        detail.state.error_message = str(hc)
+    with _engine_state_lock:
+        if not hc.get("healthy"):
+            detail.state.status = EngineStatus.error
+            detail.state.error_message = str(hc)
+            return detail
+        detail.state.status = EngineStatus.loaded
+        detail.state.model_path = hc.get("model_path") or hc.get("base_url")
+        detail.state.error_message = None
+        detail.state.loaded_at = time.strftime("%Y-%m-%dT%H:%M:%S")
         return detail
-    detail.state.status = EngineStatus.loaded
-    detail.state.model_path = hc.get("model_path") or hc.get("base_url")
-    detail.state.error_message = None
-    detail.state.loaded_at = time.strftime("%Y-%m-%dT%H:%M:%S")
-    return detail
 
 
 def stop_engine(engine_id: str) -> EngineDetail:
     engine_id = _resolve_engine_id(engine_id)
     engine_runner.stop_persistent_worker(engine_id)
-    detail = _ENGINES[engine_id]
-    detail.state.status = EngineStatus.stopped
-    detail.state.error_message = None
-    return detail
+    with _engine_state_lock:
+        detail = _ENGINES[engine_id]
+        detail.state.status = EngineStatus.stopped
+        detail.state.error_message = None
+        return detail
 
 
 def ensure_loaded(engine_id: str) -> None:

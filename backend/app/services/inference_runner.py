@@ -111,9 +111,8 @@ def run_indextts_v2(**kwargs):
     start = time.perf_counter()
     with _model_cache_lock:
         model = _model_cache.get(engine_id)
-    if model is None:
-        model = IndexTTSv2(model_dir, device=device)
-        with _model_cache_lock:
+        if model is None:
+            model = IndexTTSv2(model_dir, device=device)
             _model_cache[engine_id] = model
     model.generate(output_path=output_path, **gen_kwargs)
     meta = _audio_meta(output_path, 22050)
@@ -137,9 +136,8 @@ def run_indextts_v1(**kwargs):
     start = time.perf_counter()
     with _model_cache_lock:
         model = _model_cache.get(engine_id)
-    if model is None:
-        model = IndexTTS.load_model(model_dir)
-        with _model_cache_lock:
+        if model is None:
+            model = IndexTTS.load_model(model_dir)
             _model_cache[engine_id] = model
     audio = model.generate(text=text, ref_audio=ref_audio, **gen_kwargs)
     model.save_audio(audio, output_path)
@@ -182,17 +180,16 @@ def run_omnivoice(**kwargs):
     start = time.perf_counter()
     with _model_cache_lock:
         model = _model_cache.get(engine_id)
-    if model is None:
-        from omnivoice import OmniVoice
+        if model is None:
+            from omnivoice import OmniVoice
 
-        load_kwargs = {"device_map": device}
-        if str(device).startswith("mps"):
-            import torch
+            load_kwargs = {"device_map": device}
+            if str(device).startswith("mps"):
+                import torch
 
-            load_kwargs["attn_implementation"] = "eager"
-            load_kwargs["dtype"] = torch.float32
-        model = OmniVoice.from_pretrained("k2-fsa/OmniVoice", **load_kwargs)
-        with _model_cache_lock:
+                load_kwargs["attn_implementation"] = "eager"
+                load_kwargs["dtype"] = torch.float32
+            model = OmniVoice.from_pretrained("k2-fsa/OmniVoice", **load_kwargs)
             _model_cache[engine_id] = model
     result = model.generate(**gen_kwargs)
     if isinstance(result, (str, Path)):

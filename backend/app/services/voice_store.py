@@ -21,7 +21,6 @@ def _normalize_voice(voice: VoiceAsset) -> VoiceAsset:
     normalized_name = voice_aliases.normalized_seed_voice_name(voice.name, voice.tags)
     if normalized_name != voice.name:
         voice.name = normalized_name
-        save_voice(voice)
     voice.engine_bindings = _engine_bindings(voice)
     return voice
 

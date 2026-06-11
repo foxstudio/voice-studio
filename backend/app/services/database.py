@@ -93,22 +93,29 @@ CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(json_extract(data, '$.task_ty
 
 
 def set_db_path(path: str | Path) -> None:
-    global DB_PATH
+    global DB_PATH, _schema_applied
     DB_PATH = expand_path(str(path))
+    _schema_applied = False
 
 
 def ensure_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
+_schema_applied = False
+
+
 @contextmanager
 def conn():
+    global _schema_applied
     ensure_db()
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
-    db.execute("PRAGMA journal_mode=WAL")
-    db.executescript(SCHEMA)
-    db.executescript(INDEX_DDL)
+    if not _schema_applied:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.executescript(SCHEMA)
+        db.executescript(INDEX_DDL)
+        _schema_applied = True
     try:
         yield db
         db.commit()
