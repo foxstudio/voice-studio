@@ -1038,6 +1038,19 @@
 		line-height: 1.5;
 	}
 
+	.task-error-scroll {
+		max-height: 156px;
+		overflow-y: auto;
+		padding-right: 4px;
+		scrollbar-width: thin;
+		overflow-wrap: anywhere;
+	}
+
+	.task-error-scroll.fade-overflow {
+		mask-image: linear-gradient(to bottom, black 68%, transparent 100%);
+		-webkit-mask-image: linear-gradient(to bottom, black 68%, transparent 100%);
+	}
+
 	.verification-pending-line {
 		margin: 0;
 		padding: 7px 8px;
