@@ -463,14 +463,11 @@ class UnifiedVoiceV2(nn.Module):
 
             import numpy as np
             batch_size, vocab_size = logits.shape
-            indices_to_remove_np = np.zeros((batch_size, vocab_size), dtype=bool)
             sorted_indices_np = np.array(sorted_indices)
             sorted_remove_np = np.array(sorted_indices_to_remove)
-
-            for b in range(batch_size):
-                for i in range(vocab_size):
-                    if sorted_remove_np[b, i]:
-                        indices_to_remove_np[b, sorted_indices_np[b, i]] = True
+            indices_to_remove_np = np.zeros((batch_size, vocab_size), dtype=bool)
+            batch_idx = np.arange(batch_size)[:, None]
+            indices_to_remove_np[batch_idx, sorted_indices_np] = sorted_remove_np
 
             indices_to_remove = mx.array(indices_to_remove_np)
             logits = mx.where(indices_to_remove, float("-inf"), logits)

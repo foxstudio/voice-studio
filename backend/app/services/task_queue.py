@@ -8,6 +8,8 @@ import time
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
+
+from app.models.exceptions import AppException
 from typing import Any
 
 from fastapi import WebSocket
@@ -665,12 +667,12 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
         # Missing transcripts should not turn a short TTS request into a 10-minute ASR timeout.
         ref_text = ""
     if req.engine_id == "indextts-v2" and not ref:
-        raise ValueError("REFERENCE_AUDIO_REQUIRED")
+        raise AppException(400, "REFERENCE_AUDIO_REQUIRED", "IndexTTS v2 需要参考音频")
     if req.engine_id in {"f5-tts", "cosyvoice-zero-shot"}:
         if not ref:
-            raise ValueError("REFERENCE_AUDIO_REQUIRED")
+            raise AppException(400, "REFERENCE_AUDIO_REQUIRED", "该引擎需要参考音频")
         if not (ref_text or "").strip():
-            raise ValueError("REFERENCE_TEXT_REQUIRED")
+            raise AppException(400, "REFERENCE_TEXT_REQUIRED", "该引擎需要参考台词")
     if engine_request_builder.is_mimo_tts_request(req.engine_id):
         return engine_request_builder.build_mimo_tts_single_kwargs(
             req,

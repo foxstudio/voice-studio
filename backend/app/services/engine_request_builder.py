@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.schemas.voice_studio import BatchGenerateRequest, GenerateRequest
+from app.models.exceptions import AppException
 from app.services import settings_store
 
 MIMO_DEFAULT_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
@@ -281,9 +282,9 @@ def _mimo_auth():
     settings = settings_store.get()
     api_key = settings_store.mimo_api_key()
     if not settings.cloud_enabled:
-        raise ValueError("MIMO_CLOUD_DISABLED")
+        raise AppException(403, "MIMO_CLOUD_DISABLED", "MiMo 云端引擎未启用，请在设置中开启")
     if not api_key:
-        raise ValueError("MIMO_API_KEY_MISSING")
+        raise AppException(403, "MIMO_API_KEY_MISSING", "缺少 MiMo API Key，请在设置中配置")
     return settings, api_key
 
 

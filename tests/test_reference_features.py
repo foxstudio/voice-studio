@@ -573,8 +573,8 @@ def test_f5_requires_reference_text_to_avoid_auto_asr(tmp_path: Path):
 
     try:
         task_queue._kwargs(req, str(tmp_path / "out.wav"))
-    except ValueError as exc:
-        assert str(exc) == "REFERENCE_TEXT_REQUIRED"
+    except Exception as exc:
+        assert getattr(exc, 'code', None) == 'REFERENCE_TEXT_REQUIRED' or str(exc) == "REFERENCE_TEXT_REQUIRED"
     else:
         raise AssertionError("F5-TTS should require reference text")
 
@@ -594,8 +594,8 @@ def test_cosyvoice_zero_shot_requires_reference_text(tmp_path: Path):
 
     try:
         task_queue._kwargs(req, str(tmp_path / "out.wav"))
-    except ValueError as exc:
-        assert str(exc) == "REFERENCE_TEXT_REQUIRED"
+    except Exception as exc:
+        assert getattr(exc, 'code', None) == 'REFERENCE_TEXT_REQUIRED' or str(exc) == "REFERENCE_TEXT_REQUIRED"
     else:
         raise AssertionError("CosyVoice Zero-Shot should require reference text")
 

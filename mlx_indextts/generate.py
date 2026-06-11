@@ -460,6 +460,9 @@ class IndexTTS:
         """
         start_time = time.perf_counter()
 
+        if not 0.5 <= speed <= 2.0:
+            raise ValueError(f"speed must be between 0.5 and 2.0, got {speed}")
+
         # Set random seed if provided
         if seed is not None:
             mx.random.seed(seed)

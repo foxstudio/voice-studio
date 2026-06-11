@@ -734,6 +734,9 @@ class IndexTTSv2:
         Returns:
             Generated audio waveform as numpy array
         """
+        if not 0.5 <= speed <= 2.0:
+            raise ValueError(f"speed must be between 0.5 and 2.0, got {speed}")
+
         # Set random seed if specified
         if seed is not None:
             mx.random.seed(seed)
