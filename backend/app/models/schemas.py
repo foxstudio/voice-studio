@@ -1,3 +1,10 @@
+"""Legacy stable schema path kept for the Voice Studio 1.x line.
+
+New backend code should prefer ``app.schemas.voice_studio``. This module remains
+the implementation source during the compatibility window so old imports keep
+class identity unchanged.
+"""
+
 from __future__ import annotations
 
 import uuid

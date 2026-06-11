@@ -1,3 +1,10 @@
+"""Legacy stable error path kept for the Voice Studio 1.x line.
+
+New backend code should prefer ``app.errors``. This module remains the
+implementation source during the compatibility window so old imports keep class
+identity unchanged.
+"""
+
 from __future__ import annotations
 
 from fastapi import HTTPException
@@ -9,4 +16,3 @@ class AppException(HTTPException):
         self.code = code
         self.message = message
         self.detail_dict = detail or {}
-

@@ -142,6 +142,8 @@ Validation:
 - Add a short comment in compatibility files explaining they are stable re-export paths.
 - Remove only in a later major cleanup after explicit approval.
 
+Current status: completed. `app.models.*` remains the implementation source for 1.x compatibility; new code has migrated to `app.schemas.voice_studio` / `app.errors` outside compatibility tests and facade re-exports.
+
 ## 6. Acceptance Criteria
 
 - Existing import paths still work.
