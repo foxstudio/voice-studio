@@ -1,12 +1,21 @@
 # Scripts Inventory
 
-**Status**: dry-run inventory, no files moved  
+**Status**: dry-run inventory plus checker, no files moved  
 **Date**: 2026-06-11  
 **Related RFC**: `docs/architecture/DIRECTORY_GOVERNANCE_RFC.md`  
 
 ## Purpose
 
 This inventory groups current `scripts/` files by likely ownership before any directory migration. It is intentionally documentation-only.
+
+Use the dry-run checker before any script move:
+
+```bash
+.venv/bin/python scripts/migration/check_script_paths.py
+.venv/bin/python scripts/migration/check_script_paths.py --fail-on-risk
+```
+
+The first command reports migration risks and exits 0. The second command exits non-zero while risks remain, making it suitable as a pre-migration gate.
 
 ## Proposed Groups
 
@@ -87,6 +96,16 @@ Generated JSON reports or analysis outputs:
 - `docs/MIMO_V2_5_CLOUD_API_RFC.md` references `scripts/webui_smoke_playwright.mjs`.
 - Several scripts contain absolute paths under `/Users/foxmacstudio/Projects/mlx-indextts/scripts/...`.
 
+Current checker summary:
+
+- Inventory entries: 30
+- Missing inventory sources: 0
+- Unmanaged scripts/artifacts: 0
+- Absolute path hits: 17
+- Proposed moved scripts with references: 12
+
+The current `--fail-on-risk` result is expected to fail until absolute paths and references are patched or intentionally waived.
+
 ## Special Case: `voice_studio_batch.py`
 
 `scripts/voice_studio_batch.py` is a user-facing batch entrypoint referenced by docs. Keep it at the top level until a compatibility wrapper is planned.
@@ -101,7 +120,7 @@ Recommended later migration:
 
 Before moving any script:
 
-1. Add a path-reference test or simple `rg` checklist.
+1. Run `scripts/migration/check_script_paths.py --fail-on-risk`.
 2. Patch scripts with absolute paths to derive repo root from `Path(__file__)`.
 3. Move one group at a time.
 4. Run:
