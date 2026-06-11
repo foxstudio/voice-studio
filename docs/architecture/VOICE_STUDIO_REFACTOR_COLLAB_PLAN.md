@@ -168,17 +168,17 @@
 
 ## 5. 下一批建议指令
 
-Phase 4 后端抽象已完成 policy / manifest / health / runner / 全部当前 TTS request builder / provider skeleton 的低风险拆分，并新增 `DIRECTORY_GOVERNANCE_RFC.md`、`SCRIPTS_INVENTORY.md` 与 `SCHEMA_COMPATIBILITY_RFC.md`。`docs/models` 已迁到 `docs/engines`，并保留 `docs/models/README.md` 过渡说明。当前建议先验收 v1.2.0 release boundary；如继续后端，优先做 schema compatibility package 或 script path dry-run checker，不直接做大目录迁移。
+Phase 4 后端抽象已完成 policy / manifest / health / runner / 全部当前 TTS request builder / provider skeleton 的低风险拆分，并新增 `DIRECTORY_GOVERNANCE_RFC.md`、`SCRIPTS_INVENTORY.md` 与 `SCHEMA_COMPATIBILITY_RFC.md`。`docs/models` 已迁到 `docs/engines`，并保留 `docs/models/README.md` 过渡说明。v1.2.0 release boundary 已建立；schema compatibility facade 已落地但尚未批量迁移 imports。下一步优先做 script path dry-run checker，或进入 schema tests import migration，不直接做大目录迁移。
 
 ```text
 你现在在 /Users/foxmacstudio/Projects/mlx-indextts 工作。
 
-本轮只做 Phase 4 Batch 6F：schema compatibility package 或 script path dry-run checker。不要修改真实数据或模型权重，不要改前端。
+本轮只做 Phase 4 Batch 6G：script path dry-run checker 或 schema tests import migration。不要修改真实数据或模型权重，不要改前端。
 
 目标：
 1. 阅读 docs/architecture/DIRECTORY_GOVERNANCE_RFC.md、docs/architecture/SCRIPTS_INVENTORY.md 与 docs/architecture/SCHEMA_COMPATIBILITY_RFC.md。
-2. 如果做 schema compatibility package：只新增 app.schemas/app.errors 兼容层与 identity tests，不批量改 imports。
-3. 如果做 script path dry-run checker：只新增检查脚本，不移动 scripts。
+2. 如果做 script path dry-run checker：只新增检查脚本，不移动 scripts。
+3. 如果做 schema tests import migration：只迁移 tests imports，不改 services/api。
 4. 不改 API URL，不改 DB schema。
 5. 不移动真实数据、模型权重或 ~/VoiceStudio。
 

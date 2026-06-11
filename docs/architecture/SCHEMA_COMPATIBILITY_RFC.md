@@ -1,6 +1,6 @@
 # Schema Compatibility RFC
 
-**Status**: proposed, no code migration applied  
+**Status**: Batch A facade implemented, no import migration applied  
 **Date**: 2026-06-11  
 **Related**: `DIRECTORY_GOVERNANCE_RFC.md`  
 
@@ -46,7 +46,7 @@ backend/app/
     exceptions.py    compatibility re-export
 ```
 
-Recommended first implementation batch:
+Recommended implementation target:
 
 1. Move the implementation body of `models/schemas.py` to `schemas/voice_studio.py`.
 2. Move the implementation body of `models/exceptions.py` to `errors/__init__.py`.
@@ -81,6 +81,8 @@ while enabling new imports:
 - Add `app.schemas` and `app.errors`.
 - Keep `app.models.*` re-exports.
 - Add tests proving old and new import paths point to the same classes.
+
+Current status: completed as a facade-only compatibility layer. The implementation body still lives in `app.models.*`; `app.schemas`, `app.schemas.voice_studio`, and `app.errors` re-export existing classes to preserve identity and avoid a large move-only diff.
 
 Validation:
 
