@@ -104,9 +104,10 @@
 	}
 	onMount(() => {
 		loadInitial();
+		const scrollRoot = document.querySelector('.main');
 		const observer = new IntersectionObserver((entries) => {
 			if (entries[0].isIntersecting) loadMore();
-		}, { rootMargin: '200px' });
+		}, { root: scrollRoot, rootMargin: '200px' });
 		if (sentinel) observer.observe(sentinel);
 		return () => observer.disconnect();
 	});
@@ -583,7 +584,14 @@
 			<div class="empty">还没有声音资产</div>
 		{/each}
 		{#if hasMore}<div bind:this={sentinel} class="scroll-sentinel"></div>{/if}
-		{#if loading}<div class="loading-indicator">加载中...</div>{/if}
+		{#if loading}
+			<div class="loading-indicator">
+				<div class="loading-spinner"></div>
+				<span>加载中...</span>
+			</div>
+		{:else if !hasMore && filteredVoices.length > PAGE_SIZE}
+			<div class="end-of-list">— 已加载全部 {filteredVoices.length} 个音色 —</div>
+		{/if}
 		</section>
 		</section>
 			{#if showVoiceModal}
@@ -1349,9 +1357,33 @@
 		}
 
 		.loading-indicator {
-			text-align: center;
-			padding: 16px;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			gap: 8px;
+			padding: 20px;
 			color: var(--muted);
 			font-size: 13px;
+		}
+
+		.loading-spinner {
+			width: 18px;
+			height: 18px;
+			border: 2px solid rgba(255, 255, 255, 0.1);
+			border-top-color: var(--accent);
+			border-radius: 50%;
+			animation: spin 0.8s linear infinite;
+		}
+
+		@keyframes spin {
+			to { transform: rotate(360deg); }
+		}
+
+		.end-of-list {
+			text-align: center;
+			padding: 20px;
+			color: var(--muted);
+			font-size: 12px;
+			opacity: 0.6;
 		}
 </style>
