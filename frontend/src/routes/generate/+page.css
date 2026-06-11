@@ -799,6 +799,25 @@
 		flex: 0 0 auto;
 	}
 
+	.queue-insight {
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+		padding: 8px 10px;
+		border: 1px solid rgba(79, 156, 249, 0.22);
+		border-radius: 7px;
+		background: rgba(79, 156, 249, 0.08);
+		color: #c9d6e6;
+		font-size: 12px;
+		line-height: 1.45;
+	}
+
+	.queue-insight svg {
+		flex: 0 0 auto;
+		margin-top: 2px;
+		color: #7fb6ff;
+	}
+
 	.result-meta {
 		gap: 6px;
 		min-width: 0;

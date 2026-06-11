@@ -91,6 +91,17 @@ export function progressLabel(task: GenerationTask, queueOrderedTasks: Generatio
 	return taskStatusLabel(task.status);
 }
 
+export function taskStatusPillLabel(task: GenerationTask, queueCounts: { processing: number; waiting: number }, queueOrderedTasks: GenerationTask[]) {
+	if (task.status === 'queued' || task.status === 'pending') {
+		const pos = queueOrderedTasks.filter(t => taskIsWaiting(t)).findIndex(t => t.task_id === task.task_id) + 1;
+		if (queueCounts.processing === 0) return '等待接手';
+		return pos ? `排队 ${pos}` : '排队中';
+	}
+	if (task.status === 'running') return '渲染中';
+	if (task.status === 'postprocessing') return '写入中';
+	return taskStatusLabel(task.status);
+}
+
 export function taskProgressWidth(task: GenerationTask) {
 	if (taskIsWaiting(task)) return 0;
 	return Math.max(8, Math.round((task.progress || 0) * 100));
@@ -125,6 +136,23 @@ export function taskStageLabel(task: GenerationTask, queueOrderedTasks: Generati
 	return '收尾处理中';
 }
 
+export function queueSummaryText(queueCounts: { processing: number; waiting: number }, queueOrderedTasks: GenerationTask[], engineMap: Map<string, EngineDetail>) {
+	if (!queueCounts.processing && !queueCounts.waiting) return '';
+	if (queueCounts.processing) {
+		const current = queueOrderedTasks.find(t => taskIsProcessing(t));
+		const engineName = current ? engineMap.get(current.engine_id)?.manifest.display_name ?? current.engine_id : '后台任务';
+		const waiting = queueCounts.waiting ? `，后面等待 ${queueCounts.waiting} 条` : '';
+		return `正在执行：${engineName}${waiting}。`;
+	}
+	const next = queueOrderedTasks.find(t => taskIsWaiting(t));
+	if (!next) return `等待 ${queueCounts.waiting} 条任务。`;
+	const engine = engineMap.get(next.engine_id);
+	const engineName = engine?.manifest.display_name ?? next.engine_id;
+	const engineState = engine?.state.status;
+	const stateText = engineState && engineState !== 'loaded' ? `，当前引擎状态：${engineState}` : '';
+	return `等待后台 worker 接手：下一条是 ${engineName}${stateText}。如果这里长时间不变，通常是后台服务刚恢复、任务没有进入内存队列，或任务参数缺少必需音色。`;
+}
+
 const RUNTIME_PROFILES: Record<string, { slowAfterSeconds: number; timeoutSeconds: number }> = {
 	omnivoice: { slowAfterSeconds: 480, timeoutSeconds: 600 },
 	'indextts-v2': { slowAfterSeconds: 150, timeoutSeconds: 420 },
@@ -154,9 +182,9 @@ export function taskEtaLabel(task: GenerationTask) {
 
 export function taskRuntimeHint(task: GenerationTask, queueCounts: { processing: number; waiting: number }, queueOrderedTasks: GenerationTask[]) {
 	if (taskIsWaiting(task)) {
-		if (queueCounts.processing === 0) return '正在等待后台 worker 接手；服务恢复后会自动从最早任务开始。';
+		if (queueCounts.processing === 0) return '没有正在渲染的任务；此任务正在等待后台 worker 接手。若持续不动，请检查后台服务或任务参数。';
 		const pos = queueOrderedTasks.filter(t => taskIsWaiting(t)).findIndex(t => t.task_id === task.task_id) + 1;
-		return pos && pos > 1 ? `前面还有 ${pos - 1} 条任务。` : '';
+		return pos && pos > 1 ? `前面还有 ${pos - 1} 条任务，当前 worker 会按创建时间顺序处理。` : '前面有任务正在渲染，完成后会轮到这一条。';
 	}
 	if (!taskIsActive(task) || !task.started_at) return '';
 	const profile = RUNTIME_PROFILES[task.engine_id] ?? { slowAfterSeconds: 180, timeoutSeconds: 300 };

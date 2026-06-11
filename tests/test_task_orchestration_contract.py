@@ -155,7 +155,11 @@ async def test_longform_failure_is_reported_to_parent_status(fake_longform_db):
 
 
 @pytest.mark.asyncio
-async def test_longform_retry_failed_keeps_success_segment_result(fake_longform_db):
+async def test_longform_retry_failed_keeps_success_segment_result(fake_longform_db, monkeypatch):
+    enqueued_ids = []
+
+    monkeypatch.setattr(longform_queue, "start_worker", lambda: None)
+    monkeypatch.setattr(longform_queue, "_enqueue_task_id", lambda task_id: enqueued_ids.append(task_id))
     task = LongformTask(
         longform_task_id="lf-retry-1",
         engine_id="indextts-v2",
@@ -184,6 +188,8 @@ async def test_longform_retry_failed_keeps_success_segment_result(fake_longform_
     assert retried.segments[0].result_id == "result-1"
     assert retried.segments[1].status == TaskStatus.queued
     assert retried.segments[1].error_message is None
+    assert retried.segments[1].task_id is None
+    assert enqueued_ids == ["lf-retry-1"]
 
 
 @pytest.mark.asyncio
