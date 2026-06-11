@@ -265,6 +265,23 @@ def _enqueue_task_id(longform_task_id: str) -> None:
     _queued_task_ids.add(longform_task_id)
 
 
+def _restore_cancelled_segment_state(task: LongformTask) -> None:
+    db_task = get_task(task.longform_task_id)
+    if not db_task:
+        return
+    for idx, segment in enumerate(task.segments):
+        if idx >= len(db_task.segments):
+            break
+        if segment.status == TaskStatus.success:
+            continue
+        task.segments[idx] = db_task.segments[idx]
+
+
+def _is_longform_cancelled(longform_task_id: str) -> bool:
+    with _cancelled_lock:
+        return longform_task_id in _cancelled_longform
+
+
 async def _worker(queue: asyncio.Queue[str]) -> None:
     while True:
         longform_task_id = await queue.get()
@@ -285,9 +302,9 @@ async def _process(task: LongformTask) -> None:
         total = max(1, len(task.segments))
         for index, segment in enumerate(task.segments):
             # 检查整个任务是否被取消
-            with _cancelled_lock:
-                longform_cancelled = task.longform_task_id in _cancelled_longform
+            longform_cancelled = _is_longform_cancelled(task.longform_task_id)
             if longform_cancelled:
+                _restore_cancelled_segment_state(task)
                 task.status = TaskStatus.cancelled
                 task.completed_at = now_iso()
                 _save(task)
@@ -309,6 +326,13 @@ async def _process(task: LongformTask) -> None:
                 _save(task)
                 continue
             ok = await _process_segment(task, segment, req)
+            if _is_longform_cancelled(task.longform_task_id):
+                _restore_cancelled_segment_state(task)
+                task.status = TaskStatus.cancelled
+                task.completed_at = now_iso()
+                task.progress = (index + 1) / total * 0.9
+                _save(task)
+                return
             task.progress = (index + 1) / total * 0.9
             _save(task)
             if not ok and task.stop_merge_on_verification_failed:
@@ -318,9 +342,9 @@ async def _process(task: LongformTask) -> None:
         task.result_ids = [segment.result_id for segment in success_segments if segment.result_id]
 
         # 整个任务被取消 → 不合并，直接标记 cancelled
-        with _cancelled_lock:
-            longform_cancelled = task.longform_task_id in _cancelled_longform
+        longform_cancelled = _is_longform_cancelled(task.longform_task_id)
         if longform_cancelled:
+            _restore_cancelled_segment_state(task)
             task.status = TaskStatus.cancelled
             task.error_message = "任务已取消"
         elif failed_segments:

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import threading
 import time
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 
 from fastapi import WebSocket
 
@@ -25,7 +27,7 @@ from app.models.schemas import (
     TTSVerificationResponse,
     now_iso,
 )
-from app.services import asr_service, audio_tools, database as db, engine_registry, history_store, project_store, settings_store, text_verifier, voice_store
+from app.services import asr_service, audio_tools, database as db, engine_policy, engine_registry, engine_request_builder, history_store, project_store, settings_store, text_verifier, voice_store
 
 _queue: asyncio.Queue[str] | None = None
 _worker_task: asyncio.Task[None] | None = None
@@ -37,6 +39,7 @@ _clients: list[WebSocket] = []
 _clients_lock = threading.Lock()
 
 _TERMINAL_STATUSES = {TaskStatus.success, TaskStatus.failed, TaskStatus.cancelled}
+_TERMINAL_STATUS_VALUES = {s.value for s in _TERMINAL_STATUSES}
 _RECOVERABLE_STATUSES = {
     TaskStatus.pending,
     TaskStatus.queued,
@@ -52,18 +55,42 @@ def _save(task: GenerationTask) -> GenerationTask:
 
 
 def _timeout_seconds_for(engine_id: str) -> int:
-    return {
-        "omnivoice": 600,
-        "indextts-v2": 420,
-        "emotivoice": 420,
-        "f5-tts": 600,
-        "cosyvoice-sft": 900,
-        "cosyvoice-zero-shot": 900,
-    }.get(engine_id, 300)
+    return engine_policy.timeout_seconds_for(engine_id)
 
 
 def _task_is_active(status: TaskStatus | str) -> bool:
     return status in [TaskStatus.pending, TaskStatus.queued, TaskStatus.running, TaskStatus.postprocessing, TaskStatus.retrying]
+
+
+def _is_mimo_tts(engine_id: str) -> bool:
+    return engine_policy.is_mimo_tts(engine_id)
+
+
+def _mimo_idempotency_marker(req: GenerateRequest) -> str:
+    if req.idempotency_marker:
+        return req.idempotency_marker
+    payload = {
+        "engine_id": req.engine_id,
+        "text": req.text,
+        "voice_id": req.voice_id,
+        "reference_audio_path": req.reference_audio_path,
+        "mimo_voice": req.mimo_voice,
+        "instruction": req.style_instruction or req.emotion_text or req.emotion,
+        "voice_design_prompt": req.voice_design_prompt or req.style_instruction or req.emotion_text,
+        "optimize_text_preview": req.optimize_text_preview,
+        "temperature": req.temperature,
+        "top_p": req.top_p,
+        "output_format": req.output_format,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return f"mimo:{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:32]}"
+
+
+def _parameters_with_idempotency_marker(req: GenerateRequest) -> dict:
+    parameters = req.model_dump()
+    if _is_mimo_tts(req.engine_id):
+        parameters["idempotency_marker"] = _mimo_idempotency_marker(req)
+    return parameters
 
 
 def _elapsed_since(value: str | None) -> float:
@@ -75,7 +102,60 @@ def _elapsed_since(value: str | None) -> float:
         return 0.0
 
 
-def _reconcile_stale_task(task: GenerationTask) -> GenerationTask:
+def _coerce_task_status(value: Any) -> TaskStatus | str | None:
+    if isinstance(value, TaskStatus):
+        return value
+    if isinstance(value, str):
+        if value in _TERMINAL_STATUS_VALUES:
+            return TaskStatus(value)
+        return value
+    return None
+
+
+def _task_status_is_terminal(value: TaskStatus | str | None) -> bool:
+    coerced = _coerce_task_status(value)
+    return coerced in _TERMINAL_STATUSES
+
+
+def _task_is_protected_by_state(task: GenerationTask, *, row: dict[str, Any] | None = None) -> bool:
+    data = row if row is not None else db.get_one("tasks", "task_id", task.task_id)
+    if task.task_id in _cancelled:
+        return True
+    if not data:
+        return _task_status_is_terminal(task.status)
+    if data.get("cancel_requested"):
+        return True
+    return _task_status_is_terminal(_coerce_task_status(data.get("status")))
+
+
+def _sync_task_status_from_db(task: GenerationTask, row: dict[str, Any] | None = None) -> GenerationTask:
+    data = row if row is not None else db.get_one("tasks", "task_id", task.task_id)
+    if not data:
+        if task.task_id in _cancelled:
+            task.status = TaskStatus.cancelled
+            task.error_message = task.error_message or "已取消"
+        return task
+    status = _coerce_task_status(data.get("status"))
+    if data.get("cancel_requested") and status not in _TERMINAL_STATUSES:
+        task.status = TaskStatus.cancelled
+        task.error_message = task.error_message or data.get("error_message") or "已取消"
+        task.completed_at = task.completed_at or data.get("completed_at")
+        return task
+    if status in _TERMINAL_STATUSES:
+        task.status = status
+        task.completed_at = task.completed_at or data.get("completed_at")
+        if not task.error_message and data.get("error_message"):
+            task.error_message = data.get("error_message")
+    elif task.task_id in _cancelled:
+        task.status = TaskStatus.cancelled
+        task.error_message = task.error_message or data.get("error_message") or "已取消"
+    return task
+
+
+def _reconcile_stale_task(task_data: dict) -> GenerationTask:
+    task = GenerationTask(**task_data)
+    if task_data.get("cancel_requested"):
+        return task
     if task.status not in [TaskStatus.running, TaskStatus.postprocessing, TaskStatus.retrying]:
         return task
     stale_after = _timeout_seconds_for(task.engine_id) + 180
@@ -89,12 +169,12 @@ def _reconcile_stale_task(task: GenerationTask) -> GenerationTask:
 
 
 def list_tasks() -> list[GenerationTask]:
-    return [_reconcile_stale_task(GenerationTask(**d)) for d in db.list_all("tasks", "created_at", limit=-1)]
+    return [_reconcile_stale_task(row) for row in db.list_all("tasks", "created_at", limit=-1)]
 
 
 def get_task(task_id: str) -> GenerationTask | None:
     data = db.get_one("tasks", "task_id", task_id)
-    return _reconcile_stale_task(GenerationTask(**data)) if data else None
+    return _reconcile_stale_task(data) if data else None
 
 
 def _verification_language(task: GenerationTask) -> str:
@@ -325,7 +405,7 @@ async def submit(
         longform_segment_count=longform_segment_count,
         input_text=req.text,
         status=TaskStatus.queued,
-        parameters=req.model_dump(),
+        parameters=_parameters_with_idempotency_marker(req),
     )
     _save(task)
     _enqueue_task_id(task.task_id)
@@ -482,7 +562,9 @@ def cancel_task(task_id: str) -> dict:
         task.status = TaskStatus.cancelled
         task.completed_at = now_iso()
         task.error_message = "已取消"
-        _save(task)
+        _save_data = task.model_dump()
+        _save_data["cancel_requested"] = True
+        db.upsert("tasks", task.task_id, _save_data)
     return {"task_id": task_id, "status": task.status.value}
 
 
@@ -519,13 +601,20 @@ async def _worker(queue: asyncio.Queue[str]) -> None:
         task_id = await queue.get()
         _queued_task_ids.discard(task_id)
         task = get_task(task_id)
-        if not task or task.status == TaskStatus.cancelled:
+        if not task:
+            continue
+        if _task_is_protected_by_state(task):
+            continue
+        if task.status in [TaskStatus.cancelled, "cancelled"]:
             continue
         await _process(task)
 
 
 def _enqueue_task_id(task_id: str) -> None:
     if _queue is None or task_id in _queued_task_ids:
+        return
+    data = db.get_one("tasks", "task_id", task_id)
+    if data and (_task_status_is_terminal(data.get("status")) or data.get("cancel_requested")):
         return
     _queue.put_nowait(task_id)
     _queued_task_ids.add(task_id)
@@ -534,9 +623,20 @@ def _enqueue_task_id(task_id: str) -> None:
 def _recover_incomplete_tasks() -> list[str]:
     task_ids: list[str] = []
     for row in db.list_all("tasks", "created_at", False, limit=-1):
-        task = _reconcile_stale_task(GenerationTask(**row))
+        task = _reconcile_stale_task(row)
+        if row.get("cancel_requested"):
+            continue
         if task.status in _TERMINAL_STATUSES or task.status not in _RECOVERABLE_STATUSES:
             continue
+        if _is_mimo_tts(task.engine_id) and task.status in {TaskStatus.running, TaskStatus.postprocessing, TaskStatus.retrying}:
+            marker = task.parameters.get("provider_request_id") or task.parameters.get("idempotency_marker")
+            if not marker:
+                task.status = TaskStatus.failed
+                task.progress = min(task.progress, 0.99)
+                task.completed_at = now_iso()
+                task.error_message = "云端任务缺少幂等标记，服务重启后未自动重放。请确认云端状态后重新提交。"
+                _save(task)
+                continue
         if task.status != TaskStatus.queued or task.started_at or task.progress:
             previous_status = task.status
             task.status = TaskStatus.queued
@@ -556,16 +656,6 @@ def _resolve_reference(req: GenerateRequest) -> str | None:
     return voice_store.reference_path(req.voice_id)
 
 
-def _emotion(req: GenerateRequest):
-    if req.emotion_mode == "follow_reference":
-        return None
-    if req.emotion_mode == "emotion_vector":
-        return req.emotion_values if req.emotion_values else req.emotion
-    if req.emotion_mode == "emotion_text":
-        return req.emotion_text
-    return None
-
-
 def _kwargs(req: GenerateRequest, output_path: str) -> dict:
     ref = _resolve_reference(req)
     voice = voice_store.get_voice(req.voice_id) if req.voice_id else None
@@ -581,95 +671,52 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
             raise ValueError("REFERENCE_AUDIO_REQUIRED")
         if not (ref_text or "").strip():
             raise ValueError("REFERENCE_TEXT_REQUIRED")
-    if req.engine_id in ["mimo-v2.5-tts", "mimo-v2.5-tts-preset", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"]:
-        settings = settings_store.get()
-        api_key = settings_store.mimo_api_key()
-        if not settings.cloud_enabled:
-            raise ValueError("MIMO_CLOUD_DISABLED")
-        if not api_key:
-            raise ValueError("MIMO_API_KEY_MISSING")
-        model = "mimo-v2.5-tts" if req.engine_id in ["mimo-v2.5-tts", "mimo-v2.5-tts-preset"] else req.engine_id
-        return {
-            "text": req.text,
-            "output_path": output_path,
-            "base_url": settings.mimo_base_url or "https://token-plan-cn.xiaomimimo.com/v1",
-            "api_key": api_key,
-            "model": model,
-            "voice": req.mimo_voice or settings.mimo_default_voice,
-            "instruction": req.style_instruction or req.emotion_text or req.emotion,
-            "voice_design_prompt": req.voice_design_prompt or req.style_instruction or req.emotion_text,
-            "optimize_text_preview": req.optimize_text_preview,
-            "reference_audio_path": ref,
-            "temperature": req.temperature,
-            "top_p": req.top_p,
-        }
+    if engine_request_builder.is_mimo_tts_request(req.engine_id):
+        return engine_request_builder.build_mimo_tts_single_kwargs(
+            req,
+            output_path,
+            reference_audio_path=ref,
+            idempotency_marker=_mimo_idempotency_marker(req),
+        )
     model_dir = str(settings_store.model_path(req.engine_id))
     if req.engine_id in {"emotivoice", "cosyvoice-sft"}:
-        return {
-            "text": req.text,
-            "output_path": output_path,
-            "speaker_id": req.speaker_id,
-            "prompt": req.prompt or req.emotion,
-            "speed": req.speed,
-        }
+        return engine_request_builder.build_preset_voice_single_kwargs(req, output_path)
     if req.engine_id == "f5-tts":
-        return {
-            "text": req.text,
-            "reference_audio": ref,
-            "ref_text": ref_text,
-            "output_path": output_path,
-            "speed": req.speed,
-            "nfe_step": req.nfe_step,
-            "cfg_strength": req.cfg_strength,
-            "target_rms": req.target_rms,
-            "cross_fade_duration": req.cross_fade_duration,
-            "remove_silence": req.remove_silence,
-            "seed": req.seed,
-        }
+        return engine_request_builder.build_f5_tts_single_kwargs(
+            req,
+            output_path,
+            reference_audio=ref,
+            ref_text=ref_text,
+        )
     if req.engine_id == "cosyvoice-zero-shot":
-        return {
-            "text": req.text,
-            "reference_audio": ref,
-            "ref_text": ref_text,
-            "output_path": output_path,
-            "speed": req.speed,
-        }
-    common = {
-        "text": req.text,
-        "reference_audio": ref,
-        "output_path": output_path,
-        "model_dir": model_dir,
-        "temperature": req.temperature,
-        "top_p": req.top_p,
-        "top_k": req.top_k,
-        "repetition_penalty": req.repetition_penalty,
-        "max_text_tokens_per_segment": req.max_text_tokens_per_segment,
-        "interval_silence": req.interval_silence,
-        "segment_overlap_ms": req.segment_overlap_ms,
-        "speed": req.speed,
-        "seed": req.seed,
-    }
+        return engine_request_builder.build_cosyvoice_zero_shot_single_kwargs(
+            req,
+            output_path,
+            reference_audio=ref,
+            ref_text=ref_text,
+        )
     if req.engine_id == "indextts-v2":
-        common.update({
-            "max_mel_tokens": req.max_mel_tokens or 1500,
-            "diffusion_steps": req.diffusion_steps,
-            "cfg_rate": req.cfg_rate,
-            "emotion": _emotion(req),
-            "emo_alpha": req.emo_alpha,
-        })
-    else:
-        common.update({
-            "language": req.language,
-            "ref_text": ref_text,
-            "emotion": req.emotion,
-            "emotion_text": req.emotion_text,
-        })
-        if req.engine_id == "omnivoice":
-            common["diffusion_steps"] = req.diffusion_steps or 16
-    return common
+        return engine_request_builder.build_indextts_v2_single_kwargs(
+            req,
+            output_path,
+            reference_audio=ref,
+            model_dir=model_dir,
+        )
+    if req.engine_id == "omnivoice":
+        return engine_request_builder.build_omnivoice_single_kwargs(
+            req,
+            output_path,
+            reference_audio=ref,
+            ref_text=ref_text,
+            model_dir=model_dir,
+        )
+    raise ValueError(f"Unsupported engine: {req.engine_id}")
 
 
 async def _process(task: GenerationTask) -> None:
+    if _task_is_protected_by_state(task):
+        _sync_task_status_from_db(task)
+        return
     task.status = TaskStatus.running
     task.started_at = now_iso()
     task.progress = 0.12
@@ -702,6 +749,8 @@ async def _process(task: GenerationTask) -> None:
             now = time.monotonic()
             if next_value <= progress_state["last_value"] + 0.01 and now - progress_state["last_sent_at"] < 2.0:
                 return
+            if _task_is_protected_by_state(task):
+                return
             task.progress = next_value
             progress_state["last_value"] = next_value
             progress_state["last_sent_at"] = now
@@ -717,7 +766,9 @@ async def _process(task: GenerationTask) -> None:
             lambda: task.task_id in _cancelled,
             progress_tick,
         )
-        if task.task_id in _cancelled:
+        if _task_is_protected_by_state(task):
+            _sync_task_status_from_db(task)
+        elif task.task_id in _cancelled:
             task.status = TaskStatus.cancelled
             task.error_message = "cancelled by user"
         else:
@@ -731,33 +782,38 @@ async def _process(task: GenerationTask) -> None:
                 final_path = audio_tools.copy_or_convert(final_path, converted, req.output_format)
             if not final_path.exists() or final_path.stat().st_size <= 0:
                 raise RuntimeError(f"生成完成但结果音频不存在：{final_path}")
-            task.status = TaskStatus.success
-            task.progress = 1.0
-            task.result_audio_id = audio_id
-            task.result_duration_ms = result.get("duration_ms")
-            task.generation_time_ms = result.get("generation_time_ms")
-            hist = history_store.add(HistoryItem(
-                task_id=task.task_id,
-                engine_id=req.engine_id,
-                voice_id=req.voice_id,
-                voice_name=voice_store.get_voice(req.voice_id).name if req.voice_id and voice_store.get_voice(req.voice_id) else None,
-                project_id=task.project_id,
-                segment_id=task.segment_id,
-                longform_task_id=task.longform_task_id,
-                longform_segment_index=task.longform_segment_index,
-                longform_segment_count=task.longform_segment_count,
-                input_text=req.text,
-                output_audio_id=audio_id,
-                output_path=str(final_path),
-                duration_ms=task.result_duration_ms,
-                generation_time_ms=task.generation_time_ms,
-                parameter_snapshot=task.parameters,
-            ))
-            task.result_id = hist.result_id
-            if task.project_id and task.segment_id:
-                project_store.update_segment_result(task.project_id, task.segment_id, audio_id, hist.result_id, SegmentStatus.completed)
+            if not _task_is_protected_by_state(task):
+                task.status = TaskStatus.success
+                task.progress = 1.0
+                task.result_audio_id = audio_id
+                task.result_duration_ms = result.get("duration_ms")
+                task.generation_time_ms = result.get("generation_time_ms")
+                hist = history_store.add(HistoryItem(
+                    task_id=task.task_id,
+                    engine_id=req.engine_id,
+                    voice_id=req.voice_id,
+                    voice_name=voice_store.get_voice(req.voice_id).name if req.voice_id and voice_store.get_voice(req.voice_id) else None,
+                    project_id=task.project_id,
+                    segment_id=task.segment_id,
+                    longform_task_id=task.longform_task_id,
+                    longform_segment_index=task.longform_segment_index,
+                    longform_segment_count=task.longform_segment_count,
+                    input_text=req.text,
+                    output_audio_id=audio_id,
+                    output_path=str(final_path),
+                    duration_ms=task.result_duration_ms,
+                    generation_time_ms=task.generation_time_ms,
+                    parameter_snapshot=task.parameters,
+                ))
+                task.result_id = hist.result_id
+                if task.project_id and task.segment_id:
+                    project_store.update_segment_result(task.project_id, task.segment_id, audio_id, hist.result_id, SegmentStatus.completed)
+            else:
+                _sync_task_status_from_db(task)
     except Exception as exc:
-        if task.task_id in _cancelled or str(exc) == "Generation cancelled":
+        if _task_is_protected_by_state(task):
+            _sync_task_status_from_db(task)
+        elif task.task_id in _cancelled or str(exc) == "Generation cancelled":
             task.status = TaskStatus.cancelled
             task.error_message = "已取消"
         else:

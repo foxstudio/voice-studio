@@ -56,7 +56,19 @@
 
 <div class="app-shell" class:sidebar-collapsed={sidebarCollapsed} class:sidebar-mobile-open={sidebarMobileOpen}>
 	{#if sidebarMobileOpen}
-		<div class="sidebar-overlay" onclick={closeMobileSidebar}></div>
+		<div
+			class="sidebar-overlay"
+			role="button"
+			tabindex="0"
+			aria-label="关闭导航"
+			onclick={closeMobileSidebar}
+			onkeydown={(event) => {
+				if (event.key === 'Enter' || event.key === ' ' || event.key === 'Escape') {
+					event.preventDefault();
+					closeMobileSidebar();
+				}
+			}}
+		></div>
 	{/if}
 	<Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} onNavClick={closeMobileSidebar} />
 	<div class="main">

@@ -15,6 +15,8 @@ _worker: subprocess.Popen[str] | None = None
 _worker_log_handle = None
 _worker_lock = threading.Lock()
 _request_lock = threading.Lock()
+_STDOUT_TAIL_LIMIT_LINES = 12
+_STDOUT_TAIL_LIMIT_CHARS = 2000
 
 
 def run(
@@ -79,11 +81,20 @@ def _ensure_worker(
             bufsize=1,
             **popen_kwargs,
         )
-        ready = _read_response(_worker, timeout=timeout, started=started, cancel_check=cancel_check, on_tick=on_tick)
+        stdout_tail: list[str] = []
+        ready = _read_response(
+            _worker,
+            timeout=timeout,
+            started=started,
+            cancel_check=cancel_check,
+            on_tick=on_tick,
+            stdout_tail=stdout_tail,
+        )
         if not ready.get("ready"):
             error = ready.get("error") or "CosyVoice worker failed to start"
+            stderr_tail = _safe_stderr_tail(_worker)
             _reset_worker()
-            raise RuntimeError(error)
+            raise RuntimeError(_format_worker_error(error, stderr_tail=stderr_tail, stdout_tail_lines=stdout_tail))
         return _worker
 
 
@@ -94,7 +105,10 @@ def _read_response(
     started: float,
     cancel_check: Callable[[], bool] | None,
     on_tick: Callable[[float], None] | None,
+    stdout_tail: list[str] | None = None,
 ) -> dict[str, Any]:
+    if stdout_tail is None:
+        stdout_tail = []
     assert worker.stdout is not None
     while True:
         elapsed = time.monotonic() - started
@@ -102,14 +116,21 @@ def _read_response(
             _reset_worker()
             raise RuntimeError("Generation cancelled")
         if elapsed > timeout:
+            error = _format_worker_error(
+                f"Inference timed out after {timeout}s",
+                stderr_tail=_safe_stderr_tail(worker),
+                stdout_tail_lines=stdout_tail,
+            )
             _reset_worker()
-            raise RuntimeError(f"Inference timed out after {timeout}s")
+            raise RuntimeError(error)
         if on_tick:
             on_tick(elapsed)
         if worker.poll() is not None:
+            poll_state = worker.poll()
             stderr = _safe_stderr_tail(worker)
             _reset_worker()
-            raise RuntimeError(stderr or "CosyVoice worker exited unexpectedly")
+            message = f"CosyVoice worker exited unexpectedly (code={poll_state})"
+            raise RuntimeError(_format_worker_error(message, stderr_tail=stderr, stdout_tail_lines=stdout_tail))
         readable, _, _ = select.select([worker.stdout], [], [], 0.5)
         if not readable:
             continue
@@ -122,7 +143,39 @@ def _read_response(
         try:
             return json.loads(line)
         except json.JSONDecodeError:
+            _append_stdout_tail(stdout_tail, line)
             continue
+
+
+def _append_stdout_tail(stdout_tail: list[str], line: str) -> None:
+    if not line.strip():
+        return
+    stdout_tail.append(line.rstrip("\n"))
+    if len(stdout_tail) > _STDOUT_TAIL_LIMIT_LINES:
+        del stdout_tail[0 : len(stdout_tail) - _STDOUT_TAIL_LIMIT_LINES]
+
+
+def _format_worker_error(
+    base_message: str,
+    *,
+    stderr_tail: str = "",
+    stdout_tail_lines: list[str] | None = None,
+) -> str:
+    tail = _format_tail(stdout_tail_lines)
+    if stderr_tail:
+        if tail:
+            return f"{base_message} | stdout tail: {tail} | stderr tail: {stderr_tail}"
+        return f"{base_message} | stderr tail: {stderr_tail}"
+    if tail:
+        return f"{base_message} | stdout tail: {tail}"
+    return base_message
+
+
+def _format_tail(lines: list[str] | None) -> str:
+    if not lines:
+        return ""
+    text = "\n".join(lines)
+    return text[-_STDOUT_TAIL_LIMIT_CHARS:]
 
 
 def _safe_stderr_tail(worker: subprocess.Popen[str]) -> str:

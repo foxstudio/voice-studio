@@ -90,13 +90,15 @@ def test_emotivoice_speaker_catalog_can_be_filtered(tmp_path: Path, monkeypatch)
         engine_registry._emotivoice_speaker_catalog.cache_clear()
 
 
-def test_f5_run_isolated_uses_persistent_worker_by_default(monkeypatch):
+def test_f5_run_isolated_uses_persistent_worker_by_default(tmp_path: Path, monkeypatch):
     captured: dict = {}
 
     def fake_run(kwargs, *, root, python, timeout, cancel_check=None, on_tick=None):
         captured.update({"kwargs": kwargs, "root": root, "python": python, "timeout": timeout, "cancel_check": cancel_check, "on_tick": on_tick})
         return {"output_path": kwargs["output_path"], "duration_ms": 1000, "generation_time_ms": 42}
 
+    root = tmp_path / "F5-TTS"
+    monkeypatch.setenv("VOICE_STUDIO_F5_TTS_ROOT", str(root))
     monkeypatch.delenv("VOICE_STUDIO_F5_PERSISTENT_WORKER", raising=False)
     monkeypatch.setattr(engine_registry.f5_worker, "run", fake_run)
 
@@ -108,7 +110,7 @@ def test_f5_run_isolated_uses_persistent_worker_by_default(monkeypatch):
     assert captured["python"].endswith("/.venv/bin/python")
 
 
-def test_cosyvoice_run_isolated_uses_persistent_worker_by_default(monkeypatch):
+def test_cosyvoice_run_isolated_uses_persistent_worker_by_default(tmp_path: Path, monkeypatch):
     captured: dict = {}
 
     def fake_run(engine_id, kwargs, *, root, python, timeout, cancel_check=None, on_tick=None):
@@ -125,6 +127,8 @@ def test_cosyvoice_run_isolated_uses_persistent_worker_by_default(monkeypatch):
         )
         return {"output_path": kwargs["output_path"], "duration_ms": 1000, "generation_time_ms": 42}
 
+    root = tmp_path / "CosyVoice"
+    monkeypatch.setenv("VOICE_STUDIO_COSYVOICE_ROOT", str(root))
     monkeypatch.delenv("VOICE_STUDIO_COSYVOICE_PERSISTENT_WORKER", raising=False)
     monkeypatch.setattr(engine_registry.cosyvoice_worker, "run", fake_run)
 

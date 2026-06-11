@@ -44,7 +44,7 @@ def test_long_omnivoice_text_recommends_split_with_confirmation():
     assert plan.mode == "longform_recommended"
     assert plan.recommended_action == "split_generate"
     assert plan.requires_user_confirmation is True
-    assert plan.threshold == 120
+    assert plan.threshold == 80
     assert len(plan.segments) > 1
     assert all(segment.char_count <= 90 for segment in plan.segments)
     assert "OmniVoice" in " ".join(plan.warnings)

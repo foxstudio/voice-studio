@@ -299,6 +299,7 @@ class GenerateRequest(BaseModel):
     voice_design_prompt: str | None = None
     optimize_text_preview: bool = False
     mimo_voice: str | None = None
+    idempotency_marker: str | None = None
     speaker_id: str | None = None
     prompt: str | None = None
     nfe_step: int = Field(default=32, ge=4, le=64)
@@ -466,6 +467,7 @@ class BatchGenerateRequest(BaseModel):
     language: str = "zh"
     output_dir: str | None = None
     output_format: Literal["wav", "mp3", "flac"] = "mp3"
+    partial_success: bool = False
     segments: list[BatchSegmentInput]
     parameters: dict[str, Any] = Field(default_factory=dict)
 

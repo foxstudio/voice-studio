@@ -19,13 +19,16 @@ from app.models.schemas import (
     TaskStatus,
     now_iso,
 )
-from app.services import database as db, engine_registry, settings_store, voice_store
+from app.services import database as db, engine_registry, engine_request_builder, settings_store, voice_store
 from app.services.paths import PROJECT_ROOT, expand_path
 
 _queue: asyncio.Queue[str] | None = None
 _worker_task: asyncio.Task[None] | None = None
 _worker_loop: asyncio.AbstractEventLoop | None = None
 _lock = threading.Lock()
+_cancelled_batches: set[str] = set()
+_cancelled_lock = threading.Lock()
+_TERMINAL_STATUSES = {TaskStatus.success, TaskStatus.failed, TaskStatus.cancelled}
 
 
 def _save(batch: BatchTask) -> BatchTask:
@@ -40,6 +43,58 @@ def get_batch(batch_task_id: str) -> BatchTask | None:
 
 def list_batches() -> list[BatchTask]:
     return [BatchTask(**d) for d in db.list_all("batches", "created_at")]
+
+
+def _is_cancelled(batch_task_id: str) -> bool:
+    with _cancelled_lock:
+        return batch_task_id in _cancelled_batches
+
+
+def _enqueue_batch_id(batch_task_id: str) -> None:
+    if _queue is not None:
+        _queue.put_nowait(batch_task_id)
+
+
+def retry_batch(batch_task_id: str) -> BatchTask:
+    batch = get_batch(batch_task_id)
+    if not batch:
+        raise ValueError("Batch task not found")
+    if batch.status not in _TERMINAL_STATUSES:
+        raise ValueError("Batch task is still active")
+    for segment in batch.segments:
+        if segment.status != TaskStatus.success:
+            segment.status = TaskStatus.queued
+            segment.error_message = None
+            segment.output_path = None
+            segment.duration_ms = None
+    batch.status = TaskStatus.queued
+    batch.progress = 0.0
+    batch.error_message = None
+    batch.started_at = None
+    batch.completed_at = None
+    with _cancelled_lock:
+        _cancelled_batches.discard(batch.batch_task_id)
+    _save(batch)
+    _enqueue_batch_id(batch.batch_task_id)
+    return batch
+
+
+def cancel_batch(batch_task_id: str) -> dict:
+    batch = get_batch(batch_task_id)
+    if not batch:
+        return {"batch_task_id": batch_task_id, "status": "not_found"}
+    if batch.status in _TERMINAL_STATUSES:
+        return {"batch_task_id": batch_task_id, "status": batch.status.value}
+    with _cancelled_lock:
+        _cancelled_batches.add(batch_task_id)
+    for segment in batch.segments:
+        if segment.status != TaskStatus.success:
+            segment.status = TaskStatus.cancelled
+            segment.error_message = "已取消"
+    batch.status = TaskStatus.cancelled
+    batch.completed_at = now_iso()
+    _save(batch)
+    return {"batch_task_id": batch_task_id, "status": "cancelled"}
 
 
 def start_worker() -> None:
@@ -145,25 +200,11 @@ def _resolve_reference(req: BatchGenerateRequest) -> str | None:
 
 
 def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
-    if req.engine_id in ["mimo-v2.5-tts", "mimo-v2.5-tts-preset", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"]:
-        settings = settings_store.get()
-        api_key = settings_store.mimo_api_key()
-        if not settings.cloud_enabled:
-            raise ValueError("MIMO_CLOUD_DISABLED")
-        if not api_key:
-            raise ValueError("MIMO_API_KEY_MISSING")
-        model = "mimo-v2.5-tts" if req.engine_id in ["mimo-v2.5-tts", "mimo-v2.5-tts-preset"] else req.engine_id
-        return {
-            "base_url": settings.mimo_base_url,
-            "api_key": api_key,
-            "model": model,
-            "mimo_voice": req.parameters.get("mimo_voice") or settings.mimo_default_voice,
-            "voice_design_prompt": req.parameters.get("voice_design_prompt"),
-            "optimize_text_preview": req.parameters.get("optimize_text_preview", False),
-            "reference_audio_path": _resolve_reference(req),
-            "temperature": req.parameters.get("temperature", 0.6),
-            "top_p": req.parameters.get("top_p", 0.95),
-        }
+    if engine_request_builder.is_mimo_tts_request(req.engine_id):
+        return engine_request_builder.build_mimo_tts_batch_common_kwargs(
+            req,
+            reference_audio_path=_resolve_reference(req),
+        )
 
     ref = _resolve_reference(req)
     voice = voice_store.get_voice(req.voice_id) if req.voice_id else None
@@ -182,56 +223,36 @@ def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
     values = base.model_dump()
     values.update(req.parameters)
     if req.engine_id in {"emotivoice", "cosyvoice-sft"}:
-        return {
-            "speaker_id": values.get("speaker_id"),
-            "prompt": values.get("prompt"),
-            "speed": values.get("speed"),
-        }
+        return engine_request_builder.build_preset_voice_batch_common_kwargs(values)
     if req.engine_id == "f5-tts":
-        return {
-            "reference_audio": ref,
-            "ref_text": ref_text,
-            "speed": values.get("speed"),
-            "nfe_step": values.get("nfe_step"),
-            "cfg_strength": values.get("cfg_strength"),
-            "target_rms": values.get("target_rms"),
-            "cross_fade_duration": values.get("cross_fade_duration"),
-            "remove_silence": values.get("remove_silence"),
-            "seed": values.get("seed"),
-        }
+        return engine_request_builder.build_f5_tts_batch_common_kwargs(
+            values,
+            reference_audio=ref,
+            ref_text=ref_text,
+        )
     if req.engine_id == "cosyvoice-zero-shot":
-        return {
-            "reference_audio": ref,
-            "ref_text": ref_text,
-            "speed": values.get("speed"),
-        }
-    common = {
-        "reference_audio": ref,
-        "language": req.language,
-        "model_dir": str(settings_store.model_path(req.engine_id)),
-    }
-    # IndexTTS v2 does not use ref_text
-    if req.engine_id != "indextts-v2":
-        common["ref_text"] = ref_text
-    for key in [
-        "temperature",
-        "top_p",
-        "top_k",
-        "repetition_penalty",
-        "max_text_tokens_per_segment",
-        "interval_silence",
-        "segment_overlap_ms",
-        "speed",
-        "seed",
-        "max_mel_tokens",
-        "diffusion_steps",
-        "cfg_rate",
-        "emotion",
-        "emo_alpha",
-        "emotion_text",
-    ]:
-        common[key] = values.get(key)
-    return common
+        return engine_request_builder.build_cosyvoice_zero_shot_batch_common_kwargs(
+            values,
+            reference_audio=ref,
+            ref_text=ref_text,
+        )
+    if req.engine_id == "indextts-v2":
+        return engine_request_builder.build_indextts_v2_batch_common_kwargs(
+            values,
+            parameters=req.parameters,
+            reference_audio=ref,
+            language=req.language,
+            model_dir=str(settings_store.model_path(req.engine_id)),
+        )
+    if req.engine_id == "omnivoice":
+        return engine_request_builder.build_omnivoice_batch_common_kwargs(
+            values,
+            reference_audio=ref,
+            ref_text=ref_text,
+            language=req.language,
+            model_dir=str(settings_store.model_path(req.engine_id)),
+        )
+    raise ValueError(f"Unsupported engine: {req.engine_id}")
 
 
 def _runner_segments(req: BatchGenerateRequest, batch: BatchTask, output_dir: Path) -> list[dict[str, Any]]:
@@ -305,7 +326,7 @@ async def _worker(queue: asyncio.Queue[str]) -> None:
     while True:
         batch_id = await queue.get()
         batch = get_batch(batch_id)
-        if not batch:
+        if not batch or batch.status == TaskStatus.cancelled or _is_cancelled(batch_id):
             continue
         await _process(batch)
 
@@ -315,30 +336,52 @@ async def _process(batch: BatchTask) -> None:
     batch.started_at = now_iso()
     batch.progress = 0.05
     _save(batch)
+    success_count = 0
     try:
         req = BatchGenerateRequest(**batch.parameters)
         result = await asyncio.to_thread(run_batch, req, batch)
+        if _is_cancelled(batch.batch_task_id):
+            latest = get_batch(batch.batch_task_id)
+            if latest:
+                batch.segments = latest.segments
+            batch.status = TaskStatus.cancelled
+            batch.completed_at = now_iso()
+            _save(batch)
+            return
         by_id = {item["segment_id"]: item for item in result.get("results", [])}
-        success = 0
         for segment in batch.segments:
+            if segment.status == TaskStatus.success and segment.output_path:
+                success_count += 1
+                continue
             data = by_id.get(segment.segment_id, {})
             if data.get("status") == "success":
                 segment.status = TaskStatus.success
                 segment.output_path = data.get("output_path")
                 segment.duration_ms = data.get("duration_ms")
-                success += 1
+                success_count += 1
             else:
                 segment.status = TaskStatus.failed
                 segment.error_message = data.get("error_message") or "批处理段落生成失败"
         batch.progress = 1.0
-        batch.status = TaskStatus.success if success == len(batch.segments) else TaskStatus.failed
-        batch.error_message = None if batch.status == TaskStatus.success else "部分或全部段落生成失败"
+        failed_count = len(batch.segments) - success_count
+        batch.status = TaskStatus.success if failed_count == 0 or (req.partial_success and success_count > 0) else TaskStatus.failed
+        batch.error_message = None if batch.status == TaskStatus.success else f"批处理段落生成失败: 成功 {success_count} 个，失败 {failed_count} 个。"
     except Exception as exc:
+        if _is_cancelled(batch.batch_task_id):
+            latest = get_batch(batch.batch_task_id)
+            if latest:
+                batch.segments = latest.segments
+            batch.status = TaskStatus.cancelled
+            batch.completed_at = now_iso()
+            _save(batch)
+            return
         batch.status = TaskStatus.failed
-        batch.error_message = str(exc)
         for segment in batch.segments:
             if segment.status not in [TaskStatus.success, TaskStatus.failed]:
                 segment.status = TaskStatus.failed
                 segment.error_message = str(exc)
+        success_count = sum(1 for segment in batch.segments if segment.status == TaskStatus.success)
+        failed_count = len(batch.segments) - success_count
+        batch.error_message = f"批处理段落处理异常: 成功 {success_count} 个，失败 {failed_count} 个。{exc}"
     batch.completed_at = now_iso()
     _save(batch)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
@@ -12,7 +13,26 @@ from app.models.exceptions import AppException
 from app.services import asr_tasks, batch_queue, engine_registry, longform_queue, qwen_forced_aligner, settings_store, task_queue
 
 START = time.monotonic()
-app = FastAPI(title="Voice Studio", version="1.0.0")
+APP_VERSION = "1.1.0"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings_store.ensure_directories()
+    task_queue.start_worker()
+    longform_queue.start_worker()
+    try:
+        yield
+    finally:
+        await asr_tasks.shutdown()
+        await longform_queue.shutdown()
+        await task_queue.shutdown()
+        await batch_queue.shutdown()
+        engine_registry.shutdown_workers()
+        qwen_forced_aligner.shutdown()
+
+
+app = FastAPI(title="Voice Studio", version=APP_VERSION, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,23 +62,6 @@ app.include_router(ser.router, prefix="/api/ser", tags=["ser"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 
 
-@app.on_event("startup")
-async def startup():
-    settings_store.ensure_directories()
-    task_queue.start_worker()
-    longform_queue.start_worker()
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    await asr_tasks.shutdown()
-    await longform_queue.shutdown()
-    await task_queue.shutdown()
-    await batch_queue.shutdown()
-    engine_registry.shutdown_workers()
-    qwen_forced_aligner.shutdown()
-
-
 @app.exception_handler(AppException)
 async def app_exception_handler(request, exc: AppException):
     return JSONResponse(status_code=exc.status_code, content={"error": {"code": exc.code, "message": exc.message, "detail": exc.detail_dict}})
@@ -78,7 +81,7 @@ async def validation_exception_handler(request, exc: RequestValidationError):
 async def health():
     return {
         "status": "ok",
-        "version": "1.0.0",
+        "version": APP_VERSION,
         "uptime_seconds": round(time.monotonic() - START, 2),
         "engines": {x.manifest.engine_id: x.state.status.value for x in engine_registry.list_engines()},
         "data_dir": settings_store.get().data_dir,

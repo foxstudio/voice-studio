@@ -33,11 +33,27 @@
 	let showVoiceModal = $state(false);
 	let copiedId = $state("");
 
-	function checkOverflow(node) {
-		const check = () => node.classList.toggle('fade-overflow', node.scrollHeight > node.offsetHeight);
-		requestAnimationFrame(check);
-		return { update: () => requestAnimationFrame(check), destroy: () => {} };
+	function checkOverflow(node: HTMLElement, _text: string) {
+		let frame = 0;
+		const check = () => {
+			frame = 0;
+			node.classList.toggle('fade-overflow', node.scrollHeight > node.offsetHeight);
+		};
+		const schedule = () => {
+			if (frame) cancelAnimationFrame(frame);
+			frame = requestAnimationFrame(check);
+		};
+		schedule();
+		return {
+			update(_nextText: string) {
+				schedule();
+			},
+			destroy() {
+				if (frame) cancelAnimationFrame(frame);
+			}
+		};
 	}
+
 
 	async function refresh() {
 		voices = await Api.voices();
@@ -540,7 +556,19 @@
 			</section>
 		</section>
 			{#if showVoiceModal}
-			<div class="modal-backdrop" onclick={() => resetForm()}></div>
+			<div
+					class="modal-backdrop"
+					role="button"
+					tabindex="0"
+					aria-label="关闭声音编辑弹窗"
+					onclick={() => resetForm()}
+					onkeydown={(event) => {
+						if (event.key === 'Enter' || event.key === ' ' || event.key === 'Escape') {
+							event.preventDefault();
+							resetForm();
+						}
+					}}
+				></div>
 			<dialog class="modal" open>
 				<div class="modal-header">
 					<h2>{#if editingVoice}<Pencil size={16} /> 编辑声音{:else}<Plus size={16} /> 新增声音{/if}</h2>

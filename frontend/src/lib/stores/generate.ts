@@ -99,7 +99,7 @@ export type GenerateStoreState = {
 	verificationErrors: Record<string, string>;
 	showLongformDialog: boolean;
 	pendingLongformPlan: GeneratePlanResponse | null;
-	pendingLongformResolve: ((value: unknown) => void) | null;
+	pendingLongformResolve: ((value: LongformStrategy | null) => void) | null;
 	longformStrategy: LongformStrategy;
 	longformVerifyEnabled: boolean;
 	longformMergeEnabled: boolean;

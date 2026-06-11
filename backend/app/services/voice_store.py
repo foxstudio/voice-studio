@@ -10,7 +10,6 @@ from app.services import audio_tools, database as db, settings_store, voice_alia
 
 def list_voices() -> list[VoiceAsset]:
     return [_normalize_voice(VoiceAsset(**d)) for d in db.list_all("voices", "updated_at", limit=-1)]
-    return [_normalize_voice(VoiceAsset(**d)) for d in db.list_all("voices", "updated_at")]
 
 
 def get_voice(voice_id: str) -> VoiceAsset | None:
