@@ -8,11 +8,13 @@
  * 4. 全页面统一行为（text-pop / desc-pop / description-pop）
  */
 
-const SELECTOR = '.text-pop, .meta-pop, .desc-pop, .description-pop.has-tooltip, .param-tip';
+const SELECTOR = '.text-pop, .meta-pop, .desc-pop, .description-pop.has-tooltip, .param-tip, [data-tooltip]';
+const SHOW_DELAY = 700; // ms — 图标按钮延迟显示，避免鼠标扫过时频繁弹窗
 const HIDE_DELAY = 280; // ms — 给鼠标从触发器移到悬浮框留够时间
 
 let container: HTMLDivElement | null = null;
 let currentTarget: Element | null = null;
+let showTimer: ReturnType<typeof setTimeout> | null = null;
 let hideTimer: ReturnType<typeof setTimeout> | null = null;
 let hideRaf: ReturnType<typeof setTimeout> | null = null;
 
@@ -34,9 +36,10 @@ function ensureContainer() {
 }
 
 function show(target: Element) {
-	const text = (target as HTMLElement).dataset.text;
+	const text = tooltipText(target);
 	if (!text) return;
 
+	if (showTimer) clearTimeout(showTimer);
 	if (hideTimer) clearTimeout(hideTimer);
 	if (hideRaf) clearTimeout(hideRaf);
 	currentTarget = target;
@@ -51,6 +54,19 @@ function show(target: Element) {
 	void container!.offsetHeight;
 	position(target);
 	container!.style.opacity = '1';
+}
+
+function scheduleShow(target: Element) {
+	if (showTimer) clearTimeout(showTimer);
+	if (hideTimer) clearTimeout(hideTimer);
+	if (hideRaf) clearTimeout(hideRaf);
+
+	showTimer = setTimeout(() => show(target), SHOW_DELAY);
+}
+
+function tooltipText(target: Element) {
+	const el = target as HTMLElement;
+	return el.dataset.tooltip || el.dataset.text || '';
 }
 
 function position(target: Element) {
@@ -86,6 +102,7 @@ function position(target: Element) {
 
 function hide() {
 	if (!container) return;
+	if (showTimer) clearTimeout(showTimer);
 	container.style.opacity = '0';
 	hideRaf = setTimeout(() => {
 		if (container && !currentTarget) container.style.display = 'none';
@@ -94,6 +111,7 @@ function hide() {
 }
 
 function scheduleHide() {
+	if (showTimer) clearTimeout(showTimer);
 	hideTimer = setTimeout(hide, HIDE_DELAY);
 }
 
@@ -102,7 +120,7 @@ function scheduleHide() {
 function onMouseOver(e: Event) {
 	const el = (e.target as Element).closest(SELECTOR);
 	if (!el) return;
-	show(el);
+	scheduleShow(el);
 }
 
 function onMouseOut(e: MouseEvent) {
@@ -112,6 +130,7 @@ function onMouseOut(e: MouseEvent) {
 	if (el.contains(e.relatedTarget as Node)) return;
 	// 移向悬浮框本身 → 不隐藏
 	if (container && (e.relatedTarget === container || container.contains(e.relatedTarget as Node))) return;
+	if (showTimer) clearTimeout(showTimer);
 	scheduleHide();
 }
 

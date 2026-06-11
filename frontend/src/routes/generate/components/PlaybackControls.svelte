@@ -20,7 +20,14 @@
 	}
 </script>
 
-<button class="gen-icon-btn result-play-btn" class:playing={isPlaying} type="button" onclick={handleClick}>
+<button
+	class="gen-icon-btn result-play-btn"
+	class:playing={isPlaying}
+	type="button"
+	aria-label={isPlaying ? '停止播放' : '播放音频'}
+	data-tooltip={isPlaying ? '停止播放当前音频' : '播放当前音频'}
+	onclick={handleClick}
+>
 	{#if isPlaying}
 		<Square size={15} />
 	{:else}

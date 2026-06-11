@@ -1283,7 +1283,11 @@
 		position: absolute;
 		right: 0;
 		bottom: calc(100% + 10px);
-		display: none;
+		display: grid;
+		gap: 10px;
+		visibility: hidden;
+		opacity: 0;
+		pointer-events: none;
 		width: min(320px, calc(100vw - 32px));
 		max-height: 248px;
 		overflow: auto;
@@ -1296,12 +1300,17 @@
 		box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
 		z-index: 130;
 		text-align: left;
+		transition:
+			opacity 120ms ease 0s,
+			visibility 0s linear 120ms;
 	}
 
 	.param-pop:hover .param-panel,
 	.param-pop:focus-within .param-panel {
-		display: grid;
-		gap: 10px;
+		visibility: visible;
+		opacity: 1;
+		pointer-events: auto;
+		transition-delay: 700ms, 700ms;
 	}
 
 	.param-panel > strong {
