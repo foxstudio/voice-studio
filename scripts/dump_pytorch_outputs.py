@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Dump PyTorch intermediate outputs for alignment testing."""
 
-import sys
-sys.path.insert(0, "/Users/didi/Projects/index-tts")
-
 import os
+from pathlib import Path
+import sys
+
 import numpy as np
 import torch
 import soundfile as sf
@@ -12,9 +12,13 @@ import torchaudio
 import pickle
 
 # Paths
-REF_AUDIO_PATH = "/Users/didi/.openclaw-eridu/workspace-elina/voices/elina.wav"
-MODEL_DIR = "/Users/didi/Projects/index-tts/indexTTS-1.5"
-OUTPUT_DIR = "/tmp/alignment_test"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PYTORCH_INDEXTTS_ROOT = Path(os.environ.get("PYTORCH_INDEXTTS_ROOT", PROJECT_ROOT.parent / "index-tts"))
+REF_AUDIO_PATH = Path(os.environ.get("ALIGNMENT_REF_AUDIO", PROJECT_ROOT / "audio" / "alignment_ref.wav"))
+MODEL_DIR = Path(os.environ.get("PYTORCH_INDEXTTS_MODEL_DIR", PYTORCH_INDEXTTS_ROOT / "indexTTS-1.5"))
+OUTPUT_DIR = Path(os.environ.get("ALIGNMENT_OUTPUT_DIR", "/tmp/alignment_test"))
+
+sys.path.insert(0, str(PYTORCH_INDEXTTS_ROOT))
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

@@ -30,8 +30,8 @@ Voice/corpus import and ingestion scripts:
 | `scripts/batch_voice_import.py` | `scripts/imports/batch_voice_import.py` | Local curated voice import. |
 | `scripts/curated_voice_import.py` | `scripts/imports/curated_voice_import.py` | Curated import. |
 | `scripts/full_voice_import.py` | `scripts/imports/full_voice_import.py` | Broad local import. |
-| `scripts/genshin_batch_import.py` | `scripts/imports/genshin_batch_import.py` | Contains absolute project paths; patch before moving. |
-| `scripts/genshin_npc_import.py` | `scripts/imports/genshin_npc_import.py` | Contains absolute project paths; patch before moving. |
+| `scripts/genshin_batch_import.py` | `scripts/imports/genshin_batch_import.py` | Uses env/default source and report paths. |
+| `scripts/genshin_npc_import.py` | `scripts/imports/genshin_npc_import.py` | Uses env/default source and report paths. |
 | `scripts/voice_importer.py` | `scripts/imports/voice_importer.py` | Early/smaller importer. |
 
 ### maintenance
@@ -67,7 +67,7 @@ Local smoke/debug helpers:
 
 | Current path | Proposed path | Notes |
 | --- | --- | --- |
-| `scripts/analyze_genshin_pack.py` | `scripts/dev/analyze_genshin_pack.py` | Contains absolute project path output. |
+| `scripts/analyze_genshin_pack.py` | `scripts/dev/analyze_genshin_pack.py` | Uses env/default source and report paths. |
 | `scripts/genshin_asr_check.py` | `scripts/dev/genshin_asr_check.py` | Debug utility. |
 | `scripts/genshin_asr_fix.py` | `scripts/dev/genshin_asr_fix.py` | Debug/repair utility. |
 | `scripts/qwen_forced_align_worker.py` | `scripts/dev/qwen_forced_align_worker.py` | Worker helper; check caller paths before move. |
@@ -94,17 +94,17 @@ Generated JSON reports or analysis outputs:
 - `docs/VOICE_STUDIO_BATCH_AGENT.md` references `scripts/voice_studio_batch.py`.
 - `docs/VOICE_STUDIO_ENGINE_PARAMETERS.md` references `scripts/voice_studio_batch.py`.
 - `docs/MIMO_V2_5_CLOUD_API_RFC.md` references `scripts/webui_smoke_playwright.mjs`.
-- Several scripts contain absolute paths under `/Users/foxmacstudio/Projects/mlx-indextts/scripts/...`.
+- Planned script moves still have references in docs or usage examples.
 
 Current checker summary:
 
 - Inventory entries: 30
 - Missing inventory sources: 0
 - Unmanaged scripts/artifacts: 0
-- Absolute path hits: 17
-- Proposed moved scripts with references: 12
+- Absolute path hits: 0
+- Proposed moved scripts with references: 10
 
-The current `--fail-on-risk` result is expected to fail until absolute paths and references are patched or intentionally waived.
+The current `--fail-on-risk` result is expected to fail until references to proposed moved scripts are patched or intentionally waived.
 
 ## Special Case: `voice_studio_batch.py`
 
@@ -121,8 +121,8 @@ Recommended later migration:
 Before moving any script:
 
 1. Run `scripts/migration/check_script_paths.py --fail-on-risk`.
-2. Patch scripts with absolute paths to derive repo root from `Path(__file__)`.
-3. Move one group at a time.
+2. Patch docs and usage examples that still reference proposed moved script paths.
+3. Move one group at a time only after compatibility wrappers are planned.
 4. Run:
    - `.venv/bin/python -m compileall -q scripts`
    - docs reference `rg` checks for old paths.

@@ -10,7 +10,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-BASE_DIR = Path("/Users/foxmacstudio/Desktop/音色下载")
+BASE_DIR = Path(os.environ.get("VOICE_STUDIO_VOICE_SOURCE_DIR", str(Path.home() / "Desktop" / "音色下载")))
 API_BASE = "http://localhost:8000"
 
 # ── 角色元数据 ──────────────────────────────────────────────

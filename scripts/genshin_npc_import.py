@@ -12,9 +12,11 @@ import urllib.error
 from pathlib import Path
 
 API_BASE = "http://localhost:8000"
-GENSHIN_DIR = Path("/Users/foxmacstudio/Desktop/音色下载/原神语音包6.3（中）")
-ANALYSIS_PATH = Path("/Users/foxmacstudio/Projects/mlx-indextts/scripts/genshin_analysis.json")
-REPORT_PATH = Path(__file__).parent / "genshin_npc_import_report.json"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_GENSHIN_DIR = Path.home() / "Desktop" / "音色下载" / "原神语音包6.3（中）"
+GENSHIN_DIR = Path(os.environ.get("VOICE_STUDIO_GENSHIN_DIR", str(DEFAULT_GENSHIN_DIR)))
+ANALYSIS_PATH = Path(os.environ.get("VOICE_STUDIO_GENSHIN_ANALYSIS", str(PROJECT_ROOT / "scripts" / "genshin_analysis.json")))
+REPORT_PATH = Path(os.environ.get("VOICE_STUDIO_GENSHIN_NPC_IMPORT_REPORT", str(PROJECT_ROOT / "scripts" / "genshin_npc_import_report.json")))
 
 REF_COUNT = 3
 MIN_WAV_SIZE = 100_000

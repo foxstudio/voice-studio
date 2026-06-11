@@ -16,7 +16,8 @@ import urllib.error
 from pathlib import Path
 
 API_BASE = "http://localhost:8000"
-GENSHIN_DIR = Path("/Users/foxmacstudio/Desktop/音色下载/原神语音包6.3（中）")
+DEFAULT_GENSHIN_DIR = Path.home() / "Desktop" / "音色下载" / "原神语音包6.3（中）"
+GENSHIN_DIR = Path(os.environ.get("VOICE_STUDIO_GENSHIN_DIR", str(DEFAULT_GENSHIN_DIR)))
 
 INTERJECTION_RE = re.compile(
     r"^[啊哦嗯哈嘿呃唔哇噢咦呀哎唉哟嘟呜啵呵哼喵汪嗷噢~～!！.。，,？?、：:；;\x22\x27\s]*$"

@@ -168,16 +168,16 @@
 
 ## 5. 下一批建议指令
 
-Phase 4 后端抽象已完成 policy / manifest / health / runner / 全部当前 TTS request builder / provider skeleton 的低风险拆分，并新增 `DIRECTORY_GOVERNANCE_RFC.md`、`SCRIPTS_INVENTORY.md` 与 `SCHEMA_COMPATIBILITY_RFC.md`。`docs/models` 已迁到 `docs/engines`，并保留 `docs/models/README.md` 过渡说明。v1.2.0 release boundary 已建立；schema compatibility facade 已落地但尚未批量迁移 imports。script path dry-run checker 已落地，当前门禁结果显示仍有绝对路径和引用风险，因此不能直接移动 scripts。下一步优先 patch absolute path risks 或进入 schema tests import migration。
+Phase 4 后端抽象已完成 policy / manifest / health / runner / 全部当前 TTS request builder / provider skeleton 的低风险拆分，并新增 `DIRECTORY_GOVERNANCE_RFC.md`、`SCRIPTS_INVENTORY.md` 与 `SCHEMA_COMPATIBILITY_RFC.md`。`docs/models` 已迁到 `docs/engines`，并保留 `docs/models/README.md` 过渡说明。v1.2.0 release boundary 已建立；schema compatibility facade 已落地但尚未批量迁移 imports。script path dry-run checker 已落地，绝对路径风险已清零；当前门禁仍显示 proposed moved scripts 存在引用风险，因此不能直接移动 scripts。下一步优先处理 moved-script reference risks 或进入 schema tests import migration。
 
 ```text
 你现在在 /Users/foxmacstudio/Projects/mlx-indextts 工作。
 
-本轮只做 Phase 4 Batch 6H：patch absolute path risks 或 schema tests import migration。不要修改真实数据或模型权重，不要改前端。
+本轮只做 Phase 4 Batch 6I：patch moved-script reference risks 或 schema tests import migration。不要修改真实数据或模型权重，不要改前端。
 
 目标：
 1. 阅读 docs/architecture/DIRECTORY_GOVERNANCE_RFC.md、docs/architecture/SCRIPTS_INVENTORY.md 与 docs/architecture/SCHEMA_COMPATIBILITY_RFC.md。
-2. 如果做 absolute path risk patch：只把 repo 内报告/脚本路径改为相对 repo root；桌面素材路径只能改成 env/default，不删除默认值。
+2. 如果做 moved-script reference risk patch：只更新 docs 和脚本 usage 示例里的旧路径；不要移动脚本本体。
 3. 如果做 schema tests import migration：只迁移 tests imports，不改 services/api。
 4. 不改 API URL，不改 DB schema。
 5. 不移动真实数据、模型权重或 ~/VoiceStudio。

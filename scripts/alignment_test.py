@@ -6,22 +6,27 @@ This script records intermediate outputs from both implementations
 and compares them layer by layer to identify precision mismatches.
 """
 
-import sys
 import os
+from pathlib import Path
+import sys
 
 # Add paths
-sys.path.insert(0, "/Users/didi/Projects/index-tts")
-sys.path.insert(0, "/Users/didi/Projects/mlx-indextts/src")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PYTORCH_INDEXTTS_ROOT = Path(os.environ.get("PYTORCH_INDEXTTS_ROOT", PROJECT_ROOT.parent / "index-tts"))
+MLX_INDEXTTS_SRC = Path(os.environ.get("MLX_INDEXTTS_SRC", PROJECT_ROOT / "src"))
 
-import numpy as np
-import torch
-import mlx.core as mx
+sys.path.insert(0, str(PYTORCH_INDEXTTS_ROOT))
+sys.path.insert(0, str(MLX_INDEXTTS_SRC))
+
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
+import mlx.core as mx  # noqa: E402
 
 # Shared test parameters
-REF_AUDIO_PATH = "/Users/didi/.openclaw-eridu/workspace-elina/voices/elina.wav"
+REF_AUDIO_PATH = Path(os.environ.get("ALIGNMENT_REF_AUDIO", PROJECT_ROOT / "audio" / "alignment_ref.wav"))
 TEXT = "你好"
-MODEL_DIR_PYTORCH = "/Users/didi/Projects/index-tts/indexTTS-1.5"
-MODEL_DIR_MLX = "/Users/didi/Projects/mlx-indextts/models/mlx-indexTTS-1.5"
+MODEL_DIR_PYTORCH = Path(os.environ.get("PYTORCH_INDEXTTS_MODEL_DIR", PYTORCH_INDEXTTS_ROOT / "indexTTS-1.5"))
+MODEL_DIR_MLX = Path(os.environ.get("MLX_INDEXTTS_MODEL_DIR", PROJECT_ROOT / "models" / "mlx-indexTTS-1.5"))
 
 
 def numpy_compare(name: str, pt_arr: np.ndarray, mlx_arr: np.ndarray, atol=1e-4):

@@ -29,13 +29,11 @@ def test_inventory_parser_finds_planned_script_moves():
     assert by_current["scripts/genshin_analysis.json"] == "scripts/reports/genshin_analysis.json"
 
 
-def test_report_is_dry_run_and_surfaces_known_risks():
+def test_report_is_dry_run_and_enforces_portable_paths():
     checker = load_checker()
 
     report = checker.build_report()
-    absolute_hit_paths = {hit.path for hit in report.absolute_path_hits}
 
-    assert "scripts/alignment_test.py" in absolute_hit_paths
-    assert "scripts/genshin_batch_import.py" in absolute_hit_paths
+    assert report.absolute_path_hits == []
     assert "scripts/voice_studio_batch.py" not in report.reference_hits
     assert any(path.endswith(".py") or path.endswith(".mjs") or path.endswith(".json") for path in checker.current_script_files())

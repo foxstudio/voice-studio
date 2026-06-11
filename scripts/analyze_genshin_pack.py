@@ -7,7 +7,9 @@ import urllib.request
 from pathlib import Path
 from collections import Counter
 
-GENSHIN_DIR = Path("/Users/foxmacstudio/Desktop/音色下载/原神语音包6.3（中）")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_GENSHIN_DIR = Path.home() / "Desktop" / "音色下载" / "原神语音包6.3（中）"
+GENSHIN_DIR = Path(os.environ.get("VOICE_STUDIO_GENSHIN_DIR", str(DEFAULT_GENSHIN_DIR)))
 API_BASE = "http://localhost:8000"
 
 # ═══════════════════════════════════════════════════════════════
@@ -382,7 +384,7 @@ def main():
         }
     }
 
-    report_path = Path("/Users/foxmacstudio/Projects/mlx-indextts/scripts/genshin_analysis.json")
+    report_path = Path(os.environ.get("VOICE_STUDIO_GENSHIN_ANALYSIS", str(PROJECT_ROOT / "scripts" / "genshin_analysis.json")))
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     print(f"\n📄 完整报告已保存: {report_path}")
