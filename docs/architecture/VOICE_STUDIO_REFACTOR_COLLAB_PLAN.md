@@ -66,7 +66,7 @@
 
 遗留事项：
 
-- 文档中仍存在 OmniVoice longform threshold 120 的旧描述，需要后续文档一致性批次修正为 80，或重新做产品决策。
+- OmniVoice longform threshold 文档已与当前实现和测试统一为 80/150。
 - FastAPI `on_event` deprecation warning 暂不处理，放入后续生命周期治理。
 
 ### Phase 1: 任务编排 RFC 与回归测试

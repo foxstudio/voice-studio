@@ -170,7 +170,7 @@ MiMo 支持自然语言控制和音频标签，但这些标签只应写进 MiMo 
 
 | 引擎 | 提示阈值 | 强提醒阈值 | 推荐动作 |
 | --- | ---: | ---: | --- |
-| `omnivoice` | 120 字 | 220 字 | `split_generate` |
+| `omnivoice` | 80 字 | 150 字 | `split_generate` |
 | `indextts-v2` | 300 字 | 600 字 | `split_verify_merge` |
 | `mimo-v2.5-tts-preset` | 600 字 | 1200 字 | `split_verify_merge` |
 | `mimo-v2.5-tts-voiceclone` | 400 字 | 800 字 | `split_verify_merge` |
