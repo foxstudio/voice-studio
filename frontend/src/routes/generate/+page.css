@@ -1,3 +1,10 @@
+	.generate-page {
+		min-height: 100vh;
+		padding-bottom: 56px;
+		overflow-y: auto;
+		overscroll-behavior-y: contain;
+	}
+
 	.compose-panel {
 		min-width: 0;
 	}
@@ -892,12 +899,13 @@
 	.result-audio-compact {
 		display: inline-flex;
 		align-items: center;
-		gap: 7px;
+		gap: 8px;
 		min-width: 0;
-		padding: 4px 6px 4px 4px;
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		border-radius: 8px;
-		background: #10151c;
+		height: 30px;
+		padding: 0;
+		border: 0;
+		border-radius: 0;
+		background: transparent;
 		width: fit-content;
 		max-width: 100%;
 	}
@@ -916,6 +924,9 @@
 		}
 
 	.audio-compact-label {
+		display: inline-flex;
+		align-items: center;
+		height: 30px;
 		min-width: 0;
 		font-size: 12px;
 		line-height: 1;
@@ -983,11 +994,12 @@
 		justify-content: flex-end;
 		align-self: flex-end;
 		flex: 0 0 auto;
+		flex-wrap: nowrap;
 	}
 
 	.result-footer {
 		display: flex;
-		align-items: flex-end;
+		align-items: center;
 		justify-content: space-between;
 		gap: 8px 10px;
 		flex-wrap: nowrap;

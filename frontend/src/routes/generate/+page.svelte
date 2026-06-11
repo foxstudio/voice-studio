@@ -125,7 +125,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 </script>
 
 <svelte:head><title>语音合成 - 声音工作台</title></svelte:head>
-<main class="page">
+<main class="page generate-page">
 	<div class="page-head"><div><h1>语音合成</h1><p class="muted">短文本合成、文本处理、任务进度和生成记录统一放在一个工作台里。</p></div></div>
 	<div class="workbench"><div class="panel stack compose-panel">
 		<div class="row gen-section-head"><div><h2>合成预设</h2><p class="muted">跟随当前引擎，只显示可用于 {selected?.manifest.display_name ?? $store.engineId} 的参数组合。</p></div><div class="row wrap preset-tools"><span class="muted">{enginePresets.length} 组</span><button class="btn compact" type="button" onclick={() => openPresetEditor()}><Plus size={14} /> 保存当前</button></div></div>
