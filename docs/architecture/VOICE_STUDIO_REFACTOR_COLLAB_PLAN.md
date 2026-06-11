@@ -146,7 +146,7 @@
 
 ### Phase 4: 引擎抽象与目录治理
 
-状态：后端抽象小步推进中。已完成 Batch 0/1/2/3/4A/4B/4C/4D/5/6A：新增 engine provider/policy RFC，落地只读 `engine_policy` helper，将静态 manifest/catalog 拆到 `engine_manifests.py`，将 health strategy 拆到 `engine_health.py`，将全部当前 TTS engine 的 request builder 拆到 `engine_request_builder.py`，将 runner execution 拆到 `engine_runner.py`，新增轻量 `engine_provider.py` 组合层。当前未改变 API response、DB schema 或目录结构。
+状态：后端抽象与目录治理主线已完成当前安全批次。已完成 engine provider/policy RFC，落地 `engine_policy`、`engine_manifests.py`、`engine_health.py`、`engine_request_builder.py`、`engine_runner.py`、`engine_provider.py`；`docs/models` 已迁到 `docs/engines` 并保留过渡说明；schema compatibility facade 已落地，tests/services/api imports 已分层迁移；script path checker 门禁已清零。当前未改变 API response、DB schema，未移动真实数据或模型权重。
 
 目标：让 engine capabilities/policy 成为单一事实源，再做低风险目录调整。
 
@@ -168,38 +168,35 @@
 
 ## 5. 下一批建议指令
 
-Phase 4 后端抽象已完成 policy / manifest / health / runner / 全部当前 TTS request builder / provider skeleton 的低风险拆分，并新增 `DIRECTORY_GOVERNANCE_RFC.md`、`SCRIPTS_INVENTORY.md` 与 `SCHEMA_COMPATIBILITY_RFC.md`。`docs/models` 已迁到 `docs/engines`，并保留 `docs/models/README.md` 过渡说明。v1.2.0 release boundary 已建立；schema compatibility facade 已落地但尚未批量迁移 imports。script path dry-run checker 已落地，绝对路径风险已清零；当前门禁仍显示 proposed moved scripts 存在引用风险，因此不能直接移动 scripts。下一步优先处理 moved-script reference risks 或进入 schema tests import migration。
+Phase 4 后端抽象与目录治理当前安全批次已完成：policy / manifest / health / runner / request builder / provider skeleton 已拆分，`docs/models` 已迁到 `docs/engines`，schema compatibility imports 已分层迁移，script path dry-run checker 的 `--fail-on-risk` 门禁已清零。下一步进入 Phase 5 WebUI 产品化，优先处理 `/generate` 工作台当前可见布局和交互问题，再逐步拆 `/history` 与 `/voice-library`。
 
 ```text
 你现在在 /Users/foxmacstudio/Projects/mlx-indextts 工作。
 
-本轮只做 Phase 4 Batch 6I：patch moved-script reference risks 或 schema tests import migration。不要修改真实数据或模型权重，不要改前端。
+本轮进入 Phase 5 Batch 1：稳定 `/generate` 工作台结果卡片与筛选工具栏。不要修改后端 API、DB schema、真实数据或模型权重。
 
 目标：
-1. 阅读 docs/architecture/DIRECTORY_GOVERNANCE_RFC.md、docs/architecture/SCRIPTS_INVENTORY.md 与 docs/architecture/SCHEMA_COMPATIBILITY_RFC.md。
-2. 如果做 moved-script reference risk patch：只更新 docs 和脚本 usage 示例里的旧路径；不要移动脚本本体。
-3. 如果做 schema tests import migration：只迁移 tests imports，不改 services/api。
-4. 不改 API URL，不改 DB schema。
-5. 不移动真实数据、模型权重或 ~/VoiceStudio。
+1. 保留当前用户已在本地看到的 `/generate` 页面改动，先读取 diff，不覆盖未提交前端修改。
+2. 修复结果卡片 header：checkbox 左上、标题单行省略、状态 badge 右上。
+3. 修复音频播放/下载按钮左对齐，与复用/删除按钮尺寸一致。
+4. 修复结果工具栏：状态 tabs 单独一行；搜索/模型/来源/时间/排序左对齐并自适应；分页和批量操作右对齐并自适应折行。
+5. 保证页面可滚动，所有无文字图标按钮有延迟 tooltip。
 
 验证：
-- .venv/bin/python -m compileall -q backend/app
-- .venv/bin/python -m pytest tests/test_engine_provider.py tests/test_engine_policy.py tests/test_engine_parameter_contract.py -q
-- 如果新增 schema compatibility package，额外运行 tests/test_schema_compatibility.py
-- 不运行真实模型、不调用真实云端 API。
+- pnpm --dir frontend check
+- pnpm --dir frontend build
+- 浏览器打开 http://localhost:5173/generate 做桌面宽屏和窄屏截图检查。
 
 交付必须包含：
 - 修改文件列表
-- script/schema governance 摘要
-- Phase 4 小批次建议
-- 是否改变实现逻辑、外部 API/DB schema
+- WebUI 布局/交互摘要
+- 是否改变后端实现逻辑、外部 API/DB schema
 - 验证命令与结果
 - 是否触碰真实数据、模型权重、~/VoiceStudio
 
 禁止：
-- 不要移动目录
-- 不要改 health/runner
-- 不要扩大到目录迁移或前端改造
+- 不要重写 generate 页面业务流程
+- 不要扩大到后端架构重构
 - 不要修改真实数据
 - 不要运行 formatter 改全项目
 - 不要删除 .omo/.sisyphus/.playwright-cli
