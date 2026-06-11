@@ -758,8 +758,11 @@
 	}
 
 		.result-card {
+			display: flex;
+			flex-direction: column;
 			gap: 9px;
 			padding: 10px;
+			min-height: 206px;
 			min-width: 0;
 			transition: border-color 200ms ease, box-shadow 200ms ease;
 		}
@@ -770,23 +773,27 @@
 		}
 
 	.result-head {
-		flex-wrap: nowrap;
+		display: grid;
+		grid-template-columns: 18px minmax(0, 1fr) auto;
 		align-items: flex-start;
-		justify-content: space-between;
 		gap: 8px;
 		min-width: 0;
 	}
 
 	.title-row {
-		flex: 1 1 auto;
-		min-width: 0;
-		flex-wrap: nowrap;
-		align-items: flex-start;
+		display: contents;
+	}
+
+	.title-row input[type='checkbox'] {
+		grid-column: 1;
+		width: 16px;
+		height: 16px;
+		margin: 2px 0 0;
 	}
 
 	.result-title {
 		display: block;
-		flex: 1 1 auto;
+		grid-column: 2;
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -796,7 +803,13 @@
 	}
 
 	.result-status {
+		grid-column: 3;
 		flex: 0 0 auto;
+		align-self: start;
+		max-width: 96px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.queue-insight {
@@ -819,15 +832,40 @@
 	}
 
 	.result-meta {
+		display: flex;
+		align-items: center;
 		gap: 6px;
 		min-width: 0;
+		overflow: hidden;
+	}
+
+	.result-meta .badge {
+		min-height: 22px;
+		min-width: 0;
+		max-width: 100%;
+		font-size: 11px;
+		line-height: 1.35;
+	}
+
+	.result-meta-primary {
+		flex-wrap: nowrap;
+	}
+
+	.result-meta-secondary {
+		flex-wrap: nowrap;
+	}
+
+	.result-meta-primary .badge:first-child,
+	.result-meta-secondary .engine {
+		flex: 0 1 auto;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.result-script-chip {
-		padding: 1px 6px;
-		font-size: 11px;
-		line-height: 1.4;
-		min-height: 22px;
+		flex: 0 0 auto;
+		padding: 2px 7px;
 	}
 
 	.result-info {
@@ -942,16 +980,24 @@
 		margin-left: auto;
 		gap: 8px;
 		justify-content: flex-end;
+		align-self: flex-end;
+		flex: 0 0 auto;
 	}
 
 	.result-footer {
 		display: flex;
-		align-items: center;
+		align-items: flex-end;
 		justify-content: space-between;
 		gap: 8px 10px;
-		flex-wrap: wrap;
+		flex-wrap: nowrap;
+		align-self: end;
+		margin-top: auto;
+		min-width: 0;
 	}
 
+	.result-footer.without-audio {
+		justify-content: flex-end;
+	}
 
 
 	.error-line {

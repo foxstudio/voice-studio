@@ -18,8 +18,8 @@ export function taskIsLongformSegment(t: GenerationTask) { return Boolean(t.long
 export function taskIsLongformExport(t: GenerationTask) { return Boolean(t.longform_task_id && t.task_type === 'export'); }
 
 export function longformResultLabel(t: GenerationTask) {
-	if (taskIsLongformExport(t)) return '完整长文本';
-	if (taskIsLongformSegment(t)) return `长文本 ${t.longform_segment_index}/${t.longform_segment_count}`;
+	if (taskIsLongformExport(t)) return '完整片段';
+	if (taskIsLongformSegment(t)) return `片段 ${t.longform_segment_index}/${t.longform_segment_count}`;
 	return '';
 }
 
@@ -36,6 +36,17 @@ export function displayTitle(task: GenerationTask) {
 
 export function voiceName(task: GenerationTask, voiceMap: Map<string, VoiceAsset>) {
 	return task.voice_id ? voiceMap.get(task.voice_id)?.name ?? '' : '';
+}
+
+export function voiceBadgeLabel(task: GenerationTask, voiceMap: Map<string, VoiceAsset>) {
+	const localVoice = voiceName(task, voiceMap);
+	if (localVoice) return localVoice;
+	const mimoVoice = task.parameters.mimo_voice;
+	if (typeof mimoVoice === 'string' && mimoVoice.trim()) return mimoVoice.trim();
+	const speakerId = task.parameters.speaker_id;
+	if (typeof speakerId === 'string' && speakerId.trim()) return speakerId.trim();
+	if (typeof task.parameters.voice_design_prompt === 'string' && task.parameters.voice_design_prompt.trim()) return '声音设计';
+	return '未选音色';
 }
 
 export function engineKind(engineId: string, engineMap: Map<string, EngineDetail>) {
