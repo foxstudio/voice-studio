@@ -121,7 +121,8 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	$effect(() => { if ($store.engineId !== $store.lastEngineId) store.setEngine($store.engineId); });
 	$effect(() => { const eid = $store.engineId; const q = $store.speakerQuery.trim(); const g = $store.speakerGenderFilter; setTimeout(() => loadSpeakerCatalog(eid, q, g), 0); });
 	$effect(() => { if (!$store.initialized) return; if (!usesReferenceVoice) { untrack(() => { $store.voiceId = ''; }); return; } if ($store.voiceId && !$store.voices.some(v => v.voice_id === $store.voiceId)) untrack(() => { $store.voiceId = ''; }); });
-	$effect(() => { $store.voiceId; stopVoicePreview(); });
+	let _lastPreviewVoiceId = $state('');
+	$effect(() => { const vid = $store.voiceId; if (vid !== _lastPreviewVoiceId) { _lastPreviewVoiceId = vid; untrack(() => stopVoicePreview()); } });
 	$effect(() => { if ($store.currentPage > pageCount) $store.currentPage = pageCount; });
 	$effect(() => { if ($store.pageSizeAuto && $store.resultGridEl) recalcAutoPageSize(); });
 	$effect(() => { if (_autoResizeRO) _autoResizeRO.disconnect(); if ($store.resultGridEl && _autoResizeRO) _autoResizeRO.observe($store.resultGridEl); });
