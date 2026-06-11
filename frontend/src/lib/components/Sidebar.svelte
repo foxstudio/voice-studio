@@ -21,13 +21,13 @@
 	<div class="brand">
 		<div class="brand-mark"><Clock3 size={17} /></div>
 		<span>声音工作台</span>
-		<button class="icon-btn collapse-btn" type="button" title={collapsed ? '展开侧边栏' : '收起侧边栏'} onclick={onToggle}>
+		<button class="icon-btn collapse-btn" type="button" aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'} data-tooltip={collapsed ? '展开侧边栏' : '收起侧边栏'} onclick={onToggle}>
 			{#if collapsed}<ChevronsRight size={16} />{:else}<ChevronsLeft size={16} />{/if}
 		</button>
 	</div>
 	<nav class="nav">
 		{#each items as item}
-			<a href={item.href} class:active={page.url.pathname === item.href} title={item.label} onclick={onNavClick}>
+			<a href={item.href} class:active={page.url.pathname === item.href} aria-label={item.label} data-tooltip={item.label} onclick={onNavClick}>
 				<item.icon size={17} />
 				<span>{item.label}</span>
 			</a>

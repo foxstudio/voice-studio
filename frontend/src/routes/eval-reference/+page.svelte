@@ -168,7 +168,7 @@
 							<div><span>峰值</span><strong>{formatNumber(sample.metrics.peak, 3)}</strong></div>
 							<div><span>RMS</span><strong>{formatNumber(sample.metrics.rms, 3)}</strong></div>
 							<div><span>静音</span><strong>{formatPercent(sample.metrics.silence_ratio)}</strong></div>
-							<a class="icon-btn" href={sample.audio_url} title="下载 WAV"><Music size={17} /></a>
+							<a class="icon-btn" href={sample.audio_url} aria-label="下载 WAV" data-tooltip="下载这条参考音频"><Music size={17} /></a>
 						</div>
 					</article>
 				{/each}

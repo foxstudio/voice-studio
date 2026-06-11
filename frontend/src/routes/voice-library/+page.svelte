@@ -418,7 +418,7 @@
 							<Search size={15} />
 							<input bind:value={voiceQuery} placeholder="名称、描述、标签" />
 							{#if voiceQuery.trim()}
-								<button class="search-clear" type="button" aria-label="清空搜索" title="清空搜索" onclick={() => (voiceQuery = '')}>
+								<button class="search-clear" type="button" aria-label="清空搜索" data-tooltip="清空音色搜索条件" onclick={() => (voiceQuery = '')}>
 									<X size={14} />
 								</button>
 							{/if}
@@ -497,23 +497,23 @@
 					<div class="voice-card-head">
 						<h2 title={voice.name}>{voice.name}</h2>
 						<div class="card-head-actions">
-							<button class="icon-btn-sm" title="ASR" onclick={() => generateAsrForVoice(voice)} disabled={voiceAsrStatus.get(voice.voice_id) === 'generating'}>
+							<button class="icon-btn-sm" type="button" aria-label="生成 ASR 台词" data-tooltip="为这个音色生成或刷新 ASR 台词" onclick={() => generateAsrForVoice(voice)} disabled={voiceAsrStatus.get(voice.voice_id) === 'generating'}>
 								<FileAudio size={13} />
 							</button>
-							<button class="icon-btn-sm ser-card-btn" title="情绪识别" onclick={() => generateSerForVoice(voice)} disabled={voiceSerStatus.get(voice.voice_id) === 'generating'}>
+							<button class="icon-btn-sm ser-card-btn" type="button" aria-label="识别音色情绪" data-tooltip="识别这个音色的情绪标签" onclick={() => generateSerForVoice(voice)} disabled={voiceSerStatus.get(voice.voice_id) === 'generating'}>
 								<Heart size={13} />
 							</button>
-							<button class="icon-btn-sm" title="复制音色ID" onclick={() => navigator.clipboard.writeText(voice.voice_id).then(() => { copiedId = voice.voice_id; setTimeout(() => copiedId = '', 1500); })}>
+							<button class="icon-btn-sm" type="button" aria-label="复制音色 ID" data-tooltip="复制这个音色的 ID" onclick={() => navigator.clipboard.writeText(voice.voice_id).then(() => { copiedId = voice.voice_id; setTimeout(() => copiedId = '', 1500); })}>
 								{#if copiedId === voice.voice_id}
 									<Check size={13} />
 								{:else}
 									<ClipboardCopy size={13} />
 								{/if}
 							</button>
-							<button class="icon-btn-sm" title="编辑" onclick={() => editVoice(voice)}>
+							<button class="icon-btn-sm" type="button" aria-label="编辑音色" data-tooltip="编辑这个音色的名称、标签和授权信息" onclick={() => editVoice(voice)}>
 								<Pencil size={13} />
 							</button>
-							<button class="icon-btn-sm danger" title="删除" onclick={() => remove(voice.voice_id)}>
+							<button class="icon-btn-sm danger" type="button" aria-label="删除音色" data-tooltip="删除这个音色资产" onclick={() => remove(voice.voice_id)}>
 								<Trash2 size={13} />
 							</button>
 					</div>
@@ -542,7 +542,7 @@
 					</div>
 					<div class="card-actions">
 					{#if voice.reference_audio_ids[0]}
-						<button class={`btn icon-text ${playingVoiceId === voice.voice_id ? 'playing' : ''}`} onclick={() => toggleVoicePlayback(voice)} title={playingVoiceId === voice.voice_id ? '暂停' : '试听'}>
+						<button class={`btn icon-text ${playingVoiceId === voice.voice_id ? 'playing' : ''}`} type="button" onclick={() => toggleVoicePlayback(voice)}>
 							{#if playingVoiceId === voice.voice_id}<Pause size={14} /> 暂停{:else}<Volume2 size={14} /> 试听{/if}
 						</button>
 					{/if}

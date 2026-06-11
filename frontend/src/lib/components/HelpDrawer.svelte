@@ -14,7 +14,7 @@
 	<aside class="help-drawer" aria-label={`${title}使用说明`}>
 		<div class="row" style="justify-content:space-between">
 			<h2>{title}</h2>
-			<button class="icon-btn" type="button" title="关闭" onclick={() => (open = false)}><X size={17} /></button>
+			<button class="icon-btn" type="button" aria-label="关闭使用说明" data-tooltip="关闭使用说明" onclick={() => (open = false)}><X size={17} /></button>
 		</div>
 		{#each sections as section}
 			<section>
