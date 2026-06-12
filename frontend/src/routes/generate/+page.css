@@ -1188,6 +1188,18 @@
 		align-self: flex-end;
 		flex: 0 0 auto;
 		flex-wrap: nowrap;
+		cursor: help;
+	}
+
+	.result-audio-compact .audio-compact-label:hover,
+	.result-audio-compact .audio-compact-label:focus-visible,
+	.result-card.playing .audio-compact-label {
+		border-color: var(--line);
+		background: rgba(255, 255, 255, 0.02);
+		color: var(--muted);
+		font-size: 11px;
+		font-weight: 400;
+		line-height: 1.35;
 	}
 
 	.result-footer {
