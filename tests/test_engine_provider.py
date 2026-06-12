@@ -37,6 +37,7 @@ def test_unknown_provider_returns_none():
 
 def test_external_engine_health_without_root_env_is_structured(monkeypatch):
     monkeypatch.delenv("VOICE_STUDIO_F5_TTS_ROOT", raising=False)
+    monkeypatch.setitem(engine_registry.engine_health.DEFAULT_EXTERNAL_ROOTS, "f5-tts", Path("/missing/f5-tts"))
 
     health = engine_registry.health_check("f5-tts")
 
