@@ -1380,6 +1380,7 @@
 		}
 
 		.end-of-list {
+			grid-column: 1 / -1;
 			text-align: center;
 			padding: 20px;
 			color: var(--muted);
