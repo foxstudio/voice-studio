@@ -9,12 +9,14 @@
 		parameterSchema: ParameterSchema[];
 		values: Record<string, unknown>;
 		onChange?: (key: string, value: unknown) => void;
+		autoExpand?: boolean;
 	}
 
 	let {
 		parameterSchema = [],
 		values = {},
-		onChange = () => {}
+		onChange = () => {},
+		autoExpand = false
 	}: Props = $props();
 
 	const basicParams = $derived(parameterSchema.filter((p) => p.level === 'basic'));
@@ -23,6 +25,8 @@
 	);
 
 	let showAdvanced = $state(false);
+
+	$effect(() => { if (autoExpand) showAdvanced = true; });
 
 	function getValue(param: ParameterSchema): unknown {
 		return param.key in values ? values[param.key] : param.default;
@@ -104,7 +108,7 @@
 		</Field>
 	{/each}
 
-	{#if advancedParams.length > 0}
+	{#if advancedParams.length > 0 && !autoExpand}
 		<button
 			class="advanced-toggle"
 			type="button"
@@ -114,8 +118,9 @@
 			{showAdvanced ? '收起' : '更多'}高级参数
 			<span class="toggle-count">({advancedParams.length})</span>
 		</button>
+	{/if}
 
-		{#if showAdvanced}
+	{#if (autoExpand && advancedParams.length > 0) || showAdvanced}
 			<div class="advanced-section">
 				{#each advancedParams as param}
 					<Field label={param.label} tooltip={param.description}>
@@ -188,7 +193,6 @@
 					</Field>
 				{/each}
 			</div>
-		{/if}
 	{/if}
 </div>
 
@@ -196,6 +200,7 @@
 	.parameter-panel {
 		display: grid;
 		gap: 10px;
+		grid-column: 1 / -1;
 	}
 
 	.advanced-toggle {
@@ -225,9 +230,14 @@
 
 	.advanced-section {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-		gap: 10px;
+		grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+		gap: 10px 14px;
 		padding-top: 2px;
+	}
+
+	.advanced-section :global(.field) {
+		min-width: 0;
+		max-width: 320px;
 	}
 
 	:global(.field) .param-input,

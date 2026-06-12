@@ -88,7 +88,7 @@ textarea { width: 100%; border: 1px solid var(--line); background: #101215; colo
 input[type='checkbox'],
 input[type='radio'] { width: 16px; height: 16px; min-height: 16px; margin: 0; flex: 0 0 auto; accent-color: var(--accent); }
 textarea { resize: vertical; min-height: 120px; line-height: 1.5; }
-.badge { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.badge { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--muted); font-size: 12px; white-space: nowrap; height: 22px; min-height: 22px; max-height: 22px; }
 .badge.ok { color: #9ee6c8; border-color: #23634f; background: #12261f; }
 .badge.warn { color: #f0c76a; border-color: #604b18; background: #261f10; }
 .badge.fail { color: #ff9a9a; border-color: #6d3030; background: #2b1515; }

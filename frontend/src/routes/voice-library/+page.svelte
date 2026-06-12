@@ -374,7 +374,8 @@
 				if (voiceEngineFilter !== 'all' && !voice.engine_bindings?.some((binding) => binding.engine_id === voiceEngineFilter && binding.available)) return false;
 				if (voiceLicenseFilter !== 'all' && voice.license_status !== voiceLicenseFilter) return false;
 				if (!tokens.length) return true;
-				const haystack = [voice.name, voice.description, voice.tags.join(' '), voice.reference_text].join(' ').toLowerCase();
+				const emotionLabels = (voice.emotion_tags ?? []).map(e => emotionLabel(e)).join(' ');
+				const haystack = [voice.name, voice.description, voice.tags.join(' '), emotionLabels, voice.recommended_engine_id ? bindingLabel(voice.recommended_engine_id) : '', voiceCardKind(voice) === 'cloud' ? '云端' : '本地', voiceTypeLabel(voice.voice_type), voice.reference_text].join(' ').toLowerCase();
 				return tokens.every((token) => haystack.includes(token));
 			})
 			.sort((a, b) => {
@@ -552,7 +553,7 @@
 					<div class="tag-row">
 						{#if voice.emotion_tags?.length}
 								{#each voice.emotion_tags as tag}
-									<span class="badge tag-filter tag-emotion">{emotionLabel(tag)}</span>
+									<button class="badge tag-filter tag-emotion" type="button" title={`添加到搜索：${emotionLabel(tag)}`} onclick={() => appendVoiceQueryTag(emotionLabel(tag))}>{emotionLabel(tag)}</button>
 								{/each}
 							{/if}
 							{#each cleanTags(voice.tags, expandedCards.has(voice.voice_id) ? 99 : 4) as tag}
@@ -564,10 +565,10 @@
 					</div>
 					<div class="asset-meta">
 						{#if voiceTypeLabel(voice.voice_type)}
-							<span>{voiceTypeLabel(voice.voice_type)}</span>
+							<button class="badge" type="button" title={`添加到搜索：${voiceTypeLabel(voice.voice_type)}`} onclick={() => appendVoiceQueryTag(voiceTypeLabel(voice.voice_type))}>{voiceTypeLabel(voice.voice_type)}</button>
 						{/if}
-						<span>{voiceCardKind(voice) === 'cloud' ? '云端' : '本地'}</span>
-						<span>{voice.recommended_engine_id ? bindingLabel(voice.recommended_engine_id) : '自动引擎'}</span>
+						<button class="badge" type="button" title={`添加到搜索：${voiceCardKind(voice) === 'cloud' ? '云端' : '本地'}`} onclick={() => appendVoiceQueryTag(voiceCardKind(voice) === 'cloud' ? '云端' : '本地')}>{voiceCardKind(voice) === 'cloud' ? '云端' : '本地'}</button>
+						<button class="badge" type="button" title={`添加到搜索：${voice.recommended_engine_id ? bindingLabel(voice.recommended_engine_id) : '自动引擎'}`} onclick={() => appendVoiceQueryTag(voice.recommended_engine_id ? bindingLabel(voice.recommended_engine_id) : '自动引擎')}>{voice.recommended_engine_id ? bindingLabel(voice.recommended_engine_id) : '自动引擎'}</button>
 						<span class="text-pop text-chip" data-text={voiceLineText(voice.reference_text)}><FileText size={13} /> 台词</span>
 					</div>
 					<div class="card-actions">
@@ -889,11 +890,25 @@
 	.tag-row .badge,
 	.binding-row .badge,
 	.asset-meta span,
+	.asset-meta button.badge,
 	.text-chip {
 		padding: 1px 6px;
 		font-size: 11px;
 		line-height: 1.4;
+		height: 22px;
 		min-height: 22px;
+		max-height: 22px;
+		min-width: 0;
+		background: transparent;
+		color: var(--muted);
+	}
+
+	.asset-meta button.badge {
+		cursor: pointer;
+	}
+
+	.asset-meta button.badge:hover {
+		opacity: 0.85;
 	}
 
 	.tag-filter {

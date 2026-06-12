@@ -55,7 +55,7 @@ EMOTIVOICE_SPEAKERS = [
 def common_params(v2: bool = False) -> list[ParameterSchema]:
     params = [
         ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="控制说话速度。1.0=正常语速，大于1加速，小于1减速"),
-        ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.8 if v2 else 1.0, min=0.1, max=2.0, step=0.05, description="控制语音随机性，越低越稳定，越高越有变化"),
+        ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.8 if v2 else 1.0, min=0.1, max=2.0, step=0.05, level="advanced" if v2 else None, description="控制语音随机性，越低越稳定，越高越有变化"),
         ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.8, min=0, max=1, step=0.05, level="advanced", description="核采样概率，控制词汇选择范围"),
         ParameterSchema(key="top_k", label="候选数量 Top-K", type="slider", default=30, min=1, max=100, step=1, level="advanced", description="保留最高概率的词汇数量"),
         ParameterSchema(key="max_text_tokens_per_segment", label="分段 Token", type="slider", default=120, min=20, max=500, step=10, level="advanced", description="每段文本最大token数，影响分段长度"),
@@ -73,6 +73,8 @@ def common_params(v2: bool = False) -> list[ParameterSchema]:
                 description="选择情感类型，如高兴、悲伤、愤怒等",
             ),
             ParameterSchema(key="emo_alpha", label="情绪强度", type="slider", default=0.6, min=0, max=1, step=0.05, capability="emotion_control", description="情感强度，0.0=无情感，1.0=最大情感表达"),
+            ParameterSchema(key="max_mel_tokens", label="最大 Mel Token", type="slider", default=1500, min=50, max=1815, step=50, level="advanced", description="生成 Mel Token 最大数量，过小会导致音频截断"),
+            ParameterSchema(key="repetition_penalty", label="重复惩罚", type="slider", default=10.0, min=0.1, max=20.0, step=0.5, level="advanced", description="重复惩罚系数，越高越不容易重复"),
             ParameterSchema(key="diffusion_steps", label="扩散步数 Diffusion Steps", type="slider", default=25, min=5, max=60, step=1, level="advanced", description="扩散模型步数，越高音质越好但速度越慢"),
             ParameterSchema(key="cfg_rate", label="引导强度 CFG Rate", type="slider", default=0.7, min=0, max=1, step=0.05, level="advanced", description="无分类器引导率，控制生成与提示的匹配度"),
         ])

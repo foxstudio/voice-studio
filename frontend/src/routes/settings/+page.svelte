@@ -12,7 +12,7 @@
 	let clearMimoKey = $state(false);
 	const ttsEngines = $derived(engines.filter((engine) => !engine.manifest.capabilities.includes('speech_recognition')));
 	$effect(() => {
-		Promise.all([Api.settings(), Api.engines(), Api.voices()]).then(([s, e, v]) => {
+		Promise.all([Api.settings(), Api.engines(), Api.voices({ offset: 0, limit: 2000 })]).then(([s, e, v]) => {
 			settings = s;
 			engines = e;
 			voices = v;

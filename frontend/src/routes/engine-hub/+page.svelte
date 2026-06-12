@@ -165,7 +165,7 @@
 	}
 
 	async function refresh() {
-		[engines, voices] = await Promise.all([Api.engines(), Api.voices()]);
+		[engines, voices] = await Promise.all([Api.engines(), Api.voices({ offset: 0, limit: 2000 })]);
 	}
 	$effect(() => { refresh(); });
 

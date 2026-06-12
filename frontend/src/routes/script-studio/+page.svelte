@@ -17,7 +17,7 @@
 	const selectedSegment = $derived(current?.segments.find((seg) => seg.segment_id === selectedSegmentId) ?? current?.segments[0] ?? null);
 
 	async function refresh() {
-		[projects, voices, engines] = await Promise.all([Api.projects(), Api.voices(), Api.engines()]);
+		[projects, voices, engines] = await Promise.all([Api.projects(), Api.voices({ offset: 0, limit: 2000 }), Api.engines()]);
 		if (!current && projects[0]) current = projects[0];
 		if (current) current = projects.find((p) => p.project_id === current?.project_id) ?? current;
 	}

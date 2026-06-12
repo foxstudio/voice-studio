@@ -76,6 +76,8 @@ export type GenerateStoreState = {
 	intervalSilence: number;
 	diffusionSteps: number;
 	cfgRate: number;
+	maxMelTokens: number;
+	repetitionPenalty: number;
 	outputFormat: 'wav' | 'mp3' | 'flac';
 	showAdvanced: boolean;
 	showMoreParams: boolean;
@@ -121,6 +123,8 @@ const INDEX_TTS_DEFAULTS = {
 	intervalSilence: 200,
 	diffusionSteps: 25,
 	cfgRate: 0.7,
+	maxMelTokens: 1500,
+	repetitionPenalty: 10,
 	outputFormat: 'wav' as const
 };
 
@@ -199,6 +203,8 @@ function createInitialState(): GenerateStoreState {
 		intervalSilence: INDEX_TTS_DEFAULTS.intervalSilence,
 		diffusionSteps: INDEX_TTS_DEFAULTS.diffusionSteps,
 		cfgRate: INDEX_TTS_DEFAULTS.cfgRate,
+		maxMelTokens: INDEX_TTS_DEFAULTS.maxMelTokens,
+		repetitionPenalty: INDEX_TTS_DEFAULTS.repetitionPenalty,
 		outputFormat: INDEX_TTS_DEFAULTS.outputFormat,
 		showAdvanced: false,
 		showMoreParams: false,
@@ -320,8 +326,8 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 		temperature: state.temperature,
 		top_p: state.topP,
 		top_k: state.topK,
-		repetition_penalty: 10,
-		max_mel_tokens: 1500,
+		repetition_penalty: state.repetitionPenalty,
+		max_mel_tokens: state.maxMelTokens,
 		max_text_tokens_per_segment: state.maxTextTokensPerSegment,
 		interval_silence: state.intervalSilence,
 		segment_overlap_ms: 50,
@@ -368,6 +374,8 @@ function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<
 		intervalSilence: req.interval_silence ?? INDEX_TTS_DEFAULTS.intervalSilence,
 		diffusionSteps: req.diffusion_steps ?? INDEX_TTS_DEFAULTS.diffusionSteps,
 		cfgRate: req.cfg_rate ?? INDEX_TTS_DEFAULTS.cfgRate,
+		maxMelTokens: req.max_mel_tokens ?? INDEX_TTS_DEFAULTS.maxMelTokens,
+		repetitionPenalty: req.repetition_penalty ?? INDEX_TTS_DEFAULTS.repetitionPenalty,
 		outputFormat: req.output_format ?? INDEX_TTS_DEFAULTS.outputFormat,
 		showAdvanced: req.engine_id === 'f5-tts'
 	};

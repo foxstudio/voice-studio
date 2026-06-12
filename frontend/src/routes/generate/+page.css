@@ -1373,8 +1373,9 @@
 		display: flex;
 		align-items: center;
 		gap: 14px;
-		flex-wrap: wrap;
+		flex-wrap: nowrap;
 		padding: 8px 0;
+		position: relative;
 	}
 
 	.param-inline {
@@ -1463,20 +1464,37 @@
 	.param-inline-format select {
 		min-width: 64px;
 	}
+	.param-inline-more {
+		flex: 0 0 auto;
+		flex-shrink: 0;
+		white-space: nowrap;
+	}
 
 	/* ── 更多参数折叠面板 ── */
 	.more-params-panel {
-		padding: 10px 12px;
+		padding: 12px;
 		border: 1px solid var(--line);
 		border-radius: 8px;
 		background: var(--panel-2);
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-		gap: 10px;
+		grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+		gap: 10px 14px;
 	}
 	.more-params-panel .span-full { grid-column: 1 / -1; }
 	.more-params-panel > small {
 		grid-column: 1 / -1;
+	}
+	.more-params-panel .param-field,
+	.more-params-panel .param-slider {
+		min-width: 0;
+		max-width: 320px;
+	}
+	.more-params-panel .param-field.span-full,
+	.more-params-panel .param-slider.span-full {
+		max-width: none;
+	}
+	.more-params-panel .engine-note {
+		max-width: none;
 	}
 	.advanced-divider {
 		border-top: 1px dashed var(--line);
@@ -1571,6 +1589,7 @@
 	@media (max-width: 640px) {
 		.param-inline-row {
 			gap: 8px;
+			flex-wrap: wrap;
 		}
 
 		.param-inline,
@@ -1578,8 +1597,24 @@
 			min-width: 100%;
 		}
 
+		.param-inline-format,
+		.param-inline-more {
+			flex: 0 1 auto;
+			min-width: 0;
+		}
+
 		.param-inline-format {
 			min-width: 100px;
+		}
+
+		.more-params-panel {
+			grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+			gap: 8px;
+		}
+
+		.more-params-panel .param-field,
+		.more-params-panel .param-slider {
+			max-width: none;
 		}
 
 		.records-filter-inline {

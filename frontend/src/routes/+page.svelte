@@ -10,7 +10,7 @@
 	let projects = $state<Project[]>([]);
 
 	$effect(() => {
-		Promise.all([Api.engines(), Api.voices(), Api.history(), Api.projects()]).then(([e, v, h, p]) => {
+		Promise.all([Api.engines(), Api.voices({ offset: 0, limit: 2000 }), Api.history(), Api.projects()]).then(([e, v, h, p]) => {
 			engines = e;
 			voices = v;
 			history = h;
