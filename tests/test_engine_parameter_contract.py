@@ -58,6 +58,8 @@ def test_f5_single_batch_worker_payload_contract(tmp_path, monkeypatch):
         "cfg_strength": 2.5,
         "target_rms": 0.12,
         "cross_fade_duration": 0.2,
+        "sway_sampling_coef": -0.4,
+        "fix_duration": 8.5,
         "remove_silence": True,
         "seed": 123,
     }
@@ -88,7 +90,7 @@ def test_f5_single_batch_worker_payload_contract(tmp_path, monkeypatch):
     assert single["reference_audio"] == reference_audio_path
     assert single["ref_text"] == "我是一段参考文本。"
 
-    _, single_out, single_text, single_ref_audio, single_ref_text, speed, nfe_step, cfg_strength, target_rms, cross_fade_duration, remove_silence, seed = inference_runner._build_f5_tts_kwargs(**single)
+    _, single_out, single_text, single_ref_audio, single_ref_text, speed, nfe_step, cfg_strength, target_rms, cross_fade_duration, sway_sampling_coef, fix_duration, remove_silence, seed = inference_runner._build_f5_tts_kwargs(**single)
     assert single_out == str(tmp_path / "single.wav")
     assert single_text == "测试文本-单次"
     assert single_ref_audio == reference_audio_path
@@ -98,10 +100,12 @@ def test_f5_single_batch_worker_payload_contract(tmp_path, monkeypatch):
     assert cfg_strength == params["cfg_strength"]
     assert target_rms == params["target_rms"]
     assert cross_fade_duration == params["cross_fade_duration"]
+    assert sway_sampling_coef == params["sway_sampling_coef"]
+    assert fix_duration == params["fix_duration"]
     assert remove_silence == params["remove_silence"]
     assert seed == params["seed"]
 
-    _, batch_out, batch_text, batch_ref_audio, batch_ref_text, batch_speed, batch_nfe_step, batch_cfg_strength, batch_target_rms, batch_cross_fade_duration, batch_remove_silence, batch_seed = inference_runner._build_f5_tts_kwargs(**batch)
+    _, batch_out, batch_text, batch_ref_audio, batch_ref_text, batch_speed, batch_nfe_step, batch_cfg_strength, batch_target_rms, batch_cross_fade_duration, batch_sway_sampling_coef, batch_fix_duration, batch_remove_silence, batch_seed = inference_runner._build_f5_tts_kwargs(**batch)
     assert batch["text"] == batch_text
     assert batch_out == batch["output_path"]
     assert batch_ref_audio == reference_audio_path
@@ -111,6 +115,8 @@ def test_f5_single_batch_worker_payload_contract(tmp_path, monkeypatch):
     assert batch_cfg_strength == params["cfg_strength"]
     assert batch_target_rms == params["target_rms"]
     assert batch_cross_fade_duration == params["cross_fade_duration"]
+    assert batch_sway_sampling_coef == params["sway_sampling_coef"]
+    assert batch_fix_duration == params["fix_duration"]
     assert batch_remove_silence == params["remove_silence"]
     assert batch_seed == params["seed"]
 
