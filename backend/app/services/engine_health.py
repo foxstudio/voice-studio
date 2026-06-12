@@ -7,6 +7,14 @@ from typing import Any
 from app.services import engine_manifests, engine_policy, qwen_mlx_asr, settings_store
 
 
+DEFAULT_EXTERNAL_ROOTS = {
+    "emotivoice": Path("/Users/foxmacstudio/Projects/tts-engine-lab/EmotiVoice"),
+    "f5-tts": Path("/Users/foxmacstudio/Projects/tts-engine-lab/F5-TTS"),
+    "cosyvoice-sft": Path("/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice"),
+    "cosyvoice-zero-shot": Path("/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice"),
+}
+
+
 def mlx_audio_runtime_available() -> tuple[bool, str | None]:
     return qwen_mlx_asr.runtime_available()
 
@@ -19,12 +27,15 @@ def external_engine_root(engine_id: str) -> Path:
         "cosyvoice-zero-shot": "VOICE_STUDIO_COSYVOICE_ROOT",
     }
     env_value = os.environ.get(env_names[engine_id])
-    if not env_value:
-        raise RuntimeError(
-            f"Environment variable {env_names[engine_id]} is not set. "
-            f"Please set it to the root directory of the {engine_id} engine."
-        )
-    return Path(env_value).expanduser()
+    if env_value:
+        return Path(env_value).expanduser()
+    fallback = DEFAULT_EXTERNAL_ROOTS.get(engine_id)
+    if fallback and fallback.exists():
+        return fallback
+    raise RuntimeError(
+        f"Environment variable {env_names[engine_id]} is not set. "
+        f"Please set it to the root directory of the {engine_id} engine."
+    )
 
 
 def health_check(engine_id: str) -> dict[str, Any]:

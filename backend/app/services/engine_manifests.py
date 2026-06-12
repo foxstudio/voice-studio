@@ -49,6 +49,17 @@ EMOTIVOICE_SPEAKERS = [
     {"label": "1018 JimmyLogan 男声", "value": "1018"},
 ]
 
+OMNIVOICE_LANGUAGES = [
+    {"label": "自动", "value": "auto"},
+    {"label": "中文 zh", "value": "zh"},
+    {"label": "英文 en", "value": "en"},
+    {"label": "日语 ja", "value": "ja"},
+    {"label": "韩语 ko", "value": "ko"},
+    {"label": "法语 fr", "value": "fr"},
+    {"label": "德语 de", "value": "de"},
+    {"label": "西班牙语 es", "value": "es"},
+]
+
 
 
 
@@ -110,9 +121,12 @@ ENGINES: dict[str, EngineDetail] = {
             sample_rate=24000,
             default_use_case="多语言克隆与声音设计",
             parameter_schema=[
-                ParameterSchema(key="language", label="语言", type="select", default="auto", options=[{"label": x, "value": x} for x in ["auto", "zh", "en", "ja", "ko", "fr", "de", "es"]], description="选择语言，如中文、英文等"),
+                ParameterSchema(key="language", label="语言", type="select", default="auto", options=OMNIVOICE_LANGUAGES, description="语言提示。自动可混语，手动选择通常更稳。"),
                 ParameterSchema(key="emotion_text", label="声音描述/指令", type="textarea", default="", capability="voice_design", description="用文字描述想要的声音特征"),
                 ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="控制说话速度"),
+                ParameterSchema(key="diffusion_steps", label="扩散步数 Num Step", type="slider", default=32, min=4, max=64, step=1, level="advanced", description="OmniVoice 生成步数。越高通常越细致但更慢。"),
+                ParameterSchema(key="guidance_scale", label="引导强度 Guidance", type="slider", default=2.0, min=0.1, max=5.0, step=0.1, level="advanced", description="控制生成结果贴合文本、音色或声音描述的力度。默认 2.0。"),
+                ParameterSchema(key="duration", label="固定时长 s", type="number", default=0, min=0, max=120, step=0.5, level="advanced", description="可选。0 表示自动估算；填秒数会强制目标音频时长。"),
             ],
         ),
         state=EngineState(engine_id="omnivoice", status=EngineStatus.stopped),
@@ -170,6 +184,8 @@ ENGINES: dict[str, EngineDetail] = {
                 ParameterSchema(key="cfg_strength", label="引导强度 CFG", type="slider", default=2.0, min=0.1, max=5.0, step=0.1, level="advanced", description="无分类器引导强度"),
                 ParameterSchema(key="target_rms", label="响度目标 RMS", type="slider", default=0.1, min=0.01, max=0.5, step=0.01, level="advanced", description="目标音量(RMS)，控制输出响度"),
                 ParameterSchema(key="cross_fade_duration", label="分段交叉淡化", type="slider", default=0.15, min=0, max=1, step=0.05, level="advanced", description="交叉淡入淡出时长(秒)"),
+                ParameterSchema(key="sway_sampling_coef", label="采样摆动 Sway", type="slider", default=-1.0, min=-1.0, max=1.0, step=0.1, level="developer", description="F5-TTS 采样时间步修正系数。默认 -1，通常无需调整。"),
+                ParameterSchema(key="fix_duration", label="固定总时长 s", type="number", default=0.0, min=0.0, max=600.0, step=0.1, level="developer", description="可选。0 表示自动估算；填写秒数会尝试固定参考音频与生成音频总时长。"),
                 ParameterSchema(key="remove_silence", label="移除静音", type="toggle", default=False, level="advanced", description="是否自动去除静音段"),
             ],
         ),

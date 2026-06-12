@@ -78,6 +78,8 @@ def build_f5_tts_single_kwargs(
         "cfg_strength": req.cfg_strength,
         "target_rms": req.target_rms,
         "cross_fade_duration": req.cross_fade_duration,
+        "sway_sampling_coef": req.sway_sampling_coef,
+        "fix_duration": req.fix_duration if req.fix_duration > 0 else None,
         "remove_silence": req.remove_silence,
         "seed": req.seed,
     }
@@ -97,6 +99,8 @@ def build_f5_tts_batch_common_kwargs(
         "cfg_strength": values.get("cfg_strength"),
         "target_rms": values.get("target_rms"),
         "cross_fade_duration": values.get("cross_fade_duration"),
+        "sway_sampling_coef": values.get("sway_sampling_coef"),
+        "fix_duration": values.get("fix_duration") or None,
         "remove_silence": values.get("remove_silence"),
         "seed": values.get("seed"),
     }
@@ -240,6 +244,8 @@ def build_omnivoice_single_kwargs(
         "emotion": req.emotion,
         "emotion_text": req.emotion_text,
         "diffusion_steps": req.diffusion_steps or 16,
+        "guidance_scale": req.guidance_scale,
+        "duration": req.duration,
     }
 
 
@@ -269,6 +275,8 @@ def build_omnivoice_batch_common_kwargs(
         "seed",
         "max_mel_tokens",
         "diffusion_steps",
+        "guidance_scale",
+        "duration",
         "cfg_rate",
         "emotion",
         "emo_alpha",

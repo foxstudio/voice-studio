@@ -230,18 +230,47 @@
 
 	.advanced-section {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-		gap: 10px 14px;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+		gap: 12px 18px;
 		padding-top: 2px;
+		align-items: start;
 	}
 
 	.advanced-section :global(.field) {
 		min-width: 0;
-		max-width: 320px;
+		width: 100%;
+		max-width: 340px;
 	}
 
 	:global(.field) .param-input,
 	:global(.field) .param-textarea {
 		width: 100%;
+	}
+
+	:global(.field) .param-input {
+		height: 28px;
+		min-height: 28px;
+		padding: 3px 8px;
+		border-radius: 6px;
+		font-size: 12px;
+		line-height: 1.2;
+		box-sizing: border-box;
+	}
+
+	@media (max-width: 900px) {
+		.advanced-section {
+			grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+		}
+	}
+
+	@media (max-width: 640px) {
+		.advanced-section {
+			grid-template-columns: 1fr;
+			gap: 8px;
+		}
+
+		.advanced-section :global(.field) {
+			max-width: none;
+		}
 	}
 </style>

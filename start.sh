@@ -26,6 +26,10 @@ FORCE="${FORCE:-false}"
 BACKEND_PID=""
 FRONTEND_PID=""
 
+if [ -z "${VOICE_STUDIO_COSYVOICE_ROOT:-}" ] && [ -d "/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice" ]; then
+  export VOICE_STUDIO_COSYVOICE_ROOT="/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice"
+fi
+
 # ── helpers ──────────────────────────────────────────────────────────
 
 usage() {

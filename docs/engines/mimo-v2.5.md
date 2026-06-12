@@ -48,6 +48,20 @@ MiMo Token Plan 采用 Credit 积分制，4 档定价方案。V2.5-TTS 系列模
 
 所有 MiMo 引擎均为云端服务，音频数据需上传至小米服务器处理。
 
+## 当前参数与默认值
+
+MiMo V2.5 在本项目中拆成三种 TTS 入口。正文统一放合成文本框；风格、语速、情绪、角色感等用自然语言写进风格指令或音色描述。MiMo voiceclone 没有独立数值 `speed` 参数。
+
+| 引擎 | 参数 | 默认值 | 大白话说明 |
+|---|---|---:|---|
+| Preset | `mimo_voice` | `mimo_default` | 官方预置音色，当前本地可选：MiMo 默认、冰糖、茉莉、苏打、白桦、Mia、Chloe、Milo、Dean。 |
+| Preset / VoiceClone | `style_instruction` | 空 | 描述怎么读，例如“温柔、语速稍慢、重点句停顿”。 |
+| VoiceDesign | `voice_design_prompt` | 中年男性，声线沉稳偏正式，吐字工整，语速适中。 | 描述要生成的声音本身，不是正文。 |
+| VoiceDesign | `optimize_text_preview` | `false` | 是否让云端先润色播报文本。 |
+| 全部 TTS | `temperature` / `top_p` | `0.6` / `0.95` | 官方超参，默认偏稳定。 |
+
+内置预设：MiMo 稳定口播、MiMo 温柔女声、MiMo 角色试音、MiMo 复刻讲述。生成页“一键重置参数”会恢复当前 MiMo 变体的默认值。
+
 ## 参考链接
 
 - [MiMo 官网](https://mimo.mi.com/)

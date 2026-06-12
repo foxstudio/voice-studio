@@ -109,6 +109,20 @@ curl -X POST http://127.0.0.1:8000/api/generate \
 
 常用参数组合使用 `GET /api/presets` 获取。返回的每个预设都带 `engine_id`，调用方必须只把同引擎预设展示给当前引擎。
 
+当前生成页的“一键重置参数”会按当前引擎恢复下表默认值，但保留正文和已选参考音色，避免误操作丢失输入：
+
+| 引擎 | 重置后的主要默认值 | 当前内置预设 |
+| --- | --- | --- |
+| `indextts-v2` | `speed=1.0`, `temperature=0.8`, `top_p=0.8`, `top_k=30`, `emotion=跟随参考音色`, `emo_alpha=0.6`, `max_text_tokens_per_segment=120`, `interval_silence=200`, `diffusion_steps=25`, `cfg_rate=0.7`, `max_mel_tokens=1500`, `repetition_penalty=10` | 贴近参考音色、轻微开心、强情绪短句、教程慢讲、信息流快讲、长文本剪辑 |
+| `omnivoice` | `language=auto`, `speed=1.0`, 声音描述为空 | OmniVoice 女青年设计 |
+| `emotivoice` | `speaker_id=8051`, `prompt=开心` | 清晰女声开心、浑厚男声中立、活泼女声兴奋 |
+| `f5-tts` | `speed=1.0`, `nfe_step=32`, `cfg_strength=2.0`, `target_rms=0.1`, `cross_fade_duration=0.15`, `remove_silence=false` | 官方默认复刻、快速试听、短句去静音 |
+| `cosyvoice-sft` | `speaker_id=中文女`, `speed=1.0` | 中文女声、中文男声、粤语女声 |
+| `cosyvoice-zero-shot` | `speed=1.0` | 参考音色复刻、慢速清晰 |
+| `mimo-v2.5-tts-preset` | `mimo_voice=mimo_default`, `style_instruction=''`, `temperature=0.6`, `top_p=0.95` | MiMo 稳定口播、MiMo 温柔女声 |
+| `mimo-v2.5-tts-voicedesign` | `voice_design_prompt=中年男性，声线沉稳偏正式，吐字工整，语速适中。`, `optimize_text_preview=false`, `temperature=0.6`, `top_p=0.95` | MiMo 角色试音 |
+| `mimo-v2.5-tts-voiceclone` | `style_instruction=''`, `temperature=0.6`, `top_p=0.95` | MiMo 复刻讲述 |
+
 自定义预设接口：
 
 ```bash
@@ -297,6 +311,8 @@ agent 规则：
 - `cfg_strength`：引导强度。官方默认是 `2.0`，过高可能让发音不自然。
 - `target_rms`：响度目标，官方默认是 `0.1`。
 - `cross_fade_duration`：分段交叉淡化秒数，官方默认是 `0.15`。
+- `sway_sampling_coef`：采样时间步修正系数，官方默认是 `-1`；属于开发者参数，普通生成不建议改。
+- `fix_duration`：固定参考音频与生成音频总时长，`0` 表示自动估算；属于开发者参数，填错容易让语速或停顿不自然。
 - `remove_silence`：生成后移除较长静音。官方 basic 示例默认关闭。
 - 当前通过外部 venv 调用本地 F5-TTS 仓库，默认使用本地 ModelScope 权重，可用 `VOICE_STUDIO_F5_TTS_ROOT` 覆盖路径。
 

@@ -59,7 +59,7 @@
 
 <div class="select" bind:this={root}>
 	<button class="select-trigger" type="button" aria-haspopup="listbox" aria-expanded={open} onclick={toggle}>
-		<span class:placeholder={!selected}>{selected?.label ?? placeholder}</span>
+		<span class:placeholder={!selected} title={selected?.label ?? placeholder}>{selected?.label ?? placeholder}</span>
 		<span class="chevron" aria-hidden="true">⌄</span>
 	</button>
 
@@ -78,6 +78,7 @@
 						type="button"
 						role="option"
 						aria-selected={option.value === value}
+						title={option.label}
 						onclick={() => choose(option.value)}
 					>
 						<span>{option.label}</span>
@@ -159,6 +160,14 @@
 		color: var(--text);
 		padding: 8px 9px;
 		text-align: left;
+	}
+
+	.select-option span {
+		display: block;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.select-option:hover,

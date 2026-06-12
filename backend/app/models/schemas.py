@@ -77,6 +77,7 @@ class LicenseStatus(str, Enum):
     self_voice = "self_voice"
     company_authorized = "company_authorized"
     authorized = "authorized"
+    localized_dub_source = "localized_dub_source"
     test_only = "test_only"
     unknown = "unknown"
     commercial_forbidden = "commercial_forbidden"
@@ -313,6 +314,8 @@ class GenerateRequest(BaseModel):
     cfg_strength: float = Field(default=2.0, ge=0.1, le=5.0)
     target_rms: float = Field(default=0.1, ge=0.01, le=1.0)
     cross_fade_duration: float = Field(default=0.15, ge=0.0, le=1.0)
+    sway_sampling_coef: float = Field(default=-1.0, ge=-1.0, le=1.0)
+    fix_duration: float = Field(default=0.0, ge=0.0, le=600.0)
     remove_silence: bool = False
     emo_alpha: float = Field(default=0.6, ge=0, le=1)
     speed: float = Field(default=1.0, ge=0.5, le=3.0)
@@ -327,6 +330,8 @@ class GenerateRequest(BaseModel):
     segment_overlap_ms: int = Field(default=50, ge=0, le=500)
     diffusion_steps: int = Field(default=25, ge=1, le=100)
     cfg_rate: float = Field(default=0.7, ge=0.0, le=1.0)
+    guidance_scale: float = Field(default=2.0, ge=0.0, le=10.0)
+    duration: float = Field(default=0.0, ge=0.0, le=600.0)
     output_format: Literal["wav", "mp3", "flac"] = "wav"
 
 

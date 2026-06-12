@@ -251,7 +251,7 @@
 		].some((k) => tag.includes(k))) return 'source';
 		if ([
 			'情绪', '悲伤', '悬疑', '开心', '愤怒', '恐惧', '惊悚', '反感',
-			'爽朗', '沧桑', '压迫', '元气', '爆发', '冷静', '活泼', '热情',
+			'爽朗', '沧桑', '压迫', '元气', '爆发', '冷静', '平静', '活泼', '热情',
 			'冷淡', '傲娇', '从容', '戏谑', '俏皮', '古灵精怪', '威严'
 		].some((k) => tag.includes(k))) return 'emotion';
 		if ([
@@ -470,6 +470,7 @@
 							<option value="all">全部</option>
 							<option value="self_voice">本人声音</option>
 							<option value="authorized">已授权</option>
+							<option value="localized_dub_source">本土化</option>
 							<option value="test_only">仅测试</option>
 							<option value="unknown">未知</option>
 						</select>
@@ -619,7 +620,7 @@
 					<div class="field"><label for="voice-desc">描述</label><input id="voice-desc" bind:value={description} /></div>
 					<div class="field"><label for="voice-tags">标签</label><input id="voice-tags" bind:value={tags} placeholder="温柔, 女声" /></div>
 					<div class="field"><label for="voice-ref">参考文本</label><input id="voice-ref" bind:value={referenceText} /></div>
-					<div class="field"><label for="voice-license">授权</label><select id="voice-license" bind:value={license}><option value="unknown">未知</option><option value="self_voice">本人声音</option><option value="authorized">已授权</option><option value="test_only">仅测试</option></select></div>
+					<div class="field"><label for="voice-license">授权</label><select id="voice-license" bind:value={license}><option value="unknown">未知</option><option value="self_voice">本人声音</option><option value="authorized">已授权</option><option value="localized_dub_source">本土化</option><option value="test_only">仅测试</option></select></div>
 					<div class="field"><label for="voice-engine">推荐引擎</label><select id="voice-engine" bind:value={engine}><option value="indextts-v2">IndexTTS v2</option><option value="omnivoice">OmniVoice</option><option value="mimo-v2.5-tts-voiceclone">MiMo V2.5 VoiceClone</option></select></div>
 					<div class="field">
 						<label for="voice-file">{editingVoice ? '追加参考音频' : '参考音频'}</label>

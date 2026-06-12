@@ -22,9 +22,10 @@ async def delete_history(result_id: str):
 
 
 @router.get("/{result_id}/audio")
-async def get_audio(result_id: str):
+async def get_audio(result_id: str, download: bool = False):
     path = history_store.audio_path(result_id)
     if not path:
         raise AppException(404, "AUDIO_NOT_FOUND", "Audio not found")
+    if download:
+        return FileResponse(path, filename=path.name)
     return FileResponse(path)
-

@@ -241,6 +241,30 @@ export function taskParameterEntries(task: GenerationTask, engineMap: Map<string
 	return e;
 }
 
+export function taskParameterCopyText(task: GenerationTask, engineMap: Map<string, EngineDetail>, voiceMap: Map<string, VoiceAsset>) {
+	return taskParameterEntries(task, engineMap, voiceMap)
+		.map((entry) => `${entry.label}: ${entry.value}`)
+		.join('\n');
+}
+
+export function knownErrorMessage(message: string | null | undefined) {
+	if (!message) return '';
+	const known: Record<string, string> = {
+		'400: IndexTTS v2 需要参考音频': 'IndexTTS v2 需要先选择一个带参考音频的本地音色。',
+		'IndexTTS v2 需要参考音频': 'IndexTTS v2 需要先选择一个带参考音频的本地音色。',
+		'REFERENCE_TEXT_REQUIRED': '这个引擎需要准确的参考台词，请先在音色库补全参考文本。',
+		'MIMO_API_KEY_MISSING': '缺少 MiMo API Key，请先到设置里配置。',
+		'MIMO_CLOUD_DISABLED': 'MiMo 云端引擎还没有启用，请先到设置里打开。'
+	};
+	return known[message] ?? message;
+}
+
+export function resultDownloadName(task: GenerationTask) {
+	const safeTitle = displayTitle(task).replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40) || 'tts';
+	const format = typeof task.parameters.output_format === 'string' ? task.parameters.output_format : 'wav';
+	return `${safeTitle}_${task.task_id.slice(0, 8)}.${format}`;
+}
+
 export function longformTitle(task: LongformTask) { return task.input_text.trim() || '长文本任务'; }
 export function longformStatusText(task: LongformTask) {
 	const success = task.segments.filter(s => s.status === 'success').length;

@@ -43,6 +43,19 @@
 - SFT 模式：预置音色选择 + 语速控制
 - Zero-Shot 模式：使用本地音色库参考音频
 
+## 当前参数与默认值
+
+CosyVoice 在生成页拆成两个引擎。SFT 模式只用官方预置 speaker；Zero-Shot 模式使用音色库里的参考音频和准确参考台词。
+
+| 引擎 | 参数 | 默认值 | 大白话说明 |
+|---|---|---:|---|
+| CosyVoice SFT | `speaker_id` | `中文女` | 官方预置音色，不需要本地参考音频。 |
+| CosyVoice SFT | `speed` | `1.0` | 控制朗读速度。 |
+| CosyVoice Zero-Shot | `voice_id/ref_text` | 用户选择 | 需要本地参考音频和准确参考台词。 |
+| CosyVoice Zero-Shot | `speed` | `1.0` | 控制目标文本速度。 |
+
+内置预设：中文女声、中文男声、粤语女声、参考音色复刻、慢速清晰。生成页“一键重置参数”会按当前 CosyVoice 模式恢复默认参数。
+
 ## 参考链接
 
 - [CosyVoice GitHub](https://github.com/FunAudioLLM/CosyVoice)

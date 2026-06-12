@@ -25,6 +25,12 @@ if str(BACKEND_ROOT) not in sys.path:
 logger = logging.getLogger(__name__)
 _model_cache: dict = {}
 _model_cache_lock = threading.Lock()
+DEFAULT_EXTERNAL_ROOTS = {
+    "emotivoice": Path("/Users/foxmacstudio/Projects/tts-engine-lab/EmotiVoice"),
+    "f5-tts": Path("/Users/foxmacstudio/Projects/tts-engine-lab/F5-TTS"),
+    "cosyvoice-sft": Path("/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice"),
+    "cosyvoice-zero-shot": Path("/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice"),
+}
 
 
 def evict_cache(engine_id: str) -> None:
@@ -50,12 +56,15 @@ def _external_root(engine_id: str) -> Path:
         "cosyvoice-zero-shot": "VOICE_STUDIO_COSYVOICE_ROOT",
     }
     env_value = os.environ.get(env_names[engine_id])
-    if not env_value:
-        raise RuntimeError(
-            f"Environment variable {env_names[engine_id]} is not set. "
-            f"Please set it to the root directory of the {engine_id} engine."
-        )
-    return Path(env_value).expanduser()
+    if env_value:
+        return Path(env_value).expanduser()
+    fallback = DEFAULT_EXTERNAL_ROOTS.get(engine_id)
+    if fallback and fallback.exists():
+        return fallback
+    raise RuntimeError(
+        f"Environment variable {env_names[engine_id]} is not set. "
+        f"Please set it to the root directory of the {engine_id} engine."
+    )
 
 
 def _external_python(root: Path) -> str:
@@ -158,6 +167,8 @@ def _build_omnivoice_kwargs(**kwargs):
     speed = kwargs.pop("speed", 1.0)
     device = kwargs.pop("device", "mps")
     diffusion_steps = kwargs.pop("diffusion_steps", None) or kwargs.pop("num_step", None)
+    guidance_scale = kwargs.pop("guidance_scale", None)
+    duration = kwargs.pop("duration", None)
 
     gen_kwargs = {"text": text}
     if language and language != "auto":
@@ -172,6 +183,10 @@ def _build_omnivoice_kwargs(**kwargs):
         gen_kwargs["speed"] = speed
     if diffusion_steps:
         gen_kwargs["num_step"] = int(diffusion_steps)
+    if guidance_scale is not None:
+        gen_kwargs["guidance_scale"] = float(guidance_scale)
+    if duration is not None and float(duration) > 0:
+        gen_kwargs["duration"] = float(duration)
 
     return engine_id, output_path, device, gen_kwargs
 
@@ -296,12 +311,15 @@ def _build_f5_tts_kwargs(**kwargs):
     cfg_strength = float(kwargs.pop("cfg_strength", 1.5) or 1.5)
     target_rms = float(kwargs.pop("target_rms", 0.1) or 0.1)
     cross_fade_duration = float(kwargs.pop("cross_fade_duration", 0.15) or 0.15)
+    sway_sampling_coef = float(kwargs.pop("sway_sampling_coef", -1.0) or -1.0)
+    fix_duration_raw = float(kwargs.pop("fix_duration", 0.0) or 0.0)
+    fix_duration = fix_duration_raw if fix_duration_raw > 0 else None
     remove_silence = bool(kwargs.pop("remove_silence", False))
     seed = kwargs.pop("seed", None)
-    return root, output_path, text, ref_audio, ref_text, speed, nfe_step, cfg_strength, target_rms, cross_fade_duration, remove_silence, seed
+    return root, output_path, text, ref_audio, ref_text, speed, nfe_step, cfg_strength, target_rms, cross_fade_duration, sway_sampling_coef, fix_duration, remove_silence, seed
 
 def run_f5_tts(**kwargs):
-    root, output_path, text, ref_audio, ref_text, speed, nfe_step, cfg_strength, target_rms, cross_fade_duration, remove_silence, seed = _build_f5_tts_kwargs(**kwargs)
+    root, output_path, text, ref_audio, ref_text, speed, nfe_step, cfg_strength, target_rms, cross_fade_duration, sway_sampling_coef, fix_duration, remove_silence, seed = _build_f5_tts_kwargs(**kwargs)
     if not ref_audio:
         raise RuntimeError("REFERENCE_AUDIO_REQUIRED")
     if not ref_text:
@@ -323,6 +341,8 @@ def run_f5_tts(**kwargs):
         "cfg_strength": cfg_strength,
         "target_rms": target_rms,
         "cross_fade_duration": cross_fade_duration,
+        "sway_sampling_coef": sway_sampling_coef,
+        "fix_duration": fix_duration,
         "remove_silence": remove_silence,
         "seed": seed,
     }
@@ -344,6 +364,8 @@ model.infer(
     cfg_strength=payload["cfg_strength"],
     target_rms=payload["target_rms"],
     cross_fade_duration=payload["cross_fade_duration"],
+    sway_sampling_coef=payload["sway_sampling_coef"],
+    fix_duration=payload["fix_duration"],
     remove_silence=payload["remove_silence"],
     seed=payload["seed"],
 )

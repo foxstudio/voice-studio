@@ -68,6 +68,8 @@ export type GenerateStoreState = {
 	cfgStrength: number;
 	targetRms: number;
 	crossFadeDuration: number;
+	swaySamplingCoef: number;
+	fixDuration: number;
 	removeSilence: boolean;
 	temperature: number;
 	topP: number;
@@ -76,6 +78,8 @@ export type GenerateStoreState = {
 	intervalSilence: number;
 	diffusionSteps: number;
 	cfgRate: number;
+	guidanceScale: number;
+	duration: number;
 	maxMelTokens: number;
 	repetitionPenalty: number;
 	outputFormat: 'wav' | 'mp3' | 'flac';
@@ -133,11 +137,19 @@ const MIMO_DEFAULTS = {
 	topP: 0.95
 };
 
+const OMNIVOICE_DEFAULTS = {
+	diffusionSteps: 32,
+	guidanceScale: 2.0,
+	duration: 0
+};
+
 const F5_DEFAULTS = {
 	nfeStep: 32,
 	cfgStrength: 2.0,
 	targetRms: 0.1,
 	crossFadeDuration: 0.15,
+	swaySamplingCoef: -1.0,
+	fixDuration: 0,
 	removeSilence: false
 };
 
@@ -195,6 +207,8 @@ function createInitialState(): GenerateStoreState {
 		cfgStrength: F5_DEFAULTS.cfgStrength,
 		targetRms: F5_DEFAULTS.targetRms,
 		crossFadeDuration: F5_DEFAULTS.crossFadeDuration,
+		swaySamplingCoef: F5_DEFAULTS.swaySamplingCoef,
+		fixDuration: F5_DEFAULTS.fixDuration,
 		removeSilence: F5_DEFAULTS.removeSilence,
 		temperature: INDEX_TTS_DEFAULTS.temperature,
 		topP: INDEX_TTS_DEFAULTS.topP,
@@ -203,6 +217,8 @@ function createInitialState(): GenerateStoreState {
 		intervalSilence: INDEX_TTS_DEFAULTS.intervalSilence,
 		diffusionSteps: INDEX_TTS_DEFAULTS.diffusionSteps,
 		cfgRate: INDEX_TTS_DEFAULTS.cfgRate,
+		guidanceScale: OMNIVOICE_DEFAULTS.guidanceScale,
+		duration: OMNIVOICE_DEFAULTS.duration,
 		maxMelTokens: INDEX_TTS_DEFAULTS.maxMelTokens,
 		repetitionPenalty: INDEX_TTS_DEFAULTS.repetitionPenalty,
 		outputFormat: INDEX_TTS_DEFAULTS.outputFormat,
@@ -256,11 +272,13 @@ function getEngineDefaults(state: GenerateStoreState, engineId: string) {
 	const selectedEngine = getSelectedEngine(state, engineId);
 	const speakerParam = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'speaker_id');
 	const promptParam = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'prompt');
+	const languageParam = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'language');
 
 	return {
 		engineId,
 		lastEngineId: engineId,
 		showAdvanced: engineId === 'f5-tts',
+		language: String(languageParam?.default ?? state.language),
 		emotion: INDEX_TTS_DEFAULTS.emotion,
 		emoAlpha: INDEX_TTS_DEFAULTS.emoAlpha,
 		speed: INDEX_TTS_DEFAULTS.speed,
@@ -269,8 +287,10 @@ function getEngineDefaults(state: GenerateStoreState, engineId: string) {
 		topK: INDEX_TTS_DEFAULTS.topK,
 		maxTextTokensPerSegment: INDEX_TTS_DEFAULTS.maxTextTokensPerSegment,
 		intervalSilence: INDEX_TTS_DEFAULTS.intervalSilence,
-		diffusionSteps: INDEX_TTS_DEFAULTS.diffusionSteps,
+		diffusionSteps: engineId === 'omnivoice' ? OMNIVOICE_DEFAULTS.diffusionSteps : INDEX_TTS_DEFAULTS.diffusionSteps,
 		cfgRate: INDEX_TTS_DEFAULTS.cfgRate,
+		guidanceScale: OMNIVOICE_DEFAULTS.guidanceScale,
+		duration: OMNIVOICE_DEFAULTS.duration,
 		outputFormat: INDEX_TTS_DEFAULTS.outputFormat,
 		nfeStep: F5_DEFAULTS.nfeStep,
 		cfgStrength: F5_DEFAULTS.cfgStrength,
@@ -320,6 +340,8 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 		cfg_strength: state.cfgStrength,
 		target_rms: state.targetRms,
 		cross_fade_duration: state.crossFadeDuration,
+		sway_sampling_coef: state.swaySamplingCoef,
+		fix_duration: state.fixDuration,
 		remove_silence: state.removeSilence,
 		emo_alpha: state.emoAlpha,
 		speed: state.speed,
@@ -333,6 +355,8 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 		segment_overlap_ms: 50,
 		diffusion_steps: state.diffusionSteps,
 		cfg_rate: state.cfgRate,
+		guidance_scale: state.guidanceScale,
+		duration: state.duration,
 		output_format: state.outputFormat
 	};
 }
@@ -362,6 +386,8 @@ function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<
 		cfgStrength: req.cfg_strength ?? F5_DEFAULTS.cfgStrength,
 		targetRms: req.target_rms ?? F5_DEFAULTS.targetRms,
 		crossFadeDuration: req.cross_fade_duration ?? F5_DEFAULTS.crossFadeDuration,
+		swaySamplingCoef: req.sway_sampling_coef ?? F5_DEFAULTS.swaySamplingCoef,
+		fixDuration: req.fix_duration ?? F5_DEFAULTS.fixDuration,
 		removeSilence: req.remove_silence ?? F5_DEFAULTS.removeSilence,
 		emoAlpha: req.emo_alpha ?? INDEX_TTS_DEFAULTS.emoAlpha,
 		speed: req.speed ?? INDEX_TTS_DEFAULTS.speed,
@@ -372,8 +398,10 @@ function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<
 		maxTextTokensPerSegment:
 			req.max_text_tokens_per_segment ?? INDEX_TTS_DEFAULTS.maxTextTokensPerSegment,
 		intervalSilence: req.interval_silence ?? INDEX_TTS_DEFAULTS.intervalSilence,
-		diffusionSteps: req.diffusion_steps ?? INDEX_TTS_DEFAULTS.diffusionSteps,
+		diffusionSteps: req.diffusion_steps ?? (req.engine_id === 'omnivoice' ? OMNIVOICE_DEFAULTS.diffusionSteps : INDEX_TTS_DEFAULTS.diffusionSteps),
 		cfgRate: req.cfg_rate ?? INDEX_TTS_DEFAULTS.cfgRate,
+		guidanceScale: req.guidance_scale ?? OMNIVOICE_DEFAULTS.guidanceScale,
+		duration: req.duration ?? OMNIVOICE_DEFAULTS.duration,
 		maxMelTokens: req.max_mel_tokens ?? INDEX_TTS_DEFAULTS.maxMelTokens,
 		repetitionPenalty: req.repetition_penalty ?? INDEX_TTS_DEFAULTS.repetitionPenalty,
 		outputFormat: req.output_format ?? INDEX_TTS_DEFAULTS.outputFormat,

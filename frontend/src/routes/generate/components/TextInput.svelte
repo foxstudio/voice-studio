@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Hash, Plus, Wand2 } from 'lucide-svelte';
+	import { Hash, Plus, Scissors, Send, Wand2 } from 'lucide-svelte';
 
 	interface TagTool {
 		label: string;
@@ -11,8 +11,10 @@
 		text: string;
 		engineId: string;
 		onchange?: (e: Event) => void;
-		ontexttool?: (mode: 'clean' | 'numbers') => void;
+		ontexttool?: (mode: 'clean' | 'numbers' | 'split') => void;
+		onGenerate?: () => void;
 		textToolBusy?: string;
+		generateBusy?: boolean;
 	};
 
 	let {
@@ -20,7 +22,9 @@
 		engineId = '',
 		onchange,
 		ontexttool,
-		textToolBusy = ''
+		onGenerate = () => {},
+		textToolBusy = '',
+		generateBusy = false
 	}: Props = $props();
 
 	const isCosyVoice = $derived(
@@ -104,14 +108,12 @@
 	></textarea>
 
 	<div class="tool-row">
-		<div class="tool-left">
-			<span class="char-count">{text.length} 字</span>
-		</div>
 		<div class="tool-actions">
+			<span class="char-count">{text.length} 字</span>
 			<button
 				class="btn tool-btn text-pop"
 				type="button"
-				data-text="清理多余空白、异常标点和不利于播报的格式；只处理输入文本，不改变模型参数。适用于所有 TTS 引擎。"
+				data-text={"把复制来的稿子整理成更适合朗读的样子。\n会处理：多余空格、连续空行、奇怪标点。\n例：'你好   ，  世界！！' → '你好，世界！'\n不会改模型参数。"}
 				onclick={() => ontexttool?.('clean')}
 				disabled={textToolBusy !== ''}
 			>
@@ -121,12 +123,22 @@
 			<button
 				class="btn tool-btn text-pop"
 				type="button"
-				data-text="把数字、年份和常见符号转成更适合中文口播的写法；只处理输入文本，不改变模型参数。适用于所有 TTS 引擎。"
+				data-text={"把数字和符号改成更自然的口播读法。\n例：'2026年、3.5%、AI' 会转成更适合朗读的文本。\n适合财经、教程、年份很多的稿子。"}
 				onclick={() => ontexttool?.('numbers')}
 				disabled={textToolBusy !== ''}
 			>
 				<Hash size={14} />
 				<span class="tool-label">{textToolBusy === 'numbers' ? '处理中' : '数字规范'}</span>
+			</button>
+			<button
+				class="btn tool-btn text-pop"
+				type="button"
+				data-text={"先预览系统会怎么分句和停顿。\n适合长文、课程稿、需要控制节奏的旁白。\n只做预览，不会提交生成任务。"}
+				onclick={() => ontexttool?.('split')}
+				disabled={!text.trim() || textToolBusy !== ''}
+			>
+				<Scissors size={14} />
+				<span class="tool-label">{textToolBusy === 'split' ? '分句中' : '分句预览'}</span>
 			</button>
 
 			{#if hasTagTools}
@@ -145,6 +157,16 @@
 				</button>
 			{/each}
 		</div>
+		<button
+			class="btn primary tool-btn generate-inline-btn text-pop"
+			type="button"
+			data-text={"提交当前文本和参数开始生成语音。\n长文本会先弹出分段策略确认，云端复刻会按设置提醒上传参考音频。"}
+			onclick={onGenerate}
+			disabled={generateBusy || !text.trim()}
+		>
+			<Send size={14} />
+			<span class="tool-label">{generateBusy ? '生成中' : '生成'}</span>
+		</button>
 	</div>
 </div>
 
@@ -192,13 +214,6 @@
 		min-height: 28px;
 	}
 
-	.tool-left {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		flex-shrink: 0;
-	}
-
 	.char-count {
 		font-size: 11px;
 		color: var(--muted);
@@ -210,7 +225,8 @@
 		align-items: center;
 		gap: 6px;
 		flex-wrap: wrap;
-		justify-content: flex-end;
+		justify-content: flex-start;
+		min-width: 0;
 	}
 
 	.tool-btn {
@@ -274,5 +290,22 @@
 	.tag-btn:hover {
 		background: rgba(79, 156, 249, 0.14);
 		border-color: rgba(79, 156, 249, 0.4);
+	}
+
+	.generate-inline-btn {
+		margin-left: auto;
+		flex: 0 0 auto;
+	}
+
+	@media (max-width: 640px) {
+		.tool-row {
+			align-items: stretch;
+			flex-direction: column;
+		}
+
+		.generate-inline-btn {
+			margin-left: 0;
+			width: 100%;
+		}
 	}
 </style>

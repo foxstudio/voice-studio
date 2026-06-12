@@ -32,6 +32,17 @@
 - 音色预设试听和筛选
 - 教育和交互式语音应用
 
+## 当前参数与默认值
+
+EmotiVoice 当前使用官方开源预训练 speaker 和中文情绪提示，不使用本地音色库的 `voice_id`。生成页会从本地 EmotiVoice 仓库读取官方 speaker catalog；如果仓库未配置，会回退到项目内置精选 speaker，避免页面空转或卡死。
+
+| 参数 | 默认值 | 大白话说明 |
+|---|---:|---|
+| 说话人 `speaker_id` | `8051` | 官方预置音色 ID。不是本地上传音色。 |
+| 情绪提示 `prompt` | `开心` | 用中文提示控制表达，如开心、兴奋、悲伤、愤怒、中立。 |
+
+内置预设：清晰女声开心、浑厚男声中立、活泼女声兴奋。生成页“一键重置参数”会恢复到默认 speaker 和提示词。
+
 ## 参考链接
 
 - [EmotiVoice GitHub](https://github.com/netease-youdao/emotivoice)

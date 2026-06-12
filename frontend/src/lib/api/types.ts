@@ -198,6 +198,8 @@ export interface GenerateRequest {
 	cfg_strength: number;
 	target_rms: number;
 	cross_fade_duration: number;
+	sway_sampling_coef: number;
+	fix_duration: number;
 	remove_silence: boolean;
 	emo_alpha: number;
 	speed: number;
@@ -212,6 +214,8 @@ export interface GenerateRequest {
 	segment_overlap_ms: number;
 	diffusion_steps: number;
 	cfg_rate: number;
+	guidance_scale: number;
+	duration: number;
 	output_format: OutputFormat;
 }
 

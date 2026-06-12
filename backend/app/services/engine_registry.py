@@ -20,7 +20,10 @@ def _speaker_option_to_detail(option: dict[str, str]) -> EngineSpeaker:
 
 @lru_cache(maxsize=1)
 def _emotivoice_speaker_catalog() -> list[EngineSpeaker]:
-    readme = _external_engine_root("emotivoice") / "data" / "youdao" / "text" / "README.md"
+    try:
+        readme = _external_engine_root("emotivoice") / "data" / "youdao" / "text" / "README.md"
+    except RuntimeError:
+        return [_speaker_option_to_detail(option) for option in engine_manifests.EMOTIVOICE_SPEAKERS]
     if not readme.exists():
         return [_speaker_option_to_detail(option) for option in engine_manifests.EMOTIVOICE_SPEAKERS]
 

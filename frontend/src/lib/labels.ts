@@ -72,13 +72,14 @@ export function licenseLabel(license: string) {
 		self_voice: '本人声音',
 		company_authorized: '公司授权',
 		authorized: '已授权',
+		localized_dub_source: '本土化',
 		test_only: '仅测试',
 		unknown: '未知',
 		commercial_forbidden: '禁止商用'
 	}[license] ?? license;
 }
 
-export const VOICE_AUTH_TAG_KEYWORDS = ['测试', '授权', '许可', '商用', '自有', '试用'];
+export const VOICE_AUTH_TAG_KEYWORDS = ['测试', '授权', '许可', '商用', '自有', '试用', '本土化'];
 
 export function voiceAuthTags(tags: string[]) {
 	return tags
