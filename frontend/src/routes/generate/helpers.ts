@@ -1,4 +1,4 @@
-import type { EngineDetail, GenerationTask, LongformTask, TTSVerificationResponse, VoiceAsset } from '$lib/api/types';
+import type { EngineDetail, GenerationTask, GenerateRequest, LongformTask, TTSVerificationResponse, VoiceAsset } from '$lib/api/types';
 import { taskStatusLabel } from '$lib/labels';
 
 export type TaskStatusTab = 'all' | 'active' | 'success' | 'failed';
@@ -32,6 +32,20 @@ export function longformResultTitle(t: GenerationTask) {
 export function displayTitle(task: GenerationTask) {
 	const title = task.input_text.trim() || '未命名任务';
 	return taskIsLongformExport(task) ? `完整长文本：${title}` : title;
+}
+
+export function requestFromTask(task: GenerationTask): GenerateRequest {
+	const params = task.parameters as Partial<GenerateRequest>;
+	return {
+		...params,
+		text: typeof params.text === 'string' && params.text.trim() ? params.text : task.input_text,
+		engine_id:
+			typeof params.engine_id === 'string' && params.engine_id ? params.engine_id : task.engine_id,
+		voice_id: params.voice_id !== undefined ? params.voice_id : task.voice_id,
+		language: String(params.language ?? 'zh'),
+		emotion_mode: params.emotion_mode ?? (params.emotion ? 'emotion_vector' : 'follow_reference'),
+		output_format: (params.output_format ?? 'wav') as GenerateRequest['output_format']
+	} as GenerateRequest;
 }
 
 export function voiceName(task: GenerationTask, voiceMap: Map<string, VoiceAsset>) {

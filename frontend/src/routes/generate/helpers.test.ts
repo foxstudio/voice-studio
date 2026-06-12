@@ -11,6 +11,7 @@ import {
 	taskIsLongformExport,
 	longformResultLabel,
 	displayTitle,
+	requestFromTask,
 	formatSeconds,
 	formatAudioDuration,
 } from './helpers';
@@ -109,6 +110,55 @@ describe('displayTitle', () => {
 
 	it('prefixes longform export', () => {
 		expect(displayTitle(makeTask({ input_text: '长文', longform_task_id: 'lf1', task_type: 'export' }))).toBe('完整长文本：长文');
+	});
+});
+
+describe('requestFromTask', () => {
+	it('rebuilds a full request from a normal task parameter snapshot', () => {
+		const request = requestFromTask(makeTask({
+			engine_id: 'omnivoice',
+			voice_id: 'voice-1',
+			input_text: '任务文本',
+			parameters: {
+				text: '参数文本',
+				engine_id: 'omnivoice',
+				voice_id: 'voice-2',
+				language: 'en',
+				emotion: 'happy',
+				speed: 1.2,
+				output_format: 'mp3'
+			}
+		}));
+
+		expect(request.text).toBe('参数文本');
+		expect(request.engine_id).toBe('omnivoice');
+		expect(request.voice_id).toBe('voice-2');
+		expect(request.language).toBe('en');
+		expect(request.emotion_mode).toBe('emotion_vector');
+		expect(request.output_format).toBe('mp3');
+		expect(request.speed).toBe(1.2);
+	});
+
+	it('falls back to task fields for longform export snapshots without request fields', () => {
+		const request = requestFromTask(makeTask({
+			task_type: 'export',
+			longform_task_id: 'lf1',
+			engine_id: 'omnivoice',
+			voice_id: 'voice-1',
+			input_text: '完整长文本',
+			parameters: {
+				language: 'auto',
+				output_format: 'wav',
+				source_result_ids: ['r1', 'r2']
+			}
+		}));
+
+		expect(request.text).toBe('完整长文本');
+		expect(request.engine_id).toBe('omnivoice');
+		expect(request.voice_id).toBe('voice-1');
+		expect(request.language).toBe('auto');
+		expect(request.emotion_mode).toBe('follow_reference');
+		expect(request.output_format).toBe('wav');
 	});
 });
 
