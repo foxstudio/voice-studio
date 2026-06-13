@@ -755,21 +755,33 @@ def _update_project_segment(task: GenerationTask, audio_id: str | None, hist_res
         project_store.update_segment_result(task.project_id, task.segment_id, audio_id, hist_result_id, status, error)
 
 
+async def _update_status(task: GenerationTask, **kwargs) -> None:
+    """唯一状态写入口：写 DB + 广播。不做任何业务逻辑。"""
+    for key, value in kwargs.items():
+        if value is not None and hasattr(task, key):
+            setattr(task, key, value)
+    _save(task)
+    await _broadcast(task)
+
+
+def _update_status_sync(task: GenerationTask, **kwargs) -> None:
+    """同步版状态写入（用于 progress_tick 等线程内调用）。只写 DB，不广播。"""
+    for key, value in kwargs.items():
+        if value is not None and hasattr(task, key):
+            setattr(task, key, value)
+    _save(task)
+    _broadcast_from_thread(task)
+
+
 async def _process(task: GenerationTask) -> None:
     if _task_is_protected_by_state(task):
         _sync_task_status_from_db(task)
         return
-    task.status = TaskStatus.running
-    task.started_at = now_iso()
-    task.progress = 0.12
-    _save(task)
-    await _broadcast(task)
+    await _update_status(task, status=TaskStatus.running, started_at=now_iso(), progress=0.12)
     try:
         req = GenerateRequest(**task.parameters)
         engine_registry.ensure_loaded(req.engine_id)
-        task.progress = 0.24
-        _save(task)
-        await _broadcast(task)
+        await _update_status(task, progress=0.24)
         settings_store.ensure_directories()
         audio_id = task.task_id
         wav_path = settings_store.output_dir() / f"{audio_id}.wav"
@@ -793,11 +805,9 @@ async def _process(task: GenerationTask) -> None:
                 return
             if _task_is_protected_by_state(task):
                 return
-            task.progress = next_value
             progress_state["last_value"] = next_value
             progress_state["last_sent_at"] = now
-            _save(task)
-            _broadcast_from_thread(task)
+            _update_status_sync(task, progress=next_value)
 
         timeout_seconds = _timeout_seconds_for(req.engine_id)
         result = await asyncio.to_thread(
@@ -811,20 +821,15 @@ async def _process(task: GenerationTask) -> None:
         if _task_is_protected_by_state(task):
             _sync_task_status_from_db(task)
         elif task.task_id in _cancelled:
-            task.status = TaskStatus.cancelled
-            task.error_message = "cancelled by user"
+            await _update_status(task, status=TaskStatus.cancelled, error_message="cancelled by user")
         else:
-            task.status = TaskStatus.postprocessing
-            task.progress = 0.96
-            _save(task)
-            await _broadcast(task)
+            await _update_status(task, status=TaskStatus.postprocessing, progress=0.96)
             final_path = _postprocess_audio(task, req, result, audio_id)
             if not _task_is_protected_by_state(task):
-                task.status = TaskStatus.success
-                task.progress = 1.0
-                task.result_audio_id = audio_id
-                task.result_duration_ms = result.get("duration_ms")
-                task.generation_time_ms = result.get("generation_time_ms")
+                await _update_status(task, status=TaskStatus.success, progress=1.0,
+                               result_audio_id=audio_id,
+                               result_duration_ms=result.get("duration_ms"),
+                               generation_time_ms=result.get("generation_time_ms"))
                 hist = _save_history(task, req, final_path, audio_id, result)
                 task.result_id = hist.result_id
                 _update_project_segment(task, audio_id, hist.result_id, SegmentStatus.completed)
@@ -834,14 +839,10 @@ async def _process(task: GenerationTask) -> None:
         if _task_is_protected_by_state(task):
             _sync_task_status_from_db(task)
         elif task.task_id in _cancelled or str(exc) == "Generation cancelled":
-            task.status = TaskStatus.cancelled
-            task.error_message = "已取消"
+            await _update_status(task, status=TaskStatus.cancelled, error_message="已取消")
         else:
-            task.status = TaskStatus.failed
-            task.error_message = str(exc)
+            await _update_status(task, status=TaskStatus.failed, error_message=str(exc))
             _update_project_segment(task, None, None, SegmentStatus.failed, str(exc))
-    task.completed_at = now_iso()
-    _save(task)
-    await _broadcast(task)
+    await _update_status(task, completed_at=now_iso())
     if task.status == TaskStatus.success and task.result_id and not (task.longform_task_id and task.task_type == "segment"):
         schedule_auto_verification(task.task_id)
