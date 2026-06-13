@@ -314,15 +314,23 @@ def run_batch(req: BatchGenerateRequest, batch: BatchTask) -> dict[str, Any]:
         env=env,
     )
     stdout = (proc.stdout or "").strip()
-    if proc.returncode != 0:
+    parsed_stdout: dict[str, Any] | None = None
+    if stdout:
         try:
-            error = json.loads(stdout.splitlines()[-1] if stdout else "{}")
+            parsed_stdout = json.loads(stdout.splitlines()[-1])
         except Exception:
-            error = {}
+            parsed_stdout = None
+    if proc.returncode != 0:
+        if parsed_stdout and isinstance(parsed_stdout.get("results"), list):
+            parsed_stdout["_runner_error"] = proc.stderr[-1200:] or "Batch inference subprocess failed"
+            return parsed_stdout
+        error = parsed_stdout if parsed_stdout else {}
         raise RuntimeError(error.get("error") or proc.stderr[-1200:] or "Batch inference subprocess failed")
     if not stdout:
         raise RuntimeError("Batch inference subprocess returned no output")
-    return json.loads(stdout.splitlines()[-1])
+    if parsed_stdout is None:
+        return json.loads(stdout.splitlines()[-1])
+    return parsed_stdout
 
 
 async def _worker(queue: asyncio.Queue[str]) -> None:
@@ -352,6 +360,7 @@ async def _process(batch: BatchTask) -> None:
             _save(batch)
             return
         by_id = {item["segment_id"]: item for item in result.get("results", [])}
+        runner_error = result.get("_runner_error")
         for segment in batch.segments:
             if segment.status == TaskStatus.success and segment.output_path:
                 success_count += 1
@@ -364,11 +373,16 @@ async def _process(batch: BatchTask) -> None:
                 success_count += 1
             else:
                 segment.status = TaskStatus.failed
-                segment.error_message = data.get("error_message") or "批处理段落生成失败"
+                segment.error_message = data.get("error_message") or runner_error or "批处理段落生成失败"
         batch.progress = 1.0
         failed_count = len(batch.segments) - success_count
         batch.status = TaskStatus.success if failed_count == 0 or (req.partial_success and success_count > 0) else TaskStatus.failed
-        batch.error_message = None if batch.status == TaskStatus.success else f"批处理段落生成失败: 成功 {success_count} 个，失败 {failed_count} 个。"
+        if batch.status == TaskStatus.success:
+            batch.error_message = None
+        elif runner_error:
+            batch.error_message = f"批处理段落处理异常: 成功 {success_count} 个，失败 {failed_count} 个。{runner_error}"
+        else:
+            batch.error_message = f"批处理段落生成失败: 成功 {success_count} 个，失败 {failed_count} 个。"
     except Exception as exc:
         if _is_cancelled(batch.batch_task_id):
             latest = get_batch(batch.batch_task_id)

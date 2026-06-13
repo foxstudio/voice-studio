@@ -72,6 +72,7 @@ export function licenseLabel(license: string) {
 		self_voice: '本人声音',
 		company_authorized: '公司授权',
 		authorized: '已授权',
+		'本土化': '本土化',
 		localized_dub_source: '本土化',
 		test_only: '仅测试',
 		unknown: '未知',

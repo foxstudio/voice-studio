@@ -54,3 +54,24 @@ def test_update_voice_accepts_partial_quality_fields(isolated_db):
     assert updated.reference_text == "ASR 回填文本"
     assert updated.quality_status == "needs_review"
     assert updated.quality_notes == "ASR 回填 reference_text，需人工复核。"
+
+
+def test_update_voice_accepts_localized_license_status(isolated_db):
+    voice = voice_store.create_voice(
+        VoiceAssetCreate(
+            name="本土化音色",
+            description="来自视频本土化项目的参考音色",
+            tags=["本土化"],
+            reference_text="Reference text",
+            reference_audio_ids=["audio-localized"],
+            license_status=LicenseStatus.unknown,
+        )
+    )
+
+    updated = voice_store.update_voice(
+        voice.voice_id,
+        VoiceAssetUpdate(license_status=LicenseStatus.localized),
+    )
+
+    assert updated is not None
+    assert updated.license_status == LicenseStatus.localized

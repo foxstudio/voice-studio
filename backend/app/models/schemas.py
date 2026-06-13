@@ -77,6 +77,7 @@ class LicenseStatus(str, Enum):
     self_voice = "self_voice"
     company_authorized = "company_authorized"
     authorized = "authorized"
+    localized = "本土化"
     localized_dub_source = "localized_dub_source"
     test_only = "test_only"
     unknown = "unknown"

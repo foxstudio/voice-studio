@@ -454,6 +454,106 @@ async def test_batch_runner_exception_preserves_prior_success_segment(fake_batch
     assert batch.error_message == "批处理段落处理异常: 成功 1 个，失败 1 个。runner crashed"
 
 
+def test_batch_run_batch_preserves_stdout_results_when_runner_exits_nonzero(tmp_path, monkeypatch):
+    class FakeCompletedProcess:
+        returncode = 1
+        stdout = (
+            "loading model\n"
+            + __import__("json").dumps(
+                {
+                    "results": [
+                        {
+                            "segment_id": "seg-1",
+                            "status": "success",
+                            "output_path": str(tmp_path / "seg-1.wav"),
+                            "duration_ms": 1234,
+                        },
+                        {"segment_id": "seg-2", "status": "failed", "error_message": "段落失败"},
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        )
+        stderr = "torchaudio warning on shutdown"
+
+    req = BatchGenerateRequest(
+        engine_id="indextts-v2",
+        output_dir=str(tmp_path),
+        segments=[
+            BatchSegmentInput(text="第一段", segment_id="seg-1"),
+            BatchSegmentInput(text="第二段", segment_id="seg-2"),
+        ],
+    )
+    batch = BatchTask(
+        engine_id="indextts-v2",
+        status=TaskStatus.running,
+        output_dir=str(tmp_path),
+        segments=[
+            BatchSegmentResult(segment_id="seg-1", text="第一段", status=TaskStatus.pending),
+            BatchSegmentResult(segment_id="seg-2", text="第二段", status=TaskStatus.pending),
+        ],
+        parameters=req.model_dump(),
+    )
+    monkeypatch.setattr(batch_queue.engine_registry, "ensure_loaded", lambda _engine_id: None)
+    monkeypatch.setattr(batch_queue, "_common_kwargs", lambda _req: {})
+    monkeypatch.setattr(batch_queue.subprocess, "run", lambda *args, **kwargs: FakeCompletedProcess())
+
+    result = batch_queue.run_batch(req, batch)
+
+    assert result["results"][0]["status"] == "success"
+    assert result["results"][0]["duration_ms"] == 1234
+    assert result["results"][1]["status"] == "failed"
+    assert result["_runner_error"] == "torchaudio warning on shutdown"
+
+
+@pytest.mark.asyncio
+async def test_batch_nonzero_runner_with_results_keeps_success_and_marks_batch_failed(fake_batch_db):
+    def fake_run_batch(_req: BatchGenerateRequest, _batch: BatchTask) -> dict:
+        return {
+            "_runner_error": "runner shutdown warning",
+            "results": [
+                {
+                    "segment_id": "seg-1",
+                    "status": "success",
+                    "output_path": "/tmp/seg-1.wav",
+                    "duration_ms": 1234,
+                },
+                {"segment_id": "seg-2", "status": "failed", "error_message": "段落失败"},
+            ],
+        }
+
+    batch = BatchTask(
+        engine_id="indextts-v2",
+        status=TaskStatus.queued,
+        segments=[
+            BatchSegmentResult(segment_id="seg-1", text="第一段", status=TaskStatus.pending),
+            BatchSegmentResult(segment_id="seg-2", text="第二段", status=TaskStatus.pending),
+        ],
+        parameters={
+            "engine_id": "indextts-v2",
+            "segments": [
+                BatchSegmentInput(text="第一段", segment_id="seg-1").model_dump(),
+                BatchSegmentInput(text="第二段", segment_id="seg-2").model_dump(),
+            ],
+        },
+    )
+    fake_batch_db.upsert("batches", batch.batch_task_id, batch.model_dump())
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(batch_queue, "run_batch", fake_run_batch)
+    try:
+        await batch_queue._process(batch)
+    finally:
+        monkeypatch.undo()
+
+    assert batch.status == TaskStatus.failed
+    assert batch.segments[0].status == TaskStatus.success
+    assert batch.segments[0].output_path == "/tmp/seg-1.wav"
+    assert batch.segments[0].duration_ms == 1234
+    assert batch.segments[1].status == TaskStatus.failed
+    assert batch.segments[1].error_message == "段落失败"
+    assert batch.error_message == "批处理段落处理异常: 成功 1 个，失败 1 个。runner shutdown warning"
+
+
 def test_batch_retry_should_not_recompute_success_segments_without_retry_entry(fake_batch_db):
     batch = BatchTask(
         engine_id="indextts-v2",
