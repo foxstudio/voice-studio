@@ -773,6 +773,24 @@ def _update_status_sync(task: GenerationTask, **kwargs) -> None:
     _broadcast_from_thread(task)
 
 
+def decide_task_state(task: GenerationTask, *, engine_result: dict | None = None, engine_error: Exception | None = None, cancelled: bool = False) -> tuple[TaskStatus | None, str | None]:
+    """统一状态决策：把各种结果翻译成状态。只返回决策，不写状态。
+    
+    返回 (status, error_message)。status 为 None 表示不改状态（交给 DB 同步）。
+    """
+    if cancelled:
+        return TaskStatus.cancelled, "cancelled by user"
+    if engine_error:
+        if _task_is_protected_by_state(task):
+            return None, None
+        return TaskStatus.failed, str(engine_error)
+    if engine_result:
+        if _task_is_protected_by_state(task):
+            return None, None
+        return TaskStatus.postprocessing, None
+    return None, None
+
+
 async def _process(task: GenerationTask) -> None:
     if _task_is_protected_by_state(task):
         _sync_task_status_from_db(task)
@@ -818,31 +836,30 @@ async def _process(task: GenerationTask) -> None:
             lambda: task.task_id in _cancelled,
             progress_tick,
         )
-        if _task_is_protected_by_state(task):
+        new_status, error_msg = decide_task_state(task, engine_result=result, cancelled=task.task_id in _cancelled)
+        if new_status is None:
             _sync_task_status_from_db(task)
-        elif task.task_id in _cancelled:
-            await _update_status(task, status=TaskStatus.cancelled, error_message="cancelled by user")
+        elif new_status == TaskStatus.cancelled:
+            await _update_status(task, status=new_status, error_message=error_msg)
         else:
             await _update_status(task, status=TaskStatus.postprocessing, progress=0.96)
             final_path = _postprocess_audio(task, req, result, audio_id)
-            if not _task_is_protected_by_state(task):
-                await _update_status(task, status=TaskStatus.success, progress=1.0,
-                               result_audio_id=audio_id,
-                               result_duration_ms=result.get("duration_ms"),
-                               generation_time_ms=result.get("generation_time_ms"))
-                hist = _save_history(task, req, final_path, audio_id, result)
-                task.result_id = hist.result_id
-                _update_project_segment(task, audio_id, hist.result_id, SegmentStatus.completed)
-            else:
-                _sync_task_status_from_db(task)
+            await _update_status(task, status=TaskStatus.success, progress=1.0,
+                           result_audio_id=audio_id,
+                           result_duration_ms=result.get("duration_ms"),
+                           generation_time_ms=result.get("generation_time_ms"))
+            hist = _save_history(task, req, final_path, audio_id, result)
+            task.result_id = hist.result_id
+            _update_project_segment(task, audio_id, hist.result_id, SegmentStatus.completed)
     except Exception as exc:
-        if _task_is_protected_by_state(task):
+        cancelled = task.task_id in _cancelled or str(exc) == "Generation cancelled"
+        new_status, error_msg = decide_task_state(task, engine_error=exc, cancelled=cancelled)
+        if new_status is None:
             _sync_task_status_from_db(task)
-        elif task.task_id in _cancelled or str(exc) == "Generation cancelled":
-            await _update_status(task, status=TaskStatus.cancelled, error_message="已取消")
         else:
-            await _update_status(task, status=TaskStatus.failed, error_message=str(exc))
-            _update_project_segment(task, None, None, SegmentStatus.failed, str(exc))
+            await _update_status(task, status=new_status, error_message=error_msg)
+            if new_status == TaskStatus.failed:
+                _update_project_segment(task, None, None, SegmentStatus.failed, error_msg)
     await _update_status(task, completed_at=now_iso())
     if task.status == TaskStatus.success and task.result_id and not (task.longform_task_id and task.task_type == "segment"):
         schedule_auto_verification(task.task_id)
