@@ -715,6 +715,46 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
     raise ValueError(f"Unsupported engine: {req.engine_id}")
 
 
+def _postprocess_audio(task: GenerationTask, req: GenerateRequest, result: dict, audio_id: str) -> Path:
+    """音频后处理：格式转换。纯函数，不碰状态。"""
+    final_path = Path(result["output_path"])
+    if req.output_format != "wav":
+        converted = settings_store.output_dir() / f"{audio_id}.{req.output_format}"
+        final_path = audio_tools.copy_or_convert(final_path, converted, req.output_format)
+    if not final_path.exists() or final_path.stat().st_size <= 0:
+        raise RuntimeError(f"生成完成但结果音频不存在：{final_path}")
+    return final_path
+
+
+def _save_history(task: GenerationTask, req: GenerateRequest, final_path: Path, audio_id: str, result: dict) -> HistoryItem:
+    """写入历史记录。纯函数，不碰 task 状态。"""
+    voice = voice_store.get_voice(req.voice_id) if req.voice_id else None
+    hist = history_store.add(HistoryItem(
+        task_id=task.task_id,
+        engine_id=req.engine_id,
+        voice_id=req.voice_id,
+        voice_name=voice.name if voice else None,
+        project_id=task.project_id,
+        segment_id=task.segment_id,
+        longform_task_id=task.longform_task_id,
+        longform_segment_index=task.longform_segment_index,
+        longform_segment_count=task.longform_segment_count,
+        input_text=req.text,
+        output_audio_id=audio_id,
+        output_path=str(final_path),
+        duration_ms=result.get("duration_ms"),
+        generation_time_ms=result.get("generation_time_ms"),
+        parameter_snapshot=task.parameters,
+    ))
+    return hist
+
+
+def _update_project_segment(task: GenerationTask, audio_id: str | None, hist_result_id: str | None, status: SegmentStatus, error: str | None = None) -> None:
+    """更新项目段落状态。纯函数，只做 IO。"""
+    if task.project_id and task.segment_id:
+        project_store.update_segment_result(task.project_id, task.segment_id, audio_id, hist_result_id, status, error)
+
+
 async def _process(task: GenerationTask) -> None:
     if _task_is_protected_by_state(task):
         _sync_task_status_from_db(task)
@@ -778,38 +818,16 @@ async def _process(task: GenerationTask) -> None:
             task.progress = 0.96
             _save(task)
             await _broadcast(task)
-            final_path = Path(result["output_path"])
-            if req.output_format != "wav":
-                converted = settings_store.output_dir() / f"{audio_id}.{req.output_format}"
-                final_path = audio_tools.copy_or_convert(final_path, converted, req.output_format)
-            if not final_path.exists() or final_path.stat().st_size <= 0:
-                raise RuntimeError(f"生成完成但结果音频不存在：{final_path}")
+            final_path = _postprocess_audio(task, req, result, audio_id)
             if not _task_is_protected_by_state(task):
                 task.status = TaskStatus.success
                 task.progress = 1.0
                 task.result_audio_id = audio_id
                 task.result_duration_ms = result.get("duration_ms")
                 task.generation_time_ms = result.get("generation_time_ms")
-                hist = history_store.add(HistoryItem(
-                    task_id=task.task_id,
-                    engine_id=req.engine_id,
-                    voice_id=req.voice_id,
-                    voice_name=voice_store.get_voice(req.voice_id).name if req.voice_id and voice_store.get_voice(req.voice_id) else None,
-                    project_id=task.project_id,
-                    segment_id=task.segment_id,
-                    longform_task_id=task.longform_task_id,
-                    longform_segment_index=task.longform_segment_index,
-                    longform_segment_count=task.longform_segment_count,
-                    input_text=req.text,
-                    output_audio_id=audio_id,
-                    output_path=str(final_path),
-                    duration_ms=task.result_duration_ms,
-                    generation_time_ms=task.generation_time_ms,
-                    parameter_snapshot=task.parameters,
-                ))
+                hist = _save_history(task, req, final_path, audio_id, result)
                 task.result_id = hist.result_id
-                if task.project_id and task.segment_id:
-                    project_store.update_segment_result(task.project_id, task.segment_id, audio_id, hist.result_id, SegmentStatus.completed)
+                _update_project_segment(task, audio_id, hist.result_id, SegmentStatus.completed)
             else:
                 _sync_task_status_from_db(task)
     except Exception as exc:
@@ -821,8 +839,7 @@ async def _process(task: GenerationTask) -> None:
         else:
             task.status = TaskStatus.failed
             task.error_message = str(exc)
-            if task.project_id and task.segment_id:
-                project_store.update_segment_result(task.project_id, task.segment_id, None, None, SegmentStatus.failed, str(exc))
+            _update_project_segment(task, None, None, SegmentStatus.failed, str(exc))
     task.completed_at = now_iso()
     _save(task)
     await _broadcast(task)
