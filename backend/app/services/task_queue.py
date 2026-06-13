@@ -833,9 +833,12 @@ async def _execute_engine(task: GenerationTask, engine_id: str, kwargs: dict, wa
 
 
 async def _process(task: GenerationTask) -> None:
+    """任务执行流水线：规范化 → 引擎执行 → 后处理 → 资产登记 → 收口。"""
     if _task_is_protected_by_state(task):
         _sync_task_status_from_db(task)
         return
+
+    # Stage 1: 任务规范化
     await _update_status(task, status=TaskStatus.running, started_at=now_iso(), progress=0.12)
     try:
         req = GenerateRequest(**task.parameters)
@@ -845,31 +848,40 @@ async def _process(task: GenerationTask) -> None:
         audio_id = task.task_id
         wav_path = settings_store.output_dir() / f"{audio_id}.wav"
 
+        # Stage 2: 引擎执行
         result, progress_state = await _execute_engine(task, req.engine_id, _kwargs(req, str(wav_path)), wav_path)
         new_status, error_msg = decide_task_state(task, engine_result=result, cancelled=task.task_id in _cancelled)
         if new_status is None:
             _sync_task_status_from_db(task)
-        elif new_status == TaskStatus.cancelled:
+            return
+        if new_status == TaskStatus.cancelled:
             await _update_status(task, status=new_status, error_message=error_msg)
-        else:
-            await _update_status(task, status=TaskStatus.postprocessing, progress=0.96)
-            final_path = _postprocess_audio(task, req, result, audio_id)
-            await _update_status(task, status=TaskStatus.success, progress=1.0,
-                           result_audio_id=audio_id,
-                           result_duration_ms=result.get("duration_ms"),
-                           generation_time_ms=result.get("generation_time_ms"))
-            hist = _save_history(task, req, final_path, audio_id, result)
-            task.result_id = hist.result_id
-            _update_project_segment(task, audio_id, hist.result_id, SegmentStatus.completed)
+            return
+
+        # Stage 3: 音频后处理
+        await _update_status(task, status=TaskStatus.postprocessing, progress=0.96)
+        final_path = _postprocess_audio(task, req, result, audio_id)
+
+        # Stage 4: 资产登记 + 历史
+        await _update_status(task, status=TaskStatus.success, progress=1.0,
+                       result_audio_id=audio_id,
+                       result_duration_ms=result.get("duration_ms"),
+                       generation_time_ms=result.get("generation_time_ms"))
+        hist = _save_history(task, req, final_path, audio_id, result)
+        task.result_id = hist.result_id
+        _update_project_segment(task, audio_id, hist.result_id, SegmentStatus.completed)
+
     except Exception as exc:
         cancelled = task.task_id in _cancelled or str(exc) == "Generation cancelled"
         new_status, error_msg = decide_task_state(task, engine_error=exc, cancelled=cancelled)
         if new_status is None:
             _sync_task_status_from_db(task)
-        else:
-            await _update_status(task, status=new_status, error_message=error_msg)
-            if new_status == TaskStatus.failed:
-                _update_project_segment(task, None, None, SegmentStatus.failed, error_msg)
+            return
+        await _update_status(task, status=new_status, error_message=error_msg)
+        if new_status == TaskStatus.failed:
+            _update_project_segment(task, None, None, SegmentStatus.failed, error_msg)
+
+    # 收口：记录完成时间
     await _update_status(task, completed_at=now_iso())
     if task.status == TaskStatus.success and task.result_id and not (task.longform_task_id and task.task_type == "segment"):
         schedule_auto_verification(task.task_id)
