@@ -791,6 +791,47 @@ def decide_task_state(task: GenerationTask, *, engine_result: dict | None = None
     return None, None
 
 
+_RAMP_SECONDS = {
+    "omnivoice": 300.0,
+    "indextts-v2": 180.0,
+    "emotivoice": 180.0,
+    "f5-tts": 240.0,
+    "cosyvoice-sft": 420.0,
+    "cosyvoice-zero-shot": 420.0,
+    "mimo-v2.5-tts-preset": 120.0,
+    "mimo-v2.5-tts-voicedesign": 120.0,
+    "mimo-v2.5-tts-voiceclone": 120.0,
+}
+
+
+async def _execute_engine(task: GenerationTask, engine_id: str, kwargs: dict, wav_path: Path) -> tuple[dict, dict]:
+    """纯引擎调用。返回 (result, progress_state)。不碰任务状态。"""
+    progress_state = {"last_sent_at": 0.0, "last_value": 0.24}
+    ramp_seconds = _RAMP_SECONDS.get(engine_id, 180.0)
+
+    def progress_tick(elapsed_seconds: float) -> None:
+        next_value = min(0.92, 0.24 + min(1.0, elapsed_seconds / ramp_seconds) * 0.66)
+        now = time.monotonic()
+        if next_value <= progress_state["last_value"] + 0.01 and now - progress_state["last_sent_at"] < 2.0:
+            return
+        if _task_is_protected_by_state(task):
+            return
+        progress_state["last_value"] = next_value
+        progress_state["last_sent_at"] = now
+        _update_status_sync(task, progress=next_value)
+
+    timeout_seconds = _timeout_seconds_for(engine_id)
+    result = await asyncio.to_thread(
+        engine_registry.run_isolated,
+        engine_id,
+        kwargs,
+        timeout_seconds,
+        lambda: task.task_id in _cancelled,
+        progress_tick,
+    )
+    return result, progress_state
+
+
 async def _process(task: GenerationTask) -> None:
     if _task_is_protected_by_state(task):
         _sync_task_status_from_db(task)
@@ -803,39 +844,8 @@ async def _process(task: GenerationTask) -> None:
         settings_store.ensure_directories()
         audio_id = task.task_id
         wav_path = settings_store.output_dir() / f"{audio_id}.wav"
-        progress_state = {"last_sent_at": 0.0, "last_value": task.progress}
 
-        def progress_tick(elapsed_seconds: float) -> None:
-            ramp_seconds = {
-                "omnivoice": 300.0,
-                "indextts-v2": 180.0,
-                "emotivoice": 180.0,
-                "f5-tts": 240.0,
-                "cosyvoice-sft": 420.0,
-                "cosyvoice-zero-shot": 420.0,
-                "mimo-v2.5-tts-preset": 120.0,
-                "mimo-v2.5-tts-voicedesign": 120.0,
-                "mimo-v2.5-tts-voiceclone": 120.0,
-            }.get(req.engine_id, 180.0)
-            next_value = min(0.92, 0.24 + min(1.0, elapsed_seconds / ramp_seconds) * 0.66)
-            now = time.monotonic()
-            if next_value <= progress_state["last_value"] + 0.01 and now - progress_state["last_sent_at"] < 2.0:
-                return
-            if _task_is_protected_by_state(task):
-                return
-            progress_state["last_value"] = next_value
-            progress_state["last_sent_at"] = now
-            _update_status_sync(task, progress=next_value)
-
-        timeout_seconds = _timeout_seconds_for(req.engine_id)
-        result = await asyncio.to_thread(
-            engine_registry.run_isolated,
-            req.engine_id,
-            _kwargs(req, str(wav_path)),
-            timeout_seconds,
-            lambda: task.task_id in _cancelled,
-            progress_tick,
-        )
+        result, progress_state = await _execute_engine(task, req.engine_id, _kwargs(req, str(wav_path)), wav_path)
         new_status, error_msg = decide_task_state(task, engine_result=result, cancelled=task.task_id in _cancelled)
         if new_status is None:
             _sync_task_status_from_db(task)
