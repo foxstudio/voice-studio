@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Api } from '$lib/api';
-	import type { AppSettings, EngineDetail, EngineSpeaker, GenerationTask, GeneratePlanResponse, GenerateRequest, LongformTask, PlannedTextSegment, PresetTemplate, TTSVerificationResponse, VoiceAsset } from '$lib/api/types';
+	import type { AppSettings, EngineDetail, EngineSpeaker, GenerationTask, GeneratePlanResponse, GenerateRequest, LongformTask, PlannedTextSegment, PresetTemplate, TranscriptionSegment, TTSVerificationResponse, VoiceAsset, VoiceAssetCreate } from '$lib/api/types';
 	import { taskStatusLabel } from '$lib/labels';
-	import { CheckSquare, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Download, FileText, Info, Mic, Cpu, Pencil, Play, Plus, Repeat, RotateCcw, Save, Search, Settings, SlidersHorizontal, Square, Trash2, X } from 'lucide-svelte';
+	import { Captions, CheckSquare, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleCheck, CloudUpload, Download, FileAudio, FileText, Info, Mic, Cpu, Pencil, Play, Plus, Repeat, RotateCcw, Save, Scissors, Search, Settings, SlidersHorizontal, Square, Trash2, X } from 'lucide-svelte';
 	import { onMount, untrack } from 'svelte';
 	import EngineSelector from './components/EngineSelector.svelte';
 	import VoiceSelector from './components/VoiceSelector.svelte';
@@ -21,12 +21,45 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	let _autoResizeRO: ResizeObserver | undefined = $state();
 	let _speakerCatalogRequestKey = '';
 	let _speakerCatalogTimer: ReturnType<typeof setTimeout> | undefined;
+	let customVoiceDragActive = $state(false);
+	let voiceRegisterOpen = $state(false);
+	let voiceRegisterBusy = $state(false);
+	let voiceRegisterSerBusy = $state(false);
+	let voiceRegisterError = $state('');
+	let voiceRegisterName = $state('');
+	let voiceRegisterDescription = $state('');
+	let voiceRegisterTags = $state('');
+	let voiceRegisterEmotionTags = $state('');
+	let voiceRegisterReferenceText = $state('');
+	let voiceRegisterLicense = $state('self_voice');
+	let voiceRegisterEngine = $state('indextts-v2');
+	let customVoiceOriginalFile: File | null = $state(null);
+	let customVoiceSourcePreviewUrl = $state('');
+	let customVoiceSourceDurationMs: number | null = $state(null);
+	let customVoiceTrimStart = $state(0);
+	let customVoiceTrimEnd = $state(0);
+	let customVoiceSelectionDirty = $state(false);
+	let customVoiceLoopPreview = $state(false);
+	let customVoiceLoopEnabled = $state(true);
+	let customVoicePlaybackPosition = $state(0);
+	let customVoiceWaveformBars: number[] = $state([]);
+	let customVoiceTimelineZoom = $state(1);
 
 	const selected = $derived($store.engines.find(e => e.manifest.engine_id === $store.engineId));
 	const activeParamKeys = $derived(new Set(selected?.manifest.parameter_schema.map(p => p.key) ?? []));
 	const ttsEngines = $derived($store.engines.filter(e => !e.manifest.capabilities.includes('speech_recognition')));
 	const selectedVoice = $derived($store.voices.find(v => v.voice_id === $store.voiceId) ?? null);
 	const selectedVoicePreviewUrl = $derived(selectedVoice?.reference_audio_ids[0] ? `/api/voices/${encodeURIComponent(selectedVoice.voice_id)}/audio/${encodeURIComponent(selectedVoice.reference_audio_ids[0])}` : '');
+	const activeVoicePreviewUrl = $derived($store.voiceSource === 'reference_audio' ? $store.customVoicePreviewUrl : selectedVoicePreviewUrl);
+	const customVoiceReady = $derived(Boolean($store.customVoiceReferenceAudioPath && $store.customVoiceTranscript.trim()));
+	const customVoiceMatched = $derived(customVoiceReady && $store.customVoiceConfirmed);
+	const customVoiceSelectedDurationMs = $derived(Math.max(0, Math.round((customVoiceTrimEnd - customVoiceTrimStart) * 1000)));
+	const customVoiceDisplayDurationMs = $derived($store.customVoiceDurationMs ?? (customVoiceSourceDurationMs ? customVoiceSelectedDurationMs : null));
+	const customVoiceDurationSeconds = $derived(Math.max(0, (customVoiceSourceDurationMs ?? 0) / 1000));
+	const customVoiceTrimStartPercent = $derived(customVoiceDurationSeconds ? Math.max(0, Math.min(100, (customVoiceTrimStart / customVoiceDurationSeconds) * 100)) : 0);
+	const customVoiceTrimEndPercent = $derived(customVoiceDurationSeconds ? Math.max(0, Math.min(100, (customVoiceTrimEnd / customVoiceDurationSeconds) * 100)) : 0);
+	const customVoicePlayheadPercent = $derived(customVoiceDurationSeconds ? Math.max(customVoiceTrimStartPercent, Math.min(customVoiceTrimEndPercent, (customVoicePlaybackPosition / customVoiceDurationSeconds) * 100)) : customVoiceTrimStartPercent);
+	const customVoiceTimelineTicks = $derived.by(() => buildTimelineTicks(customVoiceDurationSeconds, customVoiceTimelineZoom));
 	const voiceMap = $derived(new Map($store.voices.map(v => [v.voice_id, v])));
 	const engineMap = $derived(new Map($store.engines.map(e => [e.manifest.engine_id, e])));
 	const supportsEmotion = $derived(activeParamKeys.has('emotion'));
@@ -67,8 +100,131 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	function applyPreset(p: PresetTemplate) { const pp = p.parameters; const m = p.engine_id.startsWith('mimo-v2.5'); const keepVoiceId = p.engine_id === $store.engineId && usesReferenceVoice ? $store.voiceId : ''; store.fromRequest({ text: p.sample_text, engine_id: p.engine_id, voice_id: keepVoiceId || null, reference_audio_path: null, ref_text: null, language: String(pp.language ?? 'zh'), emotion_mode: pp.emotion ? 'emotion_vector' : 'follow_reference', emotion: typeof pp.emotion === 'string' ? pp.emotion : null, emotion_values: null, emotion_text: typeof pp.emotion_text === 'string' ? pp.emotion_text : null, style_instruction: typeof pp.style_instruction === 'string' ? pp.style_instruction : null, voice_design_prompt: typeof pp.voice_design_prompt === 'string' ? pp.voice_design_prompt : null, mimo_voice: typeof pp.mimo_voice === 'string' ? pp.mimo_voice : null, speaker_id: typeof pp.speaker_id === 'string' ? pp.speaker_id : null, prompt: typeof pp.prompt === 'string' ? pp.prompt : null, nfe_step: Number(pp.nfe_step ?? 32), cfg_strength: Number(pp.cfg_strength ?? 2.0), target_rms: Number(pp.target_rms ?? 0.1), cross_fade_duration: Number(pp.cross_fade_duration ?? 0.15), sway_sampling_coef: Number(pp.sway_sampling_coef ?? -1.0), fix_duration: Number(pp.fix_duration ?? 0), remove_silence: Boolean(pp.remove_silence ?? false), emo_alpha: Number(pp.emo_alpha ?? 0.6), speed: Number(pp.speed ?? 1.0), temperature: Number(pp.temperature ?? (m ? 0.6 : 0.8)), top_p: Number(pp.top_p ?? (m ? 0.95 : 0.8)), top_k: Number(pp.top_k ?? 30), repetition_penalty: Number(pp.repetition_penalty ?? 10), seed: null, max_mel_tokens: Number(pp.max_mel_tokens ?? 1500), max_text_tokens_per_segment: Number(pp.max_text_tokens_per_segment ?? 120), interval_silence: Number(pp.interval_silence ?? 200), diffusion_steps: Number(pp.diffusion_steps ?? (p.engine_id === 'omnivoice' ? 32 : 25)), cfg_rate: Number(pp.cfg_rate ?? 0.7), guidance_scale: Number(pp.guidance_scale ?? 2.0), duration: Number(pp.duration ?? 0), output_format: (pp.output_format ?? 'wav') as 'wav' | 'mp3' | 'flac', } as GenerateRequest); $store.error = ''; }
 	async function savePreset() { if (!$store.presetDraft.name.trim()) return; $store.presetBusy = true; try { const payload = { preset_id: $store.editingPresetId || null, name: $store.presetDraft.name.trim(), scene: $store.presetDraft.scene.trim(), description: $store.presetDraft.description.trim(), engine_id: $store.engineId, sample_text: $store.presetDraft.sample_text.trim() || $store.text, parameters: currentPresetParameters(), source_test_id: null, recommended_voice_type: isOmniVoice && !$store.voiceId ? 'voice_design' : 'reference_voice', tags: $store.presetDraft.tags.split(/[，,]/).map(t => t.trim()).filter(Boolean) }; const saved = $store.editingPresetId ? await Api.updatePreset($store.editingPresetId, payload) : await Api.createPreset(payload); $store.presets = [saved, ...$store.presets.filter(i => i.preset_id !== saved.preset_id)]; $store.showPresetEditor = false; resetPresetDraft(); } catch (e) { $store.error = (e as Error).message; } finally { $store.presetBusy = false; } }
 	async function deletePreset(p: PresetTemplate) { if (!p.preset_id.startsWith('custom_')) return; if (!window.confirm(`删除自定义预设「${p.name}」吗？`)) return; $store.presetBusy = true; try { await Api.deletePreset(p.preset_id); $store.presets = $store.presets.filter(i => i.preset_id !== p.preset_id); } catch (e) { $store.error = (e as Error).message; } finally { $store.presetBusy = false; } }
-	async function previewSelectedVoice() { if (!$store.voicePreviewAudio || !selectedVoicePreviewUrl) return; const audio = $store.voicePreviewAudio; if ($store.voicePreviewPlaying && !audio.paused) { audio.pause(); $store.voicePreviewPlaying = false; return; } const absoluteUrl = new URL(selectedVoicePreviewUrl, window.location.href).href; if (audio.src !== absoluteUrl) { audio.src = selectedVoicePreviewUrl; audio.currentTime = 0; } $store.error = ''; $store.voicePreviewPlaying = true; try { await audio.play(); } catch (e) { $store.voicePreviewPlaying = false; $store.error = `音色预览播放失败：${(e as Error).message || '请确认参考音频文件可访问'}`; } }
-	function stopVoicePreview() { if ($store.voicePreviewAudio && $store.voicePreviewPlaying) { $store.voicePreviewAudio.pause(); } $store.voicePreviewPlaying = false; }
+	function formatSrtTime(valueMs: number) { const total = Math.max(0, Math.round(valueMs)); const h = Math.floor(total / 3600000); const m = Math.floor((total % 3600000) / 60000); const s = Math.floor((total % 60000) / 1000); const ms = total % 1000; return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`; }
+	function segmentsToSrt(segments: TranscriptionSegment[], fallbackText: string, durationMs: number | null) { const usable = segments.filter(s => s.text.trim()); if (usable.length) return usable.map((s, i) => `${i + 1}\n${formatSrtTime(s.start_ms)} --> ${formatSrtTime(s.end_ms)}\n${s.text.trim()}`).join('\n\n') + '\n'; const text = fallbackText.trim(); if (!text) return ''; return `1\n00:00:00,000 --> ${formatSrtTime(durationMs ?? 2000)}\n${text}\n`; }
+	function formatDuration(valueMs: number | null) { if (!valueMs) return '未识别'; const seconds = Math.max(0, valueMs / 1000); if (seconds < 60) { const rounded = Math.round(seconds * 10) / 10; return Number.isInteger(rounded) ? `${rounded}s` : `${rounded.toFixed(1)}s`; } const total = Math.round(seconds); const m = Math.floor(total / 60); const s = total % 60; return `${m}:${String(s).padStart(2, '0')}`; }
+	function formatTimecode(valueSeconds: number, fps = 30) { const safeSeconds = Math.max(0, Number.isFinite(valueSeconds) ? valueSeconds : 0); const totalFrames = Math.round(safeSeconds * fps); const frames = totalFrames % fps; const totalWholeSeconds = Math.floor(totalFrames / fps); const s = totalWholeSeconds % 60; const m = Math.floor(totalWholeSeconds / 60) % 60; const h = Math.floor(totalWholeSeconds / 3600); return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}:${String(frames).padStart(2, '0')}`; }
+	function formatTimelineTick(valueSeconds: number, fps = 30) { if (valueSeconds < 1) return `${Math.round(valueSeconds * fps)}f`; const safe = Math.max(0, Math.round(valueSeconds * 10) / 10); const h = Math.floor(safe / 3600); const m = Math.floor((safe % 3600) / 60); const s = safe % 60; if (h) return `${h}:${String(m).padStart(2, '0')}:${String(Math.floor(s)).padStart(2, '0')}`; if (safe < 10 && !Number.isInteger(safe)) return `${safe.toFixed(1)}s`; return `${m}:${String(Math.floor(s)).padStart(2, '0')}`; }
+	function formatTimelineZoom(value: number) { return value < 10 ? value.toFixed(1) : value.toFixed(0); }
+	function buildTimelineTicks(durationSeconds: number, zoom: number) { if (!durationSeconds) return []; const normalizedZoom = Math.max(1, zoom); const target = Math.max(8, Math.min(36000, Math.round(28 * normalizedZoom))); const rawStep = durationSeconds / target; const frameStep = 1 / 30; const steps = [frameStep, frameStep * 2, frameStep * 5, frameStep * 10, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1200]; const step = steps.find(v => v >= rawStep) ?? steps[steps.length - 1]; const ticks: Array<{ time: number; percent: number; label: string; major: boolean }> = []; const labelEvery = step < 1 ? Math.max(1, Math.round(1 / step)) : step < 5 ? 2 : 1; for (let t = 0; t <= durationSeconds + 0.001; t += step) { const index = Math.round(t / step); ticks.push({ time: t, percent: durationSeconds ? (t / durationSeconds) * 100 : 0, label: index % labelEvery === 0 ? formatTimelineTick(t) : '', major: index % labelEvery === 0 }); } if (ticks[ticks.length - 1]?.time !== durationSeconds) ticks.push({ time: durationSeconds, percent: 100, label: formatTimelineTick(durationSeconds), major: true }); return ticks; }
+	function centerCustomVoiceTimelineOnSelection() {
+		requestAnimationFrame(() => {
+			const windowEl = document.querySelector<HTMLElement>('.custom-voice-timebar-window');
+			const timebarEl = document.querySelector<HTMLElement>('.custom-voice-timebar');
+			if (!windowEl || !timebarEl || !customVoiceDurationSeconds) return;
+			const centerRatio = ((customVoiceTrimStart + customVoiceTrimEnd) / 2) / customVoiceDurationSeconds;
+			const target = timebarEl.offsetWidth * centerRatio - windowEl.clientWidth / 2;
+			windowEl.scrollLeft = Math.max(0, Math.min(windowEl.scrollWidth - windowEl.clientWidth, target));
+		});
+	}
+	function zoomCustomVoiceTimeline(nextZoom: number, anchorRatio?: number, anchorOffset?: number) {
+		if (!Number.isFinite(nextZoom)) return;
+		const windowEl = document.querySelector<HTMLElement>('.custom-voice-timebar-window');
+		const ratio = anchorRatio ?? (customVoiceDurationSeconds ? ((customVoiceTrimStart + customVoiceTrimEnd) / 2) / customVoiceDurationSeconds : 0.5);
+		const offset = anchorOffset ?? ((windowEl?.clientWidth ?? 0) / 2);
+		customVoiceTimelineZoom = Math.max(1, Math.min(1200, Math.round(nextZoom * 10) / 10));
+		requestAnimationFrame(() => {
+			const updatedWindow = document.querySelector<HTMLElement>('.custom-voice-timebar-window');
+			if (!updatedWindow) return;
+			const target = updatedWindow.scrollWidth * Math.max(0, Math.min(1, ratio)) - offset;
+			updatedWindow.scrollLeft = Math.max(0, Math.min(updatedWindow.scrollWidth - updatedWindow.clientWidth, target));
+		});
+	}
+	function setCustomVoiceTimelineZoom(value: string | number) { const n = Number(value); if (!Number.isFinite(n)) return; zoomCustomVoiceTimeline(n); }
+	function splitTags(value: string) { return value.split(/[，,]/).map(t => t.trim()).filter(Boolean); }
+	function trimFileName(file: File, start: number, end: number) { const stem = file.name.replace(/\.[^.]+$/, '') || 'custom-voice'; return `${stem}_clip_${start.toFixed(1)}-${end.toFixed(1)}s.wav`; }
+	function selectedTrimRange() { const duration = customVoiceSourceDurationMs ? customVoiceSourceDurationMs / 1000 : 0; const start = Math.min(customVoiceTrimStart, Math.max(0, customVoiceTrimEnd - 0.1)); const end = Math.max(start + 0.1, Math.min(duration || customVoiceTrimEnd, customVoiceTrimEnd)); return { start, end }; }
+	function clearCustomVoiceProcessedState() { $store.customVoiceFileId = ''; $store.customVoiceReferenceAudioPath = ''; $store.customVoiceTranscript = ''; $store.customVoiceSrt = ''; $store.customVoiceDurationMs = null; $store.customVoiceSrtSegmentCount = 0; $store.customVoiceTranscriptionId = ''; $store.customVoiceConfirmed = false; $store.customVoiceQualityWarnings = []; resetVoiceRegisterDialog(); }
+	function setCustomVoicePreviewUrl(url: string) { if ($store.customVoicePreviewUrl && $store.customVoicePreviewUrl !== url && $store.customVoicePreviewUrl !== customVoiceSourcePreviewUrl) URL.revokeObjectURL($store.customVoicePreviewUrl); $store.customVoicePreviewUrl = url; }
+	function invalidateCustomVoiceTrim() { if (!customVoiceOriginalFile) return; if ($store.customVoiceReferenceAudioPath || $store.customVoiceTranscriptionId) customVoiceSelectionDirty = true; clearCustomVoiceProcessedState(); setCustomVoicePreviewUrl(customVoiceSourcePreviewUrl); if (!customVoiceLoopPreview) stopVoicePreview(); customVoicePlaybackPosition = customVoiceTrimStart; }
+	function setCustomVoiceTrimStart(value: string | number) { const max = customVoiceTrimEnd || (customVoiceSourceDurationMs ?? 0) / 1000; const n = Number(value); if (!Number.isFinite(n)) return; customVoiceTrimStart = Math.max(0, Math.min(n, Math.max(0, max - 0.1))); if (customVoiceLoopPreview && $store.voicePreviewAudio) $store.voicePreviewAudio.currentTime = customVoiceTrimStart; invalidateCustomVoiceTrim(); }
+	function setCustomVoiceTrimEnd(value: string | number) { const duration = (customVoiceSourceDurationMs ?? 0) / 1000; const n = Number(value); if (!Number.isFinite(n)) return; customVoiceTrimEnd = Math.max(customVoiceTrimStart + 0.1, Math.min(duration || n, n)); invalidateCustomVoiceTrim(); }
+	function customVoiceStatusText() { if ($store.customVoiceBusy) return '正在处理选区并识别台词'; if ($store.customVoiceConfirmed) return '参考音色与台词已确认'; if (customVoiceSelectionDirty) return '选区已调整，请重新识别'; if ($store.customVoiceTranscript.trim()) return '请检查台词后确认'; if ($store.customVoiceFileName) return '选择范围后使用选区'; return '拖入 wav 或 mp3 音频'; }
+	function setVoiceSource(source: 'voice_library' | 'reference_audio') { $store.voiceSource = source; $store.error = ''; stopVoicePreview(); if (source === 'reference_audio') $store.voiceId = ''; }
+	function updateCustomVoiceTranscript(value: string) { $store.customVoiceTranscript = value; $store.customVoiceConfirmed = false; }
+	function confirmCustomVoice() { if (!$store.customVoiceReferenceAudioPath) { $store.customVoiceError = '请先拖入参考音频。'; return; } if (!$store.customVoiceTranscript.trim()) { $store.customVoiceError = '请先确认参考台词。'; return; } $store.customVoiceError = ''; $store.customVoiceConfirmed = true; }
+	function resetVoiceRegisterDialog() { voiceRegisterOpen = false; voiceRegisterBusy = false; voiceRegisterSerBusy = false; voiceRegisterError = ''; }
+	function resetCustomVoice() { if ($store.customVoicePreviewUrl) URL.revokeObjectURL($store.customVoicePreviewUrl); if (customVoiceSourcePreviewUrl && customVoiceSourcePreviewUrl !== $store.customVoicePreviewUrl) URL.revokeObjectURL(customVoiceSourcePreviewUrl); customVoiceOriginalFile = null; customVoiceSourcePreviewUrl = ''; customVoiceSourceDurationMs = null; customVoiceTrimStart = 0; customVoiceTrimEnd = 0; customVoicePlaybackPosition = 0; customVoiceWaveformBars = []; customVoiceTimelineZoom = 1; customVoiceSelectionDirty = false; $store.customVoiceFileName = ''; $store.customVoiceFileId = ''; $store.customVoicePreviewUrl = ''; $store.customVoiceReferenceAudioPath = ''; $store.customVoiceTranscript = ''; $store.customVoiceSrt = ''; $store.customVoiceDurationMs = null; $store.customVoiceSrtSegmentCount = 0; $store.customVoiceTranscriptionId = ''; $store.customVoiceConfirmed = false; $store.customVoiceBusy = false; $store.customVoiceError = ''; $store.customVoiceQualityWarnings = []; resetVoiceRegisterDialog(); stopVoicePreview(); }
+	function loadAudioDuration(url: string): Promise<number> { return new Promise((resolve, reject) => { const audio = new Audio(); audio.preload = 'metadata'; audio.onloadedmetadata = () => { resolve(Number.isFinite(audio.duration) ? audio.duration : 0); audio.src = ''; }; audio.onerror = () => reject(new Error('无法读取音频时长')); audio.src = url; }); }
+	function encodeWav(buffer: AudioBuffer) { const channelCount = buffer.numberOfChannels; const sampleRate = buffer.sampleRate; const frameCount = buffer.length; const bytesPerSample = 2; const blockAlign = channelCount * bytesPerSample; const dataSize = frameCount * blockAlign; const arrayBuffer = new ArrayBuffer(44 + dataSize); const view = new DataView(arrayBuffer); const writeString = (offset: number, value: string) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); }; writeString(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); writeString(8, 'WAVE'); writeString(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, channelCount, true); view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * blockAlign, true); view.setUint16(32, blockAlign, true); view.setUint16(34, 16, true); writeString(36, 'data'); view.setUint32(40, dataSize, true); let offset = 44; for (let i = 0; i < frameCount; i++) { for (let channel = 0; channel < channelCount; channel++) { const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i] ?? 0)); view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true); offset += 2; } } return new Blob([arrayBuffer], { type: 'audio/wav' }); }
+	async function buildWaveformBars(file: File, count = 2400) { const audioContext = new AudioContext(); try { const decoded = await audioContext.decodeAudioData(await file.arrayBuffer()); const channel = decoded.getChannelData(0); const dynamicCount = Math.max(count, Math.min(12000, Math.ceil(decoded.duration * 12))); const bucketSize = Math.max(1, Math.floor(channel.length / dynamicCount)); const bars: number[] = []; for (let i = 0; i < dynamicCount; i++) { const start = i * bucketSize; const end = Math.min(channel.length, start + bucketSize); let peak = 0; for (let j = start; j < end; j++) peak = Math.max(peak, Math.abs(channel[j] ?? 0)); bars.push(peak); } const maxPeak = Math.max(...bars, 0.01); return bars.map(v => Math.max(0.1, Math.min(1, Math.pow(v / maxPeak, 0.72)))); } finally { void audioContext.close(); } }
+	async function cropAudioFile(file: File, start: number, end: number) { const audioContext = new AudioContext(); try { const decoded = await audioContext.decodeAudioData(await file.arrayBuffer()); const sampleRate = decoded.sampleRate; const startFrame = Math.max(0, Math.floor(start * sampleRate)); const endFrame = Math.min(decoded.length, Math.ceil(end * sampleRate)); const frameCount = Math.max(1, endFrame - startFrame); const clip = audioContext.createBuffer(decoded.numberOfChannels, frameCount, sampleRate); for (let channel = 0; channel < decoded.numberOfChannels; channel++) clip.copyToChannel(decoded.getChannelData(channel).slice(startFrame, endFrame), channel); return encodeWav(clip); } finally { void audioContext.close(); } }
+	async function processCustomVoiceClip(file: File, previewUrl: string, durationMs: number) { setCustomVoicePreviewUrl(previewUrl); $store.customVoiceFileName = file.name; $store.customVoiceBusy = true; $store.customVoiceError = ''; clearCustomVoiceProcessedState(); stopVoicePreview(); try { const [uploaded, transcript] = await Promise.all([Api.uploadVoice(file), Api.transcribeAudio(file, 'auto', 'qwen3-asr-mlx')]); const usableSegments = transcript.segments.filter(s => s.text.trim()); $store.customVoiceFileId = uploaded.file_id; $store.customVoiceReferenceAudioPath = uploaded.path; $store.customVoiceQualityWarnings = uploaded.quality.warnings ?? []; $store.customVoiceTranscript = transcript.text.trim(); $store.customVoiceSrt = segmentsToSrt(transcript.segments, transcript.text, transcript.duration_ms ?? durationMs); $store.customVoiceDurationMs = transcript.duration_ms ?? durationMs; $store.customVoiceSrtSegmentCount = usableSegments.length || ($store.customVoiceTranscript ? 1 : 0); $store.customVoiceTranscriptionId = transcript.transcription_id; customVoiceSelectionDirty = false; } catch (e) { $store.customVoiceError = (e as Error).message || '自定义音色上传或识别失败'; } finally { $store.customVoiceBusy = false; } }
+	async function applyCustomVoiceTrim() { if (!customVoiceOriginalFile) { $store.customVoiceError = '请先拖入音频文件。'; return; } const { start, end } = selectedTrimRange(); const durationMs = Math.max(100, Math.round((end - start) * 1000)); $store.customVoiceBusy = true; try { const fullDuration = (customVoiceSourceDurationMs ?? 0) / 1000; const useOriginal = start <= 0.01 && (!fullDuration || end >= fullDuration - 0.01); const blob = useOriginal ? customVoiceOriginalFile : await cropAudioFile(customVoiceOriginalFile, start, end); const clipFile = useOriginal ? customVoiceOriginalFile : new File([blob], trimFileName(customVoiceOriginalFile, start, end), { type: 'audio/wav' }); const previewUrl = URL.createObjectURL(clipFile); await processCustomVoiceClip(clipFile, previewUrl, durationMs); } catch (e) { $store.customVoiceError = (e as Error).message || '音频裁切失败'; $store.customVoiceBusy = false; } }
+	async function handleCustomVoiceFile(file: File) { if (!file.type.startsWith('audio/') && !/\.(wav|mp3|m4a|flac|aac|ogg)$/i.test(file.name)) { $store.customVoiceError = '请拖入音频文件。'; return; } resetCustomVoice(); $store.voiceSource = 'reference_audio'; $store.voiceId = ''; customVoiceOriginalFile = file; customVoiceSourcePreviewUrl = URL.createObjectURL(file); setCustomVoicePreviewUrl(customVoiceSourcePreviewUrl); $store.customVoiceFileName = file.name; $store.customVoiceError = ''; const waveformTarget = file; const waveformPromise = buildWaveformBars(file).catch(() => [] as number[]); try { const duration = await loadAudioDuration(customVoiceSourcePreviewUrl); customVoiceSourceDurationMs = Math.round(duration * 1000); customVoiceTrimStart = 0; customVoicePlaybackPosition = 0; customVoiceTrimEnd = Math.max(0.1, duration); centerCustomVoiceTimelineOnSelection(); } catch (e) { customVoiceSourceDurationMs = null; customVoiceTrimStart = 0; customVoiceTrimEnd = 0; customVoicePlaybackPosition = 0; $store.customVoiceError = (e as Error).message || '无法读取音频时长'; } finally { const bars = await waveformPromise; if (customVoiceOriginalFile === waveformTarget) customVoiceWaveformBars = bars; } }
+	function emotionTagsFromScores(top: string | null, scores: Record<string, number>) { const tags = top ? [top] : []; for (const [emotion, score] of Object.entries(scores)) { if (emotion !== top && score > 0.15) tags.push(emotion); } return tags.slice(0, 3); }
+	async function openVoiceRegisterDialog() { if (!$store.customVoiceFileId || !$store.customVoiceTranscript.trim()) { $store.customVoiceError = '请先完成自定义音色上传和台词识别。'; return; } voiceRegisterName = ($store.customVoiceFileName || '自定义音色').replace(/\.[^.]+$/, ''); voiceRegisterDescription = `由生成页自定义音色注册，参考音频：${$store.customVoiceFileName || '未命名音频'}`; voiceRegisterTags = '自定义音色, ASR已生成'; voiceRegisterEmotionTags = $store.emotion ? $store.emotion : ''; voiceRegisterReferenceText = $store.customVoiceTranscript.trim(); voiceRegisterLicense = 'self_voice'; voiceRegisterEngine = $store.engineId; voiceRegisterError = ''; voiceRegisterOpen = true; voiceRegisterSerBusy = true; try { const result = await Api.predictEmotionForFile($store.customVoiceFileId); const emotionTags = emotionTagsFromScores(result.top_emotion, result.emotion_scores); if (emotionTags.length) voiceRegisterEmotionTags = emotionTags.join(', '); } catch (e) { voiceRegisterError = `情绪识别未完成，可先保存后在音色库重试：${(e as Error).message || 'SER 失败'}`; } finally { voiceRegisterSerBusy = false; } }
+	async function saveRegisteredVoice() { if (!$store.customVoiceFileId || !voiceRegisterName.trim()) return; voiceRegisterBusy = true; voiceRegisterError = ''; try { const payload: VoiceAssetCreate = { name: voiceRegisterName.trim(), description: voiceRegisterDescription.trim(), tags: splitTags(voiceRegisterTags), reference_text: voiceRegisterReferenceText.trim(), reference_audio_ids: [$store.customVoiceFileId], license_status: voiceRegisterLicense, recommended_engine_id: voiceRegisterEngine || null, default_language: $store.language === 'en' ? 'en' : 'zh', voice_type: 'test_sample' }; let created = await Api.createVoice(payload); const emotionTags = splitTags(voiceRegisterEmotionTags); if (emotionTags.length) created = await Api.updateVoice(created.voice_id, { emotion_tags: emotionTags }); $store.voices = [created, ...$store.voices.filter(v => v.voice_id !== created.voice_id)]; $store.voiceSource = 'voice_library'; $store.voiceId = created.voice_id; voiceRegisterOpen = false; } catch (e) { voiceRegisterError = (e as Error).message || '注册音色失败'; } finally { voiceRegisterBusy = false; } }
+	function onCustomVoiceDrop(event: DragEvent) { event.preventDefault(); customVoiceDragActive = false; const file = event.dataTransfer?.files?.[0]; if (file) void handleCustomVoiceFile(file); }
+	function customVoiceTimeFromPointer(event: PointerEvent, timebar: HTMLElement) { const rect = timebar.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)); return Math.round(ratio * customVoiceDurationSeconds * 10) / 10; }
+	function handleCustomVoiceTimebarPointer(event: PointerEvent) { if (!customVoiceDurationSeconds) return; const rect = (event.currentTarget as HTMLElement).getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)); const snapped = Math.round(ratio * customVoiceDurationSeconds * 10) / 10; if (Math.abs(snapped - customVoiceTrimStart) <= Math.abs(snapped - customVoiceTrimEnd)) setCustomVoiceTrimStart(snapped); else setCustomVoiceTrimEnd(snapped); }
+	function handleCustomVoiceTimelineWheel(event: WheelEvent) {
+		if (!customVoiceDurationSeconds) return;
+		event.preventDefault();
+		const windowEl = event.currentTarget as HTMLElement;
+		const rect = windowEl.getBoundingClientRect();
+		const anchorOffset = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+		const anchorRatio = (windowEl.scrollLeft + anchorOffset) / Math.max(1, windowEl.scrollWidth);
+		const factor = event.deltaY < 0 ? 1.16 : 1 / 1.16;
+		zoomCustomVoiceTimeline(customVoiceTimelineZoom * factor, anchorRatio, anchorOffset);
+	}
+	function beginCustomVoiceTrimDrag(event: PointerEvent, boundary: 'start' | 'end') {
+		if (!customVoiceDurationSeconds) return;
+		const timebar = (event.currentTarget as HTMLElement).closest('.custom-voice-timebar') as HTMLElement | null;
+		if (!timebar) return;
+		event.preventDefault();
+		event.stopPropagation();
+		const apply = (e: PointerEvent) => {
+			const time = customVoiceTimeFromPointer(e, timebar);
+			if (boundary === 'start') setCustomVoiceTrimStart(time);
+			else setCustomVoiceTrimEnd(time);
+		};
+		const cleanup = () => {
+			window.removeEventListener('pointermove', apply);
+			window.removeEventListener('pointerup', cleanup);
+			window.removeEventListener('pointercancel', cleanup);
+		};
+		apply(event);
+		window.addEventListener('pointermove', apply);
+		window.addEventListener('pointerup', cleanup, { once: true });
+		window.addEventListener('pointercancel', cleanup, { once: true });
+	}
+	async function toggleCustomVoiceSelectionPreview() {
+		if (!$store.voicePreviewAudio || !customVoiceSourcePreviewUrl || !customVoiceSourceDurationMs) return;
+		const audio = $store.voicePreviewAudio;
+		if (customVoiceLoopPreview && $store.voicePreviewPlaying) {
+			stopCustomVoiceSelectionPreview();
+			return;
+		}
+		const { start } = selectedTrimRange();
+		const absoluteUrl = new URL(customVoiceSourcePreviewUrl, window.location.href).href;
+		if (audio.src !== absoluteUrl) audio.src = customVoiceSourcePreviewUrl;
+		audio.currentTime = start;
+		customVoicePlaybackPosition = start;
+		customVoiceLoopPreview = true;
+		$store.voicePreviewPlaying = true;
+		try {
+			await audio.play();
+		} catch (e) {
+			customVoiceLoopPreview = false;
+			$store.voicePreviewPlaying = false;
+			$store.error = `选区试听失败：${(e as Error).message || '请确认音频文件可播放'}`;
+		}
+	}
+	function stopCustomVoiceSelectionPreview() {
+		const audio = $store.voicePreviewAudio;
+		const { start } = selectedTrimRange();
+		if (audio) {
+			audio.pause();
+			audio.currentTime = start;
+		}
+		customVoicePlaybackPosition = start;
+		customVoiceLoopPreview = false;
+		$store.voicePreviewPlaying = false;
+	}
+	async function previewSelectedVoice() { if (!$store.voicePreviewAudio || !activeVoicePreviewUrl) return; const audio = $store.voicePreviewAudio; if ($store.voicePreviewPlaying && !audio.paused) { audio.pause(); customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; return; } customVoiceLoopPreview = false; const absoluteUrl = new URL(activeVoicePreviewUrl, window.location.href).href; if (audio.src !== absoluteUrl) { audio.src = activeVoicePreviewUrl; audio.currentTime = 0; } $store.error = ''; $store.voicePreviewPlaying = true; try { await audio.play(); } catch (e) { $store.voicePreviewPlaying = false; $store.error = `音色预览播放失败：${(e as Error).message || '请确认参考音频文件可访问'}`; } }
+	function handleVoicePreviewTimeUpdate() { const audio = $store.voicePreviewAudio; if (!audio || !customVoiceLoopPreview) return; const { start, end } = selectedTrimRange(); customVoicePlaybackPosition = Math.max(start, Math.min(end, audio.currentTime)); if (audio.currentTime >= end || audio.currentTime < start) { if (customVoiceLoopEnabled) { audio.currentTime = start; customVoicePlaybackPosition = start; void audio.play().catch(() => { customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; }); } else stopCustomVoiceSelectionPreview(); } }
+	function stopVoicePreview() { if ($store.voicePreviewAudio && $store.voicePreviewPlaying) { $store.voicePreviewAudio.pause(); } customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; }
 	function upsertTask(t: GenerationTask) { $store.tasks = [t, ...$store.tasks.filter(i => i.task_id !== t.task_id)]; }
 	async function poll(taskId: string) { for (let i = 0; i < 900; i++) { const t = await Api.task(taskId); upsertTask(t); if (['success', 'failed', 'cancelled'].includes(t.status)) return; await new Promise(r => setTimeout(r, 1000)); } }
 	async function refreshPageData() { const [e, v, t, lf, p, st] = await Promise.all([Api.engines(), Api.voices({ offset: 0, limit: 2000 }), Api.tasks(), Api.longformTasks(), Api.presets(), Api.settings()]); $store.engines = e; $store.voices = v; $store.tasks = t; $store.longformTasks = lf; $store.presets = p; $store.settings = st; const params = new URLSearchParams(location.search); const vId = params.get('voice'); if (!$store.initialized) { const def = e.find(en => en.manifest.engine_id === st.default_engine_id && !en.manifest.capabilities.includes('speech_recognition')); $store.engineId = def?.manifest.engine_id || $store.engineId; $store.voiceId = vId || st.default_voice_id || ''; $store.language = st.default_language || $store.language; $store.showSplitPreview = params.get('tools') === 'text'; const reuseRaw = sessionStorage.getItem('voice-studio-history-reuse'); if (reuseRaw) { try { store.fromRequest(JSON.parse(reuseRaw) as GenerateRequest); } catch { /* ignore stale history reuse payload */ } finally { sessionStorage.removeItem('voice-studio-history-reuse'); } } $store.initialized = true; } else if (vId) $store.voiceId = vId; }
@@ -77,7 +233,56 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	function requestLongformStrategy(plan: GeneratePlanResponse): Promise<LongformStrategy | null> { prepareLongformPlan(plan); if (!plan.requires_user_confirmation) return Promise.resolve('single'); $store.pendingLongformPlan = plan; $store.longformStrategy = plan.recommended_action === 'split_generate' ? 'split_only' : 'split_merge'; $store.longformVerifyEnabled = plan.recommended_action.includes('verify'); $store.longformMergeEnabled = $store.longformStrategy === 'split_merge'; $store.longformMaxRetries = 2; $store.showLongformDialog = true; return new Promise<LongformStrategy | null>(r => { $store.pendingLongformResolve = r; }); }
 	function closeLongformDialog(v: LongformStrategy | null) { const r = $store.pendingLongformResolve; $store.showLongformDialog = false; $store.pendingLongformResolve = null; $store.pendingLongformPlan = null; r?.(v); }
 	function longformSegmentsFor(plan: GeneratePlanResponse): PlannedTextSegment[] { return plan.segments.length ? plan.segments : [{ index: 1, text: $store.text.trim(), char_count: $store.text.trim().length, segment_reason: 'direct_text' }]; }
-	async function generate() { if (!$store.text.trim()) return; $store.error = ''; $store.busy = true; try { if ((isF5 || isCosyVoiceZeroShot) && !$store.voiceId) { $store.error = `${selected?.manifest.display_name ?? '当前模型'} 需要选择带参考音频和参考台词的本地音色。`; return; } if ((isF5 || isCosyVoiceZeroShot) && !selectedVoice?.reference_text.trim()) { $store.error = `${selectedVoice?.name ?? '当前音色'} 缺少参考台词。`; return; } if (isMimoClone && !selectedVoicePreviewUrl) { $store.error = '请选择一个带参考音频的本地音色。'; return; } const plan = await Api.generatePlan({ text: $store.text.trim(), engine_id: $store.engineId, planner_mode: 'auto', target_format: $store.outputFormat }); const lfChoice = await requestLongformStrategy(plan); if (!lfChoice) return; if (isMimoClone && $store.settings?.mimo_voiceclone_confirm_upload && !window.confirm(`MiMo 音色复刻会把「${selectedVoice?.name ?? '当前参考音色'}」发送到小米云端。继续吗？`)) return; const eng = $store.engines.find(i => i.manifest.engine_id === $store.engineId); if (eng && eng.state.status !== 'loaded') await Api.startEngine($store.engineId); if (lfChoice !== 'single') { const res = await Api.generateLongform({ generate_request: store.toRequest(), segments: longformSegmentsFor(plan), verify_enabled: $store.longformVerifyEnabled, merge_enabled: lfChoice === 'split_merge' && $store.longformMergeEnabled, max_retries: $store.longformMaxRetries, stop_merge_on_verification_failed: true, asr_engine_id: 'qwen3-asr-mlx', silence_ms: 300, normalize: false }); $store.longformTasks = [res, ...$store.longformTasks.filter(i => i.longform_task_id !== res.longform_task_id)]; $store.currentPage = 1; return; } const res = await Api.generate(store.toRequest()); $store.currentPage = 1; await poll(res.task_id); } catch (e) { $store.error = (e as Error).message; } finally { $store.busy = false; } }
+	async function generate() {
+		if (!$store.text.trim()) return;
+		$store.error = '';
+		$store.busy = true;
+		try {
+			const usingCustomVoice = usesReferenceVoice && $store.voiceSource === 'reference_audio';
+			if (usesReferenceVoice && usingCustomVoice && !$store.customVoiceReferenceAudioPath) {
+				$store.error = '请先拖入自定义音色。';
+				return;
+			}
+			if (usesReferenceVoice && usingCustomVoice && !$store.customVoiceTranscript.trim()) {
+				$store.error = '请检查或填写自定义音色参考台词。';
+				return;
+			}
+			if ((isF5 || isCosyVoiceZeroShot) && !usingCustomVoice && !$store.voiceId) {
+				$store.error = `${selected?.manifest.display_name ?? '当前模型'} 需要选择带参考音频和参考台词的本地音色。`;
+				return;
+			}
+			if ((isF5 || isCosyVoiceZeroShot) && !usingCustomVoice && !selectedVoice?.reference_text.trim()) {
+				$store.error = `${selectedVoice?.name ?? '当前音色'} 缺少参考台词。`;
+				return;
+			}
+			if (isMimoClone && !activeVoicePreviewUrl) {
+				$store.error = '请选择带参考音频的音色，或拖入自定义音色。';
+				return;
+			}
+			const plan = await Api.generatePlan({ text: $store.text.trim(), engine_id: $store.engineId, planner_mode: 'auto', target_format: $store.outputFormat });
+			const lfChoice = await requestLongformStrategy(plan);
+			if (!lfChoice) return;
+			const referenceName = usingCustomVoice ? ($store.customVoiceFileName || '自定义音色') : (selectedVoice?.name ?? '当前参考音色');
+			if (isMimoClone && $store.settings?.mimo_voiceclone_confirm_upload && !window.confirm(`MiMo 音色复刻会把「${referenceName}」发送到小米云端。继续吗？`)) return;
+			const eng = $store.engines.find(i => i.manifest.engine_id === $store.engineId);
+			if (eng && eng.state.status !== 'loaded') await Api.startEngine($store.engineId);
+			if (lfChoice !== 'single') {
+				const res = await Api.generateLongform({ generate_request: store.toRequest(), segments: longformSegmentsFor(plan), verify_enabled: $store.longformVerifyEnabled, merge_enabled: lfChoice === 'split_merge' && $store.longformMergeEnabled, max_retries: $store.longformMaxRetries, stop_merge_on_verification_failed: true, asr_engine_id: 'qwen3-asr-mlx', silence_ms: 300, normalize: false });
+				$store.longformTasks = [res, ...$store.longformTasks.filter(i => i.longform_task_id !== res.longform_task_id)];
+				$store.currentPage = 1;
+				return;
+			}
+			const res = await Api.generate(store.toRequest());
+			$store.currentPage = 1;
+			void poll(res.task_id).catch((e) => {
+				$store.error = (e as Error).message || '任务状态刷新失败';
+			});
+		} catch (e) {
+			$store.error = (e as Error).message;
+		} finally {
+			$store.busy = false;
+		}
+	}
 	function reuse(t: GenerationTask) { store.fromRequest(H.requestFromTask(t)); $store.error = ''; window.scrollTo({ top: 0, behavior: 'smooth' }); }
 	async function runTextTool(mode: 'clean' | 'numbers' | 'split') { if (!$store.text.trim() && mode !== 'split') return; $store.textToolBusy = mode; try { if (mode === 'clean') { $store.text = (await Api.cleanText($store.text)).text; return; } if (mode === 'numbers') { $store.text = (await Api.normalizeNumbers($store.text)).text; return; } $store.textSegments = (await Api.splitText($store.text)).segments; $store.showSplitPreview = true; $store.splitPreviewCollapsed = false; } finally { $store.textToolBusy = ''; } }
 	async function cancelTask(t: GenerationTask) { $store.actionBusyTaskId = t.task_id; try { await Api.cancelTask(t.task_id); await refreshPageData(); } finally { $store.actionBusyTaskId = ''; } }
@@ -128,13 +333,14 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 			window.removeEventListener('resize', or);
 			_autoResizeRO?.disconnect();
 			if (_speakerCatalogTimer) clearTimeout(_speakerCatalogTimer);
+			if ($store.customVoicePreviewUrl) URL.revokeObjectURL($store.customVoicePreviewUrl);
 		};
 	});
 	$effect(() => { if ($store.engineId !== $store.lastEngineId) store.setEngine($store.engineId); });
 	$effect(() => { const eid = $store.engineId; const q = $store.speakerQuery.trim(); const g = $store.speakerGenderFilter; const key = `${eid}|${q}|${g}`; if (key === _speakerCatalogRequestKey) return; _speakerCatalogRequestKey = key; if (_speakerCatalogTimer) clearTimeout(_speakerCatalogTimer); _speakerCatalogTimer = setTimeout(() => { untrack(() => { void loadSpeakerCatalog(eid, q, g); }); }, 150); });
-	$effect(() => { if (!$store.initialized) return; if (!usesReferenceVoice) { if ($store.voiceId) untrack(() => { $store.voiceId = ''; }); return; } if ($store.voiceId && !$store.voices.some(v => v.voice_id === $store.voiceId)) untrack(() => { $store.voiceId = ''; }); });
+	$effect(() => { if (!$store.initialized) return; if (!usesReferenceVoice) { if ($store.voiceId) untrack(() => { $store.voiceId = ''; }); if ($store.voiceSource !== 'voice_library') untrack(() => { $store.voiceSource = 'voice_library'; }); return; } if ($store.voiceSource === 'reference_audio' && $store.voiceId) untrack(() => { $store.voiceId = ''; }); if ($store.voiceSource === 'voice_library' && $store.voiceId && !$store.voices.some(v => v.voice_id === $store.voiceId)) untrack(() => { $store.voiceId = ''; }); });
 	let _lastPreviewVoiceId = $state('');
-	$effect(() => { const vid = $store.voiceId; if (vid !== _lastPreviewVoiceId) { _lastPreviewVoiceId = vid; untrack(() => stopVoicePreview()); } });
+	$effect(() => { const vid = `${$store.voiceSource}|${$store.voiceId}|${$store.customVoicePreviewUrl}`; if (vid !== _lastPreviewVoiceId) { _lastPreviewVoiceId = vid; untrack(() => stopVoicePreview()); } });
 	$effect(() => { if ($store.currentPage > pageCount) $store.currentPage = pageCount; });
 	$effect(() => { if ($store.pageSizeAuto && $store.resultGridEl) recalcAutoPageSize(); });
 	$effect(() => { if (_autoResizeRO) _autoResizeRO.disconnect(); if ($store.resultGridEl && _autoResizeRO) _autoResizeRO.observe($store.resultGridEl); });
@@ -149,12 +355,90 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		{#if $store.showPresetEditor}<div class="preset-editor"><div class="row gen-section-head"><div><h3>{$store.editingPresetId ? '编辑自定义预设' : '保存当前为预设'}</h3><p class="muted">绑定引擎：{selected?.manifest.display_name ?? $store.engineId}</p></div><button class="gen-icon-btn mini" type="button" aria-label="关闭预设编辑器" data-tooltip="关闭预设编辑器" onclick={() => ($store.showPresetEditor = false)}>X</button></div><div class="preset-editor-grid"><label class="field"><span>名称</span><input bind:value={$store.presetDraft.name} placeholder="例如：课程慢讲" /></label><label class="field"><span>场景</span><input bind:value={$store.presetDraft.scene} placeholder="例如：教程 / 长文旁白" /></label><label class="field wide"><span>描述</span><input bind:value={$store.presetDraft.description} placeholder="简短说明" /></label><label class="field"><span>标签</span><input bind:value={$store.presetDraft.tags} placeholder="慢讲，课程" /></label><label class="field wide"><span>示例文本</span><textarea bind:value={$store.presetDraft.sample_text} placeholder="可选"></textarea></label></div><div class="row wrap"><button class="btn primary compact" type="button" onclick={savePreset} disabled={$store.presetBusy || !$store.presetDraft.name.trim()}><Save size={14} /> {$store.presetBusy ? '保存中' : '保存预设'}</button><button class="btn compact" type="button" onclick={() => ($store.showPresetEditor = false)}>取消</button></div></div>{/if}
 		<div class="param-inline-row">
 			<label class="param-inline engine-param-inline"><span>引擎</span><EngineSelector engines={ttsEngines} bind:value={$store.engineId} /></label>
-			{#if usesReferenceVoice}<div class="param-inline voice-param-inline"><span>声音</span><div class="voice-inline"><VoiceSelector voices={$store.voices} bind:value={$store.voiceId} /><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听音色' : '试听当前音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停当前音色试听' : '试听当前选择的音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!selectedVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div></div>{#if selectedVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={selectedVoicePreviewUrl} preload="none" onended={stopVoicePreview} onpause={() => { if ($store.voicePreviewAudio?.ended || !$store.voicePreviewAudio?.currentTime) $store.voicePreviewPlaying = false; }}></audio>{/if}{/if}
+			{#if usesReferenceVoice}<div class="param-inline voice-param-inline" class:library-source={$store.voiceSource === 'voice_library'} class:custom-source={$store.voiceSource === 'reference_audio'}><span>声音</span><div class="voice-source-control"><div class="gen-segmented voice-source-tabs" role="tablist" aria-label="声音来源"><button class:active={$store.voiceSource === 'voice_library'} type="button" onclick={() => setVoiceSource('voice_library')}>音色库</button><button class:active={$store.voiceSource === 'reference_audio'} type="button" onclick={() => setVoiceSource('reference_audio')}>自定义</button></div>{#if $store.voiceSource === 'voice_library'}<div class="voice-inline"><VoiceSelector voices={$store.voices} bind:value={$store.voiceId} /><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听音色' : '试听当前音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停当前音色试听' : '试听当前选择的音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{:else}<div class="custom-voice-inline"><span class="custom-voice-chip" class:ok={customVoiceMatched}>{#if customVoiceMatched}<CircleCheck size={13} />{:else}<FileAudio size={13} />{/if}{$store.customVoiceFileName || '未上传'}</span><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听自定义音色' : '试听自定义音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停自定义音色试听' : '试听当前自定义音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{/if}</div></div>{#if activeVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={activeVoicePreviewUrl} preload="none" ontimeupdate={handleVoicePreviewTimeUpdate} onended={stopVoicePreview} onpause={() => { if ($store.voicePreviewAudio?.ended || !$store.voicePreviewAudio?.currentTime) { customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; } }}></audio>{/if}{/if}
 			{#if activeParamKeys.has('speed')}<label class="param-inline-range"><span>语速</span><input class="speed-number" type="number" min="0.5" max="2" step="0.1" value={$store.speed.toFixed(2)} oninput={(e) => setSpeedValue((e.currentTarget as HTMLInputElement).value)} onblur={(e) => ((e.currentTarget as HTMLInputElement).value = $store.speed.toFixed(2))} /><input type="range" min="0.5" max="2" step="0.1" value={$store.speed} oninput={(e) => setSpeedValue((e.currentTarget as HTMLInputElement).value)} /></label>{/if}
 			<label class="param-inline param-inline-format"><span>格式</span><select bind:value={$store.outputFormat}><option value="wav">WAV</option><option value="mp3">MP3</option><option value="flac">FLAC</option></select></label>
 			<button class="btn param-reset-btn text-pop" type="button" data-text="把当前引擎的参数恢复到默认值。正文和已选参考音色会保留。" onclick={resetCurrentEngineParams}><RotateCcw size={14} /> 重置参数</button>
 			<button class="btn param-inline-more" type="button" onclick={() => ($store.showMoreParams = !$store.showMoreParams)}><Settings size={14} /> {$store.showMoreParams ? '收起高级' : '更多选项'}</button>
 		</div>
+			{#if usesReferenceVoice && $store.voiceSource === 'reference_audio'}
+				<section class="custom-voice-panel">
+					<div class="custom-voice-layout">
+						<div class="custom-voice-dropzone" role="region" aria-label="自定义音色拖拽上传区" class:drag-active={customVoiceDragActive} ondragenter={(e) => { e.preventDefault(); customVoiceDragActive = true; }} ondragover={(e) => { e.preventDefault(); customVoiceDragActive = true; }} ondragleave={(e) => { e.preventDefault(); customVoiceDragActive = false; }} ondrop={onCustomVoiceDrop}>
+							<CloudUpload size={22} />
+							<div>
+								<strong>{$store.customVoiceFileName || '拖入参考音频'}</strong>
+								<span>{customVoiceStatusText()}</span>
+							</div>
+							{#if $store.customVoiceBusy}<span class="badge">ASR</span>{:else if customVoiceMatched}<span class="badge ok">已确认</span>{:else if customVoiceReady}<span class="badge">待确认</span>{/if}
+						</div>
+						<label class="field custom-voice-text custom-voice-card">
+							<textarea rows="4" value={$store.customVoiceTranscript} oninput={(e) => updateCustomVoiceTranscript((e.currentTarget as HTMLTextAreaElement).value)} placeholder="ASR 识别后可编辑中文或英文台词" disabled={!$store.customVoiceFileName}></textarea>
+						</label>
+						<div class="custom-voice-srt-card custom-voice-card">
+							<div class="custom-voice-metrics">
+								<div><span>字幕状态</span><strong>{#if $store.customVoiceTranscriptionId}<Captions size={12} /> 已生成{:else}未生成{/if}</strong></div>
+								<div><span>持续时间</span><strong>{formatDuration(customVoiceDisplayDurationMs)}</strong></div>
+								<div><span>字幕段数</span><strong>{$store.customVoiceSrtSegmentCount || '未识别'}</strong></div>
+								<div><span>识别引擎</span><strong>{$store.customVoiceTranscriptionId ? 'Qwen3 ASR' : '等待音频'}</strong></div>
+								<div><span>选区时长</span><strong>{formatDuration(customVoiceSelectedDurationMs)}</strong></div>
+								<div><span>当前指针</span><strong>{formatTimecode(customVoicePlaybackPosition)}</strong></div>
+								<div><span>入点</span><strong class="metric-in">{formatTimecode(customVoiceTrimStart)}</strong></div>
+								<div><span>出点</span><strong class="metric-out">{formatTimecode(customVoiceTrimEnd)}</strong></div>
+							</div>
+						</div>
+					</div>
+					{#if customVoiceOriginalFile}
+						<div class="custom-voice-trimmer">
+							<div class="custom-voice-trimmer-head">
+								<div><Scissors size={14} /><span>裁切选区</span></div>
+								<div class="trim-transport-buttons">
+									<button class="trim-icon-btn play" type="button" aria-label={customVoiceLoopPreview && $store.voicePreviewPlaying ? '停止选区播放' : '播放选区'} data-tooltip={customVoiceLoopPreview && $store.voicePreviewPlaying ? '停止并回到入点' : '从入点播放到出点'} onclick={toggleCustomVoiceSelectionPreview} disabled={!customVoiceSourcePreviewUrl || !customVoiceSourceDurationMs || customVoiceSelectedDurationMs < 100}>{#if customVoiceLoopPreview && $store.voicePreviewPlaying}<Square size={16} />{:else}<Play size={16} />{/if}</button>
+									<button class="trim-loop-btn" class:active={customVoiceLoopEnabled} type="button" aria-label={customVoiceLoopEnabled ? '关闭循环播放' : '开启循环播放'} data-tooltip={customVoiceLoopEnabled ? '循环播放已开启' : '循环播放已关闭'} onclick={() => (customVoiceLoopEnabled = !customVoiceLoopEnabled)} disabled={!customVoiceSourcePreviewUrl || !customVoiceSourceDurationMs}><Repeat size={14} /> 循环</button>
+									<div class="trim-zoom-buttons" aria-label="时间轴缩放">
+										<button class="trim-tool-btn" type="button" aria-label="缩小时间轴" data-tooltip="缩小时间轴" onclick={() => zoomCustomVoiceTimeline(customVoiceTimelineZoom / 1.35)} disabled={!customVoiceSourceDurationMs}>−</button>
+										<span>{formatTimelineZoom(customVoiceTimelineZoom)}x</span>
+										<button class="trim-tool-btn" type="button" aria-label="放大时间轴" data-tooltip="放大时间轴" onclick={() => zoomCustomVoiceTimeline(customVoiceTimelineZoom * 1.35)} disabled={!customVoiceSourceDurationMs}>+</button>
+									</div>
+									<button class="btn compact primary trim-apply-btn" type="button" onclick={applyCustomVoiceTrim} disabled={$store.customVoiceBusy || !customVoiceSourceDurationMs || customVoiceSelectedDurationMs < 100}><Scissors size={13} /> {$store.customVoiceReferenceAudioPath && !customVoiceSelectionDirty ? '重新识别' : '使用选区并识别'}</button>
+								</div>
+							</div>
+							<div class="custom-voice-editor-strip">
+								<div class="custom-voice-timebar-window" onwheel={handleCustomVoiceTimelineWheel}>
+									<div class="custom-voice-timebar" role="group" aria-label="自定义音色裁切时间轴" style={`--trim-start:${customVoiceTrimStartPercent}%;--trim-end:${customVoiceTrimEndPercent}%;--playhead:${customVoicePlayheadPercent}%;width:${customVoiceTimelineZoom * 100}%`} onpointerdown={handleCustomVoiceTimebarPointer}>
+										<div class="custom-voice-timebar-ruler" aria-hidden="true">
+											{#each customVoiceTimelineTicks as tick}
+												<span class:major={tick.major} style={`left:${tick.percent}%`}><i></i><b>{tick.label}</b></span>
+											{/each}
+										</div>
+										<div class="custom-voice-timebar-track" aria-hidden="true"></div>
+										<div class="custom-voice-waveform" aria-hidden="true">
+											{#if customVoiceWaveformBars.length}
+												<svg class="custom-voice-waveform-svg" viewBox={`0 0 ${customVoiceWaveformBars.length} 100`} preserveAspectRatio="none">
+													<line class="waveform-midline" x1="0" y1="50" x2={customVoiceWaveformBars.length} y2="50" />
+													{#each customVoiceWaveformBars as level, index}
+														<rect x={index + 0.08} y={50 - level * 46} width="0.84" height={Math.max(8, level * 92)} rx="0.18" />
+													{/each}
+												</svg>
+											{:else}
+												<span class="waveform-empty"></span>
+											{/if}
+										</div>
+										<div class="custom-voice-play-progress" aria-hidden="true"></div>
+										<div class="custom-voice-playhead" aria-hidden="true"></div>
+										<button type="button" class="trim-handle-label trim-in-label" aria-label="拖动裁切入点" onpointerdown={(e) => beginCustomVoiceTrimDrag(e, 'start')}><span>IN</span></button>
+										<button type="button" class="trim-handle-label trim-out-label" aria-label="拖动裁切出点" onpointerdown={(e) => beginCustomVoiceTrimDrag(e, 'end')}><span>OUT</span></button>
+										<input aria-label="裁切入点" class="trim-range trim-start" type="range" min="0" max={customVoiceDurationSeconds} step="0.1" value={customVoiceTrimStart} oninput={(e) => setCustomVoiceTrimStart((e.currentTarget as HTMLInputElement).value)} disabled={!customVoiceSourceDurationMs} />
+										<input aria-label="裁切出点" class="trim-range trim-end" type="range" min="0.1" max={customVoiceDurationSeconds} step="0.1" value={customVoiceTrimEnd} oninput={(e) => setCustomVoiceTrimEnd((e.currentTarget as HTMLInputElement).value)} disabled={!customVoiceSourceDurationMs} />
+									</div>
+								</div>
+							</div>
+						</div>
+					{/if}
+					<div class="custom-voice-status">{#if $store.customVoiceError}<span class="badge fail">{$store.customVoiceError}</span>{/if}{#each $store.customVoiceQualityWarnings as warning}<span class="badge warn">{warning}</span>{/each}</div>
+					<div class="custom-voice-actions"><button class="btn compact primary" type="button" onclick={confirmCustomVoice} disabled={$store.customVoiceBusy || !$store.customVoiceReferenceAudioPath || !$store.customVoiceTranscript.trim()}><CircleCheck size={14} /> 确认匹配</button><button class="btn compact" type="button" onclick={openVoiceRegisterDialog} disabled={$store.customVoiceBusy || !$store.customVoiceFileId || !$store.customVoiceTranscript.trim()}><Plus size={14} /> 注册到音色库</button><button class="btn compact" type="button" onclick={resetCustomVoice} disabled={!$store.customVoiceFileName}><X size={14} /> 清除</button></div>
+				</section>
+			{/if}
 		{#if $store.showMoreParams}<div class="more-params-panel">
 			{#if isEmotiVoice}<div class="engine-note span-full"><strong>EmotiVoice</strong><small>使用官方说话人和情绪提示。</small></div>{:else if isCosyVoice}<div class="engine-note span-full"><strong>CosyVoice SFT</strong><small>使用官方 SFT 预置音色。</small></div>{:else if isCosyVoiceZeroShot}<div class="engine-note span-full"><strong>CosyVoice Zero-Shot</strong><small>需要本地参考音频和准确参考台词。</small></div>{/if}
 			{#if activeParamKeys.has('speaker_id')}<div class="field param-field" class:span-full={!isEmotiVoice} class:span-wide={isEmotiVoice}><label class="param-label" for="spk">音色</label><div class="param-control">{#if isEmotiVoice}<div class="speaker-catalog-tools"><div class="gen-search-field speaker-search"><Search size={14} /><input bind:value={$store.speakerQuery} placeholder="搜索" />{#if $store.speakerQuery.trim()}<button class="gen-search-clear" type="button" onclick={() => ($store.speakerQuery = '')}><X size={13} /></button>{/if}</div><select class="speaker-gender" bind:value={$store.speakerGenderFilter}><option value="all">全部</option><option value="F">女声</option><option value="M">男声</option></select></div>{/if}<select id="spk" bind:value={$store.speakerId}>{#each speakerChoices as o}<option value={o.value}>{o.label}</option>{/each}</select>{#if isEmotiVoice}<small>{$store.speakerCatalogLoading ? '读取中' : `结果 ${$store.speakerCatalog.length} 条`}</small>{/if}</div></div>{/if}
@@ -168,9 +452,37 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		</div>{/if}
 		<TextInput bind:text={$store.text} engineId={$store.engineId} ontexttool={(mode: 'clean' | 'numbers' | 'split') => runTextTool(mode)} textToolBusy={$store.textToolBusy} onGenerate={generate} generateBusy={$store.busy} />
 		{#if $store.error}<div class="badge fail">{$store.error}</div>{/if}
-		<audio class="result-shared-audio" bind:this={$store.resultPreviewAudio} preload="none" onended={() => { $store.playingResultTaskId = ''; $store.resultAudioPlaying = false; }}></audio>
-		{#if $store.showLongformDialog && $store.pendingLongformPlan}<div class="gen-modal-backdrop"><div class="longform-dialog" role="dialog" aria-modal="true"><div class="dialog-head"><div><h3>长文本生成策略</h3><p class="muted">预计 {$store.pendingLongformPlan.segments.length} 段。{$store.pendingLongformPlan.planner_reason}</p></div><button class="gen-icon-btn" type="button" aria-label="关闭长文本策略弹窗" data-tooltip="关闭长文本策略弹窗" onclick={() => closeLongformDialog(null)}>×</button></div>{#if $store.pendingLongformPlan.warnings.length}<p class="dialog-warning">{$store.pendingLongformPlan.warnings[0]}</p>{/if}<div class="strategy-grid"><button class:active={$store.longformStrategy === 'split_merge'} type="button" onclick={() => { $store.longformStrategy = 'split_merge'; $store.longformMergeEnabled = true; $store.longformVerifyEnabled = true; }}><strong>分段生成并合并</strong><span>逐段生成，校对后自动合并。</span></button><button class:active={$store.longformStrategy === 'split_only'} type="button" onclick={() => { $store.longformStrategy = 'split_only'; $store.longformMergeEnabled = false; }}><strong>只分段生成</strong><span>保留每段结果，先人工复听。</span></button><button class:active={$store.longformStrategy === 'single'} type="button" onclick={() => { $store.longformStrategy = 'single'; $store.longformMergeEnabled = false; }}><strong>仍然单条生成</strong><span>最快开始，但容易超时或截断。</span></button></div><div class="dialog-options"><label class="check-row"><input type="checkbox" bind:checked={$store.longformVerifyEnabled} disabled={$store.longformStrategy === 'single'} /><span>生成后自动 ASR 校对</span></label><label class="field compact-field"><span>失败重试</span><input type="number" min="0" max="5" bind:value={$store.longformMaxRetries} disabled={$store.longformStrategy === 'single'} /></label></div><div class="dialog-preview">{#each $store.pendingLongformPlan.segments.slice(0, 4) as seg}<p><strong>{seg.index}</strong> {seg.text}</p>{/each}{#if $store.pendingLongformPlan.segments.length > 4}<p class="muted">还有 {$store.pendingLongformPlan.segments.length - 4} 段...</p>{/if}</div><div class="dialog-actions"><button class="btn" type="button" onclick={() => closeLongformDialog(null)}>取消</button><button class="btn primary" type="button" onclick={() => closeLongformDialog($store.longformStrategy)}>确认</button></div></div></div>{/if}
-		{#if $store.showSplitPreview && $store.textSegments.length}<div class="split-preview" class:collapsed={$store.splitPreviewCollapsed}><div class="split-preview-head"><div class="split-preview-title"><div class="row wrap split-title-row"><h3>{$store.lastGeneratePlan ? '系统分段计划' : '智能分句预览'}</h3><span class="badge">{$store.textSegments.length} 段</span></div><p>用来提前检查停顿和节奏。{#if $store.lastGeneratePlan}{$store.lastGeneratePlan.planner_reason}{/if}</p></div><button class="gen-icon-btn split-collapse" class:expanded={!$store.splitPreviewCollapsed} type="button" aria-label={$store.splitPreviewCollapsed ? '展开分句预览' : '收起分句预览'} data-tooltip={$store.splitPreviewCollapsed ? '展开分句预览' : '收起分句预览'} onclick={() => ($store.splitPreviewCollapsed = !$store.splitPreviewCollapsed)}><ChevronRight size={15} /></button></div>{#if !$store.splitPreviewCollapsed}<div class="segment-list">{#each $store.textSegments as seg, i}<div class="segment-card"><span class="segment-index">{i + 1}</span><p>{seg}</p></div>{/each}</div>{/if}</div>{/if}
+			<audio class="result-shared-audio" bind:this={$store.resultPreviewAudio} preload="none" onended={() => { $store.playingResultTaskId = ''; $store.resultAudioPlaying = false; }}></audio>
+			{#if $store.showLongformDialog && $store.pendingLongformPlan}<div class="gen-modal-backdrop"><div class="longform-dialog" role="dialog" aria-modal="true"><div class="dialog-head"><div><h3>长文本生成策略</h3><p class="muted">预计 {$store.pendingLongformPlan.segments.length} 段。{$store.pendingLongformPlan.planner_reason}</p></div><button class="gen-icon-btn" type="button" aria-label="关闭长文本策略弹窗" data-tooltip="关闭长文本策略弹窗" onclick={() => closeLongformDialog(null)}>×</button></div>{#if $store.pendingLongformPlan.warnings.length}<p class="dialog-warning">{$store.pendingLongformPlan.warnings[0]}</p>{/if}<div class="strategy-grid"><button class:active={$store.longformStrategy === 'split_merge'} type="button" onclick={() => { $store.longformStrategy = 'split_merge'; $store.longformMergeEnabled = true; $store.longformVerifyEnabled = true; }}><strong>分段生成并合并</strong><span>逐段生成，校对后自动合并。</span></button><button class:active={$store.longformStrategy === 'split_only'} type="button" onclick={() => { $store.longformStrategy = 'split_only'; $store.longformMergeEnabled = false; }}><strong>只分段生成</strong><span>保留每段结果，先人工复听。</span></button><button class:active={$store.longformStrategy === 'single'} type="button" onclick={() => { $store.longformStrategy = 'single'; $store.longformMergeEnabled = false; }}><strong>仍然单条生成</strong><span>最快开始，但容易超时或截断。</span></button></div><div class="dialog-options"><label class="check-row"><input type="checkbox" bind:checked={$store.longformVerifyEnabled} disabled={$store.longformStrategy === 'single'} /><span>生成后自动 ASR 校对</span></label><label class="field compact-field"><span>失败重试</span><input type="number" min="0" max="5" bind:value={$store.longformMaxRetries} disabled={$store.longformStrategy === 'single'} /></label></div><div class="dialog-preview">{#each $store.pendingLongformPlan.segments.slice(0, 4) as seg}<p><strong>{seg.index}</strong> {seg.text}</p>{/each}{#if $store.pendingLongformPlan.segments.length > 4}<p class="muted">还有 {$store.pendingLongformPlan.segments.length - 4} 段...</p>{/if}</div><div class="dialog-actions"><button class="btn" type="button" onclick={() => closeLongformDialog(null)}>取消</button><button class="btn primary" type="button" onclick={() => closeLongformDialog($store.longformStrategy)}>确认</button></div></div></div>{/if}
+			{#if voiceRegisterOpen}
+				<div class="gen-modal-backdrop">
+					<div class="voice-register-dialog" role="dialog" aria-modal="true">
+						<div class="dialog-head">
+							<div>
+								<h3><Plus size={16} /> 注册到音色库</h3>
+								<p class="muted">ASR 台词和情绪标签已根据当前音频预填。</p>
+							</div>
+							<button class="gen-icon-btn" type="button" aria-label="关闭音色注册弹窗" data-tooltip="关闭音色注册弹窗" onclick={resetVoiceRegisterDialog}><X size={15} /></button>
+						</div>
+						<div class="voice-register-grid">
+							<label class="field"><span>名称</span><input bind:value={voiceRegisterName} /></label>
+							<label class="field"><span>授权</span><select bind:value={voiceRegisterLicense}><option value="self_voice">本人声音</option><option value="authorized">已授权</option><option value="company_authorized">公司授权</option><option value="test_only">仅测试</option><option value="unknown">未知</option></select></label>
+							<label class="field"><span>推荐引擎</span><select bind:value={voiceRegisterEngine}><option value="indextts-v2">IndexTTS v2</option><option value="omnivoice">OmniVoice</option><option value="f5-tts">F5-TTS</option><option value="cosyvoice-zero-shot">CosyVoice Zero-Shot</option><option value="mimo-v2.5-tts-voiceclone">MiMo VoiceClone</option></select></label>
+							<label class="field span-full"><span>描述</span><input bind:value={voiceRegisterDescription} /></label>
+							<label class="field"><span>标签</span><input bind:value={voiceRegisterTags} /></label>
+							<label class="field"><span>情绪标签</span><input bind:value={voiceRegisterEmotionTags} placeholder={voiceRegisterSerBusy ? '情绪识别中' : '例如 calm, happy'} /></label>
+							<label class="field span-full"><span>参考文本</span><textarea rows="4" bind:value={voiceRegisterReferenceText}></textarea></label>
+						</div>
+						{#if voiceRegisterSerBusy}<p class="muted"><Mic size={13} /> 正在识别情绪标签...</p>{/if}
+						{#if voiceRegisterError}<p class="muted error-line">{voiceRegisterError}</p>{/if}
+						<div class="dialog-actions">
+							<button class="btn" type="button" onclick={resetVoiceRegisterDialog}>取消</button>
+							<button class="btn primary" type="button" onclick={saveRegisteredVoice} disabled={voiceRegisterBusy || !voiceRegisterName.trim() || !$store.customVoiceFileId}><Save size={14} /> {voiceRegisterBusy ? '保存中' : '保存音色'}</button>
+						</div>
+					</div>
+				</div>
+			{/if}
+			{#if $store.showSplitPreview && $store.textSegments.length}<div class="split-preview" class:collapsed={$store.splitPreviewCollapsed}><div class="split-preview-head"><div class="split-preview-title"><div class="row wrap split-title-row"><h3>{$store.lastGeneratePlan ? '系统分段计划' : '智能分句预览'}</h3><span class="badge">{$store.textSegments.length} 段</span></div><p>用来提前检查停顿和节奏。{#if $store.lastGeneratePlan}{$store.lastGeneratePlan.planner_reason}{/if}</p></div><button class="gen-icon-btn split-collapse" class:expanded={!$store.splitPreviewCollapsed} type="button" aria-label={$store.splitPreviewCollapsed ? '展开分句预览' : '收起分句预览'} data-tooltip={$store.splitPreviewCollapsed ? '展开分句预览' : '收起分句预览'} onclick={() => ($store.splitPreviewCollapsed = !$store.splitPreviewCollapsed)}><ChevronRight size={15} /></button></div>{#if !$store.splitPreviewCollapsed}<div class="segment-list">{#each $store.textSegments as seg, i}<div class="segment-card"><span class="segment-index">{i + 1}</span><p>{seg}</p></div>{/each}</div>{/if}</div>{/if}
 		<div class="result-panel stack section-divider" id="records">
 			<div class="row gen-section-head result-headline"><h2>结果与记录</h2><div class="records-row-summary"><span class="muted">{filteredTasks.length} 条</span>{#if statusCounts.active}<span class="badge">生成中 {queueCounts.processing}</span><span class="badge">等待 {queueCounts.waiting}</span>{/if}{#if $store.selectedTaskIds.length}<span class="badge ok">已选 {$store.selectedTaskIds.length}</span>{/if}</div></div>
 			<div class="records-toolbar">

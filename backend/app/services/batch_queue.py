@@ -197,9 +197,34 @@ async def submit(payload: Any) -> BatchTask:
 
 def _resolve_reference(req: BatchGenerateRequest) -> str | None:
     ref = req.reference_audio_path or req.parameters.get("reference_audio_path")
-    if isinstance(ref, str) and Path(ref).exists():
-        return ref
+    if isinstance(ref, str) and ref:
+        if Path(ref).exists():
+            return ref
+        raise ValueError("REFERENCE_AUDIO_NOT_FOUND")
     return voice_store.reference_path(req.voice_id)
+
+
+def _segment_reference(segment: BatchSegmentInput) -> str | None:
+    if segment.reference_audio_path:
+        if Path(segment.reference_audio_path).exists():
+            return segment.reference_audio_path
+        raise ValueError("REFERENCE_AUDIO_NOT_FOUND")
+    return voice_store.reference_path(segment.voice_id)
+
+
+def _segment_ref_text(segment: BatchSegmentInput) -> str | None:
+    if segment.ref_text is not None:
+        return segment.ref_text
+    voice = voice_store.get_voice(segment.voice_id) if segment.voice_id else None
+    return voice.reference_text if voice else None
+
+
+def _all_segments_have_reference(req: BatchGenerateRequest) -> bool:
+    return bool(req.segments) and all(_segment_reference(segment) for segment in req.segments)
+
+
+def _all_segments_have_reference_text(req: BatchGenerateRequest) -> bool:
+    return bool(req.segments) and all((_segment_ref_text(segment) or "").strip() for segment in req.segments)
 
 
 def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
@@ -215,12 +240,14 @@ def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
     if req.engine_id == "omnivoice" and ref and ref_text is None:
         # Avoid OmniVoice's on-the-fly Whisper auto-transcription in batch jobs.
         ref_text = ""
-    if req.engine_id == "indextts-v2" and not ref:
+    has_segment_refs = _all_segments_have_reference(req)
+    has_segment_ref_texts = _all_segments_have_reference_text(req)
+    if req.engine_id == "indextts-v2" and not (ref or has_segment_refs):
         raise ValueError("REFERENCE_AUDIO_REQUIRED")
     if req.engine_id in {"f5-tts", "cosyvoice-zero-shot"}:
-        if not ref:
+        if not (ref or has_segment_refs):
             raise ValueError("REFERENCE_AUDIO_REQUIRED")
-        if not (ref_text or "").strip():
+        if not ((ref_text or "").strip() or has_segment_ref_texts):
             raise ValueError("REFERENCE_TEXT_REQUIRED")
     base = GenerateRequest(text="placeholder", engine_id=req.engine_id, voice_id=req.voice_id, language=req.language)
     values = base.model_dump()
@@ -272,8 +299,8 @@ def _runner_segments(req: BatchGenerateRequest, batch: BatchTask, output_dir: Pa
             "voice_design_prompt": segment.voice_design_prompt,
             "mimo_voice": segment.mimo_voice,
             "language": segment.language,
-            "reference_audio": segment.reference_audio_path,
-            "ref_text": segment.ref_text,
+            "reference_audio": _segment_reference(segment),
+            "ref_text": _segment_ref_text(segment),
             "speaker_id": segment.parameters.get("speaker_id"),
             "prompt": segment.parameters.get("prompt"),
             "nfe_step": segment.parameters.get("nfe_step"),

@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter
 
 from app.errors import AppException
-from app.schemas.voice_studio import SERPredictRequest, SERBatchPredictRequest, SEREmotionResult
+from app.schemas.voice_studio import SERPredictRequest, SERPredictFileRequest, SERBatchPredictRequest, SEREmotionResult
 from app.services import ser_service, voice_store
 
 log = logging.getLogger(__name__)
@@ -35,6 +35,26 @@ async def predict_emotion(body: SERPredictRequest):
 
     return SEREmotionResult(
         voice_id=body.voice_id,
+        top_emotion=result["top_emotion"],
+        emotion_scores=result["emotion_scores"],
+    )
+
+
+@router.post("/predict-file", response_model=SEREmotionResult)
+async def predict_file_emotion(body: SERPredictFileRequest):
+    """对已上传但尚未注册到音色库的参考音频做情绪识别。"""
+    vf = voice_store.get_file(body.file_id)
+    if not vf:
+        raise AppException(400, "NO_AUDIO", "Reference audio file not found")
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, ser_service.predict_emotion, vf.path)
+
+    if "error" in result:
+        raise AppException(500, "SER_ERROR", result["error"])
+
+    return SEREmotionResult(
+        voice_id=body.file_id,
         top_emotion=result["top_emotion"],
         emotion_scores=result["emotion_scores"],
     )

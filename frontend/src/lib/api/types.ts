@@ -128,6 +128,7 @@ export interface VoiceAsset extends VoiceAssetCreate {
 export interface UploadResult {
 	file_id: string;
 	filename: string;
+	path: string;
 	quality: { passed: boolean; warnings: string[] };
 }
 
@@ -181,7 +182,10 @@ export interface GenerateRequest {
 	text: string;
 	engine_id: string;
 	voice_id?: string | null;
+	voice_source?: 'voice_library' | 'reference_audio' | 'model_preset' | 'voice_design' | null;
 	reference_audio_path?: string | null;
+	reference_audio_license_status?: string | null;
+	reference_audio_tags?: string[];
 	ref_text?: string | null;
 	language: string;
 	emotion_mode: 'follow_reference' | 'emotion_vector' | 'emotion_text';

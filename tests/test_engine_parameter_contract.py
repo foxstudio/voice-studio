@@ -10,8 +10,8 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.schemas.voice_studio import AppSettings, BatchSegmentInput, BatchGenerateRequest, GenerateRequest
-from app.services import batch_queue, inference_runner, task_queue
+from app.schemas.voice_studio import AppSettings, BatchSegmentInput, BatchGenerateRequest, GenerateRequest, VoiceAssetCreate, VoiceFile
+from app.services import batch_queue, database, inference_runner, task_queue, voice_store
 
 
 def _ref_file(tmp_path: Path) -> str:
@@ -166,6 +166,129 @@ def test_cosyvoice_zero_shot_single_batch_worker_contract(tmp_path, monkeypatch)
     assert batch_ref_audio == reference_audio_path
     assert batch_ref_text == "一句中文参考文本。"
     assert batch_speed == params["speed"]
+
+
+def test_single_request_prefers_explicit_reference_audio_over_voice_id(tmp_path):
+    original_db = database.DB_PATH
+    database.set_db_path(tmp_path / "voice_studio.db")
+    library_ref = tmp_path / "library.wav"
+    explicit_ref = tmp_path / "explicit.wav"
+    library_ref.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ")
+    explicit_ref.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ")
+    try:
+        voice_file = VoiceFile(
+            file_id="library-file",
+            original_name="library.wav",
+            path=str(library_ref),
+            size_bytes=library_ref.stat().st_size,
+        )
+        database.upsert("voice_files", voice_file.file_id, voice_file.model_dump())
+        voice = voice_store.create_voice(
+            VoiceAssetCreate(
+                name="库内声音",
+                reference_audio_ids=[voice_file.file_id],
+                reference_text="库内参考文本",
+            )
+        )
+
+        req = GenerateRequest(
+            text="测试文本",
+            engine_id="f5-tts",
+            voice_id=voice.voice_id,
+            reference_audio_path=str(explicit_ref),
+            ref_text="外部参考文本",
+        )
+
+        kwargs = task_queue._kwargs(req, str(tmp_path / "out.wav"))
+
+        assert kwargs["reference_audio"] == str(explicit_ref)
+        assert kwargs["ref_text"] == "外部参考文本"
+    finally:
+        database.set_db_path(original_db)
+
+
+def test_single_request_does_not_fallback_when_explicit_reference_is_missing(tmp_path):
+    original_db = database.DB_PATH
+    database.set_db_path(tmp_path / "voice_studio.db")
+    library_ref = tmp_path / "library.wav"
+    library_ref.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ")
+    try:
+        voice_file = VoiceFile(
+            file_id="library-file",
+            original_name="library.wav",
+            path=str(library_ref),
+            size_bytes=library_ref.stat().st_size,
+        )
+        database.upsert("voice_files", voice_file.file_id, voice_file.model_dump())
+        voice = voice_store.create_voice(
+            VoiceAssetCreate(
+                name="库内声音",
+                reference_audio_ids=[voice_file.file_id],
+                reference_text="库内参考文本",
+            )
+        )
+        req = GenerateRequest(
+            text="测试文本",
+            engine_id="f5-tts",
+            voice_id=voice.voice_id,
+            reference_audio_path=str(tmp_path / "missing.wav"),
+            ref_text="外部参考文本",
+        )
+
+        with pytest.raises(Exception) as exc:
+            task_queue._kwargs(req, str(tmp_path / "out.wav"))
+
+        assert getattr(exc.value, "code", None) == "REFERENCE_AUDIO_NOT_FOUND"
+    finally:
+        database.set_db_path(original_db)
+
+
+@pytest.mark.parametrize(
+    ("engine_id", "reference_key"),
+    [
+        ("indextts-v2", "reference_audio"),
+        ("omnivoice", "reference_audio"),
+        ("mimo-v2.5-tts-voiceclone", "reference_audio_path"),
+        ("f5-tts", "reference_audio"),
+        ("cosyvoice-zero-shot", "reference_audio"),
+    ],
+)
+def test_custom_reference_audio_flows_to_all_reference_voice_engines(tmp_path, monkeypatch, engine_id, reference_key):
+    if engine_id.startswith("mimo-"):
+        _enable_mimo(monkeypatch)
+
+    reference = _ref_file(tmp_path)
+    req = GenerateRequest(
+        text="测试文本",
+        engine_id=engine_id,
+        reference_audio_path=reference,
+        ref_text="自定义音色对应的参考台词。",
+    )
+
+    kwargs = task_queue._kwargs(req, str(tmp_path / f"{engine_id}.wav"))
+
+    assert kwargs[reference_key] == reference
+    if engine_id in {"omnivoice", "f5-tts", "cosyvoice-zero-shot"}:
+        assert kwargs["ref_text"] == "自定义音色对应的参考台词。"
+
+
+def test_batch_segment_reference_audio_can_replace_library_voice(tmp_path):
+    reference = _ref_file(tmp_path)
+    batch_req = BatchGenerateRequest(
+        engine_id="f5-tts",
+        segments=[
+            BatchSegmentInput(
+                text="测试文本-批量",
+                reference_audio_path=reference,
+                ref_text="逐段参考文本。",
+            )
+        ],
+    )
+
+    batch = _batch_payload(batch_req, tmp_path)
+
+    assert batch["reference_audio"] == reference
+    assert batch["ref_text"] == "逐段参考文本。"
 
 
 def test_indextts_v2_single_batch_contract_for_required_parameters(tmp_path):

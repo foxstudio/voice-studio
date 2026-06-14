@@ -653,8 +653,10 @@ def _recover_incomplete_tasks() -> list[str]:
 
 
 def _resolve_reference(req: GenerateRequest) -> str | None:
-    if req.reference_audio_path and Path(req.reference_audio_path).exists():
-        return req.reference_audio_path
+    if req.reference_audio_path:
+        if Path(req.reference_audio_path).exists():
+            return req.reference_audio_path
+        raise AppException(400, "REFERENCE_AUDIO_NOT_FOUND", "指定的参考音频不存在")
     return voice_store.reference_path(req.voice_id)
 
 

@@ -14,7 +14,7 @@ if str(BACKEND) not in sys.path:
 
 from app.main import app  # noqa: E402
 from app.schemas.voice_studio import AppSettings, EngineAudioDiagnosisRequest, GenerateRequest, HistoryItem, Project, Role, ScriptSegment  # noqa: E402
-from app.services import audio_tools, batch_queue, community_voice_pack_store, database, engine_registry, history_store, settings_store, task_queue, voice_aliases, voice_store  # noqa: E402
+from app.services import audio_tools, batch_queue, community_voice_pack_store, database, engine_registry, history_store, ser_service, settings_store, task_queue, voice_aliases, voice_store  # noqa: E402
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -177,6 +177,75 @@ def test_custom_presets_can_be_created_updated_and_deleted(tmp_path: Path):
     deleted = client.delete(f"/api/presets/{preset['preset_id']}")
     assert deleted.status_code == 200
     assert client.get(f"/api/presets/{preset['preset_id']}").status_code == 404
+
+
+def test_agent_can_register_voice_with_license_and_tags(tmp_path: Path):
+    client = _client(tmp_path)
+
+    resp = client.post(
+        "/api/voices/register",
+        data={
+            "name": "外部 Agent 授权音色",
+            "reference_text": "这是一段经过授权的参考声音。",
+            "license_status": "authorized",
+            "tags": '["agent:demo", "授权", "参考声音"]',
+            "recommended_engine_id": "indextts-v2",
+        },
+        files={"file": ("agent.wav", b"RIFF\x24\x00\x00\x00WAVEfmt ", "audio/wav")},
+    )
+
+    assert resp.status_code == 200
+    voice = resp.json()
+    assert voice["name"] == "外部 Agent 授权音色"
+    assert voice["license_status"] == "authorized"
+    assert voice["reference_text"] == "这是一段经过授权的参考声音。"
+    assert voice["reference_audio_ids"]
+    stored_file = voice_store.get_file(voice["reference_audio_ids"][0])
+    assert stored_file is not None
+    assert Path(stored_file.path).exists()
+    assert "agent:demo" in voice["tags"]
+    assert any(binding["engine_id"] == "indextts-v2" and binding["available"] for binding in voice["engine_bindings"])
+
+
+def test_voice_upload_returns_reference_audio_path(tmp_path: Path):
+    client = _client(tmp_path)
+
+    resp = client.post(
+        "/api/voices/upload",
+        files={"file": ("custom.wav", b"RIFF\x24\x00\x00\x00WAVEfmt ", "audio/wav")},
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["file_id"]
+    assert data["filename"] == "custom.wav"
+    assert data["path"]
+    assert Path(data["path"]).exists()
+
+
+def test_predict_file_emotion_uses_uploaded_voice_file(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+
+    uploaded = client.post(
+        "/api/voices/upload",
+        files={"file": ("custom.wav", b"RIFF\x24\x00\x00\x00WAVEfmt ", "audio/wav")},
+    ).json()
+
+    captured: dict[str, str] = {}
+
+    def fake_predict(path: str):
+        captured["path"] = path
+        return {"top_emotion": "calm", "emotion_scores": {"calm": 0.9, "happy": 0.2}}
+
+    monkeypatch.setattr(ser_service, "predict_emotion", fake_predict)
+
+    resp = client.post("/api/ser/predict-file", json={"file_id": uploaded["file_id"]})
+
+    assert resp.status_code == 200
+    assert captured["path"] == uploaded["path"]
+    assert resp.json()["voice_id"] == uploaded["file_id"]
+    assert resp.json()["top_emotion"] == "calm"
+    assert resp.json()["emotion_scores"]["happy"] == 0.2
 
 
 def test_builtin_presets_are_readonly(tmp_path: Path):

@@ -6,6 +6,24 @@
 
 如果 agent 需要复用常用参数组合，先调 `GET /api/presets`，只使用 `engine_id` 与当前目标引擎一致的预设。自定义预设由前端和 API 共用，内置预设只读。
 
+## 声音来源
+
+后台 agent 调用 TTS 时不要写死系统音色库。当前支持三种声音来源：
+
+| 来源 | 适用引擎 | 调用方式 |
+| --- | --- | --- |
+| 系统音色库 | `indextts-v2`、`omnivoice`、`f5-tts`、`cosyvoice-zero-shot`、`mimo-v2.5-tts-voiceclone` | 传 `voice_id`，系统会解析音色库中的参考音频；F5/CosyVoice Zero-Shot 还需要准确 `ref_text`。 |
+| 调用方提供参考声音 | `indextts-v2`、`omnivoice`、`f5-tts`、`cosyvoice-zero-shot`、`mimo-v2.5-tts-voiceclone` | 直接传 `reference_audio_path`；如果同时传了 `voice_id`，本次生成优先使用 `reference_audio_path`。 |
+| 模型预设声音/声音设计 | `emotivoice`、`cosyvoice-sft`、`mimo-v2.5-tts-preset`、`mimo-v2.5-tts-voicedesign` | 传模型自己的 `speaker_id`、`mimo_voice` 或 `voice_design_prompt`，不需要本地音色库。 |
+
+可选留痕字段：
+
+- `voice_source`: `voice_library`、`reference_audio`、`model_preset`、`voice_design`。
+- `reference_audio_license_status`: 与音色库 `license_status` 相同，例如 `self_voice`、`authorized`、`company_authorized`、`test_only`。
+- `reference_audio_tags`: 调用方对外部参考声音的标签，例如 `["agent:video-localization", "授权"]`。
+
+这些字段用于任务参数留痕和授权审计，不会替代调用方对参考声音授权的确认。云端 voiceclone 会上传本次选择的参考音频，调用前必须确认声音授权和用户同意。
+
 ## 服务地址
 
 先启动 Voice Studio 后端服务：
@@ -70,6 +88,7 @@ python scripts/voice_studio_batch.py \
 说明：
 
 - `--voice` 是 Voice Studio 音色库里的 `voice_id`。当前“狐狸 Fox - 通俗剪辑版”的 `voice_id` 是 `819316179a4a`。
+- 如果 agent 已经有本次任务的参考声音，用 `--ref-audio /path/to/ref.wav --ref-text "参考音频台词"`，不要为了调用而强行写死 `--voice`。
 - `--engine indextts-v2` 使用本地 IndexTTS v2。
 - `--engine mimo-v2.5-tts-preset` 使用小米 MiMo 官方预置音色。
 - `--engine mimo-v2.5-tts-voicedesign` 使用小米 MiMo 文本音色设计。
@@ -152,7 +171,67 @@ MiMo VoiceDesign 示例：
 }
 ```
 
+使用调用方提供的参考声音：
+
+```json
+{
+  "project_name": "外部 Agent 旁白",
+  "engine_id": "f5-tts",
+  "reference_audio_path": "/absolute/path/to/ref.wav",
+  "ref_text": "参考音频里实际说出的台词。",
+  "voice_source": "reference_audio",
+  "reference_audio_license_status": "authorized",
+  "reference_audio_tags": ["agent:demo", "授权参考"],
+  "segments": [
+    {
+      "chapter": "intro",
+      "step": 1,
+      "text": "这段会直接使用调用方提供的参考声音。",
+      "audio": "intro/1.mp3"
+    }
+  ]
+}
+```
+
+每段也可以单独指定参考声音或音色库声音：
+
+```json
+{
+  "engine_id": "cosyvoice-zero-shot",
+  "segments": [
+    {
+      "segment_id": "role-a-001",
+      "text": "角色 A 的台词。",
+      "reference_audio_path": "/absolute/path/to/role-a.wav",
+      "ref_text": "角色 A 参考音频台词。"
+    },
+    {
+      "segment_id": "role-b-001",
+      "text": "角色 B 的台词。",
+      "voice_id": "voice-id-from-library",
+      "ref_text": "角色 B 音色库参考台词。"
+    }
+  ]
+}
+```
+
 输出的 `audio-manifest.json` 会记录每段的状态、音频路径、时长和错误信息。
+
+## 注册新声音
+
+如果外部 agent 希望把新参考声音加入系统音色库，调用一步式注册接口：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/voices/register \
+  -F 'name=外部 Agent 授权音色' \
+  -F 'reference_text=参考音频里实际说出的台词。' \
+  -F 'license_status=authorized' \
+  -F 'tags=["agent:demo","授权","参考声音"]' \
+  -F 'recommended_engine_id=indextts-v2' \
+  -F 'file=@/absolute/path/to/ref.wav;type=audio/wav'
+```
+
+响应里的 `voice_id` 可在后续 `voice_id` 调用中复用。也可以继续使用旧的两步流程：先 `POST /api/voices/upload` 得到 `file_id`，再 `POST /api/voices` 创建音色资产。
 
 ## HTTP API
 
@@ -183,6 +262,7 @@ agent 只有在最终批处理结果满足以下条件时，才能说“音频�
 ## 常见错误
 
 - `REFERENCE_AUDIO_REQUIRED`：IndexTTS v2 需要 `--voice <voice_id>` 或参考音频路径。
+- `REFERENCE_AUDIO_NOT_FOUND`：传入了 `reference_audio_path`，但文件不存在；系统不会悄悄退回默认 `voice_id`。
 - `MIMO_API_KEY_MISSING`：MiMo API key 没有配置。
 - `MIMO_CLOUD_DISABLED`：设置页没有启用云端引擎。
 - `failed`：某个段落生成失败，需要查看该段的 `error_message`。

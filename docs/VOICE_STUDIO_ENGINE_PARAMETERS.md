@@ -103,6 +103,25 @@ curl -X POST http://127.0.0.1:8000/api/generate \
 | `mimo-v2.5-asr` | 云端 ASR | `language` | TTS 参数全部无效 |
 | `qwen3-asr-mlx` | 本地 ASR | `language` | TTS 参数全部无效 |
 
+## 声音来源与授权标签
+
+TTS 调用方可以选择系统音色库、调用方提供的参考声音，或模型预设/声音设计。不要把某个固定 `voice_id` 写死成唯一入口。
+
+- 系统音色库：传 `voice_id`。后端会从音色库解析参考音频和已登记的 `license_status`、`tags`。
+- 调用方提供参考声音：传 `reference_audio_path`。如果同时传了 `voice_id`，本次生成优先使用 `reference_audio_path`，`voice_id` 只作为任务上下文保留。
+- 模型预设声音：传模型自己的 `speaker_id` 或 `mimo_voice`。
+- 声音设计：传 `emotion_text` 或 `voice_design_prompt`，由模型按文本描述生成声音。
+
+外部参考声音可附带这些可选留痕字段：
+
+- `voice_source`: `voice_library`、`reference_audio`、`model_preset`、`voice_design`。
+- `reference_audio_license_status`: `self_voice`、`authorized`、`company_authorized`、`test_only`、`unknown` 等。
+- `reference_audio_tags`: 标签数组，例如 `["agent:course-video", "授权"]`。
+
+当前授权机制以音色库资产为中心：`license_status` 会影响音色库声音在云端 voiceclone 里的可用性；官方预设音色不依赖本地音色库授权；临时 `reference_audio_path` 由调用方声明授权并负责确认。涉及 MiMo voiceclone 这类云端上传时，调用方必须先确认参考声音授权和用户同意。
+
+外部 agent 可以注册新声音到音色库：先 `POST /api/voices/upload` 再 `POST /api/voices`，或直接用 `POST /api/voices/register` 一步上传并创建音色资产。注册时建议写入 `reference_text`、`license_status` 和来源标签。
+
 ## 参数发现和预设
 
 前端和后台 agent 都应该把 `GET /api/engines` 的 `parameter_schema` 当作有效参数来源。生成页也是按当前 `engine_id` 过滤参数控件、结果参数弹窗和合成预设。
@@ -272,7 +291,7 @@ agent 规则：
 ### IndexTTS v2
 
 - `voice_id`：音色库里的本地参考音色。IndexTTS v2 生成必须有参考音频。
-- `reference_audio_path`：直接指定参考音频路径；通常由 `voice_id` 自动解析。
+- `reference_audio_path`：直接指定参考音频路径；通常由 `voice_id` 自动解析。调用方显式提供时优先于 `voice_id`。
 - `ref_text`：参考音频对应台词，能帮助模型更准地理解参考音频。
 - `emotion_mode`：`follow_reference` 表示不额外叠加情绪；`emotion_vector` 表示使用 `emotion` 和 `emo_alpha`。
 - `emotion`：8 种情绪之一：`happy`、`sad`、`angry`、`afraid`、`disgusted`、`melancholic`、`surprised`、`calm`。
@@ -289,6 +308,7 @@ agent 规则：
 ### OmniVoice
 
 - `voice_id`：使用音色库里的本地参考音频做声音克隆。
+- `reference_audio_path`：直接指定参考音频路径；显式提供时优先于 `voice_id`。
 - `emotion_text`：未选择参考音色时，作为声音设计/生成指令传给 OmniVoice。
 - `ref_text`：参考音频台词，可提升克隆稳定性。
 - `language`：`auto` 或具体语言代码。
@@ -305,6 +325,7 @@ agent 规则：
 ### F5-TTS
 
 - `voice_id`：音色库里的本地参考音频。F5 需要参考音频做音色迁移。
+- `reference_audio_path`：直接指定参考音频路径；显式提供时优先于 `voice_id`。
 - `ref_text`：参考音频对应台词，当前接入要求必填；为空时后端会报 `REFERENCE_TEXT_REQUIRED`，避免自动下载/启动 Whisper。
 - `speed`：语速倍率。
 - `nfe_step`：采样步数。官方默认是 `32`，本地快速试听可降低到 `16`。
@@ -325,7 +346,7 @@ agent 规则：
 ### CosyVoice Zero-Shot
 
 - `voice_id`：音色库里的本地参考音频。CosyVoice Zero-Shot 使用它做参考音色生成。
-- `reference_audio_path`：直接指定参考音频路径；通常由 `voice_id` 自动解析。
+- `reference_audio_path`：直接指定参考音频路径；通常由 `voice_id` 自动解析。调用方显式提供时优先于 `voice_id`。
 - `ref_text`：参考音频对应台词，必填。缺失时后端会报 `REFERENCE_TEXT_REQUIRED`。
 - `speed`：语速倍率。
 - 官方实现会在目标文本明显短于 prompt text 时给出效果下降提醒；后台 agent 应先用较完整的测试句确认贴近度。
@@ -348,7 +369,7 @@ agent 规则：
 ### MiMo V2.5 TTS VoiceClone
 
 - `voice_id`：音色库里的本地参考音色。只有本次生成选择的参考音频会上传到 MiMo。
-- `reference_audio_path`：直接指定 wav/mp3 参考音频路径。官方限制 Base64 后不超过 10 MB。
+- `reference_audio_path`：直接指定 wav/mp3 参考音频路径；显式提供时优先于 `voice_id`。官方限制 Base64 后不超过 10 MB。
 - `style_instruction`：自然语言风格指令。要调语速时写在这里，例如“语速稍慢，停顿自然”。
 - `temperature`：官方超参，默认 0.6，范围 0 到 1.5。
 - `top_p`：官方超参，默认 0.95，范围 0.01 到 1.0。

@@ -93,7 +93,7 @@ async def upload_audio(file: UploadFile) -> dict:
     except Exception as exc:
         quality = {"passed": False, "warnings": [f"无法读取音频: {exc}"]}
     db.upsert("voice_files", vf.file_id, vf.model_dump())
-    return {"file_id": vf.file_id, "filename": vf.original_name, "quality": quality}
+    return {"file_id": vf.file_id, "filename": vf.original_name, "path": vf.path, "quality": quality}
 
 
 def reference_path(voice_id: str | None) -> str | None:

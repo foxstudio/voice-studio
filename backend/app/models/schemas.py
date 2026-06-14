@@ -90,6 +90,13 @@ class EmotionMode(str, Enum):
     emotion_text = "emotion_text"
 
 
+class VoiceSource(str, Enum):
+    voice_library = "voice_library"
+    reference_audio = "reference_audio"
+    model_preset = "model_preset"
+    voice_design = "voice_design"
+
+
 EMOTIONS = ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surprised", "calm"]
 
 
@@ -298,6 +305,9 @@ class GenerateRequest(BaseModel):
     engine_id: str = "indextts-v2"
     voice_id: str | None = None
     reference_audio_path: str | None = None
+    voice_source: VoiceSource | None = None
+    reference_audio_license_status: LicenseStatus | None = None
+    reference_audio_tags: list[str] = Field(default_factory=list)
     ref_text: str | None = None
     language: str = "zh"
     emotion_mode: EmotionMode = EmotionMode.follow_reference
@@ -460,6 +470,9 @@ class BatchSegmentInput(BaseModel):
     engine_id: str | None = None
     voice_id: str | None = None
     reference_audio_path: str | None = None
+    voice_source: VoiceSource | None = None
+    reference_audio_license_status: LicenseStatus | None = None
+    reference_audio_tags: list[str] = Field(default_factory=list)
     ref_text: str | None = None
     language: str | None = None
     emotion: str | None = None
@@ -476,6 +489,9 @@ class BatchGenerateRequest(BaseModel):
     engine_id: str = "indextts-v2"
     voice_id: str | None = None
     reference_audio_path: str | None = None
+    voice_source: VoiceSource | None = None
+    reference_audio_license_status: LicenseStatus | None = None
+    reference_audio_tags: list[str] = Field(default_factory=list)
     ref_text: str | None = None
     language: str = "zh"
     output_dir: str | None = None
@@ -753,6 +769,10 @@ class EngineAudioDiagnosisRequest(BaseModel):
 
 class SERPredictRequest(BaseModel):
     voice_id: str
+
+
+class SERPredictFileRequest(BaseModel):
+    file_id: str
 
 
 class SERBatchPredictRequest(BaseModel):

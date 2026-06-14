@@ -165,7 +165,7 @@
 			disabled={generateBusy || !text.trim()}
 		>
 			<Send size={14} />
-			<span class="tool-label">{generateBusy ? '生成中' : '生成'}</span>
+			<span class="tool-label">{generateBusy ? '提交中' : '生成'}</span>
 		</button>
 	</div>
 </div>

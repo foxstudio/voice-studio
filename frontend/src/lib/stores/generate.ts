@@ -17,6 +17,7 @@ export type TaskSourceFilter = 'all' | 'local' | 'cloud';
 export type TaskDateFilter = 'all' | 'today' | '7d' | '30d';
 export type TaskSortBy = 'latest' | 'oldest' | 'duration_desc';
 export type LongformStrategy = 'split_merge' | 'split_only' | 'single';
+export type VoiceSourceMode = 'voice_library' | 'reference_audio';
 
 export type PresetDraft = {
 	name: string;
@@ -47,7 +48,21 @@ export type GenerateStoreState = {
 	splitPreviewCollapsed: boolean;
 	lastGeneratePlan: GeneratePlanResponse | null;
 	engineId: string;
+	voiceSource: VoiceSourceMode;
 	voiceId: string;
+	customVoiceFileName: string;
+	customVoiceFileId: string;
+	customVoicePreviewUrl: string;
+	customVoiceReferenceAudioPath: string;
+	customVoiceTranscript: string;
+	customVoiceSrt: string;
+	customVoiceDurationMs: number | null;
+	customVoiceSrtSegmentCount: number;
+	customVoiceTranscriptionId: string;
+	customVoiceConfirmed: boolean;
+	customVoiceBusy: boolean;
+	customVoiceError: string;
+	customVoiceQualityWarnings: string[];
 	language: string;
 	emotion: string;
 	voiceDesign: string;
@@ -163,6 +178,13 @@ const DEFAULT_PRESET_DRAFT: PresetDraft = {
 
 const DEFAULT_VOICE_DESIGN = '女，青年，中音调';
 const DEFAULT_VOICE_DESIGN_PROMPT = '中年男性，声线沉稳偏正式，吐字工整，语速适中。';
+export const REFERENCE_VOICE_ENGINE_IDS = [
+	'indextts-v2',
+	'omnivoice',
+	'mimo-v2.5-tts-voiceclone',
+	'f5-tts',
+	'cosyvoice-zero-shot'
+] as const;
 
 function createInitialState(): GenerateStoreState {
 	return {
@@ -186,7 +208,21 @@ function createInitialState(): GenerateStoreState {
 		splitPreviewCollapsed: false,
 		lastGeneratePlan: null,
 		engineId: 'indextts-v2',
+		voiceSource: 'voice_library',
 		voiceId: '',
+		customVoiceFileName: '',
+		customVoiceFileId: '',
+		customVoicePreviewUrl: '',
+		customVoiceReferenceAudioPath: '',
+		customVoiceTranscript: '',
+		customVoiceSrt: '',
+		customVoiceDurationMs: null,
+		customVoiceSrtSegmentCount: 0,
+		customVoiceTranscriptionId: '',
+		customVoiceConfirmed: false,
+		customVoiceBusy: false,
+		customVoiceError: '',
+		customVoiceQualityWarnings: [],
 		language: 'zh',
 		emotion: '',
 		voiceDesign: DEFAULT_VOICE_DESIGN,
@@ -306,30 +342,32 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 	const selected = getSelectedEngine(state);
 	const activeParamKeys = getActiveParamKeys(state);
 	const selectedVoice = state.voices.find((voice) => voice.voice_id === state.voiceId) ?? null;
-	const usesReferenceVoice = Boolean(
-		selected &&
-		['indextts-v2', 'omnivoice', 'mimo-v2.5-tts-voiceclone', 'f5-tts', 'cosyvoice-zero-shot'].includes(
-			selected.manifest.engine_id
-		)
-	);
+	const usesReferenceVoice = Boolean(selected && REFERENCE_VOICE_ENGINE_IDS.includes(selected.manifest.engine_id as (typeof REFERENCE_VOICE_ENGINE_IDS)[number]));
 	const supportsEmotion = activeParamKeys.has('emotion');
 	const isOmniVoice = state.engineId === 'omnivoice';
 	const isMimoPreset = state.engineId === 'mimo-v2.5-tts-preset';
 	const isMimoDesign = state.engineId === 'mimo-v2.5-tts-voicedesign';
 	const isMimo = isMimoEngine(state.engineId);
+	const useCustomReference = usesReferenceVoice && state.voiceSource === 'reference_audio';
 
 	return {
 		text: state.text,
 		engine_id: state.engineId,
-		voice_id: usesReferenceVoice ? state.voiceId || null : null,
+		voice_id: usesReferenceVoice && !useCustomReference ? state.voiceId || null : null,
+		voice_source: usesReferenceVoice ? state.voiceSource : undefined,
+		reference_audio_path: useCustomReference ? state.customVoiceReferenceAudioPath || null : null,
+		reference_audio_license_status: useCustomReference ? 'self_voice' : null,
+		reference_audio_tags: useCustomReference ? ['custom-reference'] : [],
 		ref_text:
-			usesReferenceVoice && selectedVoice?.reference_text.trim()
+			useCustomReference && state.customVoiceTranscript.trim()
+				? state.customVoiceTranscript.trim()
+				: usesReferenceVoice && selectedVoice?.reference_text.trim()
 				? selectedVoice.reference_text.trim()
 				: null,
 		language: state.language,
 		emotion_mode: supportsEmotion && Boolean(state.emotion) ? 'emotion_vector' : 'follow_reference',
 		emotion: supportsEmotion && Boolean(state.emotion) ? state.emotion : null,
-		emotion_text: isOmniVoice && !state.voiceId ? state.voiceDesign : null,
+		emotion_text: isOmniVoice && !state.voiceId && !useCustomReference ? state.voiceDesign : null,
 		style_instruction: isMimo ? state.styleInstruction || null : null,
 		voice_design_prompt: isMimoDesign ? state.voiceDesignPrompt : null,
 		optimize_text_preview: isMimoDesign ? state.optimizeTextPreview : false,
@@ -368,7 +406,21 @@ function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<
 	return {
 		...engineDefaults,
 		text: req.text,
+		voiceSource: req.reference_audio_path ? 'reference_audio' : 'voice_library',
 		voiceId: req.voice_id ?? '',
+		customVoiceFileName: req.reference_audio_path ? req.reference_audio_path.split('/').pop() ?? '自定义参考音频' : '',
+		customVoiceFileId: '',
+		customVoicePreviewUrl: '',
+		customVoiceReferenceAudioPath: req.reference_audio_path ?? '',
+		customVoiceTranscript: req.reference_audio_path ? req.ref_text ?? '' : '',
+		customVoiceSrt: '',
+		customVoiceDurationMs: null,
+		customVoiceSrtSegmentCount: 0,
+		customVoiceTranscriptionId: '',
+		customVoiceConfirmed: Boolean(req.reference_audio_path && (req.ref_text ?? '').trim()),
+		customVoiceBusy: false,
+		customVoiceError: '',
+		customVoiceQualityWarnings: [],
 		language: req.language || 'zh',
 		emotion:
 			req.emotion_mode === 'emotion_vector' && typeof req.emotion === 'string' ? req.emotion : '',
@@ -409,7 +461,7 @@ function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<
 	};
 }
 
-function createGenerateStore() {
+export function createGenerateStore() {
 	const store = writable<GenerateStoreState>(createInitialState());
 
 	return {

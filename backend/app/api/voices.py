@@ -1,13 +1,32 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Query, UploadFile
+import json
+
+from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from app.errors import AppException
-from app.schemas.voice_studio import VoiceAsset, VoiceAssetCreate, VoiceAssetUpdate
+from app.schemas.voice_studio import LicenseStatus, VoiceAsset, VoiceAssetCreate, VoiceAssetUpdate, VoiceType
 from app.services import voice_store
 
 router = APIRouter()
+
+
+def _parse_tags(value: str | None) -> list[str]:
+    if not value:
+        return []
+    stripped = value.strip()
+    if not stripped:
+        return []
+    if stripped.startswith("["):
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise AppException(400, "VOICE_TAGS_INVALID", "tags must be a JSON array or comma-separated string") from exc
+        if not isinstance(parsed, list):
+            raise AppException(400, "VOICE_TAGS_INVALID", "tags must be a JSON array or comma-separated string")
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    return [part.strip() for part in stripped.split(",") if part.strip()]
 
 
 @router.get("", response_model=list[VoiceAsset])
@@ -17,6 +36,38 @@ async def list_voices(offset: int = Query(0, ge=0), limit: int = Query(100, ge=1
 
 @router.post("", response_model=VoiceAsset)
 async def create_voice(data: VoiceAssetCreate):
+    return voice_store.create_voice(data)
+
+
+@router.post("/upload")
+async def upload_reference_audio(file: UploadFile = File(...)):
+    return await voice_store.upload_audio(file)
+
+
+@router.post("/register", response_model=VoiceAsset)
+async def register_voice(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    reference_text: str = Form(""),
+    license_status: LicenseStatus = Form(LicenseStatus.unknown),
+    tags: str = Form(""),
+    voice_type: VoiceType = Form(VoiceType.test_sample),
+    description: str = Form(""),
+    default_language: str = Form("zh"),
+    recommended_engine_id: str | None = Form(None),
+):
+    uploaded = await voice_store.upload_audio(file)
+    data = VoiceAssetCreate(
+        name=name,
+        voice_type=voice_type,
+        description=description,
+        default_language=default_language,
+        tags=_parse_tags(tags),
+        reference_text=reference_text,
+        recommended_engine_id=recommended_engine_id,
+        reference_audio_ids=[uploaded["file_id"]],
+        license_status=license_status,
+    )
     return voice_store.create_voice(data)
 
 
@@ -40,11 +91,6 @@ async def update_voice(voice_id: str, data: VoiceAssetUpdate):
 async def delete_voice(voice_id: str):
     voice_store.delete_voice(voice_id)
     return {"status": "deleted"}
-
-
-@router.post("/upload")
-async def upload_reference_audio(file: UploadFile = File(...)):
-    return await voice_store.upload_audio(file)
 
 
 @router.get("/{voice_id}/audio/{file_id}")

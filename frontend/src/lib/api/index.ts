@@ -138,6 +138,7 @@ export const Api = {
 	deleteTranscriptionTask: (taskId: string) => api.delete<{ status: string; task_id: string }>(`/asr/tasks/${taskId}`),
 	transcriptionHistory: () => api.get<TranscriptionRecord[]>('/asr/history'),
 	predictEmotion: (voiceId: string) => api.post<SEREmotionResult>('/ser/predict', { voice_id: voiceId }),
+	predictEmotionForFile: (fileId: string) => api.post<SEREmotionResult>('/ser/predict-file', { file_id: fileId }),
 	batchPredictAllEmotions: () => api.post<{ results: SEREmotionResult[] }>('/ser/batch-predict', { all: true }),
 	splitText: (text: string) => api.post<{ segments: string[] }>('/text-tools/split', { text }),
 	cleanText: (text: string) => api.post<{ text: string }>('/text-tools/clean', { text }),
