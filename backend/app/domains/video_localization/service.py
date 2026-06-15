@@ -405,6 +405,29 @@ def sync_tts_batch_results(project_id: str, batch_task_id: str) -> VideoLocaliza
     return save_video_localization(project_id, draft.model_copy(update={"cues": next_cues}))
 
 
+def sync_single_tts_result(project_id: str, cue_id: str, *, result_id: str, output_path: str, duration_ms: int | None) -> VideoLocalizationDraft | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    path = Path(output_path)
+    if not path.exists():
+        raise AppException(400, "VIDEO_LOCALIZATION_TTS_AUDIO_NOT_FOUND", "TTS audio file not found")
+
+    updated = False
+    next_cues: list[VideoLocalizationCue] = []
+    for cue in draft.cues:
+        if cue.cue_id != cue_id:
+            next_cues.append(cue)
+            continue
+        next_cues.append(_cue_with_tts_audio(cue, result_id=result_id, output_path=str(path), duration_ms=duration_ms))
+        updated = True
+
+    if not updated:
+        raise AppException(400, "VIDEO_LOCALIZATION_TTS_CUE_NOT_FOUND", "Cue not found in video localization draft")
+    return save_video_localization(project_id, draft.model_copy(update={"cues": next_cues}))
+
+
 def tts_audio_file(project_id: str, cue_id: str) -> Path | None:
     project = project_store.get_project(project_id)
     if not project:
@@ -699,12 +722,21 @@ def _safe_identifier(value: str) -> str:
 
 
 def _cue_with_tts_result(cue: VideoLocalizationCue, batch_task_id: str, segment: BatchSegmentResult) -> VideoLocalizationCue:
+    return _cue_with_tts_audio(
+        cue,
+        result_id=f"{batch_task_id}:{segment.segment_id}",
+        output_path=segment.output_path,
+        duration_ms=segment.duration_ms,
+    )
+
+
+def _cue_with_tts_audio(cue: VideoLocalizationCue, *, result_id: str, output_path: str | None, duration_ms: int | None) -> VideoLocalizationCue:
     flags = [flag for flag in cue.quality_flags if flag != "tts_generated"]
     flags.append("tts_generated")
     update = {
-        "tts_result_id": f"{batch_task_id}:{segment.segment_id}",
-        "tts_audio_path": segment.output_path,
-        "generated_duration_ms": segment.duration_ms,
+        "tts_result_id": result_id,
+        "tts_audio_path": output_path,
+        "generated_duration_ms": duration_ms,
         "quality_flags": flags,
     }
     if cue.source_duration_ms is None:

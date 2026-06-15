@@ -306,12 +306,19 @@ export interface VideoLocalizationExport extends VideoLocalizationDraft {
 export interface GenerateRequest {
 	text: string;
 	engine_id: string;
+	source?: string | null;
+	project_id?: string | null;
+	segment_id?: string | null;
 	voice_id?: string | null;
 	voice_source?: 'voice_library' | 'reference_audio' | 'model_preset' | 'voice_design' | null;
 	reference_audio_path?: string | null;
 	reference_audio_license_status?: string | null;
 	reference_audio_tags?: string[];
 	ref_text?: string | null;
+	custom_reference_source_audio_path?: string | null;
+	custom_reference_source_duration_ms?: number | null;
+	custom_reference_trim_start_ms?: number | null;
+	custom_reference_trim_end_ms?: number | null;
 	language: string;
 	emotion_mode: 'follow_reference' | 'emotion_vector' | 'emotion_text';
 	emotion?: string | null;

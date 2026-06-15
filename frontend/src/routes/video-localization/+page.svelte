@@ -410,6 +410,9 @@
 		const request: GenerateRequest = {
 			text: selectedCue.tts_recommended_text?.trim() ?? '',
 			engine_id: 'indextts-v2',
+			source: 'video_localization',
+			project_id: projectId,
+			segment_id: selectedCue.cue_id,
 			voice_id: null,
 			voice_source: 'reference_audio',
 			reference_audio_path: reference?.audio_path ?? null,

@@ -304,12 +304,19 @@ class TranscriptionBatchSupplementRequest(TimestampSupplementRequest):
 class GenerateRequest(BaseModel):
     text: str
     engine_id: str = "indextts-v2"
+    source: str | None = None
+    project_id: str | None = None
+    segment_id: str | None = None
     voice_id: str | None = None
     reference_audio_path: str | None = None
     voice_source: VoiceSource | None = None
     reference_audio_license_status: LicenseStatus | None = None
     reference_audio_tags: list[str] = Field(default_factory=list)
     ref_text: str | None = None
+    custom_reference_source_audio_path: str | None = None
+    custom_reference_source_duration_ms: int | None = None
+    custom_reference_trim_start_ms: int | None = None
+    custom_reference_trim_end_ms: int | None = None
     language: str = "zh"
     emotion_mode: EmotionMode = EmotionMode.follow_reference
     emotion: str | None = None

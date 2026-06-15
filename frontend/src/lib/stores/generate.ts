@@ -47,6 +47,9 @@ export type GenerateStoreState = {
 	showSplitPreview: boolean;
 	splitPreviewCollapsed: boolean;
 	lastGeneratePlan: GeneratePlanResponse | null;
+	requestSource: string;
+	requestProjectId: string;
+	requestSegmentId: string;
 	engineId: string;
 	voiceSource: VoiceSourceMode;
 	voiceId: string;
@@ -54,6 +57,11 @@ export type GenerateStoreState = {
 	customVoiceFileId: string;
 	customVoicePreviewUrl: string;
 	customVoiceReferenceAudioPath: string;
+	customVoiceSourceFileId: string;
+	customVoiceSourceAudioPath: string;
+	customVoiceSourceDurationMs: number | null;
+	customVoiceTrimStartMs: number | null;
+	customVoiceTrimEndMs: number | null;
 	customVoiceTranscript: string;
 	customVoiceSrt: string;
 	customVoiceDurationMs: number | null;
@@ -207,6 +215,9 @@ function createInitialState(): GenerateStoreState {
 		showSplitPreview: false,
 		splitPreviewCollapsed: false,
 		lastGeneratePlan: null,
+		requestSource: '',
+		requestProjectId: '',
+		requestSegmentId: '',
 		engineId: 'indextts-v2',
 		voiceSource: 'voice_library',
 		voiceId: '',
@@ -214,6 +225,11 @@ function createInitialState(): GenerateStoreState {
 		customVoiceFileId: '',
 		customVoicePreviewUrl: '',
 		customVoiceReferenceAudioPath: '',
+		customVoiceSourceFileId: '',
+		customVoiceSourceAudioPath: '',
+		customVoiceSourceDurationMs: null,
+		customVoiceTrimStartMs: null,
+		customVoiceTrimEndMs: null,
 		customVoiceTranscript: '',
 		customVoiceSrt: '',
 		customVoiceDurationMs: null,
@@ -353,6 +369,9 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 	return {
 		text: state.text,
 		engine_id: state.engineId,
+		source: state.requestSource || null,
+		project_id: state.requestProjectId || null,
+		segment_id: state.requestSegmentId || null,
 		voice_id: usesReferenceVoice && !useCustomReference ? state.voiceId || null : null,
 		voice_source: usesReferenceVoice ? state.voiceSource : undefined,
 		reference_audio_path: useCustomReference ? state.customVoiceReferenceAudioPath || null : null,
@@ -364,6 +383,10 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 				: usesReferenceVoice && selectedVoice?.reference_text.trim()
 				? selectedVoice.reference_text.trim()
 				: null,
+		custom_reference_source_audio_path: useCustomReference ? state.customVoiceSourceAudioPath || null : null,
+		custom_reference_source_duration_ms: useCustomReference ? state.customVoiceSourceDurationMs : null,
+		custom_reference_trim_start_ms: useCustomReference ? state.customVoiceTrimStartMs : null,
+		custom_reference_trim_end_ms: useCustomReference ? state.customVoiceTrimEndMs : null,
 		language: state.language,
 		emotion_mode: supportsEmotion && Boolean(state.emotion) ? 'emotion_vector' : 'follow_reference',
 		emotion: supportsEmotion && Boolean(state.emotion) ? state.emotion : null,
@@ -406,12 +429,20 @@ function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<
 	return {
 		...engineDefaults,
 		text: req.text,
+		requestSource: req.source ?? '',
+		requestProjectId: req.project_id ?? '',
+		requestSegmentId: req.segment_id ?? '',
 		voiceSource: req.reference_audio_path ? 'reference_audio' : 'voice_library',
 		voiceId: req.voice_id ?? '',
 		customVoiceFileName: req.reference_audio_path ? req.reference_audio_path.split('/').pop() ?? '自定义参考音频' : '',
 		customVoiceFileId: '',
 		customVoicePreviewUrl: '',
 		customVoiceReferenceAudioPath: req.reference_audio_path ?? '',
+		customVoiceSourceFileId: '',
+		customVoiceSourceAudioPath: req.custom_reference_source_audio_path ?? '',
+		customVoiceSourceDurationMs: req.custom_reference_source_duration_ms ?? null,
+		customVoiceTrimStartMs: req.custom_reference_trim_start_ms ?? null,
+		customVoiceTrimEndMs: req.custom_reference_trim_end_ms ?? null,
 		customVoiceTranscript: req.reference_audio_path ? req.ref_text ?? '' : '',
 		customVoiceSrt: '',
 		customVoiceDurationMs: null,

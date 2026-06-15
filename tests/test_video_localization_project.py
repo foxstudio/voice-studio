@@ -11,9 +11,9 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
-from app.schemas.voice_studio import AppSettings, BatchSegmentResult, BatchTask, TaskStatus  # noqa: E402
+from app.schemas.voice_studio import AppSettings, BatchSegmentResult, BatchTask, GenerationTask, HistoryItem, TaskStatus  # noqa: E402
 from app.domains.video_localization import service as video_localization_service  # noqa: E402
-from app.services import batch_queue, database, settings_store  # noqa: E402
+from app.services import batch_queue, database, settings_store, task_queue  # noqa: E402
 from app.api import projects as projects_api  # noqa: E402
 
 
@@ -777,6 +777,59 @@ def test_video_localization_source_cue_audio_slices_clean_vocals(tmp_path: Path,
     assert response.status_code == 200
     assert response.content == b"source-cue"
     assert captured == {"source": vocals_path, "start_ms": 1000, "end_ms": 3200}
+
+
+def test_video_localization_single_tts_generation_syncs_from_task_queue(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "单条回填", "description": ""}).json()
+    output_path = tmp_path / "outputs" / "single.wav"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(b"single-audio")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 3200,
+                    "en_subtitle_text": "Source line.",
+                    "zh_localized_subtitle_text": "源台词。",
+                    "tts_recommended_text": "源台词。",
+                }
+            ],
+        },
+    )
+    task = GenerationTask(
+        task_id="task-video-single",
+        engine_id="indextts-v2",
+        project_id=project["project_id"],
+        segment_id="cue_0001",
+        input_text="源台词。",
+        status=TaskStatus.success,
+        parameters={"source": "video_localization"},
+    )
+    hist = HistoryItem(
+        result_id="result-video-single",
+        task_id=task.task_id,
+        engine_id=task.engine_id,
+        project_id=task.project_id,
+        segment_id=task.segment_id,
+        input_text=task.input_text,
+        output_path=str(output_path),
+        duration_ms=2300,
+    )
+
+    task_queue._sync_video_localization_tts_result(task, hist)
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization")
+    cue = response.json()["cues"][0]
+    assert cue["tts_result_id"] == "result-video-single"
+    assert cue["tts_audio_path"] == str(output_path)
+    assert cue["generated_duration_ms"] == 2300
 
 
 def test_video_localization_tts_batch_sync_rejects_wrong_project(tmp_path: Path):

@@ -20,5 +20,5 @@ async def generate_plan(req: GeneratePlanRequest):
 
 @router.post("", response_model=GenerateResponse)
 async def generate(req: GenerateRequest):
-    task_id = await task_queue.submit(req)
+    task_id = await task_queue.submit(req, project_id=req.project_id, segment_id=req.segment_id)
     return GenerateResponse(task_id=task_id)

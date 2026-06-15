@@ -757,6 +757,29 @@ def _update_project_segment(task: GenerationTask, audio_id: str | None, hist_res
         project_store.update_segment_result(task.project_id, task.segment_id, audio_id, hist_result_id, status, error)
 
 
+def _sync_video_localization_tts_result(task: GenerationTask, hist: HistoryItem) -> None:
+    if task.parameters.get("source") != "video_localization" or not task.project_id or not task.segment_id:
+        return
+    if not hist.output_path or not hist.result_id:
+        return
+    from app.domains.video_localization import service as video_localization_service
+
+    video_localization_service.sync_single_tts_result(
+        task.project_id,
+        task.segment_id,
+        result_id=hist.result_id,
+        output_path=hist.output_path,
+        duration_ms=hist.duration_ms,
+    )
+
+
+def _try_sync_video_localization_tts_result(task: GenerationTask, hist: HistoryItem) -> None:
+    try:
+        _sync_video_localization_tts_result(task, hist)
+    except Exception as exc:
+        task.logs.append(f"视频本土化 cue 回填失败：{exc}")
+
+
 async def _update_status(task: GenerationTask, **kwargs) -> None:
     """唯一状态写入口：写 DB + 广播。不做任何业务逻辑。"""
     for key, value in kwargs.items():
@@ -777,7 +800,7 @@ def _update_status_sync(task: GenerationTask, **kwargs) -> None:
 
 def decide_task_state(task: GenerationTask, *, engine_result: dict | None = None, engine_error: Exception | None = None, cancelled: bool = False) -> tuple[TaskStatus | None, str | None]:
     """统一状态决策：把各种结果翻译成状态。只返回决策，不写状态。
-    
+
     返回 (status, error_message)。status 为 None 表示不改状态（交给 DB 同步）。
     """
     if cancelled:
@@ -872,6 +895,7 @@ async def _process(task: GenerationTask) -> None:
         hist = _save_history(task, req, final_path, audio_id, result)
         task.result_id = hist.result_id
         _update_project_segment(task, audio_id, hist.result_id, SegmentStatus.completed)
+        _try_sync_video_localization_tts_result(task, hist)
 
     except Exception as exc:
         cancelled = task.task_id in _cancelled or str(exc) == "Generation cancelled"
