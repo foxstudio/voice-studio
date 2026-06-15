@@ -33,6 +33,7 @@
 	let creating = $state(false);
 	let importing = $state(false);
 	let extractingAudio = $state(false);
+	let separatingStems = $state(false);
 	let transcribingAsr = $state(false);
 	let videoInput: HTMLInputElement | null = null;
 	let message = $state('');
@@ -164,6 +165,21 @@
 			error = (e as Error).message || '英文 ASR 失败';
 		} finally {
 			transcribingAsr = false;
+		}
+	}
+
+	async function separateStems() {
+		if (!projectId || !(draft?.source_media.audio_path || draft?.stems.original_audio_path)) return;
+		separatingStems = true;
+		error = '';
+		try {
+			draft = await Api.separateVideoLocalizationStems(projectId);
+			message = '人声与背景声已分离';
+			setTimeout(() => (message = ''), 1800);
+		} catch (e) {
+			error = (e as Error).message || '人声分离失败';
+		} finally {
+			separatingStems = false;
 		}
 	}
 
@@ -378,6 +394,9 @@
 						<span>分离</span>
 						<strong>vocals_clean + background</strong>
 						<span class={`badge ${draft?.stems.separation_status === 'completed' ? 'ok' : ''}`}>{draft?.stems.separation_status || 'pending'}</span>
+						<button class="mini-btn" type="button" onclick={separateStems} disabled={!(draft?.source_media.audio_path || draft?.stems.original_audio_path) || separatingStems}>
+							{separatingStems ? '分离中' : '分离'}
+						</button>
 					</div>
 					<div class="model-row">
 						<span>源音</span>

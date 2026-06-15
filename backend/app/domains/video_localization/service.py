@@ -89,6 +89,35 @@ def extract_source_audio(project_id: str) -> VideoLocalizationDraft | None:
     return save_video_localization(project_id, draft.model_copy(update={"source_media": source_media, "stems": stems}))
 
 
+def separate_source_audio(project_id: str) -> VideoLocalizationDraft | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    audio_path_value = draft.source_media.audio_path or draft.stems.original_audio_path
+    if not audio_path_value:
+        raise AppException(400, "VIDEO_LOCALIZATION_SOURCE_AUDIO_MISSING", "Extract source audio before running stem separation")
+
+    audio_path = Path(audio_path_value)
+    if not audio_path.exists():
+        raise AppException(400, "VIDEO_LOCALIZATION_SOURCE_AUDIO_NOT_FOUND", "Source audio file is missing")
+
+    stems_dir = _project_video_localization_dir(project_id) / "stems"
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    separation = _separate_audio_file(audio_path, stems_dir)
+    stems = draft.stems.model_copy(
+        update={
+            "vocals_clean_path": str(separation["vocals_clean_path"]),
+            "background_path": str(separation["background_path"]),
+            "original_audio_path": str(audio_path),
+            "separation_engine_id": separation.get("engine_id", "demucs:htdemucs"),
+            "separation_status": "completed",
+            "quality_flags": separation.get("quality_flags", []),
+        }
+    )
+    return save_video_localization(project_id, draft.model_copy(update={"stems": stems}))
+
+
 def transcribe_english_source_audio(project_id: str, engine_id: str = "faster-whisper-turbo") -> VideoLocalizationDraft | None:
     project = project_store.get_project(project_id)
     if not project:
@@ -235,6 +264,42 @@ def _extract_audio_file(video_path: Path, audio_path: Path) -> dict:
         audio_path.unlink(missing_ok=True)
         raise AppException(500, "VIDEO_LOCALIZATION_AUDIO_EXTRACT_FAILED", "Failed to extract source audio")
     return audio_tools.probe_audio(audio_path)
+
+
+def _separate_audio_file(audio_path: Path, stems_dir: Path) -> dict:
+    demucs = shutil.which("demucs")
+    if not demucs:
+        raise AppException(500, "VIDEO_LOCALIZATION_DEMUCS_MISSING", "demucs is required to separate vocals and background")
+
+    output_root = stems_dir / "demucs"
+    command = [
+        demucs,
+        "--two-stems",
+        "vocals",
+        "--name",
+        "htdemucs",
+        "--out",
+        str(output_root),
+        str(audio_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    demucs_dir = output_root / "htdemucs" / audio_path.stem
+    vocals_path = demucs_dir / "vocals.wav"
+    background_path = demucs_dir / "no_vocals.wav"
+    if result.returncode != 0 or not vocals_path.exists() or not background_path.exists():
+        raise AppException(500, "VIDEO_LOCALIZATION_SEPARATION_FAILED", "Failed to separate vocals and background")
+
+    vocals_clean_path = _unique_path(stems_dir / f"{audio_path.stem}-vocals-clean.wav")
+    background_dest = _unique_path(stems_dir / f"{audio_path.stem}-background.wav")
+    shutil.copy2(vocals_path, vocals_clean_path)
+    shutil.copy2(background_path, background_dest)
+    quality = audio_tools.quality_metrics(vocals_clean_path, min_duration_ms=1000)
+    return {
+        "vocals_clean_path": vocals_clean_path,
+        "background_path": background_dest,
+        "engine_id": "demucs:htdemucs",
+        "quality_flags": quality.get("warnings", []),
+    }
 
 
 def _cues_from_asr_segments(

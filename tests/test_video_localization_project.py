@@ -268,6 +268,59 @@ def test_video_localization_extract_source_audio_requires_video(tmp_path: Path):
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_SOURCE_MISSING"
 
 
+def test_video_localization_separate_source_audio_requires_source_audio(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "缺源音分离", "description": ""}).json()
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/stems")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_SOURCE_AUDIO_MISSING"
+
+
+def test_video_localization_separate_source_audio_updates_stems(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "分离人声", "description": ""}).json()
+    audio_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "audio" / "source.wav"
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    audio_path.write_bytes(b"fake-wav")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "demo.mp4", "audio_path": str(audio_path), "duration_ms": 4200},
+        },
+    )
+
+    def fake_separate(source_audio: Path, stems_dir: Path) -> dict:
+        assert source_audio == audio_path
+        vocals = stems_dir / "source-vocals-clean.wav"
+        background = stems_dir / "source-background.wav"
+        vocals.parent.mkdir(parents=True, exist_ok=True)
+        vocals.write_bytes(b"vocals")
+        background.write_bytes(b"background")
+        return {
+            "vocals_clean_path": vocals,
+            "background_path": background,
+            "engine_id": "demucs:mock",
+            "quality_flags": ["needs_reference_review"],
+        }
+
+    monkeypatch.setattr(video_localization_service, "_separate_audio_file", fake_separate)
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/stems")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stems"]["separation_status"] == "completed"
+    assert body["stems"]["separation_engine_id"] == "demucs:mock"
+    assert body["stems"]["vocals_clean_path"].endswith("source-vocals-clean.wav")
+    assert body["stems"]["background_path"].endswith("source-background.wav")
+    assert body["stems"]["original_audio_path"] == str(audio_path)
+    assert body["stems"]["quality_flags"] == ["needs_reference_review"]
+
+
 def test_video_localization_english_asr_requires_source_audio(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "缺源音", "description": ""}).json()
