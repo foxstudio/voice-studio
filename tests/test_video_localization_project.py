@@ -11,9 +11,10 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
-from app.schemas.voice_studio import AppSettings  # noqa: E402
+from app.schemas.voice_studio import AppSettings, BatchTask, TaskStatus  # noqa: E402
 from app.domains.video_localization import service as video_localization_service  # noqa: E402
 from app.services import database, settings_store  # noqa: E402
+from app.api import projects as projects_api  # noqa: E402
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -508,6 +509,116 @@ def test_video_localization_chinese_draft_normalizes_existing_subtitle_for_tts(t
     assert cue["zh_localized_subtitle_text"] == "1992 年，有 130 人加入。"
     assert cue["tts_recommended_text"] == "一九九二年，有一百三十人加入。"
     assert "tts_text_normalized" in cue["quality_flags"]
+
+
+def test_video_localization_tts_batch_submits_ready_clean_reference_cues(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "批量 TTS", "description": ""}).json()
+    reference_path = tmp_path / "refs" / "speaker.wav"
+    reference_path.parent.mkdir(parents=True, exist_ok=True)
+    reference_path.write_bytes(b"voice")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "speakers": [{"speaker_id": "speaker_01", "display_name": "A"}],
+            "reference_clips": [
+                {
+                    "reference_clip_id": "ref_001",
+                    "speaker_id": "speaker_01",
+                    "source_stem": "vocals_clean",
+                    "audio_path": str(reference_path),
+                    "cleanliness": "clean",
+                    "asr_text": "In 1992, this changed everything.",
+                    "asr_status": "verified",
+                }
+            ],
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 3200,
+                    "audio_route": "clone_from_source",
+                    "en_subtitle_text": "In 1992, this changed everything.",
+                    "zh_localized_subtitle_text": "1992 年，这件事改变了一切。",
+                    "tts_recommended_text": "一九九二年，这件事，改变了一切。",
+                    "reference_clip_id": "ref_001",
+                    "review_status": "ready",
+                }
+            ],
+        },
+    )
+    captured: dict = {}
+
+    async def fake_submit(payload):
+        captured["payload"] = payload
+        return BatchTask(batch_task_id="batch-video-1", project_name=payload["project_name"], engine_id=payload["engine_id"], status=TaskStatus.queued, segments=[])
+
+    monkeypatch.setattr(projects_api.batch_queue, "submit", fake_submit)
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/tts/batch")
+
+    assert response.status_code == 200
+    assert response.json()["batch_task_id"] == "batch-video-1"
+    payload = captured["payload"]
+    assert payload["project_name"] == "批量 TTS 中文本土化配音"
+    assert payload["engine_id"] == "indextts-v2"
+    assert payload["output_format"] == "mp3"
+    assert payload["parameters"]["source"] == "video_localization"
+    segment = payload["segments"][0]
+    assert segment["segment_id"] == "cue_0001"
+    assert segment["text"] == "一九九二年，这件事，改变了一切。"
+    assert segment["reference_audio_path"] == str(reference_path)
+    assert segment["ref_text"] == "In 1992, this changed everything."
+    assert segment["reference_audio_license_status"] == "本土化"
+    assert segment["parameters"]["zh_localized_subtitle_text"] == "1992 年，这件事改变了一切。"
+
+
+def test_video_localization_tts_batch_rejects_unverified_reference(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "参考音未复听", "description": ""}).json()
+    reference_path = tmp_path / "refs" / "speaker.wav"
+    reference_path.parent.mkdir(parents=True, exist_ok=True)
+    reference_path.write_bytes(b"voice")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "reference_clips": [
+                {
+                    "reference_clip_id": "ref_001",
+                    "speaker_id": "speaker_01",
+                    "source_stem": "vocals_clean",
+                    "audio_path": str(reference_path),
+                    "cleanliness": "needs_review",
+                    "asr_text": "Reference line.",
+                    "asr_status": "candidate",
+                }
+            ],
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 3200,
+                    "audio_route": "clone_from_source",
+                    "en_subtitle_text": "Reference line.",
+                    "zh_localized_subtitle_text": "参考台词。",
+                    "tts_recommended_text": "参考台词。",
+                    "reference_clip_id": "ref_001",
+                    "review_status": "ready",
+                }
+            ],
+        },
+    )
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/tts/batch")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_TTS_REFERENCE_NOT_READY"
 
 
 def test_video_localization_export_adds_project_metadata(tmp_path: Path):

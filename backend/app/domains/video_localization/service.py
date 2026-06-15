@@ -10,6 +10,9 @@ from fastapi import UploadFile
 from app.domains.video_localization.quality_gate import evaluate_quality_gate
 from app.errors import AppException
 from app.schemas.voice_studio import (
+    BatchGenerateRequest,
+    BatchSegmentInput,
+    LicenseStatus,
     VideoLocalizationCue,
     VideoLocalizationDraft,
     VideoLocalizationExport,
@@ -267,6 +270,75 @@ def generate_localization_draft(project_id: str) -> VideoLocalizationDraft | Non
     return save_video_localization(project_id, draft.model_copy(update={"cues": next_cues}))
 
 
+def build_tts_batch_request(project_id: str, engine_id: str = "indextts-v2") -> BatchGenerateRequest | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    reference_by_id = {clip.reference_clip_id: clip for clip in draft.reference_clips}
+    segments: list[BatchSegmentInput] = []
+
+    for cue in draft.cues:
+        if cue.review_status not in {"ready", "locked"}:
+            continue
+        if cue.audio_route != "clone_from_source":
+            continue
+        tts_text = (cue.tts_recommended_text or "").strip()
+        if not tts_text or _is_placeholder_text(tts_text):
+            raise AppException(400, "VIDEO_LOCALIZATION_TTS_TEXT_NOT_READY", f"Cue {cue.cue_id} does not have production-ready TTS text")
+        reference = reference_by_id.get(cue.reference_clip_id or "")
+        if not reference:
+            raise AppException(400, "VIDEO_LOCALIZATION_TTS_REFERENCE_MISSING", f"Cue {cue.cue_id} does not have a reference clip")
+        if reference.source_stem != "vocals_clean" or reference.cleanliness != "clean" or reference.asr_status != "verified":
+            raise AppException(400, "VIDEO_LOCALIZATION_TTS_REFERENCE_NOT_READY", f"Reference {reference.reference_clip_id} is not verified clean vocals")
+        if not reference.audio_path or not Path(reference.audio_path).exists():
+            raise AppException(400, "VIDEO_LOCALIZATION_TTS_REFERENCE_FILE_MISSING", f"Reference audio is missing for {reference.reference_clip_id}")
+
+        segments.append(
+            BatchSegmentInput(
+                segment_id=cue.cue_id,
+                chapter=cue.speaker_id or "speaker",
+                step=len(segments) + 1,
+                text=tts_text,
+                audio=f"{_safe_identifier(cue.speaker_id or 'speaker')}/{cue.cue_id}.mp3",
+                reference_audio_path=reference.audio_path,
+                reference_audio_license_status=LicenseStatus.localized,
+                reference_audio_tags=["视频本土化", "本土化", cue.speaker_id or "unknown"],
+                ref_text=reference.asr_text or cue.en_subtitle_text,
+                language="zh",
+                parameters={
+                    "cue_id": cue.cue_id,
+                    "speaker_id": cue.speaker_id,
+                    "source_start_ms": cue.start_ms,
+                    "source_end_ms": cue.end_ms,
+                    "source_duration_ms": cue.source_duration_ms,
+                    "en_subtitle_text": cue.en_subtitle_text,
+                    "zh_localized_subtitle_text": cue.zh_localized_subtitle_text,
+                    "reference_clip_id": reference.reference_clip_id,
+                    "audio_route": cue.audio_route,
+                },
+            )
+        )
+
+    if not segments:
+        raise AppException(400, "VIDEO_LOCALIZATION_TTS_CUES_EMPTY", "No ready clone-from-source cues can be submitted")
+
+    return BatchGenerateRequest(
+        project_name=f"{project.name} 中文本土化配音",
+        engine_id=engine_id,
+        language="zh",
+        output_dir=str(_project_video_localization_dir(project_id) / "tts"),
+        output_format="mp3",
+        partial_success=True,
+        segments=segments,
+        parameters={
+            "source": "video_localization",
+            "project_id": project_id,
+            "schema_version": draft.schema_version,
+        },
+    )
+
+
 def export_video_localization(project_id: str) -> VideoLocalizationExport | None:
     project = project_store.get_project(project_id)
     if not project:
@@ -488,6 +560,10 @@ def _next_cue_id(existing_cue_ids: set[str], index: int) -> str:
 
 def _is_replaceable_asr_candidate(cue: VideoLocalizationCue) -> bool:
     return cue.review_status == "needs_review" and "generated_by_asr" in cue.quality_flags
+
+
+def _is_placeholder_text(value: str | None) -> bool:
+    return bool(value and value.strip().startswith("【待本土化】"))
 
 
 def _add_flags(flags: list[str], additions: list[str]) -> list[str]:

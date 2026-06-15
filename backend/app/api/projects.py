@@ -7,8 +7,8 @@ from fastapi.responses import JSONResponse
 
 from app.domains.video_localization import service as video_localization_service
 from app.errors import AppException
-from app.schemas.voice_studio import Project, ProjectCreate, ProjectTranscriptionImportRequest, ProjectTranscriptionImportResponse, Role, ScriptSegment, VideoLocalizationDraft
-from app.services import project_store, task_queue
+from app.schemas.voice_studio import BatchTask, Project, ProjectCreate, ProjectTranscriptionImportRequest, ProjectTranscriptionImportResponse, Role, ScriptSegment, VideoLocalizationDraft
+from app.services import batch_queue, project_store, task_queue
 
 router = APIRouter()
 
@@ -115,6 +115,17 @@ async def generate_video_localization_chinese_draft(project_id: str):
     if not updated:
         raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
     return updated
+
+
+@router.post("/{project_id}/video-localization/tts/batch", response_model=BatchTask)
+async def submit_video_localization_tts_batch(project_id: str):
+    batch_request = video_localization_service.build_tts_batch_request(project_id)
+    if not batch_request:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    try:
+        return await batch_queue.submit(batch_request.model_dump())
+    except ValueError as exc:
+        raise AppException(400, "VIDEO_LOCALIZATION_TTS_BATCH_INVALID", str(exc)) from exc
 
 
 @router.get("/{project_id}/video-localization/export")

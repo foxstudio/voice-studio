@@ -37,6 +37,7 @@
 	let transcribingAsr = $state(false);
 	let creatingReferences = $state(false);
 	let localizingZh = $state(false);
+	let submittingBatch = $state(false);
 	let videoInput: HTMLInputElement | null = null;
 	let message = $state('');
 	let error = $state('');
@@ -47,7 +48,9 @@
 	const readyCount = $derived(draft?.cues.filter((cue) => cue.review_status === 'ready' || cue.review_status === 'locked').length ?? 0);
 	const reviewCount = $derived(draft?.cues.filter((cue) => cue.review_status === 'needs_review').length ?? 0);
 	const blockedCount = $derived(draft?.cues.filter((cue) => cue.review_status === 'blocked').length ?? 0);
-	const canSubmitCount = $derived(draft?.cues.filter((cue) => cue.review_status === 'ready' && cue.tts_recommended_text?.trim()).length ?? 0);
+	const canSubmitCount = $derived(
+		draft?.cues.filter((cue) => cue.review_status === 'ready' && cue.audio_route === 'clone_from_source' && cue.tts_recommended_text?.trim() && referenceReady(cue.reference_clip_id)).length ?? 0
+	);
 
 	onMount(() => {
 		loadProjects();
@@ -234,6 +237,21 @@
 		}
 	}
 
+	async function submitBatchTts() {
+		if (!projectId || !canSubmitCount) return;
+		submittingBatch = true;
+		error = '';
+		try {
+			const task = await Api.submitVideoLocalizationBatchTts(projectId);
+			message = `已提交批量 TTS：${task.batch_task_id}`;
+			setTimeout(() => (message = ''), 2400);
+		} catch (e) {
+			error = (e as Error).message || '批量 TTS 提交失败';
+		} finally {
+			submittingBatch = false;
+		}
+	}
+
 	function addCue() {
 		if (!draft) return;
 		const index = draft.cues.length + 1;
@@ -325,6 +343,12 @@
 		const colors = ['#4f9cf9', '#42c49b', '#e4ad42', '#b58cff', '#ff8c8c'];
 		const index = Math.abs([...(speakerId ?? 'unknown')].reduce((sum, char) => sum + char.charCodeAt(0), 0)) % colors.length;
 		return colors[index];
+	}
+
+	function referenceReady(referenceClipId: string | null | undefined) {
+		if (!referenceClipId) return false;
+		const clip = draft?.reference_clips.find((item) => item.reference_clip_id === referenceClipId);
+		return Boolean(clip?.audio_path && clip.cleanliness === 'clean' && clip.asr_status === 'verified');
 	}
 
 	function msLabel(ms: number | null | undefined) {
@@ -646,7 +670,7 @@
 					{draft?.quality_gate.checked_at ? `最近检查：${draft.quality_gate.checked_at}` : '保存或导出后会自动刷新质量门。'}
 				</p>
 				<div class="stack">
-					<button class="btn success" type="button" disabled><Wand2 size={14} /> 批量发送可生成片段</button>
+					<button class="btn success" type="button" onclick={submitBatchTts} disabled={!canSubmitCount || submittingBatch}><Wand2 size={14} /> {submittingBatch ? '提交中' : '批量发送可生成片段'}</button>
 					<button class="btn" type="button" onclick={exportJson} disabled={!draft}><Download size={14} /> 下载 production JSON</button>
 					<button class="btn" type="button" disabled><Languages size={14} /> 导出中英字幕草稿</button>
 				</div>
