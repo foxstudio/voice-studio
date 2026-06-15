@@ -341,6 +341,28 @@ def build_tts_batch_request(project_id: str, engine_id: str = "indextts-v2") -> 
     )
 
 
+def mark_tts_batch_submitted(project_id: str, batch_task_id: str, cue_ids: list[str]) -> VideoLocalizationDraft | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    cue_id_set = set(cue_ids)
+    if not cue_id_set:
+        return draft
+    attempted_at = now_iso()
+    updated = False
+    next_cues: list[VideoLocalizationCue] = []
+    for cue in draft.cues:
+        if cue.cue_id not in cue_id_set:
+            next_cues.append(cue)
+            continue
+        next_cues.append(_cue_with_tts_batch_status(cue, batch_task_id, TaskStatus.queued, None, attempted_at=attempted_at))
+        updated = True
+    if not updated:
+        return draft
+    return save_video_localization(project_id, draft.model_copy(update={"cues": next_cues}))
+
+
 def export_subtitles(project_id: str, kind: str) -> str | None:
     project = project_store.get_project(project_id)
     if not project:
@@ -382,22 +404,25 @@ def sync_tts_batch_results(project_id: str, batch_task_id: str) -> VideoLocaliza
     if not isinstance(request_parameters, dict) or request_parameters.get("source") != "video_localization" or request_parameters.get("project_id") != project_id:
         raise AppException(400, "VIDEO_LOCALIZATION_TTS_BATCH_PROJECT_MISMATCH", "Batch task does not belong to this video localization project")
 
-    successful_segments = {
-        segment.segment_id: segment
-        for segment in batch.segments
-        if segment.status == TaskStatus.success and segment.output_path and Path(segment.output_path).exists()
-    }
-    if not successful_segments:
-        raise AppException(400, "VIDEO_LOCALIZATION_TTS_BATCH_RESULTS_EMPTY", "Batch task has no successful audio outputs")
+    segments_by_id = {segment.segment_id: segment for segment in batch.segments}
+    if not segments_by_id:
+        raise AppException(400, "VIDEO_LOCALIZATION_TTS_BATCH_RESULTS_EMPTY", "Batch task has no segment results")
 
     updated = False
     next_cues: list[VideoLocalizationCue] = []
     for cue in draft.cues:
-        segment = successful_segments.get(cue.cue_id)
+        segment = segments_by_id.get(cue.cue_id)
         if not segment:
             next_cues.append(cue)
             continue
-        next_cues.append(_cue_with_tts_result(cue, batch.batch_task_id, segment))
+        if segment.status == TaskStatus.success and segment.output_path and Path(segment.output_path).exists():
+            next_cues.append(_cue_with_tts_result(cue, batch.batch_task_id, segment))
+        else:
+            status = TaskStatus.failed if segment.status == TaskStatus.success else segment.status
+            error = segment.error_message
+            if segment.status == TaskStatus.success and segment.output_path and not Path(segment.output_path).exists():
+                error = "生成标记成功，但输出音频文件不存在"
+            next_cues.append(_cue_with_tts_batch_status(cue, batch.batch_task_id, status, error))
         updated = True
 
     if not updated:
@@ -722,12 +747,13 @@ def _safe_identifier(value: str) -> str:
 
 
 def _cue_with_tts_result(cue: VideoLocalizationCue, batch_task_id: str, segment: BatchSegmentResult) -> VideoLocalizationCue:
-    return _cue_with_tts_audio(
+    updated = _cue_with_tts_audio(
         cue,
         result_id=f"{batch_task_id}:{segment.segment_id}",
         output_path=segment.output_path,
         duration_ms=segment.duration_ms,
     )
+    return _cue_with_tts_batch_status(updated, batch_task_id, TaskStatus.success, None)
 
 
 def _cue_with_tts_audio(cue: VideoLocalizationCue, *, result_id: str, output_path: str | None, duration_ms: int | None) -> VideoLocalizationCue:
@@ -744,6 +770,31 @@ def _cue_with_tts_audio(cue: VideoLocalizationCue, *, result_id: str, output_pat
         if duration_ms is not None:
             update["source_duration_ms"] = duration_ms
     return cue.model_copy(update=update)
+
+
+def _cue_with_tts_batch_status(
+    cue: VideoLocalizationCue,
+    batch_task_id: str,
+    status: TaskStatus | str,
+    error: str | None,
+    *,
+    attempted_at: str | None = None,
+) -> VideoLocalizationCue:
+    status_value = status.value if isinstance(status, TaskStatus) else str(status)
+    flags = [flag for flag in cue.quality_flags if flag not in {"tts_batch_submitted", "tts_failed"}]
+    if status_value in {"queued", "running", "postprocessing", "retrying"}:
+        flags.append("tts_batch_submitted")
+    if status_value in {"failed", "cancelled"}:
+        flags.append("tts_failed")
+    return cue.model_copy(
+        update={
+            "tts_batch_task_id": batch_task_id,
+            "tts_batch_status": status_value,
+            "tts_batch_error": error,
+            "tts_attempted_at": attempted_at or cue.tts_attempted_at or now_iso(),
+            "quality_flags": flags,
+        }
+    )
 
 
 def _subtitle_lines_for(cue: VideoLocalizationCue, kind: str) -> list[str]:

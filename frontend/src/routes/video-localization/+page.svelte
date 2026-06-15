@@ -310,6 +310,10 @@
 			reference_clip_id: null,
 			tts_result_id: null,
 			tts_audio_path: null,
+			tts_batch_task_id: null,
+			tts_batch_status: null,
+			tts_batch_error: null,
+			tts_attempted_at: null,
 			source_duration_ms: null,
 			generated_duration_ms: null,
 			review_status: 'needs_review',
@@ -485,6 +489,18 @@
 	function durationLabel(ms: number | null | undefined) {
 		if (!ms) return '未知';
 		return `${(ms / 1000).toFixed(1)}s`;
+	}
+
+	function ttsBatchLabel(status: string | null | undefined) {
+		return {
+			queued: '队列中',
+			running: '生成中',
+			postprocessing: '处理中',
+			success: '已生成',
+			failed: '失败',
+			cancelled: '已取消',
+			retrying: '重试中'
+		}[status ?? ''] ?? '待生成';
 	}
 </script>
 
@@ -670,6 +686,9 @@
 									{#if cue.tts_audio_path}
 										<span class="badge ok">已生成</span>
 										<small>{durationLabel(cue.generated_duration_ms)}</small>
+									{:else if cue.tts_batch_status}
+										<span class={`badge ${cue.tts_batch_status === 'failed' || cue.tts_batch_status === 'cancelled' ? 'fail' : 'warn'}`}>{ttsBatchLabel(cue.tts_batch_status)}</span>
+										{#if cue.tts_batch_error}<small>{cue.tts_batch_error}</small>{/if}
 									{:else}
 										<span class="badge warn">待生成</span>
 									{/if}

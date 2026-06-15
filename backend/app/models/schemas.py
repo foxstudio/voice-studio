@@ -745,6 +745,10 @@ class VideoLocalizationCue(VideoLocalizationExtensibleModel):
     reference_clip_id: str | None = None
     tts_result_id: str | None = None
     tts_audio_path: str | None = None
+    tts_batch_task_id: str | None = None
+    tts_batch_status: str | None = None
+    tts_batch_error: str | None = None
+    tts_attempted_at: str | None = None
     source_duration_ms: int | None = Field(default=None, ge=0)
     generated_duration_ms: int | None = Field(default=None, ge=0)
     review_status: Literal["needs_review", "ready", "blocked", "locked"] = "needs_review"

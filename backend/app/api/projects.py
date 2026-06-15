@@ -123,7 +123,9 @@ async def submit_video_localization_tts_batch(project_id: str):
     if not batch_request:
         raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
     try:
-        return await batch_queue.submit(batch_request.model_dump())
+        batch = await batch_queue.submit(batch_request.model_dump())
+        video_localization_service.mark_tts_batch_submitted(project_id, batch.batch_task_id, [segment.segment_id for segment in batch.segments])
+        return batch
     except ValueError as exc:
         raise AppException(400, "VIDEO_LOCALIZATION_TTS_BATCH_INVALID", str(exc)) from exc
 

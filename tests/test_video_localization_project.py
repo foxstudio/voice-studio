@@ -615,7 +615,13 @@ def test_video_localization_tts_batch_submits_ready_clean_reference_cues(tmp_pat
 
     async def fake_submit(payload):
         captured["payload"] = payload
-        return BatchTask(batch_task_id="batch-video-1", project_name=payload["project_name"], engine_id=payload["engine_id"], status=TaskStatus.queued, segments=[])
+        return BatchTask(
+            batch_task_id="batch-video-1",
+            project_name=payload["project_name"],
+            engine_id=payload["engine_id"],
+            status=TaskStatus.queued,
+            segments=[BatchSegmentResult(segment_id="cue_0001", text=payload["segments"][0]["text"], status=TaskStatus.queued)],
+        )
 
     monkeypatch.setattr(projects_api.batch_queue, "submit", fake_submit)
 
@@ -635,6 +641,10 @@ def test_video_localization_tts_batch_submits_ready_clean_reference_cues(tmp_pat
     assert segment["ref_text"] == "In 1992, this changed everything."
     assert segment["reference_audio_license_status"] == "本土化"
     assert segment["parameters"]["zh_localized_subtitle_text"] == "1992 年，这件事改变了一切。"
+    cue = client.get(f"/api/projects/{project['project_id']}/video-localization").json()["cues"][0]
+    assert cue["tts_batch_task_id"] == "batch-video-1"
+    assert cue["tts_batch_status"] == "queued"
+    assert cue["tts_batch_error"] is None
 
 
 def test_video_localization_tts_batch_rejects_unverified_reference(tmp_path: Path):
@@ -777,6 +787,55 @@ def test_video_localization_source_cue_audio_slices_clean_vocals(tmp_path: Path,
     assert response.status_code == 200
     assert response.content == b"source-cue"
     assert captured == {"source": vocals_path, "start_ms": 1000, "end_ms": 3200}
+
+
+def test_video_localization_tts_batch_sync_records_failed_segments(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "失败回填", "description": ""}).json()
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 3200,
+                    "en_subtitle_text": "Failed line.",
+                    "zh_localized_subtitle_text": "失败台词。",
+                    "tts_recommended_text": "失败台词。",
+                }
+            ],
+        },
+    )
+    batch = BatchTask(
+        batch_task_id="batch-video-failed",
+        project_name="失败回填",
+        engine_id="indextts-v2",
+        status=TaskStatus.failed,
+        segments=[
+            BatchSegmentResult(
+                segment_id="cue_0001",
+                text="失败台词。",
+                status=TaskStatus.failed,
+                error_message="REFERENCE_AUDIO_NOT_FOUND",
+            )
+        ],
+        parameters={"parameters": {"source": "video_localization", "project_id": project["project_id"]}},
+    )
+    batch_queue._save(batch)
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/tts/batch/{batch.batch_task_id}/sync")
+
+    assert response.status_code == 200
+    cue = response.json()["cues"][0]
+    assert cue["tts_batch_task_id"] == "batch-video-failed"
+    assert cue["tts_batch_status"] == "failed"
+    assert cue["tts_batch_error"] == "REFERENCE_AUDIO_NOT_FOUND"
+    assert "tts_failed" in cue["quality_flags"]
+    assert cue["tts_audio_path"] is None
 
 
 def test_video_localization_single_tts_generation_syncs_from_task_queue(tmp_path: Path):

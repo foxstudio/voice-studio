@@ -248,6 +248,10 @@ export interface VideoLocalizationCue {
 	reference_clip_id: string | null;
 	tts_result_id: string | null;
 	tts_audio_path: string | null;
+	tts_batch_task_id: string | null;
+	tts_batch_status: string | null;
+	tts_batch_error: string | null;
+	tts_attempted_at: string | null;
 	source_duration_ms: number | null;
 	generated_duration_ms: number | null;
 	review_status: 'needs_review' | 'ready' | 'blocked' | 'locked';
