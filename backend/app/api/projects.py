@@ -109,6 +109,14 @@ async def create_video_localization_reference_clips(project_id: str):
     return updated
 
 
+@router.post("/{project_id}/video-localization/localize/zh", response_model=VideoLocalizationDraft)
+async def generate_video_localization_chinese_draft(project_id: str):
+    updated = video_localization_service.generate_localization_draft(project_id)
+    if not updated:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    return updated
+
+
 @router.get("/{project_id}/video-localization/export")
 async def export_video_localization(project_id: str):
     data = video_localization_service.export_video_localization(project_id)

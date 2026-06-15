@@ -58,8 +58,12 @@ def _check_cue_basics(
         blockers.append(_issue("EN_SUBTITLE_MISSING", "cue 缺少英文字幕", "blocker", cue_id=cue.cue_id))
     if not _has_text(cue.zh_localized_subtitle_text):
         blockers.append(_issue("ZH_SUBTITLE_MISSING", "cue 缺少中文字幕", "blocker", cue_id=cue.cue_id))
+    elif _is_localization_placeholder(cue.zh_localized_subtitle_text):
+        blockers.append(_issue("ZH_SUBTITLE_PLACEHOLDER", "中文字幕仍是待本土化占位稿", "blocker", cue_id=cue.cue_id))
     if not _has_text(cue.tts_recommended_text):
         blockers.append(_issue("TTS_TEXT_MISSING", "cue 缺少 TTS 台词", "blocker", cue_id=cue.cue_id))
+    elif _is_localization_placeholder(cue.tts_recommended_text):
+        blockers.append(_issue("TTS_TEXT_PLACEHOLDER", "TTS 台词仍是待本土化占位稿", "blocker", cue_id=cue.cue_id))
     elif cue.tts_recommended_text.strip() == (cue.zh_localized_subtitle_text or "").strip():
         warnings.append(_issue("TTS_TEXT_NOT_NORMALIZED", "TTS 台词与中文字幕相同，可能未做口播规范化", "warning", cue_id=cue.cue_id))
     if cue.review_status == "blocked":
@@ -108,6 +112,10 @@ def _check_cue_duration(cue: VideoLocalizationCue, warnings: list[VideoLocalizat
 
 def _has_text(value: str | None) -> bool:
     return bool(value and value.strip())
+
+
+def _is_localization_placeholder(value: str | None) -> bool:
+    return bool(value and value.strip().startswith("【待本土化】"))
 
 
 def _issue(

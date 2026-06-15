@@ -17,7 +17,7 @@ from app.schemas.voice_studio import (
     VideoLocalizationTimeRange,
     now_iso,
 )
-from app.services import asr_service, audio_tools, project_store, settings_store
+from app.services import asr_service, audio_tools, project_store, settings_store, text_normalizer
 
 VIDEO_LOCALIZATION_KEY = "video_localization"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
@@ -225,6 +225,46 @@ def create_reference_clips_from_cues(project_id: str) -> VideoLocalizationDraft 
     next_speakers = [speaker_updates.get(speaker.speaker_id, speaker) for speaker in draft.speakers]
     next_draft = draft.model_copy(update={"reference_clips": next_refs, "cues": next_cues, "speakers": next_speakers})
     return save_video_localization(project_id, next_draft)
+
+
+def generate_localization_draft(project_id: str) -> VideoLocalizationDraft | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    if not draft.cues:
+        raise AppException(400, "VIDEO_LOCALIZATION_CUES_MISSING", "Create English ASR cues before generating Chinese localization draft")
+
+    changed = False
+    next_cues: list[VideoLocalizationCue] = []
+    for cue in draft.cues:
+        patch: dict[str, object] = {}
+        flags = list(cue.quality_flags)
+        zh_text = (cue.zh_localized_subtitle_text or "").strip()
+        if not zh_text:
+            source_text = (cue.en_subtitle_text or "").strip()
+            if not source_text:
+                next_cues.append(cue)
+                continue
+            zh_text = f"【待本土化】{source_text}"
+            patch["zh_localized_subtitle_text"] = zh_text
+            flags = _add_flags(flags, ["localization_draft", "needs_human_localization"])
+            changed = True
+
+        if not (cue.tts_recommended_text or "").strip():
+            patch["tts_recommended_text"] = text_normalizer.normalize_spoken_numbers(zh_text)
+            flags = _add_flags(flags, ["tts_text_normalized"])
+            changed = True
+
+        if patch:
+            patch["quality_flags"] = flags
+            next_cues.append(cue.model_copy(update=patch))
+        else:
+            next_cues.append(cue)
+
+    if not changed:
+        raise AppException(400, "VIDEO_LOCALIZATION_LOCALIZATION_UNCHANGED", "All cues already have Chinese subtitle and TTS text")
+    return save_video_localization(project_id, draft.model_copy(update={"cues": next_cues}))
 
 
 def export_video_localization(project_id: str) -> VideoLocalizationExport | None:
@@ -448,6 +488,14 @@ def _next_cue_id(existing_cue_ids: set[str], index: int) -> str:
 
 def _is_replaceable_asr_candidate(cue: VideoLocalizationCue) -> bool:
     return cue.review_status == "needs_review" and "generated_by_asr" in cue.quality_flags
+
+
+def _add_flags(flags: list[str], additions: list[str]) -> list[str]:
+    next_flags = list(flags)
+    for flag in additions:
+        if flag not in next_flags:
+            next_flags.append(flag)
+    return next_flags
 
 
 def _cue_can_seed_reference(cue: VideoLocalizationCue) -> bool:

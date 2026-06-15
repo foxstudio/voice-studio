@@ -438,6 +438,78 @@ def test_video_localization_reference_candidates_from_clean_vocals(tmp_path: Pat
     assert body["speakers"][0]["time_ranges"][0]["source"] == "reference_candidate"
 
 
+def test_video_localization_chinese_draft_requires_cues(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "缺 cue", "description": ""}).json()
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/localize/zh")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_CUES_MISSING"
+
+
+def test_video_localization_chinese_draft_fills_missing_tracks_and_keeps_placeholder_blocked(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "中文草稿", "description": ""}).json()
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 3200,
+                    "en_subtitle_text": "In 1992, this changed everything.",
+                }
+            ],
+        },
+    )
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/localize/zh")
+
+    assert response.status_code == 200
+    body = response.json()
+    cue = body["cues"][0]
+    assert cue["zh_localized_subtitle_text"] == "【待本土化】In 1992, this changed everything."
+    assert cue["tts_recommended_text"] == "【待本土化】In 一千九百九十二, this changed everything."
+    assert "localization_draft" in cue["quality_flags"]
+    blocker_codes = {issue["code"] for issue in body["quality_gate"]["blockers"]}
+    assert {"ZH_SUBTITLE_PLACEHOLDER", "TTS_TEXT_PLACEHOLDER"}.issubset(blocker_codes)
+
+
+def test_video_localization_chinese_draft_normalizes_existing_subtitle_for_tts(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "数字读法", "description": ""}).json()
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 3200,
+                    "en_subtitle_text": "In 1992, 130 people joined.",
+                    "zh_localized_subtitle_text": "1992 年，有 130 人加入。",
+                }
+            ],
+        },
+    )
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/localize/zh")
+
+    assert response.status_code == 200
+    cue = response.json()["cues"][0]
+    assert cue["zh_localized_subtitle_text"] == "1992 年，有 130 人加入。"
+    assert cue["tts_recommended_text"] == "一九九二年，有一百三十人加入。"
+    assert "tts_text_normalized" in cue["quality_flags"]
+
+
 def test_video_localization_export_adds_project_metadata(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "导出测试", "description": ""}).json()

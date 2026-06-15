@@ -36,6 +36,7 @@
 	let separatingStems = $state(false);
 	let transcribingAsr = $state(false);
 	let creatingReferences = $state(false);
+	let localizingZh = $state(false);
 	let videoInput: HTMLInputElement | null = null;
 	let message = $state('');
 	let error = $state('');
@@ -196,6 +197,21 @@
 			error = (e as Error).message || '生成参考音候选失败';
 		} finally {
 			creatingReferences = false;
+		}
+	}
+
+	async function generateChineseDraft() {
+		if (!projectId || !draft?.cues.some((cue) => cue.en_subtitle_text?.trim())) return;
+		localizingZh = true;
+		error = '';
+		try {
+			draft = await Api.generateVideoLocalizationChineseDraft(projectId);
+			message = '中文字幕与 TTS 台词草稿已生成';
+			setTimeout(() => (message = ''), 1800);
+		} catch (e) {
+			error = (e as Error).message || '生成中文草稿失败';
+		} finally {
+			localizingZh = false;
 		}
 	}
 
@@ -461,6 +477,9 @@
 					<p class="muted">三轨文本独立维护，TTS 台词会保留数字读法和停顿。</p>
 				</div>
 				<div class="row">
+					<button class="mini-btn" type="button" onclick={generateChineseDraft} disabled={!draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) || localizingZh}>
+						{localizingZh ? '生成中' : '生成中文草稿'}
+					</button>
 					<span class="badge ok">{readyCount} 可生成</span>
 					<span class="badge warn">{reviewCount} 待校对</span>
 					<span class="badge fail">{blockedCount} 阻断</span>
