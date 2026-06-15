@@ -144,6 +144,14 @@ async def get_video_localization_cue_tts_audio(project_id: str, cue_id: str):
     return FileResponse(audio_path, filename=audio_path.name)
 
 
+@router.get("/{project_id}/video-localization/cues/{cue_id}/source-audio")
+async def get_video_localization_cue_source_audio(project_id: str, cue_id: str):
+    audio_path = video_localization_service.source_cue_audio_file(project_id, cue_id)
+    if not audio_path:
+        raise AppException(404, "VIDEO_LOCALIZATION_SOURCE_CUE_AUDIO_NOT_FOUND", "Source cue audio file not found")
+    return FileResponse(audio_path, filename=audio_path.name)
+
+
 @router.get("/{project_id}/video-localization/subtitles/{kind}")
 async def export_video_localization_subtitles(project_id: str, kind: str):
     srt = video_localization_service.export_subtitles(project_id, kind)

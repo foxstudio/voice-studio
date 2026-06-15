@@ -739,6 +739,46 @@ def test_video_localization_syncs_tts_batch_results_to_cues(tmp_path: Path):
     assert audio.content == b"audio"
 
 
+def test_video_localization_source_cue_audio_slices_clean_vocals(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "原声切片", "description": ""}).json()
+    vocals_path = tmp_path / "stems" / "vocals.wav"
+    vocals_path.parent.mkdir(parents=True, exist_ok=True)
+    vocals_path.write_bytes(b"vocals")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "stems": {"vocals_clean_path": str(vocals_path), "separation_status": "completed"},
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 3200,
+                    "en_subtitle_text": "Source line.",
+                }
+            ],
+        },
+    )
+    captured = {}
+
+    def fake_slice_audio(source, destination, start_ms, end_ms):
+        captured["source"] = source
+        captured["start_ms"] = start_ms
+        captured["end_ms"] = end_ms
+        destination.write_bytes(b"source-cue")
+
+    monkeypatch.setattr(video_localization_service, "_cut_audio_clip", fake_slice_audio)
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/cues/cue_0001/source-audio")
+
+    assert response.status_code == 200
+    assert response.content == b"source-cue"
+    assert captured == {"source": vocals_path, "start_ms": 1000, "end_ms": 3200}
+
+
 def test_video_localization_tts_batch_sync_rejects_wrong_project(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "项目 A", "description": ""}).json()

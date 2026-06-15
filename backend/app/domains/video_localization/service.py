@@ -419,6 +419,30 @@ def tts_audio_file(project_id: str, cue_id: str) -> Path | None:
     return path if path.exists() else None
 
 
+def source_cue_audio_file(project_id: str, cue_id: str) -> Path | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id)
+    if not draft:
+        return None
+    cue = next((item for item in draft.cues if item.cue_id == cue_id), None)
+    if not cue or cue.start_ms is None or cue.end_ms is None or cue.end_ms <= cue.start_ms:
+        return None
+    source_value = draft.stems.vocals_clean_path or draft.stems.original_audio_path or draft.source_media.audio_path
+    if not source_value:
+        return None
+    source_path = Path(source_value)
+    if not source_path.exists():
+        return None
+    cache_dir = _project_video_localization_dir(project_id) / "cue-source-audio"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    destination = cache_dir / f"{_safe_identifier(cue.cue_id)}-source.wav"
+    if not destination.exists():
+        _cut_audio_clip(source_path, destination, cue.start_ms, cue.end_ms)
+    return destination if destination.exists() else None
+
+
 def export_video_localization(project_id: str) -> VideoLocalizationExport | None:
     project = project_store.get_project(project_id)
     if not project:

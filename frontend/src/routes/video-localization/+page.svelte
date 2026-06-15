@@ -410,6 +410,10 @@
 		return projectId && cue.tts_audio_path ? `/api/projects/${projectId}/video-localization/cues/${cue.cue_id}/tts-audio` : '';
 	}
 
+	function sourceCueAudioUrl(cue: VideoLocalizationCue) {
+		return projectId && cue.start_ms !== null && cue.end_ms !== null ? `/api/projects/${projectId}/video-localization/cues/${cue.cue_id}/source-audio` : '';
+	}
+
 	function durationLabel(ms: number | null | undefined) {
 		if (!ms) return '未知';
 		return `${(ms / 1000).toFixed(1)}s`;
@@ -670,12 +674,24 @@
 						<label class="field"><span>TTS 台词</span><textarea rows="3" value={selectedCue.tts_recommended_text ?? ''} oninput={(event) => updateSelectedCue({ tts_recommended_text: event.currentTarget.value })}></textarea></label>
 					</div>
 					<div class="row editor-actions">
-						<button class="btn" type="button" disabled><Play size={14} /> 原声</button>
-						{#if ttsAudioUrl(selectedCue)}
-							<audio class="cue-audio" controls src={ttsAudioUrl(selectedCue)}></audio>
-						{:else}
-							<button class="btn" type="button" disabled><Mic2 size={14} /> TTS</button>
-						{/if}
+						<div class="cue-audio-compare">
+							<div>
+								<span>原声</span>
+								{#if sourceCueAudioUrl(selectedCue)}
+									<audio class="cue-audio" controls src={sourceCueAudioUrl(selectedCue)}></audio>
+								{:else}
+									<button class="btn" type="button" disabled><Play size={14} /> 原声</button>
+								{/if}
+							</div>
+							<div>
+								<span>TTS</span>
+								{#if ttsAudioUrl(selectedCue)}
+									<audio class="cue-audio" controls src={ttsAudioUrl(selectedCue)}></audio>
+								{:else}
+									<button class="btn" type="button" disabled><Mic2 size={14} /> TTS</button>
+								{/if}
+							</div>
+						</div>
 						<a class="btn primary" href="/generate"><Send size={14} /> 单条发送</a>
 					</div>
 				{:else}
@@ -1170,6 +1186,24 @@
 	.cue-audio {
 		width: min(260px, 100%);
 		height: 34px;
+	}
+
+	.cue-audio-compare {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(160px, 1fr));
+		gap: 8px;
+		flex: 1;
+		min-width: 280px;
+	}
+
+	.cue-audio-compare > div {
+		display: grid;
+		gap: 4px;
+	}
+
+	.cue-audio-compare span {
+		font-size: 11px;
+		color: var(--muted);
 	}
 
 	.reference-list {
