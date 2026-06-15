@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { AudioLines, BookOpenText, ChartNoAxesColumn, ChevronsLeft, ChevronsRight, Clock3, FileAudio, Gauge, History, Library, Settings, SlidersHorizontal } from 'lucide-svelte';
+	import { AudioLines, BookOpenText, ChartNoAxesColumn, ChevronsLeft, ChevronsRight, Clock3, FileAudio, Film, Gauge, Library, Settings, SlidersHorizontal } from 'lucide-svelte';
 	import { page } from '$app/state';
 
 	let { collapsed = false, onToggle = () => {}, onNavClick = () => {} }: { collapsed?: boolean; onToggle?: () => void; onNavClick?: () => void } = $props();
@@ -9,7 +9,7 @@
 		{ href: '/engine-hub', label: '引擎管理', icon: SlidersHorizontal },
 		{ href: '/voice-library', label: '音色管理', icon: Library },
 		{ href: '/generate', label: '语音合成', icon: AudioLines },
-		{ href: '/history', label: '历史记录', icon: History },
+		{ href: '/video-localization', label: '视频本土化', icon: Film },
 		{ href: '/script-studio', label: '脚本与批量', icon: BookOpenText },
 		{ href: '/eval-reference', label: '参数参考', icon: ChartNoAxesColumn },
 		{ href: '/audio-tools', label: '语音转写', icon: FileAudio },

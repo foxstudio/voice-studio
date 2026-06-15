@@ -178,6 +178,129 @@ export interface TranscriptionTask {
 	completed_at: string | null;
 }
 
+export interface VideoLocalizationSourceMedia {
+	filename: string | null;
+	duration_ms: number | null;
+	video_path: string | null;
+	audio_path: string | null;
+	size_bytes: number | null;
+	width: number | null;
+	height: number | null;
+	frame_rate: number | null;
+	imported_at: string | null;
+	metadata: Record<string, unknown>;
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationStems {
+	vocals_clean_path: string | null;
+	background_path: string | null;
+	original_audio_path: string | null;
+	separation_engine_id: string | null;
+	separation_status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+	quality_flags: string[];
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationTimeRange {
+	start_ms: number | null;
+	end_ms: number | null;
+	source: string | null;
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationSpeaker {
+	speaker_id: string;
+	display_name: string | null;
+	route: 'clone_from_source' | 'preset_tts' | 'preserve_original_audio' | 'manual_review';
+	reference_clip_ids: string[];
+	time_ranges: VideoLocalizationTimeRange[];
+	review_status: 'needs_review' | 'ready' | 'blocked' | 'locked';
+	notes: string | null;
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationReferenceClip {
+	reference_clip_id: string;
+	speaker_id: string | null;
+	source_stem: 'vocals_clean' | 'original_audio' | 'uploaded_reference' | 'generated_tts';
+	start_ms: number | null;
+	end_ms: number | null;
+	duration_ms: number | null;
+	audio_path: string | null;
+	cleanliness: 'clean' | 'needs_review' | 'blocked' | 'mixed' | 'unknown';
+	asr_text: string | null;
+	asr_status: 'pending' | 'candidate' | 'verified' | 'failed' | 'skipped';
+	license_status: string | null;
+	quality_flags: string[];
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationCue {
+	cue_id: string;
+	speaker_id: string | null;
+	start_ms: number | null;
+	end_ms: number | null;
+	audio_route: 'clone_from_source' | 'preset_tts' | 'preserve_original_audio' | 'manual_review';
+	en_subtitle_text: string | null;
+	zh_localized_subtitle_text: string | null;
+	tts_recommended_text: string | null;
+	reference_clip_id: string | null;
+	tts_result_id: string | null;
+	tts_audio_path: string | null;
+	source_duration_ms: number | null;
+	generated_duration_ms: number | null;
+	review_status: 'needs_review' | 'ready' | 'blocked' | 'locked';
+	quality_flags: string[];
+	notes: string | null;
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationQualityIssue {
+	code: string;
+	message: string;
+	severity: 'blocker' | 'warning' | 'info';
+	cue_id: string | null;
+	speaker_id: string | null;
+	reference_clip_id: string | null;
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationQualityGate {
+	status: 'unknown' | 'pass' | 'warning' | 'blocked';
+	pending_issues: number;
+	blockers: VideoLocalizationQualityIssue[];
+	warnings: VideoLocalizationQualityIssue[];
+	checked_at: string | null;
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationExportState {
+	production_json_path: string | null;
+	subtitle_paths: Record<string, string>;
+	last_exported_at: string | null;
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationDraft {
+	project_type: 'video_localization';
+	schema_version: string;
+	status: 'draft' | 'reviewing' | 'ready_for_tts' | 'tts_running' | 'candidate' | 'blocked';
+	source_media: VideoLocalizationSourceMedia;
+	stems: VideoLocalizationStems;
+	speakers: VideoLocalizationSpeaker[];
+	reference_clips: VideoLocalizationReferenceClip[];
+	cues: VideoLocalizationCue[];
+	quality_gate: VideoLocalizationQualityGate;
+	exports: VideoLocalizationExportState;
+	updated_at: string | null;
+}
+
+export interface VideoLocalizationExport extends VideoLocalizationDraft {
+	project_id: string;
+	project_name: string;
+}
+
 export interface GenerateRequest {
 	text: string;
 	engine_id: string;

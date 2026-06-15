@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 
 from app.errors import AppException
-from app.schemas.voice_studio import Project, ProjectCreate, ProjectTranscriptionImportRequest, ProjectTranscriptionImportResponse, Role, ScriptSegment
+from app.schemas.voice_studio import Project, ProjectCreate, ProjectTranscriptionImportRequest, ProjectTranscriptionImportResponse, Role, ScriptSegment, VideoLocalizationDraft
 from app.services import project_store, task_queue
 
 router = APIRouter()
@@ -47,6 +50,34 @@ async def put_segments(project_id: str, segments: list[ScriptSegment]):
     if not project:
         raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
     return project
+
+
+@router.get("/{project_id}/video-localization", response_model=VideoLocalizationDraft)
+async def get_video_localization(project_id: str):
+    draft = project_store.get_video_localization(project_id)
+    if not draft:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    return draft
+
+
+@router.put("/{project_id}/video-localization", response_model=VideoLocalizationDraft)
+async def put_video_localization(project_id: str, draft: VideoLocalizationDraft):
+    updated = project_store.save_video_localization(project_id, draft)
+    if not updated:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    return updated
+
+
+@router.get("/{project_id}/video-localization/export")
+async def export_video_localization(project_id: str):
+    data = project_store.export_video_localization(project_id)
+    if not data:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    filename = f"{project_id}-video-localization.json"
+    return JSONResponse(
+        content=json.loads(data.model_dump_json()),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/{project_id}/transcriptions/import", response_model=ProjectTranscriptionImportResponse)

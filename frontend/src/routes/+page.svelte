@@ -2,7 +2,7 @@
 	import { Api } from '$lib/api';
 	import type { EngineDetail, HistoryItem, Project, VoiceAsset } from '$lib/api/types';
 	import { engineStatusLabel } from '$lib/labels';
-	import { ArrowRight, Mic2, Plus } from 'lucide-svelte';
+	import { ArrowRight, Film, Mic2, Plus } from 'lucide-svelte';
 
 	let engines = $state<EngineDetail[]>([]);
 	let voices = $state<VoiceAsset[]>([]);
@@ -33,7 +33,7 @@
 	<section class="grid">
 		<div class="card"><h2>引擎</h2><strong>{engines.filter((e) => e.state.status === 'loaded').length}/{engines.length}</strong><p class="muted">已加载 / 总数</p></div>
 		<div class="card"><h2>声音</h2><strong>{voices.length}</strong><p class="muted">可复用参考声音</p></div>
-		<div class="card"><h2>历史</h2><strong>{history.length}</strong><p class="muted">生成结果</p></div>
+		<div class="card"><h2>结果</h2><strong>{history.length}</strong><p class="muted">生成结果</p></div>
 		<div class="card"><h2>项目</h2><strong>{projects.length}</strong><p class="muted">脚本工作台项目</p></div>
 	</section>
 
@@ -56,6 +56,7 @@
 			<div class="row" style="justify-content:space-between"><h2>快速入口</h2><a class="btn" href="/voice-library"><Plus size={15} /> 声音</a></div>
 			<div class="stack">
 				<a class="card row" href="/engine-hub">配置本地引擎 <ArrowRight size={16} /></a>
+				<a class="card row" href="/video-localization"><Film size={16} /> 视频本土化配音 <ArrowRight size={16} /></a>
 				<a class="card row" href="/generate#records">查看结果与记录 <ArrowRight size={16} /></a>
 				<a class="card row" href="/script-studio">创建脚本项目 <ArrowRight size={16} /></a>
 				<a class="card row" href="/eval-reference">查看参数参考 <ArrowRight size={16} /></a>

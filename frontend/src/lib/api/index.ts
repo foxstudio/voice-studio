@@ -27,6 +27,8 @@ import type {
 	TTSVerificationRequest,
 	TTSVerificationResponse,
 	UploadResult,
+	VideoLocalizationDraft,
+	VideoLocalizationExport,
 	VoiceAsset,
 	VoiceAssetCreate,
 	SEREmotionResult,
@@ -97,6 +99,9 @@ export const Api = {
 	deleteProject: (id: string) => api.delete<{ status: string }>(`/projects/${id}`),
 	addRole: (id: string, role: Role) => api.post<Project>(`/projects/${id}/roles`, role),
 	putSegments: (id: string, segments: ScriptSegment[]) => api.put<Project>(`/projects/${id}/segments`, segments),
+	videoLocalizationDraft: (id: string) => api.get<VideoLocalizationDraft>(`/projects/${id}/video-localization`),
+	saveVideoLocalizationDraft: (id: string, draft: VideoLocalizationDraft) => api.put<VideoLocalizationDraft>(`/projects/${id}/video-localization`, draft),
+	exportVideoLocalizationDraft: (id: string) => api.get<VideoLocalizationExport>(`/projects/${id}/video-localization/export`),
 	importTranscriptionsToProject: (
 		id: string,
 		body: { transcription_ids: string[]; mode?: 'append' | 'replace'; role_id?: string | null; default_engine_id?: string | null; default_voice_id?: string | null }

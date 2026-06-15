@@ -13,7 +13,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic_core import PydanticCustomError
 
 
 def new_id() -> str:
@@ -654,6 +655,142 @@ class ProjectTranscriptionImportResponse(BaseModel):
     project: Project
     imported_count: int = 0
     skipped_count: int = 0
+
+
+class VideoLocalizationExtensibleModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
+class VideoLocalizationSourceMedia(VideoLocalizationExtensibleModel):
+    filename: str | None = None
+    duration_ms: int | None = Field(default=None, ge=0)
+    video_path: str | None = None
+    audio_path: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    width: int | None = Field(default=None, ge=0)
+    height: int | None = Field(default=None, ge=0)
+    frame_rate: float | None = Field(default=None, ge=0)
+    imported_at: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class VideoLocalizationStems(VideoLocalizationExtensibleModel):
+    vocals_clean_path: str | None = None
+    background_path: str | None = None
+    original_audio_path: str | None = None
+    separation_engine_id: str | None = None
+    separation_status: Literal["pending", "running", "completed", "failed", "skipped"] = "pending"
+    quality_flags: list[str] = Field(default_factory=list)
+
+
+class VideoLocalizationTimeRange(VideoLocalizationExtensibleModel):
+    start_ms: int | None = Field(default=None, ge=0)
+    end_ms: int | None = Field(default=None, ge=0)
+    source: str | None = None
+
+    @model_validator(mode="after")
+    def validate_time_range(self):
+        if self.start_ms is not None and self.end_ms is not None and self.end_ms < self.start_ms:
+            raise PydanticCustomError("invalid_time_range", "end_ms must be greater than or equal to start_ms")
+        return self
+
+
+class VideoLocalizationSpeaker(VideoLocalizationExtensibleModel):
+    speaker_id: str
+    display_name: str | None = None
+    route: Literal["clone_from_source", "preset_tts", "preserve_original_audio", "manual_review"] = "manual_review"
+    reference_clip_ids: list[str] = Field(default_factory=list)
+    time_ranges: list[VideoLocalizationTimeRange] = Field(default_factory=list)
+    review_status: Literal["needs_review", "ready", "blocked", "locked"] = "needs_review"
+    notes: str | None = None
+
+
+class VideoLocalizationReferenceClip(VideoLocalizationExtensibleModel):
+    reference_clip_id: str
+    speaker_id: str | None = None
+    source_stem: Literal["vocals_clean", "original_audio", "uploaded_reference", "generated_tts"] = "vocals_clean"
+    start_ms: int | None = Field(default=None, ge=0)
+    end_ms: int | None = Field(default=None, ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    audio_path: str | None = None
+    cleanliness: Literal["clean", "needs_review", "blocked", "mixed", "unknown"] = "unknown"
+    asr_text: str | None = None
+    asr_status: Literal["pending", "candidate", "verified", "failed", "skipped"] = "pending"
+    license_status: str | None = None
+    quality_flags: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_time_range(self):
+        if self.start_ms is not None and self.end_ms is not None and self.end_ms < self.start_ms:
+            raise PydanticCustomError("invalid_time_range", "end_ms must be greater than or equal to start_ms")
+        return self
+
+
+class VideoLocalizationCue(VideoLocalizationExtensibleModel):
+    cue_id: str
+    speaker_id: str | None = None
+    start_ms: int | None = Field(default=None, ge=0)
+    end_ms: int | None = Field(default=None, ge=0)
+    audio_route: Literal["clone_from_source", "preset_tts", "preserve_original_audio", "manual_review"] = "manual_review"
+    en_subtitle_text: str | None = None
+    zh_localized_subtitle_text: str | None = None
+    tts_recommended_text: str | None = None
+    reference_clip_id: str | None = None
+    tts_result_id: str | None = None
+    tts_audio_path: str | None = None
+    source_duration_ms: int | None = Field(default=None, ge=0)
+    generated_duration_ms: int | None = Field(default=None, ge=0)
+    review_status: Literal["needs_review", "ready", "blocked", "locked"] = "needs_review"
+    quality_flags: list[str] = Field(default_factory=list)
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def validate_time_range(self):
+        if self.start_ms is not None and self.end_ms is not None and self.end_ms < self.start_ms:
+            raise PydanticCustomError("invalid_time_range", "end_ms must be greater than or equal to start_ms")
+        return self
+
+
+class VideoLocalizationQualityIssue(VideoLocalizationExtensibleModel):
+    code: str
+    message: str
+    severity: Literal["blocker", "warning", "info"] = "warning"
+    cue_id: str | None = None
+    speaker_id: str | None = None
+    reference_clip_id: str | None = None
+
+
+class VideoLocalizationQualityGate(VideoLocalizationExtensibleModel):
+    status: Literal["unknown", "pass", "warning", "blocked"] = "unknown"
+    pending_issues: int = Field(default=0, ge=0)
+    blockers: list[VideoLocalizationQualityIssue] = Field(default_factory=list)
+    warnings: list[VideoLocalizationQualityIssue] = Field(default_factory=list)
+    checked_at: str | None = None
+
+
+class VideoLocalizationExportState(VideoLocalizationExtensibleModel):
+    production_json_path: str | None = None
+    subtitle_paths: dict[str, str] = Field(default_factory=dict)
+    last_exported_at: str | None = None
+
+
+class VideoLocalizationDraft(BaseModel):
+    project_type: Literal["video_localization"] = "video_localization"
+    schema_version: str = "v1"
+    status: Literal["draft", "reviewing", "ready_for_tts", "tts_running", "candidate", "blocked"] = "draft"
+    source_media: VideoLocalizationSourceMedia = Field(default_factory=VideoLocalizationSourceMedia)
+    stems: VideoLocalizationStems = Field(default_factory=VideoLocalizationStems)
+    speakers: list[VideoLocalizationSpeaker] = Field(default_factory=list)
+    reference_clips: list[VideoLocalizationReferenceClip] = Field(default_factory=list)
+    cues: list[VideoLocalizationCue] = Field(default_factory=list)
+    quality_gate: VideoLocalizationQualityGate = Field(default_factory=VideoLocalizationQualityGate)
+    exports: VideoLocalizationExportState = Field(default_factory=VideoLocalizationExportState)
+    updated_at: str | None = None
+
+
+class VideoLocalizationExport(VideoLocalizationDraft):
+    project_id: str
+    project_name: str
 
 
 class ExportRequest(BaseModel):
