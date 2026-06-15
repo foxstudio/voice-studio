@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Api } from '$lib/api';
-	import type { GenerateRequest, Project, VideoLocalizationCue, VideoLocalizationDraft } from '$lib/api/types';
+	import type { BatchTask, GenerateRequest, Project, VideoLocalizationCue, VideoLocalizationDraft } from '$lib/api/types';
 	import {
 		AlertTriangle,
 		CheckCircle2,
@@ -25,6 +25,7 @@
 	};
 
 	let projects = $state<Project[]>([]);
+	let batches = $state<BatchTask[]>([]);
 	let projectId = $state('');
 	let draft = $state<VideoLocalizationDraft | null>(null);
 	let selectedCueId = $state('');
@@ -39,6 +40,7 @@
 	let localizingZh = $state(false);
 	let submittingBatch = $state(false);
 	let syncingBatch = $state(false);
+	let loadingBatches = $state(false);
 	let ttsBatchId = $state('');
 	let videoInput: HTMLInputElement | null = null;
 	let message = $state('');
@@ -51,6 +53,7 @@
 	const reviewCount = $derived(draft?.cues.filter((cue) => cue.review_status === 'needs_review').length ?? 0);
 	const blockedCount = $derived(draft?.cues.filter((cue) => cue.review_status === 'blocked').length ?? 0);
 	const generatedCount = $derived(draft?.cues.filter((cue) => cue.tts_audio_path).length ?? 0);
+	const projectBatches = $derived(batches.filter((batch) => batchProjectId(batch) === projectId));
 	const canSubmitCount = $derived(
 		draft?.cues.filter((cue) => cue.review_status === 'ready' && cue.audio_route === 'clone_from_source' && cue.tts_recommended_text?.trim() && referenceReady(cue.reference_clip_id)).length ?? 0
 	);
@@ -83,8 +86,20 @@
 		try {
 			draft = await Api.videoLocalizationDraft(nextProjectId);
 			selectedCueId = draft.cues[0]?.cue_id ?? '';
+			await loadBatches();
 		} catch (e) {
 			error = (e as Error).message || '加载草稿失败';
+		}
+	}
+
+	async function loadBatches() {
+		loadingBatches = true;
+		try {
+			batches = await Api.batches();
+		} catch {
+			batches = [];
+		} finally {
+			loadingBatches = false;
 		}
 	}
 
@@ -247,6 +262,7 @@
 		try {
 			const task = await Api.submitVideoLocalizationBatchTts(projectId);
 			ttsBatchId = task.batch_task_id;
+			batches = [task, ...batches.filter((batch) => batch.batch_task_id !== task.batch_task_id)];
 			message = `已提交批量 TTS：${task.batch_task_id}`;
 			setTimeout(() => (message = ''), 2400);
 		} catch (e) {
@@ -262,6 +278,7 @@
 		error = '';
 		try {
 			draft = await Api.syncVideoLocalizationBatchTts(projectId, ttsBatchId.trim());
+			await loadBatches();
 			message = 'TTS 生成结果已同步到 cue';
 			setTimeout(() => (message = ''), 2200);
 		} catch (e) {
@@ -489,6 +506,19 @@
 	function durationLabel(ms: number | null | undefined) {
 		if (!ms) return '未知';
 		return `${(ms / 1000).toFixed(1)}s`;
+	}
+
+	function batchProjectId(batch: BatchTask) {
+		const parameters = batch.parameters?.parameters;
+		if (!parameters || typeof parameters !== 'object') return '';
+		const value = (parameters as Record<string, unknown>).project_id;
+		return typeof value === 'string' ? value : '';
+	}
+
+	function batchOptionLabel(batch: BatchTask) {
+		const success = batch.segments.filter((segment) => segment.status === 'success').length;
+		const failed = batch.segments.filter((segment) => segment.status === 'failed').length;
+		return `${batch.batch_task_id} · ${ttsBatchLabel(batch.status)} · 成功 ${success}/${batch.segments.length}${failed ? ` · 失败 ${failed}` : ''}`;
 	}
 
 	function ttsBatchLabel(status: string | null | undefined) {
@@ -838,6 +868,12 @@
 				<div class="stack">
 					<button class="btn success" type="button" onclick={submitBatchTts} disabled={!canSubmitCount || submittingBatch}><Wand2 size={14} /> {submittingBatch ? '提交中' : '批量发送可生成片段'}</button>
 					<div class="batch-sync-row">
+						<select value={ttsBatchId} aria-label="选择当前项目批次" onchange={(event) => (ttsBatchId = event.currentTarget.value)} disabled={loadingBatches}>
+							<option value="">{loadingBatches ? '加载批次中' : projectBatches.length ? '选择最近批次' : '暂无项目批次'}</option>
+							{#each projectBatches as batch}
+								<option value={batch.batch_task_id}>{batchOptionLabel(batch)}</option>
+							{/each}
+						</select>
 						<input value={ttsBatchId} oninput={(event) => (ttsBatchId = event.currentTarget.value)} placeholder="batch id" aria-label="批量 TTS 任务 ID" />
 						<button class="btn" type="button" onclick={syncBatchTtsResults} disabled={!ttsBatchId.trim() || syncingBatch}>
 							<Mic2 size={14} /> {syncingBatch ? '同步中' : '同步 TTS 结果'}
@@ -1359,11 +1395,12 @@
 
 	.batch-sync-row {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr) auto;
 		gap: 8px;
 	}
 
-	.batch-sync-row input {
+	.batch-sync-row input,
+	.batch-sync-row select {
 		min-width: 0;
 		border: 1px solid var(--line);
 		border-radius: 7px;

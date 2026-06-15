@@ -75,6 +75,7 @@ export const Api = {
 	longformTask: (id: string) => api.get<LongformTask>(`/longform/${id}`),
 	retryLongformFailed: (id: string) => api.post<LongformTask>(`/longform/${id}/retry-failed`),
 	generateBatch: (body: unknown) => api.post<BatchTask>('/batches/generate', body),
+	batches: () => api.get<BatchTask[]>('/batches'),
 	batch: (id: string) => api.get<BatchTask>(`/batches/${id}`),
 	tasks: () => api.get<GenerationTask[]>('/tasks'),
 	task: (id: string) => api.get<GenerationTask>(`/tasks/${id}`),
