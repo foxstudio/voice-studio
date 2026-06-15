@@ -5,6 +5,7 @@ import json
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from app.domains.video_localization import service as video_localization_service
 from app.errors import AppException
 from app.schemas.voice_studio import Project, ProjectCreate, ProjectTranscriptionImportRequest, ProjectTranscriptionImportResponse, Role, ScriptSegment, VideoLocalizationDraft
 from app.services import project_store, task_queue
@@ -54,7 +55,7 @@ async def put_segments(project_id: str, segments: list[ScriptSegment]):
 
 @router.get("/{project_id}/video-localization", response_model=VideoLocalizationDraft)
 async def get_video_localization(project_id: str):
-    draft = project_store.get_video_localization(project_id)
+    draft = video_localization_service.get_video_localization(project_id)
     if not draft:
         raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
     return draft
@@ -62,7 +63,7 @@ async def get_video_localization(project_id: str):
 
 @router.put("/{project_id}/video-localization", response_model=VideoLocalizationDraft)
 async def put_video_localization(project_id: str, draft: VideoLocalizationDraft):
-    updated = project_store.save_video_localization(project_id, draft)
+    updated = video_localization_service.save_video_localization(project_id, draft)
     if not updated:
         raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
     return updated
@@ -70,7 +71,7 @@ async def put_video_localization(project_id: str, draft: VideoLocalizationDraft)
 
 @router.get("/{project_id}/video-localization/export")
 async def export_video_localization(project_id: str):
-    data = project_store.export_video_localization(project_id)
+    data = video_localization_service.export_video_localization(project_id)
     if not data:
         raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
     filename = f"{project_id}-video-localization.json"

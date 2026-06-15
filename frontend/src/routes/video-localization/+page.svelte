@@ -195,6 +195,22 @@
 		}[status];
 	}
 
+	function gateLabel(status: VideoLocalizationDraft['quality_gate']['status'] | undefined) {
+		return {
+			pass: '质量门通过',
+			warning: '存在警告',
+			blocked: '存在阻断',
+			unknown: '未检查'
+		}[status ?? 'unknown'];
+	}
+
+	function gateBadgeClass(status: VideoLocalizationDraft['quality_gate']['status'] | undefined) {
+		if (status === 'pass') return 'ok';
+		if (status === 'blocked') return 'fail';
+		if (status === 'warning') return 'warn';
+		return '';
+	}
+
 	function speakerLabel(speakerId: string | null | undefined) {
 		if (!speakerId) return '未选';
 		const speaker = draft?.speakers.find((item) => item.speaker_id === speakerId);
@@ -491,8 +507,16 @@
 			<section class="panel export-panel">
 				<div class="section-title">
 					<h2>批量与交付</h2>
-					<span class="badge warn">{canSubmitCount}/{draft?.cues.length ?? 0} 可提交</span>
+					<span class={`badge ${gateBadgeClass(draft?.quality_gate.status)}`}>{gateLabel(draft?.quality_gate.status)}</span>
 				</div>
+				<div class="handoff-summary">
+					<div><strong>{canSubmitCount}</strong><span>可提交</span></div>
+					<div><strong>{draft?.quality_gate.blockers.length ?? 0}</strong><span>阻断</span></div>
+					<div><strong>{draft?.quality_gate.warnings.length ?? 0}</strong><span>警告</span></div>
+				</div>
+				<p class="muted small-note">
+					{draft?.quality_gate.checked_at ? `最近检查：${draft.quality_gate.checked_at}` : '保存或导出后会自动刷新质量门。'}
+				</p>
 				<div class="stack">
 					<button class="btn success" type="button" disabled><Wand2 size={14} /> 批量发送可生成片段</button>
 					<button class="btn" type="button" onclick={exportJson} disabled={!draft}><Download size={14} /> 下载 production JSON</button>
@@ -919,6 +943,34 @@
 		color: var(--muted);
 		font-size: 12px;
 		line-height: 1.45;
+	}
+
+	.handoff-summary {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 8px;
+		margin-bottom: 8px;
+	}
+
+	.handoff-summary div {
+		border: 1px solid var(--line);
+		border-radius: 7px;
+		padding: 8px;
+		background: #101215;
+	}
+
+	.handoff-summary strong,
+	.handoff-summary span {
+		display: block;
+	}
+
+	.handoff-summary strong {
+		font-size: 18px;
+	}
+
+	.handoff-summary span,
+	.small-note {
+		font-size: 12px;
 	}
 
 	.export-panel .btn {

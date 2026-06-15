@@ -11,14 +11,9 @@ from app.schemas.voice_studio import (
     ScriptSegment,
     SegmentStatus,
     TranscriptionRecord,
-    VideoLocalizationDraft,
-    VideoLocalizationExport,
     now_iso,
 )
 from app.services import database as db
-
-VIDEO_LOCALIZATION_KEY = "video_localization"
-
 
 def list_projects() -> list[Project]:
     return [Project(**d) for d in db.list_all("projects", "updated_at")]
@@ -120,34 +115,6 @@ def update_segment_result(project_id: str, segment_id: str, result_audio_id: str
             seg.error_message = error
             break
     save_project(project)
-
-
-def get_video_localization(project_id: str) -> VideoLocalizationDraft | None:
-    project = get_project(project_id)
-    if not project:
-        return None
-    raw = project.parameters.get(VIDEO_LOCALIZATION_KEY) or {}
-    return VideoLocalizationDraft(**raw)
-
-
-def save_video_localization(project_id: str, draft: VideoLocalizationDraft) -> VideoLocalizationDraft | None:
-    project = get_project(project_id)
-    if not project:
-        return None
-    next_draft = draft.model_copy(update={"updated_at": now_iso()})
-    project.parameters = {**project.parameters, VIDEO_LOCALIZATION_KEY: next_draft.model_dump()}
-    save_project(project)
-    return next_draft
-
-
-def export_video_localization(project_id: str) -> VideoLocalizationExport | None:
-    project = get_project(project_id)
-    if not project:
-        return None
-    draft = get_video_localization(project_id)
-    if not draft:
-        return None
-    return VideoLocalizationExport(project_id=project.project_id, project_name=project.name, **draft.model_dump())
 
 
 def _role_for_import(project: Project, role_id: str | None) -> Role | None:

@@ -119,6 +119,83 @@ def test_video_localization_rejects_inverted_time_ranges(tmp_path: Path):
     assert response.json()["error"]["code"] == "INVALID_REQUEST"
 
 
+def test_video_localization_save_recalculates_quality_gate_blockers(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "质量门阻断", "description": ""}).json()
+
+    response = client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "quality_gate": {"status": "pass", "pending_issues": 0},
+            "cues": [
+                {
+                    "cue_id": "cue_blocked",
+                    "start_ms": 1000,
+                    "end_ms": 2000,
+                    "zh_localized_subtitle_text": "中文字幕存在。",
+                    "tts_recommended_text": "中文字幕存在。",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "blocked"
+    assert body["quality_gate"]["status"] == "blocked"
+    blocker_codes = {issue["code"] for issue in body["quality_gate"]["blockers"]}
+    assert {"CUE_SPEAKER_MISSING", "EN_SUBTITLE_MISSING"}.issubset(blocker_codes)
+
+
+def test_video_localization_complete_clone_cue_can_pass_quality_gate(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "质量门通过", "description": ""}).json()
+
+    response = client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "source.mp4"},
+            "stems": {"separation_status": "completed", "vocals_clean_path": "stems/vocals.wav"},
+            "speakers": [{"speaker_id": "speaker_01", "display_name": "A", "route": "clone_from_source"}],
+            "reference_clips": [
+                {
+                    "reference_clip_id": "ref_001",
+                    "speaker_id": "speaker_01",
+                    "source_stem": "vocals_clean",
+                    "audio_path": "refs/ref_001.wav",
+                    "cleanliness": "clean",
+                    "asr_text": "This is a clean reference.",
+                    "asr_status": "verified",
+                }
+            ],
+            "cues": [
+                {
+                    "cue_id": "cue_ready",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 3000,
+                    "audio_route": "clone_from_source",
+                    "en_subtitle_text": "In 1992, this changed everything.",
+                    "zh_localized_subtitle_text": "1992 年，这件事改变了一切。",
+                    "tts_recommended_text": "一九九二年，这件事，改变了一切。",
+                    "reference_clip_id": "ref_001",
+                    "review_status": "ready",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ready_for_tts"
+    assert body["quality_gate"]["status"] == "pass"
+    assert body["quality_gate"]["pending_issues"] == 0
+
+
 def test_video_localization_export_adds_project_metadata(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "导出测试", "description": ""}).json()
@@ -137,4 +214,7 @@ def test_video_localization_export_adds_project_metadata(tmp_path: Path):
     body = exported.json()
     assert body["project_id"] == project["project_id"]
     assert body["project_name"] == "导出测试"
+    assert body["exported_at"]
+    assert body["export_summary"]["cue_count"] == 1
+    assert body["quality_gate"]["status"] == "blocked"
     assert body["cues"][0]["tts_recommended_text"] == "你好。"

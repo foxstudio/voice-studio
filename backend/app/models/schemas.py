@@ -791,6 +791,8 @@ class VideoLocalizationDraft(BaseModel):
 class VideoLocalizationExport(VideoLocalizationDraft):
     project_id: str
     project_name: str
+    exported_at: str = Field(default_factory=now_iso)
+    export_summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class ExportRequest(BaseModel):

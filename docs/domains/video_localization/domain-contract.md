@@ -152,15 +152,34 @@ V1 只要求能保存和导出。真实文件复制、抽音频和探测时长�
 - `warnings`
 - `checked_at`
 
+保存草稿和导出 production JSON 时，后端必须自动重算质量门，并覆盖客户端传入的旧 `quality_gate`。导出可以包含阻断明细；后续批量 TTS 提交必须在存在 blocker 时拒绝提交。
+
 批量提交前的硬阻断：
 
 - cue 缺少时间码。
 - cue 缺少 `speaker_id`。
+- cue 绑定的 `speaker_id` 不存在。
 - cue 缺少英文字幕、中文字幕或 TTS 台词。
 - `clone_from_source` 路线缺少干净参考音。
 - 参考音未独立 ASR。
 - 混合说话未拆分，也没有显式标记 `preserve_original_audio`。
 - 云端 fallback 或云端 voiceclone 未经人工确认。
+
+V1 issue code 使用稳定英文枚举，前端显示中文 `message`：
+
+- `CUE_TIMECODE_MISSING`
+- `CUE_SPEAKER_MISSING`
+- `CUE_SPEAKER_NOT_FOUND`
+- `MIXED_SPEAKER_NEEDS_SPLIT`
+- `EN_SUBTITLE_MISSING`
+- `ZH_SUBTITLE_MISSING`
+- `TTS_TEXT_MISSING`
+- `TTS_TEXT_NOT_NORMALIZED`
+- `REFERENCE_CLIP_MISSING`
+- `REFERENCE_CLIP_NOT_FOUND`
+- `REFERENCE_NOT_FROM_CLEAN_VOCALS`
+- `REFERENCE_NOT_CLEAN`
+- `REFERENCE_ASR_NOT_VERIFIED`
 
 ## Export
 
@@ -168,6 +187,8 @@ V1 只要求能保存和导出。真实文件复制、抽音频和探测时长�
 
 - `project_id`
 - `project_name`
+- `exported_at`
+- `export_summary`
 
 导出 JSON 必须保留：
 

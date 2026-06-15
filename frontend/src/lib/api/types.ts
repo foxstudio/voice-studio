@@ -299,6 +299,8 @@ export interface VideoLocalizationDraft {
 export interface VideoLocalizationExport extends VideoLocalizationDraft {
 	project_id: string;
 	project_name: string;
+	exported_at: string;
+	export_summary: Record<string, unknown>;
 }
 
 export interface GenerateRequest {
