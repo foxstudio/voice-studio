@@ -35,6 +35,7 @@
 	let extractingAudio = $state(false);
 	let separatingStems = $state(false);
 	let transcribingAsr = $state(false);
+	let creatingReferences = $state(false);
 	let videoInput: HTMLInputElement | null = null;
 	let message = $state('');
 	let error = $state('');
@@ -180,6 +181,21 @@
 			error = (e as Error).message || '人声分离失败';
 		} finally {
 			separatingStems = false;
+		}
+	}
+
+	async function createReferenceCandidates() {
+		if (!projectId || draft?.stems.separation_status !== 'completed') return;
+		creatingReferences = true;
+		error = '';
+		try {
+			draft = await Api.createVideoLocalizationReferences(projectId);
+			message = '参考音候选已生成';
+			setTimeout(() => (message = ''), 1800);
+		} catch (e) {
+			error = (e as Error).message || '生成参考音候选失败';
+		} finally {
+			creatingReferences = false;
 		}
 	}
 
@@ -567,7 +583,12 @@
 			<section class="panel refs-panel">
 				<div class="section-title">
 					<h2>干净参考音色池</h2>
-					<span class="badge ok">{draft?.reference_clips.length ?? 0} 候选</span>
+					<div class="row">
+						<span class="badge ok">{draft?.reference_clips.length ?? 0} 候选</span>
+						<button class="mini-btn" type="button" onclick={createReferenceCandidates} disabled={draft?.stems.separation_status !== 'completed' || creatingReferences}>
+							{creatingReferences ? '生成中' : '生成候选'}
+						</button>
+					</div>
 				</div>
 				<div class="reference-list">
 					{#each draft?.reference_clips ?? [] as clip}

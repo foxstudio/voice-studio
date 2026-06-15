@@ -376,6 +376,68 @@ def test_video_localization_english_asr_creates_cue_draft(tmp_path: Path, monkey
     assert {"CUE_SPEAKER_MISSING", "ZH_SUBTITLE_MISSING", "TTS_TEXT_MISSING"}.issubset(blocker_codes)
 
 
+def test_video_localization_reference_candidates_require_clean_vocals(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "缺干净人声", "description": ""}).json()
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/reference-clips")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_CLEAN_VOCALS_MISSING"
+
+
+def test_video_localization_reference_candidates_from_clean_vocals(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "参考音候选", "description": ""}).json()
+    vocals_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "stems" / "vocals.wav"
+    vocals_path.parent.mkdir(parents=True, exist_ok=True)
+    vocals_path.write_bytes(b"vocals")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "stems": {"separation_status": "completed", "vocals_clean_path": str(vocals_path)},
+            "speakers": [{"speaker_id": "speaker_01", "display_name": "A"}],
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 3200,
+                    "en_subtitle_text": "This is a reference line.",
+                    "zh_localized_subtitle_text": "这是一句参考台词。",
+                    "tts_recommended_text": "这是一句，参考台词。",
+                }
+            ],
+        },
+    )
+
+    def fake_cut(source_path: Path, destination: Path, start_ms: int, end_ms: int):
+        assert source_path == vocals_path
+        assert start_ms == 1000
+        assert end_ms == 3200
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"clip")
+        return destination
+
+    monkeypatch.setattr(video_localization_service, "_cut_audio_clip", fake_cut)
+    monkeypatch.setattr(video_localization_service.audio_tools, "probe_audio", lambda path: {"duration_ms": 2200, "sample_rate": 24000, "channels": 1})
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/reference-clips")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reference_clips"][0]["reference_clip_id"] == "ref_speaker_01_cue_0001"
+    assert body["reference_clips"][0]["source_stem"] == "vocals_clean"
+    assert body["reference_clips"][0]["cleanliness"] == "needs_review"
+    assert body["reference_clips"][0]["asr_status"] == "candidate"
+    assert body["reference_clips"][0]["asr_text"] == "This is a reference line."
+    assert body["cues"][0]["reference_clip_id"] == "ref_speaker_01_cue_0001"
+    assert body["speakers"][0]["reference_clip_ids"] == ["ref_speaker_01_cue_0001"]
+    assert body["speakers"][0]["time_ranges"][0]["source"] == "reference_candidate"
+
+
 def test_video_localization_export_adds_project_metadata(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "导出测试", "description": ""}).json()

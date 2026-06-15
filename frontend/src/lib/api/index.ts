@@ -105,6 +105,7 @@ export const Api = {
 	extractVideoLocalizationAudio: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/source-audio`),
 	separateVideoLocalizationStems: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/stems`),
 	transcribeVideoLocalizationEnglish: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/asr/en`),
+	createVideoLocalizationReferences: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/reference-clips`),
 	exportVideoLocalizationDraft: (id: string) => api.get<VideoLocalizationExport>(`/projects/${id}/video-localization/export`),
 	importTranscriptionsToProject: (
 		id: string,
