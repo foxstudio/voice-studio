@@ -18,6 +18,7 @@ def test_provider_catalog_matches_engine_registry():
     assert provider_ids == registry_ids
     assert "mimo-v2.5-tts" not in provider_ids
     assert "mimo-v2.5-tts-preset" in provider_ids
+    assert "faster-whisper-turbo" in provider_ids
 
 
 def test_provider_resolves_legacy_mimo_alias():

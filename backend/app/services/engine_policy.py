@@ -11,7 +11,7 @@ MIMO_ENGINES = {*MIMO_TTS_ENGINES, "mimo-v2.5-asr"}
 EXTERNAL_WORKER_ENGINES = {"f5-tts", "cosyvoice-sft", "cosyvoice-zero-shot"}
 EXTERNAL_SUBPROCESS_ENGINES = {"emotivoice", *EXTERNAL_WORKER_ENGINES}
 LOCAL_MODEL_ENGINES = {"indextts-v2", "omnivoice"}
-LOCAL_ASR_ENGINES = {"qwen3-asr-mlx"}
+LOCAL_ASR_ENGINES = {"qwen3-asr-mlx", "faster-whisper-turbo"}
 
 _TIMEOUTS = {
     "omnivoice": 600,
@@ -58,4 +58,3 @@ def runner_kind_for(engine_id: str) -> RunnerKind:
     if resolved in LOCAL_ASR_ENGINES:
         return "asr_local"
     return "local"
-

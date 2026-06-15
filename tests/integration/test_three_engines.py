@@ -86,6 +86,7 @@ class TestEngineRegistryAPI:
             "mimo-v2.5-tts-voiceclone",
             "mimo-v2.5-asr",
             "qwen3-asr-mlx",
+            "faster-whisper-turbo",
         ]
 
     def test_engine_metadata(self, client):
@@ -123,6 +124,7 @@ class TestEngineRegistryAPI:
         assert "voice_design" in by_id["mimo-v2.5-tts-voicedesign"]["capabilities"]
         assert "voice_clone" in by_id["mimo-v2.5-tts-voiceclone"]["capabilities"]
         assert "speech_recognition" in by_id["qwen3-asr-mlx"]["capabilities"]
+        assert "vad" in by_id["faster-whisper-turbo"]["capabilities"]
 
     def test_get_single_engine(self, client):
         resp = client.get("/api/engines/indextts-v2")

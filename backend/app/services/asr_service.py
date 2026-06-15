@@ -6,10 +6,10 @@ from typing import Any
 
 from app.errors import AppException
 from app.schemas.voice_studio import TimestampMode, TranscriptionRecord, TranscriptionSegment
-from app.services import engine_registry, mimo_client, qwen_forced_aligner, qwen_mlx_asr, settings_store
+from app.services import engine_registry, faster_whisper_asr, mimo_client, qwen_forced_aligner, qwen_mlx_asr, settings_store
 
 
-SUPPORTED_ENGINES = {"mimo-v2.5-asr", "qwen3-asr-mlx"}
+SUPPORTED_ENGINES = {"mimo-v2.5-asr", "qwen3-asr-mlx", "faster-whisper-turbo"}
 SUPPORTED_LANGUAGES = {"auto", "zh", "en"}
 SUPPORTED_SUFFIXES = {".wav", ".mp3"}
 
@@ -31,13 +31,7 @@ def ensure_engine_ready(engine_id: str) -> dict[str, Any]:
 
     status = health.get("status", "unavailable")
     detail = health.get("detail") or ", ".join(health.get("missing", [])) or "ASR engine is unavailable"
-    code_by_status = {
-        "cloud_disabled": "MIMO_API_KEY_REQUIRED",
-        "api_key_missing": "MIMO_API_KEY_REQUIRED",
-        "runtime_missing": "QWEN3_ASR_RUNTIME_MISSING",
-        "model_missing": "QWEN3_ASR_MODEL_MISSING",
-        "not_found": "ASR_ENGINE_UNSUPPORTED",
-    }
+    code_by_status = _unavailable_codes_for(engine_id)
     raise AppException(400, code_by_status.get(status, "ASR_ENGINE_UNAVAILABLE"), str(detail))
 
 
@@ -57,7 +51,32 @@ def transcribe(*, engine_id: str, audio_path: str, language: str) -> dict[str, A
             language=language,
             model_path=str(settings_store.model_path(engine_id)),
         )
+    if engine_id == "faster-whisper-turbo":
+        return faster_whisper_asr.transcribe_audio(
+            audio_path=audio_path,
+            language=language,
+            model_path=str(settings_store.model_path(engine_id)),
+        )
     raise AppException(400, "ASR_ENGINE_UNSUPPORTED", f"Unsupported ASR engine: {engine_id}")
+
+
+def _unavailable_codes_for(engine_id: str) -> dict[str, str]:
+    if engine_id == "qwen3-asr-mlx":
+        runtime_missing = "QWEN3_ASR_RUNTIME_MISSING"
+        model_missing = "QWEN3_ASR_MODEL_MISSING"
+    elif engine_id == "faster-whisper-turbo":
+        runtime_missing = "FASTER_WHISPER_ASR_RUNTIME_MISSING"
+        model_missing = "FASTER_WHISPER_ASR_MODEL_MISSING"
+    else:
+        runtime_missing = "ASR_RUNTIME_MISSING"
+        model_missing = "ASR_MODEL_MISSING"
+    return {
+        "cloud_disabled": "MIMO_API_KEY_REQUIRED",
+        "api_key_missing": "MIMO_API_KEY_REQUIRED",
+        "runtime_missing": runtime_missing,
+        "model_missing": model_missing,
+        "not_found": "ASR_ENGINE_UNSUPPORTED",
+    }
 
 
 def timestamp_metadata_for(engine_id: str, segments: list[dict[str, Any]] | list[TranscriptionSegment] | None) -> dict[str, Any]:

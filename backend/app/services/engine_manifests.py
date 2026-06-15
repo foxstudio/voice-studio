@@ -348,4 +348,21 @@ ENGINES: dict[str, EngineDetail] = {
         ),
         state=EngineState(engine_id="qwen3-asr-mlx", status=EngineStatus.stopped),
     ),
+    "faster-whisper-turbo": EngineDetail(
+        manifest=EngineManifest(
+            engine_id="faster-whisper-turbo",
+            display_name="Faster Whisper Turbo",
+            provider="SYSTRAN faster-whisper + OpenAI Whisper",
+            version="large-v3-turbo / CTranslate2",
+            description="本地 faster-whisper 英文优先转写，面向视频本土化初稿字幕；原始模型 openai/whisper-large-v3-turbo，运行时使用 CTranslate2 转换模型。",
+            supported_languages=["auto", "en"],
+            capabilities=["local_inference", "speech_recognition", "transcription", "language_identification", "vad"],
+            default_use_case="英文视频快速转写、时间轴字幕初稿和人工校对入口",
+            privacy_level="local_only",
+            parameter_schema=[
+                ParameterSchema(key="language", label="识别语言", type="select", default="en", options=[{"label": x, "value": x} for x in ["en", "auto"]], description="视频本土化默认英文识别；auto 用于少量混语素材。")
+            ],
+        ),
+        state=EngineState(engine_id="faster-whisper-turbo", status=EngineStatus.stopped),
+    ),
 }

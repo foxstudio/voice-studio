@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from app.services import engine_manifests, engine_policy, qwen_mlx_asr, settings_store
+from app.services import engine_manifests, engine_policy, faster_whisper_asr, qwen_mlx_asr, settings_store
 
 
 DEFAULT_EXTERNAL_ROOTS = {
@@ -48,6 +48,8 @@ def health_check(engine_id: str) -> dict[str, Any]:
         return _health_cloud_engine()
     if engine_id == "qwen3-asr-mlx":
         return _health_qwen_asr(engine_id)
+    if engine_id == "faster-whisper-turbo":
+        return _health_faster_whisper_asr(engine_id)
     if engine_id in engine_policy.EXTERNAL_SUBPROCESS_ENGINES:
         return _health_external_engine(engine_id)
     return _health_omnivoice()
@@ -82,6 +84,11 @@ def _health_qwen_asr(engine_id: str) -> dict[str, Any]:
         health["healthy"] = ok
         health["detail"] = f"mlx-audio runtime is unavailable: {detail}" if detail else health.get("detail")
     return health
+
+
+def _health_faster_whisper_asr(engine_id: str) -> dict[str, Any]:
+    model_path = settings_store.model_path(engine_id)
+    return faster_whisper_asr.model_health(model_path)
 
 
 def _health_external_engine(engine_id: str) -> dict[str, Any]:

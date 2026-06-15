@@ -320,11 +320,13 @@ def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path):
         "mimo-v2.5-tts-voiceclone",
         "mimo-v2.5-asr",
         "qwen3-asr-mlx",
+        "faster-whisper-turbo",
     }
     assert "emotion_control" in by_id["indextts-v2"]["capabilities"]
     assert by_id["mimo-v2.5-tts-preset"]["engine_type"] == "cloud"
     assert "mimo-v2.5-tts" not in by_id
     assert "speech_recognition" in by_id["qwen3-asr-mlx"]["capabilities"]
+    assert "vad" in by_id["faster-whisper-turbo"]["capabilities"]
     assert by_id["emotivoice"]["sample_rate"] == 16000
     assert "preset_voice" in by_id["cosyvoice-sft"]["capabilities"]
     assert "voice_clone" in by_id["f5-tts"]["capabilities"]

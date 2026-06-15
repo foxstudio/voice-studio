@@ -49,6 +49,7 @@ def test_mimo_engines_are_split_and_legacy_id_is_hidden(tmp_path: Path):
         "mimo-v2.5-tts-voiceclone",
         "mimo-v2.5-asr",
         "qwen3-asr-mlx",
+        "faster-whisper-turbo",
     } <= set(by_id)
 
     preset = by_id["mimo-v2.5-tts-preset"]
@@ -88,6 +89,11 @@ def test_mimo_engines_are_split_and_legacy_id_is_hidden(tmp_path: Path):
     assert qwen["engine_type"] == "local"
     assert "speech_recognition" in qwen["capabilities"]
     assert "transcription" in qwen["capabilities"]
+
+    turbo = by_id["faster-whisper-turbo"]
+    assert turbo["engine_type"] == "local"
+    assert turbo["supported_languages"] == ["auto", "en"]
+    assert "vad" in turbo["capabilities"]
 
 
 def test_settings_include_default_voice_and_cloud_upload_confirmation(tmp_path: Path):
@@ -268,6 +274,47 @@ def test_asr_transcribe_endpoint_dispatches_selected_engine(tmp_path: Path, monk
     assert srt.status_code == 200
     assert "00:00:00,000 --> 00:00:01,350" in srt.text
     assert "Qwen3-ASR 结果。" in srt.text
+
+
+def test_asr_transcribe_endpoint_dispatches_faster_whisper_turbo(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+
+    monkeypatch.setattr(
+        engine_registry,
+        "health_check",
+        lambda engine_id: {"healthy": True, "status": "ready", "engine_id": engine_id},
+    )
+
+    import app.services.faster_whisper_asr as faster_whisper_asr  # noqa: E402
+
+    def fake_turbo_transcribe(*, audio_path: str, language: str, model_path: str):
+        assert audio_path.endswith(".wav")
+        assert language == "en"
+        assert Path(model_path).name == "faster-whisper-turbo"
+        return {
+            "text": "We shipped the first localization pass.",
+            "segments": [
+                {"start_ms": 0, "end_ms": 1850, "text": "We shipped", "language": "en"},
+                {"start_ms": 1850, "end_ms": 4200, "text": "the first localization pass.", "language": "en"},
+            ],
+            "usage_seconds": 2,
+            "provider_response_id": None,
+        }
+
+    monkeypatch.setattr(faster_whisper_asr, "transcribe_audio", fake_turbo_transcribe)
+
+    resp = client.post(
+        "/api/asr/transcribe",
+        data={"language": "en", "engine_id": "faster-whisper-turbo"},
+        files={"file": ("clip.wav", b"RIFF" + b"\0" * 128, "audio/wav")},
+    )
+    assert resp.status_code == 200
+    record = resp.json()
+    assert record["engine_id"] == "faster-whisper-turbo"
+    assert record["text"] == "We shipped the first localization pass."
+    assert len(record["segments"]) == 2
+    assert record["timestamp_mode"] == "native"
+    assert record["timestamp_source_engine_id"] == "faster-whisper-turbo"
 
 
 def test_mimo_transcription_srt_export_is_rejected_without_segments(tmp_path: Path, monkeypatch):
@@ -544,6 +591,30 @@ def test_qwen3_asr_health_reports_runtime_missing_when_model_exists(tmp_path: Pa
     assert data["status"] == "runtime_missing"
     assert data["model_path"] == str(model_dir)
     assert "mlx-audio" in data["detail"]
+
+
+def test_faster_whisper_turbo_health_reports_runtime_missing_when_model_exists(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    model_dir = tmp_path / "faster-whisper-turbo"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "config.json").write_text("{}", encoding="utf-8")
+    (model_dir / "model.bin").write_bytes(b"model")
+    (model_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(settings_store, "model_path", lambda engine_id: model_dir)
+    import app.services.faster_whisper_asr as faster_whisper_asr  # noqa: E402
+
+    monkeypatch.setattr(faster_whisper_asr, "runtime_available", lambda: (False, "faster-whisper is not installed"))
+
+    resp = client.post("/api/engines/faster-whisper-turbo/health-check")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["healthy"] is False
+    assert data["status"] == "runtime_missing"
+    assert data["model_path"] == str(model_dir)
+    assert data["model_id"] == "dropbox-dash/faster-whisper-large-v3-turbo"
+    assert data["original_model_id"] == "openai/whisper-large-v3-turbo"
+    assert "faster-whisper" in data["detail"]
 
 
 def test_voice_assets_report_engine_bindings(tmp_path: Path):
