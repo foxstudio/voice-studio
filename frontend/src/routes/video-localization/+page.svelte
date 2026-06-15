@@ -252,6 +252,30 @@
 		}
 	}
 
+	async function exportBilingualSrt() {
+		if (!projectId) return;
+		error = '';
+		try {
+			const response = await fetch(`/api/projects/${projectId}/video-localization/subtitles/bilingual`);
+			if (!response.ok) {
+				const data = await response.json().catch(() => null);
+				throw new Error(data?.error?.message || '导出字幕失败');
+			}
+			const text = await response.text();
+			const blob = new Blob([text], { type: 'application/x-subrip;charset=utf-8' });
+			const url = URL.createObjectURL(blob);
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = `${projectId}-video-localization-bilingual.srt`;
+			link.click();
+			URL.revokeObjectURL(url);
+			message = '中英字幕草稿已导出';
+			setTimeout(() => (message = ''), 1800);
+		} catch (e) {
+			error = (e as Error).message || '导出字幕失败';
+		}
+	}
+
 	function addCue() {
 		if (!draft) return;
 		const index = draft.cues.length + 1;
@@ -672,7 +696,7 @@
 				<div class="stack">
 					<button class="btn success" type="button" onclick={submitBatchTts} disabled={!canSubmitCount || submittingBatch}><Wand2 size={14} /> {submittingBatch ? '提交中' : '批量发送可生成片段'}</button>
 					<button class="btn" type="button" onclick={exportJson} disabled={!draft}><Download size={14} /> 下载 production JSON</button>
-					<button class="btn" type="button" disabled><Languages size={14} /> 导出中英字幕草稿</button>
+					<button class="btn" type="button" onclick={exportBilingualSrt} disabled={!draft?.cues.some((cue) => cue.start_ms !== null && cue.end_ms !== null)}><Languages size={14} /> 导出中英字幕草稿</button>
 				</div>
 			</section>
 		</aside>

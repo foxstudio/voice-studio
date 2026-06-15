@@ -511,6 +511,67 @@ def test_video_localization_chinese_draft_normalizes_existing_subtitle_for_tts(t
     assert "tts_text_normalized" in cue["quality_flags"]
 
 
+def test_video_localization_subtitle_export_bilingual_srt(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "字幕导出", "description": ""}).json()
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 3200,
+                    "en_subtitle_text": "In 1992, this changed everything.",
+                    "zh_localized_subtitle_text": "1992 年，这件事改变了一切。",
+                }
+            ],
+        },
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/subtitles/bilingual")
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"].endswith(f'{project["project_id"]}-video-localization-bilingual.srt"')
+    assert response.text == (
+        "1\n"
+        "00:00:01,000 --> 00:00:03,200\n"
+        "In 1992, this changed everything.\n"
+        "1992 年，这件事改变了一切。\n"
+    )
+
+
+def test_video_localization_subtitle_export_rejects_empty_timed_cues(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "无时间字幕", "description": ""}).json()
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [{"cue_id": "cue_0001", "en_subtitle_text": "No timing yet."}],
+        },
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/subtitles/bilingual")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_SUBTITLES_EMPTY"
+
+
+def test_video_localization_subtitle_export_rejects_unsupported_kind(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "字幕类型", "description": ""}).json()
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/subtitles/ass")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_SUBTITLE_KIND_UNSUPPORTED"
+
+
 def test_video_localization_tts_batch_submits_ready_clean_reference_cues(tmp_path: Path, monkeypatch):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "批量 TTS", "description": ""}).json()
