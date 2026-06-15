@@ -12,6 +12,7 @@ if str(BACKEND) not in sys.path:
 
 from app.main import app  # noqa: E402
 from app.schemas.voice_studio import AppSettings  # noqa: E402
+from app.domains.video_localization import service as video_localization_service  # noqa: E402
 from app.services import database, settings_store  # noqa: E402
 
 
@@ -227,6 +228,44 @@ def test_video_localization_import_rejects_unsupported_media(tmp_path: Path):
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_UNSUPPORTED_MEDIA"
+
+
+def test_video_localization_extract_source_audio_updates_draft(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "抽取音轨", "description": ""}).json()
+    imported = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/source-media",
+        files={"file": ("demo.mp4", b"fake-video-bytes", "video/mp4")},
+    ).json()
+
+    def fake_extract(video_path: Path, audio_path: Path) -> dict:
+        assert video_path == Path(imported["source_media"]["video_path"])
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        audio_path.write_bytes(b"fake-wav")
+        return {"duration_ms": 1234, "sample_rate": 48000, "channels": 2, "size_bytes": 8}
+
+    monkeypatch.setattr(video_localization_service, "_extract_audio_file", fake_extract)
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/source-audio")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source_media"]["audio_path"].endswith("-source.wav")
+    assert Path(body["source_media"]["audio_path"]).exists()
+    assert body["source_media"]["duration_ms"] == 1234
+    assert body["source_media"]["metadata"]["audio_sample_rate"] == 48000
+    assert body["source_media"]["metadata"]["audio_channels"] == 2
+    assert body["stems"]["original_audio_path"] == body["source_media"]["audio_path"]
+
+
+def test_video_localization_extract_source_audio_requires_video(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "缺视频", "description": ""}).json()
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/source-audio")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_SOURCE_MISSING"
 
 
 def test_video_localization_export_adds_project_metadata(tmp_path: Path):

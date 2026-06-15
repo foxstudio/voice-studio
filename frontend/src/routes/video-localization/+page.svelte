@@ -32,6 +32,7 @@
 	let saving = $state(false);
 	let creating = $state(false);
 	let importing = $state(false);
+	let extractingAudio = $state(false);
 	let videoInput: HTMLInputElement | null = null;
 	let message = $state('');
 	let error = $state('');
@@ -131,6 +132,21 @@
 		} finally {
 			importing = false;
 			if (videoInput) videoInput.value = '';
+		}
+	}
+
+	async function extractSourceAudio() {
+		if (!projectId || !draft?.source_media.video_path) return;
+		extractingAudio = true;
+		error = '';
+		try {
+			draft = await Api.extractVideoLocalizationAudio(projectId);
+			message = '源音轨已抽取';
+			setTimeout(() => (message = ''), 1800);
+		} catch (e) {
+			error = (e as Error).message || '抽取源音轨失败';
+		} finally {
+			extractingAudio = false;
 		}
 	}
 
@@ -341,6 +357,13 @@
 						<span>分离</span>
 						<strong>vocals_clean + background</strong>
 						<span class={`badge ${draft?.stems.separation_status === 'completed' ? 'ok' : ''}`}>{draft?.stems.separation_status || 'pending'}</span>
+					</div>
+					<div class="model-row">
+						<span>源音</span>
+						<strong>{draft?.source_media.audio_path ? 'source.wav 已记录' : '等待抽取'}</strong>
+						<button class="mini-btn" type="button" onclick={extractSourceAudio} disabled={!draft?.source_media.video_path || extractingAudio}>
+							{extractingAudio ? '抽取中' : '抽取'}
+						</button>
 					</div>
 				</div>
 			</section>
@@ -688,6 +711,22 @@
 
 	.model-row > span:first-child {
 		color: var(--muted);
+	}
+
+	.mini-btn {
+		border: 1px solid var(--line);
+		border-radius: 6px;
+		background: #15181d;
+		color: var(--text);
+		padding: 5px 8px;
+		font-size: 12px;
+		cursor: pointer;
+	}
+
+	.mini-btn:disabled {
+		color: var(--muted);
+		cursor: not-allowed;
+		opacity: 0.65;
 	}
 
 	.video-preview {
