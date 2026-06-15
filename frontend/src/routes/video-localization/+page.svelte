@@ -33,6 +33,7 @@
 	let creating = $state(false);
 	let importing = $state(false);
 	let extractingAudio = $state(false);
+	let transcribingAsr = $state(false);
 	let videoInput: HTMLInputElement | null = null;
 	let message = $state('');
 	let error = $state('');
@@ -150,6 +151,22 @@
 		}
 	}
 
+	async function transcribeEnglishSource() {
+		if (!projectId || !(draft?.source_media.audio_path || draft?.stems.original_audio_path)) return;
+		transcribingAsr = true;
+		error = '';
+		try {
+			draft = await Api.transcribeVideoLocalizationEnglish(projectId);
+			selectedCueId = draft.cues[0]?.cue_id ?? '';
+			message = '英文字幕草稿已生成';
+			setTimeout(() => (message = ''), 1800);
+		} catch (e) {
+			error = (e as Error).message || '英文 ASR 失败';
+		} finally {
+			transcribingAsr = false;
+		}
+	}
+
 	async function exportJson() {
 		if (!projectId) return;
 		error = '';
@@ -206,6 +223,7 @@
 
 	function buildWorkflow(current: VideoLocalizationDraft | null): WorkflowStep[] {
 		const hasSource = Boolean(current?.source_media.filename || current?.source_media.video_path);
+		const hasSourceAudio = Boolean(current?.source_media.audio_path || current?.stems.original_audio_path);
 		const stemsReady = current?.stems.separation_status === 'completed';
 		const hasAsr = Boolean(current?.cues.some((cue) => cue.en_subtitle_text?.trim()));
 		const hasSpeakers = Boolean(current?.speakers.length);
@@ -216,7 +234,7 @@
 		return [
 			{ label: '导入', status: hasSource ? 'done' : 'active' },
 			{ label: '人声分离', status: stemsReady ? 'done' : hasSource ? 'active' : 'pending' },
-			{ label: '英文 ASR', status: hasAsr ? 'done' : stemsReady ? 'active' : 'pending' },
+			{ label: '英文 ASR', status: hasAsr ? 'done' : hasSourceAudio ? 'active' : 'pending' },
 			{ label: '说话人', status: hasSpeakers ? 'done' : hasAsr ? 'active' : 'pending' },
 			{ label: '人工校对', status: blocked ? 'blocked' : hasReviewed ? 'active' : 'pending' },
 			{ label: 'TTS', status: hasTts ? 'done' : readyForTts ? 'active' : 'pending' },
@@ -346,7 +364,10 @@
 					<div class="model-row">
 						<span>ASR</span>
 						<strong>faster-whisper-turbo</strong>
-						<span class={`badge ${draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? 'ok' : ''}`}>{draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? '有草稿' : '待接入'}</span>
+						<span class={`badge ${draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? 'ok' : ''}`}>{draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? '有草稿' : '待转录'}</span>
+						<button class="mini-btn" type="button" onclick={transcribeEnglishSource} disabled={!(draft?.source_media.audio_path || draft?.stems.original_audio_path) || transcribingAsr}>
+							{transcribingAsr ? '转录中' : '转录'}
+						</button>
 					</div>
 					<div class="model-row">
 						<span>备用</span>
@@ -703,7 +724,7 @@
 
 	.model-row {
 		display: grid;
-		grid-template-columns: 44px minmax(0, 1fr) auto;
+		grid-template-columns: 44px minmax(0, 1fr) auto auto;
 		gap: 8px;
 		align-items: center;
 		font-size: 12px;

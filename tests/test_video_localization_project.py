@@ -268,6 +268,61 @@ def test_video_localization_extract_source_audio_requires_video(tmp_path: Path):
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_SOURCE_MISSING"
 
 
+def test_video_localization_english_asr_requires_source_audio(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "缺源音", "description": ""}).json()
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/asr/en")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_SOURCE_AUDIO_MISSING"
+
+
+def test_video_localization_english_asr_creates_cue_draft(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "英文转录", "description": ""}).json()
+    audio_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "audio" / "source.wav"
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    audio_path.write_bytes(b"fake-wav")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "demo.mp4", "audio_path": str(audio_path), "duration_ms": 4200},
+        },
+    )
+
+    def fake_transcribe(*, engine_id: str, audio_path: str, language: str):
+        assert engine_id == "faster-whisper-turbo"
+        assert Path(audio_path).name == "source.wav"
+        assert language == "en"
+        return {
+            "text": "We shipped the first localization pass.",
+            "segments": [
+                {"start_ms": 0, "end_ms": 1850, "text": "We shipped", "language": "en"},
+                {"start_ms": 1850, "end_ms": 4200, "text": "the first localization pass.", "language": "en"},
+            ],
+        }
+
+    monkeypatch.setattr(video_localization_service.asr_service, "transcribe", fake_transcribe)
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/asr/en")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source_media"]["metadata"]["english_asr_status"] == "completed"
+    assert body["source_media"]["metadata"]["english_asr_engine_id"] == "faster-whisper-turbo"
+    assert body["source_media"]["metadata"]["english_asr_segment_count"] == 2
+    assert body["status"] == "blocked"
+    assert [cue["en_subtitle_text"] for cue in body["cues"]] == ["We shipped", "the first localization pass."]
+    assert body["cues"][0]["start_ms"] == 0
+    assert body["cues"][1]["end_ms"] == 4200
+    assert "generated_by_asr" in body["cues"][0]["quality_flags"]
+    blocker_codes = {issue["code"] for issue in body["quality_gate"]["blockers"]}
+    assert {"CUE_SPEAKER_MISSING", "ZH_SUBTITLE_MISSING", "TTS_TEXT_MISSING"}.issubset(blocker_codes)
+
+
 def test_video_localization_export_adds_project_metadata(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "导出测试", "description": ""}).json()

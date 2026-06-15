@@ -103,6 +103,7 @@ export const Api = {
 	saveVideoLocalizationDraft: (id: string, draft: VideoLocalizationDraft) => api.put<VideoLocalizationDraft>(`/projects/${id}/video-localization`, draft),
 	importVideoLocalizationSource: (id: string, file: File) => api.upload<VideoLocalizationDraft>(`/projects/${id}/video-localization/source-media`, file),
 	extractVideoLocalizationAudio: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/source-audio`),
+	transcribeVideoLocalizationEnglish: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/asr/en`),
 	exportVideoLocalizationDraft: (id: string) => api.get<VideoLocalizationExport>(`/projects/${id}/video-localization/export`),
 	importTranscriptionsToProject: (
 		id: string,
