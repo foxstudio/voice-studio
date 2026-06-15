@@ -38,6 +38,8 @@
 	let creatingReferences = $state(false);
 	let localizingZh = $state(false);
 	let submittingBatch = $state(false);
+	let syncingBatch = $state(false);
+	let ttsBatchId = $state('');
 	let videoInput: HTMLInputElement | null = null;
 	let message = $state('');
 	let error = $state('');
@@ -48,6 +50,7 @@
 	const readyCount = $derived(draft?.cues.filter((cue) => cue.review_status === 'ready' || cue.review_status === 'locked').length ?? 0);
 	const reviewCount = $derived(draft?.cues.filter((cue) => cue.review_status === 'needs_review').length ?? 0);
 	const blockedCount = $derived(draft?.cues.filter((cue) => cue.review_status === 'blocked').length ?? 0);
+	const generatedCount = $derived(draft?.cues.filter((cue) => cue.tts_audio_path).length ?? 0);
 	const canSubmitCount = $derived(
 		draft?.cues.filter((cue) => cue.review_status === 'ready' && cue.audio_route === 'clone_from_source' && cue.tts_recommended_text?.trim() && referenceReady(cue.reference_clip_id)).length ?? 0
 	);
@@ -243,12 +246,28 @@
 		error = '';
 		try {
 			const task = await Api.submitVideoLocalizationBatchTts(projectId);
+			ttsBatchId = task.batch_task_id;
 			message = `已提交批量 TTS：${task.batch_task_id}`;
 			setTimeout(() => (message = ''), 2400);
 		} catch (e) {
 			error = (e as Error).message || '批量 TTS 提交失败';
 		} finally {
 			submittingBatch = false;
+		}
+	}
+
+	async function syncBatchTtsResults() {
+		if (!projectId || !ttsBatchId.trim()) return;
+		syncingBatch = true;
+		error = '';
+		try {
+			draft = await Api.syncVideoLocalizationBatchTts(projectId, ttsBatchId.trim());
+			message = 'TTS 生成结果已同步到 cue';
+			setTimeout(() => (message = ''), 2200);
+		} catch (e) {
+			error = (e as Error).message || '同步 TTS 结果失败';
+		} finally {
+			syncingBatch = false;
 		}
 	}
 
@@ -385,6 +404,10 @@
 
 	function timeLabel(cue: VideoLocalizationCue) {
 		return `${msLabel(cue.start_ms)} - ${msLabel(cue.end_ms)}`;
+	}
+
+	function ttsAudioUrl(cue: VideoLocalizationCue) {
+		return projectId && cue.tts_audio_path ? `/api/projects/${projectId}/video-localization/cues/${cue.cue_id}/tts-audio` : '';
 	}
 
 	function durationLabel(ms: number | null | undefined) {
@@ -558,6 +581,7 @@
 							<th>中文字幕</th>
 							<th>TTS 台词</th>
 							<th>参考音色</th>
+							<th>TTS 音频</th>
 							<th>状态</th>
 						</tr>
 					</thead>
@@ -571,6 +595,14 @@
 								<td><strong>{cue.tts_recommended_text || '未填写'}</strong></td>
 								<td>{cue.reference_clip_id || '未选择'}</td>
 								<td>
+									{#if cue.tts_audio_path}
+										<span class="badge ok">已生成</span>
+										<small>{durationLabel(cue.generated_duration_ms)}</small>
+									{:else}
+										<span class="badge warn">待生成</span>
+									{/if}
+								</td>
+								<td>
 									<span class={`badge ${cue.review_status === 'ready' || cue.review_status === 'locked' ? 'ok' : cue.review_status === 'blocked' ? 'fail' : 'warn'}`}>{statusLabel(cue.review_status)}</span>
 									<div class="flag-list">
 										{#each cue.quality_flags as flag}<small>{flag}</small>{/each}
@@ -580,7 +612,7 @@
 						{/each}
 						{#if !draft?.cues.length}
 							<tr>
-								<td colspan="7" class="empty-cell">当前项目还没有 cue。可以先手动新增一条，后续 ASR 会自动生成候选。</td>
+								<td colspan="8" class="empty-cell">当前项目还没有 cue。可以先手动新增一条，后续 ASR 会自动生成候选。</td>
 							</tr>
 						{/if}
 					</tbody>
@@ -639,7 +671,11 @@
 					</div>
 					<div class="row editor-actions">
 						<button class="btn" type="button" disabled><Play size={14} /> 原声</button>
-						<button class="btn" type="button" disabled><Mic2 size={14} /> TTS</button>
+						{#if ttsAudioUrl(selectedCue)}
+							<audio class="cue-audio" controls src={ttsAudioUrl(selectedCue)}></audio>
+						{:else}
+							<button class="btn" type="button" disabled><Mic2 size={14} /> TTS</button>
+						{/if}
 						<a class="btn primary" href="/generate"><Send size={14} /> 单条发送</a>
 					</div>
 				{:else}
@@ -687,6 +723,7 @@
 				</div>
 				<div class="handoff-summary">
 					<div><strong>{canSubmitCount}</strong><span>可提交</span></div>
+					<div><strong>{generatedCount}</strong><span>已生成</span></div>
 					<div><strong>{draft?.quality_gate.blockers.length ?? 0}</strong><span>阻断</span></div>
 					<div><strong>{draft?.quality_gate.warnings.length ?? 0}</strong><span>警告</span></div>
 				</div>
@@ -695,6 +732,12 @@
 				</p>
 				<div class="stack">
 					<button class="btn success" type="button" onclick={submitBatchTts} disabled={!canSubmitCount || submittingBatch}><Wand2 size={14} /> {submittingBatch ? '提交中' : '批量发送可生成片段'}</button>
+					<div class="batch-sync-row">
+						<input value={ttsBatchId} oninput={(event) => (ttsBatchId = event.currentTarget.value)} placeholder="batch id" aria-label="批量 TTS 任务 ID" />
+						<button class="btn" type="button" onclick={syncBatchTtsResults} disabled={!ttsBatchId.trim() || syncingBatch}>
+							<Mic2 size={14} /> {syncingBatch ? '同步中' : '同步 TTS 结果'}
+						</button>
+					</div>
 					<button class="btn" type="button" onclick={exportJson} disabled={!draft}><Download size={14} /> 下载 production JSON</button>
 					<button class="btn" type="button" onclick={exportBilingualSrt} disabled={!draft?.cues.some((cue) => cue.start_ms !== null && cue.end_ms !== null)}><Languages size={14} /> 导出中英字幕草稿</button>
 				</div>
@@ -1005,7 +1048,7 @@
 	}
 
 	.cue-table {
-		min-width: 760px;
+		min-width: 840px;
 		table-layout: fixed;
 	}
 
@@ -1033,6 +1076,11 @@
 
 	.cue-table th:nth-child(7),
 	.cue-table td:nth-child(7) {
+		width: 86px;
+	}
+
+	.cue-table th:nth-child(8),
+	.cue-table td:nth-child(8) {
 		width: 112px;
 	}
 
@@ -1119,6 +1167,11 @@
 		justify-content: flex-end;
 	}
 
+	.cue-audio {
+		width: min(260px, 100%);
+		height: 34px;
+	}
+
 	.reference-list {
 		display: grid;
 		gap: 8px;
@@ -1179,6 +1232,21 @@
 
 	.export-panel .btn {
 		justify-content: center;
+	}
+
+	.batch-sync-row {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 8px;
+	}
+
+	.batch-sync-row input {
+		min-width: 0;
+		border: 1px solid var(--line);
+		border-radius: 7px;
+		padding: 8px 10px;
+		background: #fff;
+		color: var(--ink);
 	}
 
 	@media (max-width: 1500px) {

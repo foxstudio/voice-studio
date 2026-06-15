@@ -11,9 +11,9 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
-from app.schemas.voice_studio import AppSettings, BatchTask, TaskStatus  # noqa: E402
+from app.schemas.voice_studio import AppSettings, BatchSegmentResult, BatchTask, TaskStatus  # noqa: E402
 from app.domains.video_localization import service as video_localization_service  # noqa: E402
-from app.services import database, settings_store  # noqa: E402
+from app.services import batch_queue, database, settings_store  # noqa: E402
 from app.api import projects as projects_api  # noqa: E402
 
 
@@ -680,6 +680,81 @@ def test_video_localization_tts_batch_rejects_unverified_reference(tmp_path: Pat
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_TTS_REFERENCE_NOT_READY"
+
+
+def test_video_localization_syncs_tts_batch_results_to_cues(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "同步 TTS", "description": ""}).json()
+    output_path = tmp_path / "tts" / "cue_0001.mp3"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(b"audio")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 3200,
+                    "en_subtitle_text": "Reference line.",
+                    "zh_localized_subtitle_text": "参考台词。",
+                    "tts_recommended_text": "参考台词。",
+                    "review_status": "ready",
+                }
+            ],
+        },
+    )
+    batch = BatchTask(
+        batch_task_id="batch-video-tts-1",
+        project_name="同步 TTS",
+        engine_id="indextts-v2",
+        status=TaskStatus.success,
+        segments=[
+            BatchSegmentResult(
+                segment_id="cue_0001",
+                text="参考台词。",
+                output_path=str(output_path),
+                duration_ms=2600,
+                status=TaskStatus.success,
+            )
+        ],
+        parameters={"parameters": {"source": "video_localization", "project_id": project["project_id"]}},
+    )
+    batch_queue._save(batch)
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/tts/batch/{batch.batch_task_id}/sync")
+
+    assert response.status_code == 200
+    cue = response.json()["cues"][0]
+    assert cue["tts_result_id"] == "batch-video-tts-1:cue_0001"
+    assert cue["tts_audio_path"] == str(output_path)
+    assert cue["generated_duration_ms"] == 2600
+    assert "tts_generated" in cue["quality_flags"]
+
+    audio = client.get(f"/api/projects/{project['project_id']}/video-localization/cues/cue_0001/tts-audio")
+    assert audio.status_code == 200
+    assert audio.content == b"audio"
+
+
+def test_video_localization_tts_batch_sync_rejects_wrong_project(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "项目 A", "description": ""}).json()
+    batch = BatchTask(
+        batch_task_id="batch-other-project",
+        project_name="其他项目",
+        engine_id="indextts-v2",
+        status=TaskStatus.success,
+        parameters={"parameters": {"source": "video_localization", "project_id": "other-project"}},
+    )
+    batch_queue._save(batch)
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/tts/batch/{batch.batch_task_id}/sync")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_TTS_BATCH_PROJECT_MISMATCH"
 
 
 def test_video_localization_export_adds_project_metadata(tmp_path: Path):

@@ -108,6 +108,7 @@ export const Api = {
 	createVideoLocalizationReferences: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/reference-clips`),
 	generateVideoLocalizationChineseDraft: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/localize/zh`),
 	submitVideoLocalizationBatchTts: (id: string) => api.post<BatchTask>(`/projects/${id}/video-localization/tts/batch`),
+	syncVideoLocalizationBatchTts: (id: string, batchId: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/tts/batch/${batchId}/sync`),
 	exportVideoLocalizationDraft: (id: string) => api.get<VideoLocalizationExport>(`/projects/${id}/video-localization/export`),
 	importTranscriptionsToProject: (
 		id: string,

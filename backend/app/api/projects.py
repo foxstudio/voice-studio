@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, File, UploadFile
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from app.domains.video_localization import service as video_localization_service
 from app.errors import AppException
@@ -126,6 +126,22 @@ async def submit_video_localization_tts_batch(project_id: str):
         return await batch_queue.submit(batch_request.model_dump())
     except ValueError as exc:
         raise AppException(400, "VIDEO_LOCALIZATION_TTS_BATCH_INVALID", str(exc)) from exc
+
+
+@router.post("/{project_id}/video-localization/tts/batch/{batch_task_id}/sync", response_model=VideoLocalizationDraft)
+async def sync_video_localization_tts_batch(project_id: str, batch_task_id: str):
+    updated = video_localization_service.sync_tts_batch_results(project_id, batch_task_id)
+    if not updated:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    return updated
+
+
+@router.get("/{project_id}/video-localization/cues/{cue_id}/tts-audio")
+async def get_video_localization_cue_tts_audio(project_id: str, cue_id: str):
+    audio_path = video_localization_service.tts_audio_file(project_id, cue_id)
+    if not audio_path:
+        raise AppException(404, "VIDEO_LOCALIZATION_TTS_AUDIO_NOT_FOUND", "TTS audio file not found")
+    return FileResponse(audio_path, filename=audio_path.name)
 
 
 @router.get("/{project_id}/video-localization/subtitles/{kind}")

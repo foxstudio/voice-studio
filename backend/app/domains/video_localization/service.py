@@ -12,7 +12,9 @@ from app.errors import AppException
 from app.schemas.voice_studio import (
     BatchGenerateRequest,
     BatchSegmentInput,
+    BatchSegmentResult,
     LicenseStatus,
+    TaskStatus,
     VideoLocalizationCue,
     VideoLocalizationDraft,
     VideoLocalizationExport,
@@ -20,7 +22,7 @@ from app.schemas.voice_studio import (
     VideoLocalizationTimeRange,
     now_iso,
 )
-from app.services import asr_service, audio_tools, project_store, settings_store, text_normalizer
+from app.services import asr_service, audio_tools, batch_queue, project_store, settings_store, text_normalizer
 
 VIDEO_LOCALIZATION_KEY = "video_localization"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
@@ -368,6 +370,55 @@ def export_subtitles(project_id: str, kind: str) -> str | None:
     return "\n\n".join(blocks) + "\n"
 
 
+def sync_tts_batch_results(project_id: str, batch_task_id: str) -> VideoLocalizationDraft | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    batch = batch_queue.get_batch(batch_task_id)
+    if not batch:
+        raise AppException(404, "VIDEO_LOCALIZATION_TTS_BATCH_NOT_FOUND", "TTS batch task not found")
+    request_parameters = batch.parameters.get("parameters") if isinstance(batch.parameters, dict) else None
+    if not isinstance(request_parameters, dict) or request_parameters.get("source") != "video_localization" or request_parameters.get("project_id") != project_id:
+        raise AppException(400, "VIDEO_LOCALIZATION_TTS_BATCH_PROJECT_MISMATCH", "Batch task does not belong to this video localization project")
+
+    successful_segments = {
+        segment.segment_id: segment
+        for segment in batch.segments
+        if segment.status == TaskStatus.success and segment.output_path and Path(segment.output_path).exists()
+    }
+    if not successful_segments:
+        raise AppException(400, "VIDEO_LOCALIZATION_TTS_BATCH_RESULTS_EMPTY", "Batch task has no successful audio outputs")
+
+    updated = False
+    next_cues: list[VideoLocalizationCue] = []
+    for cue in draft.cues:
+        segment = successful_segments.get(cue.cue_id)
+        if not segment:
+            next_cues.append(cue)
+            continue
+        next_cues.append(_cue_with_tts_result(cue, batch.batch_task_id, segment))
+        updated = True
+
+    if not updated:
+        raise AppException(400, "VIDEO_LOCALIZATION_TTS_BATCH_CUES_UNMATCHED", "Batch task results do not match any cue ids")
+    return save_video_localization(project_id, draft.model_copy(update={"cues": next_cues}))
+
+
+def tts_audio_file(project_id: str, cue_id: str) -> Path | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id)
+    if not draft:
+        return None
+    cue = next((item for item in draft.cues if item.cue_id == cue_id), None)
+    if not cue or not cue.tts_audio_path:
+        return None
+    path = Path(cue.tts_audio_path)
+    return path if path.exists() else None
+
+
 def export_video_localization(project_id: str) -> VideoLocalizationExport | None:
     project = project_store.get_project(project_id)
     if not project:
@@ -621,6 +672,22 @@ def _reference_id_for_cue(cue: VideoLocalizationCue) -> str:
 
 def _safe_identifier(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_") or "item"
+
+
+def _cue_with_tts_result(cue: VideoLocalizationCue, batch_task_id: str, segment: BatchSegmentResult) -> VideoLocalizationCue:
+    flags = [flag for flag in cue.quality_flags if flag != "tts_generated"]
+    flags.append("tts_generated")
+    update = {
+        "tts_result_id": f"{batch_task_id}:{segment.segment_id}",
+        "tts_audio_path": segment.output_path,
+        "generated_duration_ms": segment.duration_ms,
+        "quality_flags": flags,
+    }
+    if cue.source_duration_ms is None:
+        duration_ms = _cue_duration_ms(cue)
+        if duration_ms is not None:
+            update["source_duration_ms"] = duration_ms
+    return cue.model_copy(update=update)
 
 
 def _subtitle_lines_for(cue: VideoLocalizationCue, kind: str) -> list[str]:
