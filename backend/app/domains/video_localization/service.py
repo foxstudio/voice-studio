@@ -485,7 +485,7 @@ def source_cue_audio_file(project_id: str, cue_id: str) -> Path | None:
         return None
     cache_dir = _project_video_localization_dir(project_id) / "cue-source-audio"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    destination = cache_dir / f"{_safe_identifier(cue.cue_id)}-source.wav"
+    destination = _source_cue_cache_path(cache_dir, source_path, cue)
     if not destination.exists():
         _cut_audio_clip(source_path, destination, cue.start_ms, cue.end_ms)
     return destination if destination.exists() else None
@@ -744,6 +744,13 @@ def _reference_id_for_cue(cue: VideoLocalizationCue) -> str:
 
 def _safe_identifier(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_") or "item"
+
+
+def _source_cue_cache_path(cache_dir: Path, source_path: Path, cue: VideoLocalizationCue) -> Path:
+    stat = source_path.stat()
+    signature = f"{stat.st_size}-{stat.st_mtime_ns}"
+    name = f"{_safe_identifier(cue.cue_id)}-{cue.start_ms}-{cue.end_ms}-{signature}-source.wav"
+    return cache_dir / name
 
 
 def _cue_with_tts_result(cue: VideoLocalizationCue, batch_task_id: str, segment: BatchSegmentResult) -> VideoLocalizationCue:

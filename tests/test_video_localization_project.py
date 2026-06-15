@@ -776,6 +776,7 @@ def test_video_localization_source_cue_audio_slices_clean_vocals(tmp_path: Path,
 
     def fake_slice_audio(source, destination, start_ms, end_ms):
         captured["source"] = source
+        captured["destination"] = destination
         captured["start_ms"] = start_ms
         captured["end_ms"] = end_ms
         destination.write_bytes(b"source-cue")
@@ -786,7 +787,11 @@ def test_video_localization_source_cue_audio_slices_clean_vocals(tmp_path: Path,
 
     assert response.status_code == 200
     assert response.content == b"source-cue"
-    assert captured == {"source": vocals_path, "start_ms": 1000, "end_ms": 3200}
+    assert captured["source"] == vocals_path
+    assert captured["start_ms"] == 1000
+    assert captured["end_ms"] == 3200
+    assert "cue_0001-1000-3200" in captured["destination"].name
+    assert f"-{vocals_path.stat().st_size}-" in captured["destination"].name
 
 
 def test_video_localization_tts_batch_sync_records_failed_segments(tmp_path: Path):
