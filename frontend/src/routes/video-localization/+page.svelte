@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Api } from '$lib/api';
-	import type { Project, VideoLocalizationCue, VideoLocalizationDraft } from '$lib/api/types';
+	import type { GenerateRequest, Project, VideoLocalizationCue, VideoLocalizationDraft } from '$lib/api/types';
 	import {
 		AlertTriangle,
 		CheckCircle2,
@@ -394,6 +394,71 @@
 		return Boolean(clip?.audio_path && clip.cleanliness === 'clean' && clip.asr_status === 'verified');
 	}
 
+	function referenceForCue(cue: VideoLocalizationCue | null) {
+		if (!cue?.reference_clip_id) return null;
+		return draft?.reference_clips.find((item) => item.reference_clip_id === cue.reference_clip_id) ?? null;
+	}
+
+	function cueCanSendToGenerate(cue: VideoLocalizationCue | null) {
+		const reference = referenceForCue(cue);
+		return Boolean(cue?.tts_recommended_text?.trim() && reference?.audio_path && reference.cleanliness === 'clean' && reference.asr_status === 'verified');
+	}
+
+	function sendSelectedCueToGenerate() {
+		if (!selectedCue || !cueCanSendToGenerate(selectedCue)) return;
+		const reference = referenceForCue(selectedCue);
+		const request: GenerateRequest = {
+			text: selectedCue.tts_recommended_text?.trim() ?? '',
+			engine_id: 'indextts-v2',
+			voice_id: null,
+			voice_source: 'reference_audio',
+			reference_audio_path: reference?.audio_path ?? null,
+			reference_audio_license_status: '本土化',
+			reference_audio_tags: ['视频本土化', '本土化', selectedCue.speaker_id ?? 'unknown'],
+			ref_text: reference?.asr_text || selectedCue.en_subtitle_text || null,
+			custom_reference_source_audio_path: reference?.audio_path ?? null,
+			custom_reference_source_duration_ms: reference?.duration_ms ?? null,
+			custom_reference_trim_start_ms: null,
+			custom_reference_trim_end_ms: null,
+			language: 'zh',
+			emotion_mode: 'follow_reference',
+			emotion: null,
+			emotion_values: null,
+			emotion_text: null,
+			style_instruction: null,
+			voice_design_prompt: null,
+			optimize_text_preview: false,
+			mimo_voice: null,
+			speaker_id: null,
+			prompt: null,
+			nfe_step: 32,
+			cfg_strength: 2,
+			target_rms: 0.1,
+			cross_fade_duration: 0.15,
+			sway_sampling_coef: -1,
+			fix_duration: 0,
+			remove_silence: false,
+			emo_alpha: 0.6,
+			speed: 1,
+			temperature: 0.8,
+			top_p: 0.8,
+			top_k: 30,
+			repetition_penalty: 10,
+			seed: null,
+			max_mel_tokens: 1500,
+			max_text_tokens_per_segment: 120,
+			interval_silence: 200,
+			segment_overlap_ms: 50,
+			diffusion_steps: 25,
+			cfg_rate: 0.7,
+			guidance_scale: 2,
+			duration: 0,
+			output_format: 'wav'
+		};
+		sessionStorage.setItem('voice-studio-history-reuse', JSON.stringify(request));
+		window.location.href = '/generate';
+	}
+
 	function msLabel(ms: number | null | undefined) {
 		if (ms === null || ms === undefined) return '--:--.--';
 		const totalSeconds = ms / 1000;
@@ -692,7 +757,9 @@
 								{/if}
 							</div>
 						</div>
-						<a class="btn primary" href="/generate"><Send size={14} /> 单条发送</a>
+						<button class="btn primary" type="button" onclick={sendSelectedCueToGenerate} disabled={!cueCanSendToGenerate(selectedCue)}>
+							<Send size={14} /> 单条发送
+						</button>
 					</div>
 				{:else}
 					<p class="muted">选择或新增一个 cue 后，可以编辑三轨文本和参考音色。</p>
