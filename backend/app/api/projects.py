@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter
+from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.domains.video_localization import service as video_localization_service
@@ -64,6 +64,14 @@ async def get_video_localization(project_id: str):
 @router.put("/{project_id}/video-localization", response_model=VideoLocalizationDraft)
 async def put_video_localization(project_id: str, draft: VideoLocalizationDraft):
     updated = video_localization_service.save_video_localization(project_id, draft)
+    if not updated:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    return updated
+
+
+@router.post("/{project_id}/video-localization/source-media", response_model=VideoLocalizationDraft)
+async def import_video_localization_source_media(project_id: str, file: UploadFile = File(...)):
+    updated = await video_localization_service.import_source_media(project_id, file)
     if not updated:
         raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
     return updated

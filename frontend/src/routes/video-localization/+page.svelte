@@ -31,6 +31,8 @@
 	let loading = $state(true);
 	let saving = $state(false);
 	let creating = $state(false);
+	let importing = $state(false);
+	let videoInput: HTMLInputElement | null = null;
 	let message = $state('');
 	let error = $state('');
 
@@ -109,6 +111,26 @@
 			error = (e as Error).message || '保存失败';
 		} finally {
 			saving = false;
+		}
+	}
+
+	async function importVideoFile(file: File | null | undefined) {
+		if (!file) return;
+		if (!projectId) {
+			error = '请先选择或新建项目';
+			return;
+		}
+		importing = true;
+		error = '';
+		try {
+			draft = await Api.importVideoLocalizationSource(projectId, file);
+			message = '视频已导入';
+			setTimeout(() => (message = ''), 1800);
+		} catch (e) {
+			error = (e as Error).message || '导入视频失败';
+		} finally {
+			importing = false;
+			if (videoInput) videoInput.value = '';
 		}
 	}
 
@@ -260,7 +282,10 @@
 			{#if !projects.length}
 				<button class="btn" type="button" onclick={createLocalizationProject} disabled={creating}>{creating ? '创建中' : '新建本土化项目'}</button>
 			{/if}
-			<button class="btn" type="button" disabled title="下一批接入文件导入"><UploadCloud size={15} /> 导入视频</button>
+			<input bind:this={videoInput} class="visually-hidden" type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm,.mkv" onchange={(event) => importVideoFile(event.currentTarget.files?.[0])} />
+			<button class="btn" type="button" onclick={() => videoInput?.click()} disabled={!projectId || importing}>
+				<UploadCloud size={15} /> {importing ? '导入中' : '导入视频'}
+			</button>
 			<button class="btn" type="button" onclick={saveDraft} disabled={!draft || saving}><Save size={15} /> {saving ? '保存中' : '保存草稿'}</button>
 			<button class="btn" type="button" onclick={exportJson} disabled={!draft}><FileJson size={15} /> 导出 JSON</button>
 			<a class="btn primary" href="/generate"><Send size={15} /> 发送到语音合成</a>
@@ -564,6 +589,18 @@
 		color: #ff9a9a;
 		border-color: #6d3030;
 		background: #2b1515;
+	}
+
+	.visually-hidden {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
 	}
 
 	.workflow-strip {

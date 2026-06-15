@@ -196,6 +196,39 @@ def test_video_localization_complete_clone_cue_can_pass_quality_gate(tmp_path: P
     assert body["quality_gate"]["pending_issues"] == 0
 
 
+def test_video_localization_import_source_media_updates_draft(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "导入视频", "description": ""}).json()
+
+    response = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/source-media",
+        files={"file": ("demo clip.mp4", b"fake-video-bytes", "video/mp4")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source_media"]["filename"] == "demo clip.mp4"
+    assert body["source_media"]["size_bytes"] == len(b"fake-video-bytes")
+    assert body["source_media"]["metadata"]["content_type"] == "video/mp4"
+    video_path = Path(body["source_media"]["video_path"])
+    assert video_path.exists()
+    assert video_path.name == "demo_clip.mp4"
+    assert project["project_id"] in str(video_path)
+
+
+def test_video_localization_import_rejects_unsupported_media(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "导入失败", "description": ""}).json()
+
+    response = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/source-media",
+        files={"file": ("notes.txt", b"not-video", "text/plain")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_UNSUPPORTED_MEDIA"
+
+
 def test_video_localization_export_adds_project_metadata(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "导出测试", "description": ""}).json()

@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
+from fastapi import UploadFile
+
 from app.domains.video_localization.quality_gate import evaluate_quality_gate
+from app.errors import AppException
 from app.schemas.voice_studio import VideoLocalizationDraft, VideoLocalizationExport, now_iso
-from app.services import project_store
+from app.services import project_store, settings_store
 
 VIDEO_LOCALIZATION_KEY = "video_localization"
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 
 
 def get_video_localization(project_id: str) -> VideoLocalizationDraft | None:
@@ -23,6 +30,29 @@ def save_video_localization(project_id: str, draft: VideoLocalizationDraft) -> V
     project.parameters = {**project.parameters, VIDEO_LOCALIZATION_KEY: next_draft.model_dump()}
     project_store.save_project(project)
     return next_draft
+
+
+async def import_source_media(project_id: str, file: UploadFile) -> VideoLocalizationDraft | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    source_path, content = await _save_uploaded_video(project_id, file)
+    draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    source_media = draft.source_media.model_copy(
+        update={
+            "filename": file.filename or source_path.name,
+            "video_path": str(source_path),
+            "size_bytes": len(content),
+            "imported_at": now_iso(),
+            "metadata": {
+                **draft.source_media.metadata,
+                "content_type": file.content_type,
+                "upload_status": "stored",
+            },
+        }
+    )
+    next_draft = draft.model_copy(update={"source_media": source_media, "status": "draft"})
+    return save_video_localization(project_id, next_draft)
 
 
 def export_video_localization(project_id: str) -> VideoLocalizationExport | None:
@@ -66,3 +96,38 @@ def _status_for_gate(draft: VideoLocalizationDraft, gate_status: str) -> str:
     if draft.cues:
         return "reviewing"
     return "draft"
+
+
+async def _save_uploaded_video(project_id: str, file: UploadFile) -> tuple[Path, bytes]:
+    filename = file.filename or "source.mp4"
+    suffix = Path(filename).suffix.lower()
+    if suffix not in VIDEO_EXTENSIONS:
+        raise AppException(400, "VIDEO_LOCALIZATION_UNSUPPORTED_MEDIA", "Only mp4, mov, m4v, webm, and mkv videos are supported")
+
+    content = await file.read()
+    if not content:
+        raise AppException(400, "VIDEO_LOCALIZATION_EMPTY_UPLOAD", "Uploaded video is empty")
+
+    settings_store.ensure_directories()
+    source_dir = settings_store.expand_path(settings_store.get().project_dir) / project_id / "video_localization" / "source"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    destination = _unique_path(source_dir / _safe_filename(filename))
+    destination.write_bytes(content)
+    return destination, content
+
+
+def _safe_filename(filename: str) -> str:
+    name = Path(filename).name.strip() or "source.mp4"
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(name).stem).strip("._-") or "source"
+    suffix = Path(name).suffix.lower() or ".mp4"
+    return f"{stem}{suffix}"
+
+
+def _unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    for index in range(1, 1000):
+        candidate = path.with_name(f"{path.stem}-{index}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise AppException(500, "VIDEO_LOCALIZATION_UPLOAD_COLLISION", "Could not allocate a unique video path")
