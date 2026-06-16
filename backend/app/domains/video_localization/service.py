@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
+from app.domains.video_localization import audio_access
 from app.domains.video_localization import cues as cue_tools
 from app.domains.video_localization import draft_store
 from app.domains.video_localization import localization
@@ -162,7 +163,7 @@ def tts_audio_file(project_id: str, cue_id: str) -> Path | None:
     draft = get_video_localization(project_id)
     if not draft:
         return None
-    return tts_pipeline.tts_audio_path(draft, cue_id)
+    return audio_access.tts_audio_path(draft, cue_id)
 
 
 def reference_clip_audio_file(project_id: str, reference_clip_id: str) -> Path | None:
@@ -172,11 +173,7 @@ def reference_clip_audio_file(project_id: str, reference_clip_id: str) -> Path |
     draft = get_video_localization(project_id)
     if not draft:
         return None
-    clip = next((item for item in draft.reference_clips if item.reference_clip_id == reference_clip_id), None)
-    if not clip or not clip.audio_path:
-        return None
-    path = Path(clip.audio_path)
-    return path if path.exists() else None
+    return audio_access.reference_clip_audio_path(draft, reference_clip_id)
 
 
 def source_cue_audio_file(project_id: str, cue_id: str) -> Path | None:
@@ -186,21 +183,7 @@ def source_cue_audio_file(project_id: str, cue_id: str) -> Path | None:
     draft = get_video_localization(project_id)
     if not draft:
         return None
-    cue = next((item for item in draft.cues if item.cue_id == cue_id), None)
-    if not cue or cue.start_ms is None or cue.end_ms is None or cue.end_ms <= cue.start_ms:
-        return None
-    source_value = draft.stems.vocals_clean_path or draft.stems.original_audio_path or draft.source_media.audio_path
-    if not source_value:
-        return None
-    source_path = Path(source_value)
-    if not source_path.exists():
-        return None
-    cache_dir = media_assets.project_video_localization_dir(project_id) / "cue-source-audio"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    destination = media_assets.source_cue_cache_path(cache_dir, source_path, cue)
-    if not destination.exists():
-        media_assets.cut_audio_clip(source_path, destination, cue.start_ms, cue.end_ms)
-    return destination if destination.exists() else None
+    return audio_access.source_cue_audio_path(project_id, draft, cue_id)
 
 
 def export_video_localization(project_id: str) -> VideoLocalizationExport | None:
