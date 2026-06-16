@@ -14,7 +14,6 @@
 		AlertTriangle,
 		CheckCircle2,
 		FileJson,
-		Film,
 		Send,
 		Save,
 		UploadCloud
@@ -26,18 +25,17 @@
 		buildGenerateRequest,
 		buildWorkflow,
 		createManualCue,
-		durationLabel,
 		isActiveOperation,
-		operationBadgeClass,
-		operationStatusLabel,
 		sortOperations,
 		type WorkflowStep
 	} from './utils';
 	import CueEditor from './CueEditor.svelte';
 	import CueTable from './CueTable.svelte';
 	import DeliveryPanel from './DeliveryPanel.svelte';
+	import LocalizationTextImport from './LocalizationTextImport.svelte';
 	import PreviewPanel from './PreviewPanel.svelte';
 	import ReferencePool from './ReferencePool.svelte';
+	import SourceModelPanel from './SourceModelPanel.svelte';
 	import WorkflowStrip from './WorkflowStrip.svelte';
 
 	let projects = $state<Project[]>([]);
@@ -55,13 +53,13 @@
 	let separatingStems = $state(false);
 	let transcribingAsr = $state(false);
 	let creatingReferences = $state(false);
-	let localizingZh = $state(false);
 	let submittingBatch = $state(false);
 	let syncingBatch = $state(false);
 	let loadingBatches = $state(false);
 	let referenceUpdatingId = $state('');
 	let operationActionId = $state('');
 	let ttsBatchId = $state('');
+	let localizationImportOpen = $state(false);
 	let videoInput: HTMLInputElement | null = null;
 	let operationPollingTimer: ReturnType<typeof setInterval> | null = null;
 	let message = $state('');
@@ -338,21 +336,6 @@
 		updateReferenceClip(clip.reference_clip_id, { cleanliness: 'needs_review', asr_status: clip.asr_text ? 'candidate' : 'pending' }, '参考音已退回复听');
 	}
 
-	async function generateChineseDraft() {
-		if (!projectId || !draft?.cues.some((cue) => cue.en_subtitle_text?.trim())) return;
-		localizingZh = true;
-		error = '';
-		try {
-			draft = await Api.generateVideoLocalizationChineseDraft(projectId);
-			message = '中文字幕与 TTS 台词草稿已生成';
-			setTimeout(() => (message = ''), 1800);
-		} catch (e) {
-			error = (e as Error).message || '生成中文草稿失败';
-		} finally {
-			localizingZh = false;
-		}
-	}
-
 	async function exportJson() {
 		if (!projectId) return;
 		error = '';
@@ -445,6 +428,30 @@
 	function updateSelectedCueTime(field: 'start_ms' | 'end_ms', value: string) {
 		const normalized = value.trim();
 		updateSelectedCue({ [field]: normalized ? Math.max(0, Number(normalized)) : null });
+	}
+
+	function applyLocalizationText(text: string) {
+		if (!draft) return;
+		const lines = text
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.filter(Boolean);
+		if (!lines.length) return;
+		const nextCues = draft.cues.map((cue, index) => {
+			const line = lines[index];
+			if (!line) return cue;
+			const [subtitleText, ttsText] = line.split(/\s*\|\|\s*/, 2).map((part) => part.trim());
+			return {
+				...cue,
+				zh_localized_subtitle_text: subtitleText || cue.zh_localized_subtitle_text,
+				tts_recommended_text: ttsText || cue.tts_recommended_text,
+				quality_flags: [...new Set([...cue.quality_flags.filter((flag) => !flag.startsWith('manual_localization_import')), 'manual_localization_import'])]
+			};
+		});
+		draft = { ...draft, cues: nextCues };
+		localizationImportOpen = false;
+		message = `已应用 ${Math.min(lines.length, draft.cues.length)} 行中文稿，请校对后保存草稿`;
+		setTimeout(() => (message = ''), 2400);
 	}
 
 	async function saveSelectedCue() {
@@ -564,7 +571,7 @@
 	<header class="page-head localization-head">
 		<div>
 			<h1>视频本土化配音</h1>
-			<p class="muted">从英文视频生成可审校的中文字幕、TTS 台词、参考音色和批量合成 JSON。</p>
+			<p class="muted">从英文视频整理可审校的中文字幕、TTS 台词、参考音色和批量合成 JSON。</p>
 		</div>
 		<div class="row head-actions">
 			<select class="project-select" value={projectId} onchange={changeProject} aria-label="选择项目" disabled={loading || !projects.length}>
@@ -575,7 +582,7 @@
 			{#if !projects.length}
 				<button class="btn" type="button" onclick={createLocalizationProject} disabled={creating}>{creating ? '创建中' : '新建本土化项目'}</button>
 			{/if}
-			<input bind:this={videoInput} class="visually-hidden" type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm,.mkv" onchange={(event) => importVideoFile(event.currentTarget.files?.[0])} />
+			<input bind:this={videoInput} data-video-localization-file class="visually-hidden" type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm,.mkv" onchange={(event) => importVideoFile(event.currentTarget.files?.[0])} />
 			<button class="btn" type="button" onclick={() => videoInput?.click()} disabled={importing}>
 				<UploadCloud size={15} /> {importing ? '导入中' : projectId ? '导入视频' : '导入视频并新建项目'}
 			</button>
@@ -593,83 +600,24 @@
 
 	<section class="localization-shell">
 		<div class="stack left-rail">
-			<section class="panel import-panel">
-				<div class="section-title">
-					<h2>素材与模型</h2>
-					<span class={`badge ${draft?.updated_at ? 'ok' : ''}`}>{draft?.updated_at ? '草稿已保存' : '等待保存'}</span>
-				</div>
-				<div class="drop-target">
-					<Film size={22} />
-					<div>
-						<strong>{draft?.source_media.filename || '尚未导入视频'}</strong>
-						<p class="muted">
-							{durationLabel(draft?.source_media.duration_ms)}
-							{#if draft?.source_media.width && draft?.source_media.height}
-								· {draft.source_media.width}x{draft.source_media.height}
-							{/if}
-							{#if selectedProject}
-								· {selectedProject.name}
-							{/if}
-						</p>
-					</div>
-				</div>
-				<div class="model-list">
-					<div class="model-row">
-						<span>ASR</span>
-						<strong>faster-whisper-turbo</strong>
-						<span class={`badge ${operationBadgeClass(operationFor('english_asr')) || (draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? 'ok' : '')}`}>
-							{operationBusy('english_asr') ? operationStatusLabel(operationFor('english_asr')) : draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? '有草稿' : operationStatusLabel(operationFor('english_asr'))}
-						</span>
-						<button class="mini-btn" type="button" onclick={transcribeEnglishSource} disabled={!(draft?.source_media.audio_path || draft?.stems.original_audio_path) || transcribingAsr || operationBusy('english_asr')}>
-							{operationBusy('english_asr') || transcribingAsr ? '转录中' : '转录'}
-						</button>
-					</div>
-					<div class="model-row">
-						<span>备用</span>
-						<strong>qwen3-asr-mlx / mimo-v2.5</strong>
-						<span class="badge">可选</span>
-					</div>
-					<div class="model-row">
-						<span>分离</span>
-						<strong>vocals_clean + background</strong>
-						<span class={`badge ${operationBadgeClass(operationFor('stems')) || (draft?.stems.separation_status === 'completed' ? 'ok' : '')}`}>
-							{operationBusy('stems') ? operationStatusLabel(operationFor('stems')) : draft?.stems.separation_status === 'completed' ? '已完成' : operationStatusLabel(operationFor('stems'))}
-						</span>
-						<button class="mini-btn" type="button" onclick={separateStems} disabled={!(draft?.source_media.audio_path || draft?.stems.original_audio_path) || separatingStems || operationBusy('stems')}>
-							{operationBusy('stems') || separatingStems ? '分离中' : '分离'}
-						</button>
-					</div>
-					<div class="model-row">
-						<span>源音</span>
-						<strong>{draft?.source_media.audio_path ? 'source.wav 已记录' : '等待抽取'}</strong>
-						<span class={`badge ${operationBadgeClass(operationFor('source_audio')) || (draft?.source_media.audio_path ? 'ok' : '')}`}>
-							{operationBusy('source_audio') ? operationStatusLabel(operationFor('source_audio')) : draft?.source_media.audio_path ? '已完成' : operationStatusLabel(operationFor('source_audio'))}
-						</span>
-						<button class="mini-btn" type="button" onclick={extractSourceAudio} disabled={!draft?.source_media.video_path || extractingAudio || operationBusy('source_audio')}>
-							{operationBusy('source_audio') || extractingAudio ? '抽取中' : '抽取'}
-						</button>
-					</div>
-				</div>
-				{#if latestOperation}
-					<div class:active={hasActiveOperation} class="operation-note">
-						<span>
-							最近任务：{latestOperation.label || latestOperation.kind} · {operationStatusLabel(latestOperation)}
-							{#if latestOperation.error_message}
-								· {latestOperation.error_message}
-							{/if}
-						</span>
-						{#if isActiveOperation(latestOperation)}
-							<button class="mini-btn" type="button" onclick={() => cancelOperation(latestOperation)} disabled={operationActionId === latestOperation.operation_id}>
-								{operationActionId === latestOperation.operation_id ? '取消中' : '取消'}
-							</button>
-						{:else if latestOperation.status === 'failed' || latestOperation.status === 'cancelled'}
-							<button class="mini-btn" type="button" onclick={() => retryOperation(latestOperation)} disabled={operationActionId === latestOperation.operation_id || hasActiveOperation}>
-								{operationActionId === latestOperation.operation_id ? '重试中' : '重试'}
-							</button>
-						{/if}
-					</div>
-				{/if}
-			</section>
+			<SourceModelPanel
+				{draft}
+				{selectedProject}
+				{latestOperation}
+				{hasActiveOperation}
+				{operationActionId}
+				{extractingAudio}
+				{separatingStems}
+				{transcribingAsr}
+				onImportVideo={importVideoFile}
+				onExtractAudio={extractSourceAudio}
+				onSeparateStems={separateStems}
+				onTranscribeEnglish={transcribeEnglishSource}
+				onCancelOperation={cancelOperation}
+				onRetryOperation={retryOperation}
+				{operationFor}
+				{operationBusy}
+			/>
 
 			<PreviewPanel {selectedCue} hasCleanReference={Boolean(draft?.reference_clips.some((clip) => clip.cleanliness === 'clean'))} />
 		</div>
@@ -678,17 +626,19 @@
 			<div class="section-title">
 				<div>
 					<h2>cue 审校表</h2>
-					<p class="muted">三轨文本独立维护，TTS 台词会保留数字读法和停顿。</p>
+					<p class="muted">英文字幕、中文字幕和 TTS 台词独立维护；翻译在外部完成后粘贴进来。</p>
 				</div>
 				<div class="row">
-					<button class="mini-btn" type="button" onclick={generateChineseDraft} disabled={!draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) || localizingZh}>
-						{localizingZh ? '生成中' : '生成中文草稿'}
+					<button class="mini-btn" type="button" onclick={() => (localizationImportOpen = !localizationImportOpen)} disabled={!draft?.cues.length}>
+						{localizationImportOpen ? '收起中文稿' : '粘贴中文稿'}
 					</button>
 					<span class="badge ok">{readyCount} 可生成</span>
 					<span class="badge warn">{reviewCount} 待校对</span>
 					<span class="badge fail">{blockedCount} 阻断</span>
 				</div>
 			</div>
+
+			<LocalizationTextImport open={localizationImportOpen} cueCount={draft?.cues.length ?? 0} onApply={applyLocalizationText} onClose={() => (localizationImportOpen = false)} />
 
 			<div class="quality-bar">
 				<span class={`badge ${draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? 'ok' : 'warn'}`}><CheckCircle2 size={13} /> ASR 覆盖</span>
@@ -836,50 +786,6 @@
 	.section-title h2,
 	.section-title p {
 		margin: 0;
-	}
-
-	.drop-target {
-		display: grid;
-		grid-template-columns: 38px minmax(0, 1fr);
-		gap: 10px;
-		align-items: center;
-		border: 1px dashed var(--line);
-		border-radius: 7px;
-		padding: 12px;
-		background: #101215;
-	}
-
-	.model-list {
-		display: grid;
-		gap: 8px;
-		margin-top: 12px;
-	}
-
-	.model-row {
-		display: grid;
-		grid-template-columns: 44px minmax(0, 1fr) auto auto;
-		gap: 8px;
-		align-items: center;
-		font-size: 12px;
-	}
-
-	.model-row > span:first-child {
-		color: var(--muted);
-	}
-
-	.operation-note {
-		margin: 10px 0 0;
-		color: var(--muted);
-		font-size: 12px;
-		line-height: 1.45;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
-	}
-
-	.operation-note.active {
-		color: #9cc9ff;
 	}
 
 	.mini-btn {

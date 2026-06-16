@@ -270,9 +270,19 @@ def test_video_localization_patch_cue_rejects_invalid_time_range(tmp_path: Path)
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_CUE_INVALID"
 
 
-def test_video_localization_import_source_media_updates_draft(tmp_path: Path):
+def test_video_localization_import_source_media_updates_draft(tmp_path: Path, monkeypatch):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "导入视频", "description": ""}).json()
+    monkeypatch.setattr(
+        media_assets,
+        "probe_video",
+        lambda path: {
+            "duration_ms": 3400,
+            "width": 1920,
+            "height": 1080,
+            "frame_rate": 24.0,
+        },
+    )
 
     response = client.post(
         f"/api/projects/{project['project_id']}/video-localization/source-media",
@@ -283,7 +293,12 @@ def test_video_localization_import_source_media_updates_draft(tmp_path: Path):
     body = response.json()
     assert body["source_media"]["filename"] == "demo clip.mp4"
     assert body["source_media"]["size_bytes"] == len(b"fake-video-bytes")
+    assert body["source_media"]["duration_ms"] == 3400
+    assert body["source_media"]["width"] == 1920
+    assert body["source_media"]["height"] == 1080
+    assert body["source_media"]["frame_rate"] == 24.0
     assert body["source_media"]["metadata"]["content_type"] == "video/mp4"
+    assert body["source_media"]["metadata"]["probe_status"] == "completed"
     video_path = Path(body["source_media"]["video_path"])
     assert video_path.exists()
     assert video_path.name == "demo_clip.mp4"

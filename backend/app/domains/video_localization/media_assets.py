@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -78,6 +79,41 @@ def extract_audio_file(video_path: Path, audio_path: Path) -> dict:
     return audio_tools.probe_audio(audio_path)
 
 
+def probe_video(path: Path) -> dict:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return {}
+    command = [
+        ffprobe,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height,avg_frame_rate,duration",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "json",
+        str(path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        return {}
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return {}
+    stream = (payload.get("streams") or [{}])[0] or {}
+    duration = _float_or_none(stream.get("duration")) or _float_or_none((payload.get("format") or {}).get("duration"))
+    return {
+        "duration_ms": int(duration * 1000) if duration is not None else None,
+        "width": _int_or_none(stream.get("width")),
+        "height": _int_or_none(stream.get("height")),
+        "frame_rate": _frame_rate(stream.get("avg_frame_rate")),
+    }
+
+
 def separate_audio_file(audio_path: Path, stems_dir: Path) -> dict:
     demucs = shutil.which("demucs")
     if not demucs:
@@ -152,3 +188,34 @@ def source_cue_cache_path(cache_dir: Path, source_path: Path, cue: VideoLocaliza
 
 def _safe_identifier(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_") or "item"
+
+
+def _float_or_none(value: object) -> float | None:
+    try:
+        if value in (None, "", "N/A"):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: object) -> int | None:
+    try:
+        if value in (None, "", "N/A"):
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _frame_rate(value: object) -> float | None:
+    if not isinstance(value, str) or value in {"", "0/0", "N/A"}:
+        return None
+    if "/" not in value:
+        return _float_or_none(value)
+    numerator, denominator = value.split("/", 1)
+    top = _float_or_none(numerator)
+    bottom = _float_or_none(denominator)
+    if not top or not bottom:
+        return None
+    return top / bottom

@@ -13,16 +13,22 @@ from app.services import asr_service
 
 async def with_imported_source_media(project_id: str, draft: VideoLocalizationDraft, file: UploadFile) -> VideoLocalizationDraft:
     source_path, content = await media_assets.save_uploaded_video(project_id, file)
+    video_meta = media_assets.probe_video(source_path)
     source_media = draft.source_media.model_copy(
         update={
             "filename": file.filename or source_path.name,
             "video_path": str(source_path),
             "size_bytes": len(content),
+            "duration_ms": video_meta.get("duration_ms"),
+            "width": video_meta.get("width"),
+            "height": video_meta.get("height"),
+            "frame_rate": video_meta.get("frame_rate"),
             "imported_at": now_iso(),
             "metadata": {
                 **draft.source_media.metadata,
                 "content_type": file.content_type,
                 "upload_status": "stored",
+                "probe_status": "completed" if video_meta else "unavailable",
             },
         }
     )
