@@ -9,9 +9,9 @@ from app.domains.video_localization import cues as cue_tools
 from app.domains.video_localization import draft_store
 from app.domains.video_localization import exporting
 from app.domains.video_localization import localization
-from app.domains.video_localization import media_assets
 from app.domains.video_localization import reference_clips
 from app.domains.video_localization import source_pipeline
+from app.domains.video_localization import tts_orchestration
 from app.domains.video_localization import tts_pipeline
 from app.errors import AppException
 from app.schemas.voice_studio import (
@@ -20,9 +20,8 @@ from app.schemas.voice_studio import (
     VideoLocalizationDraft,
     VideoLocalizationExport,
     VideoLocalizationReferenceClipUpdate,
-    now_iso,
 )
-from app.services import batch_queue, project_store
+from app.services import project_store
 
 VIDEO_LOCALIZATION_KEY = draft_store.VIDEO_LOCALIZATION_KEY
 
@@ -104,11 +103,10 @@ def build_tts_batch_request(project_id: str, engine_id: str = "indextts-v2") -> 
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    return tts_pipeline.build_batch_request(
+    return tts_orchestration.build_batch_request(
         project_id=project_id,
         project_name=project.name,
         draft=draft,
-        output_dir=media_assets.project_video_localization_dir(project_id) / "tts",
         engine_id=engine_id,
     )
 
@@ -118,7 +116,7 @@ def mark_tts_batch_submitted(project_id: str, batch_task_id: str, cue_ids: list[
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    next_draft = tts_pipeline.with_batch_submitted(draft, batch_task_id, cue_ids, attempted_at=now_iso())
+    next_draft = tts_orchestration.mark_batch_submitted(draft, batch_task_id, cue_ids)
     if next_draft is draft:
         return draft
     return save_video_localization(project_id, next_draft)
@@ -137,14 +135,7 @@ def sync_tts_batch_results(project_id: str, batch_task_id: str) -> VideoLocaliza
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    batch = batch_queue.get_batch(batch_task_id)
-    if not batch:
-        raise AppException(404, "VIDEO_LOCALIZATION_TTS_BATCH_NOT_FOUND", "TTS batch task not found")
-    request_parameters = batch.parameters.get("parameters") if isinstance(batch.parameters, dict) else None
-    if not isinstance(request_parameters, dict) or request_parameters.get("source") != "video_localization" or request_parameters.get("project_id") != project_id:
-        raise AppException(400, "VIDEO_LOCALIZATION_TTS_BATCH_PROJECT_MISMATCH", "Batch task does not belong to this video localization project")
-
-    return save_video_localization(project_id, tts_pipeline.with_synced_batch_results(draft, batch))
+    return save_video_localization(project_id, tts_orchestration.sync_batch_results(project_id, draft, batch_task_id))
 
 
 def sync_single_tts_result(project_id: str, cue_id: str, *, result_id: str, output_path: str, duration_ms: int | None) -> VideoLocalizationDraft | None:
@@ -152,7 +143,7 @@ def sync_single_tts_result(project_id: str, cue_id: str, *, result_id: str, outp
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    return save_video_localization(project_id, tts_pipeline.with_single_tts_result(draft, cue_id, result_id=result_id, output_path=output_path, duration_ms=duration_ms))
+    return save_video_localization(project_id, tts_orchestration.sync_single_result(draft, cue_id, result_id=result_id, output_path=output_path, duration_ms=duration_ms))
 
 
 def tts_audio_file(project_id: str, cue_id: str) -> Path | None:
