@@ -7,13 +7,12 @@ from fastapi import UploadFile
 from app.domains.video_localization import audio_access
 from app.domains.video_localization import cues as cue_tools
 from app.domains.video_localization import draft_store
+from app.domains.video_localization import exporting
 from app.domains.video_localization import localization
 from app.domains.video_localization import media_assets
 from app.domains.video_localization import reference_clips
-from app.domains.video_localization.readiness import build_production_readiness_audit
 from app.domains.video_localization import source_pipeline
 from app.domains.video_localization import tts_pipeline
-from app.domains.video_localization import subtitles
 from app.errors import AppException
 from app.schemas.voice_studio import (
     BatchGenerateRequest,
@@ -130,7 +129,7 @@ def export_subtitles(project_id: str, kind: str) -> str | None:
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    return subtitles.export_srt(draft, kind)
+    return exporting.export_subtitles(draft, kind)
 
 
 def sync_tts_batch_results(project_id: str, batch_task_id: str) -> VideoLocalizationDraft | None:
@@ -193,22 +192,7 @@ def export_video_localization(project_id: str) -> VideoLocalizationExport | None
     draft = get_video_localization(project_id)
     if not draft:
         return None
-    next_draft = draft_store.save(project_id, draft, updated_at=draft.updated_at)
-    if not next_draft:
-        return None
-    summary = {
-        "cue_count": len(next_draft.cues),
-        "ready_cue_count": sum(1 for cue in next_draft.cues if cue.review_status in {"ready", "locked"}),
-        "blocker_count": len(next_draft.quality_gate.blockers),
-        "warning_count": len(next_draft.quality_gate.warnings),
-    }
-    return VideoLocalizationExport(
-        project_id=project.project_id,
-        project_name=project.name,
-        exported_at=now_iso(),
-        export_summary=summary,
-        **next_draft.model_dump(),
-    )
+    return exporting.export_bundle(project.project_id, project.name, draft)
 
 
 def production_readiness_audit(project_id: str) -> dict | None:
@@ -218,5 +202,4 @@ def production_readiness_audit(project_id: str) -> dict | None:
     draft = get_video_localization(project_id)
     if not draft:
         return None
-    next_draft = draft_store.with_fresh_gate(draft, updated_at=draft.updated_at)
-    return build_production_readiness_audit(project_id=project.project_id, project_name=project.name, draft=next_draft)
+    return exporting.production_readiness(project.project_id, project.name, draft)
