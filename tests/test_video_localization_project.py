@@ -692,6 +692,108 @@ def test_video_localization_tts_batch_rejects_unverified_reference(tmp_path: Pat
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_TTS_REFERENCE_NOT_READY"
 
 
+def test_video_localization_reference_clip_review_enables_tts_batch(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "参考音复核", "description": ""}).json()
+    reference_path = tmp_path / "refs" / "speaker.wav"
+    reference_path.parent.mkdir(parents=True, exist_ok=True)
+    reference_path.write_bytes(b"voice")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "speakers": [{"speaker_id": "speaker_01", "display_name": "A"}],
+            "reference_clips": [
+                {
+                    "reference_clip_id": "ref_001",
+                    "speaker_id": "speaker_01",
+                    "source_stem": "vocals_clean",
+                    "audio_path": str(reference_path),
+                    "cleanliness": "needs_review",
+                    "asr_text": "Reference line.",
+                    "asr_status": "candidate",
+                }
+            ],
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 3200,
+                    "audio_route": "clone_from_source",
+                    "en_subtitle_text": "Reference line.",
+                    "zh_localized_subtitle_text": "参考字幕。",
+                    "tts_recommended_text": "参考台词。",
+                    "reference_clip_id": "ref_001",
+                    "review_status": "ready",
+                }
+            ],
+        },
+    )
+
+    reviewed = client.patch(
+        f"/api/projects/{project['project_id']}/video-localization/reference-clips/ref_001",
+        json={"cleanliness": "clean", "asr_status": "verified", "asr_text": "Reference line."},
+    )
+    assert reviewed.status_code == 200
+    reference = reviewed.json()["reference_clips"][0]
+    assert reference["cleanliness"] == "clean"
+    assert reference["asr_status"] == "verified"
+    assert "human_verified_reference" in reference["quality_flags"]
+
+    audio = client.get(f"/api/projects/{project['project_id']}/video-localization/reference-clips/ref_001/audio")
+    assert audio.status_code == 200
+    assert audio.content == b"voice"
+
+    async def fake_submit(payload):
+        return BatchTask(
+            batch_task_id="batch-reference-review",
+            project_name=payload["project_name"],
+            engine_id=payload["engine_id"],
+            status=TaskStatus.queued,
+            segments=[BatchSegmentResult(segment_id="cue_0001", text=payload["segments"][0]["text"], status=TaskStatus.queued)],
+        )
+
+    monkeypatch.setattr(projects_api.batch_queue, "submit", fake_submit)
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/tts/batch")
+    assert response.status_code == 200
+    assert response.json()["batch_task_id"] == "batch-reference-review"
+
+
+def test_video_localization_reference_clip_review_requires_asr_text(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "参考音缺文本", "description": ""}).json()
+    reference_path = tmp_path / "refs" / "speaker.wav"
+    reference_path.parent.mkdir(parents=True, exist_ok=True)
+    reference_path.write_bytes(b"voice")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "reference_clips": [
+                {
+                    "reference_clip_id": "ref_001",
+                    "source_stem": "vocals_clean",
+                    "audio_path": str(reference_path),
+                    "cleanliness": "needs_review",
+                    "asr_status": "candidate",
+                }
+            ],
+        },
+    )
+
+    response = client.patch(
+        f"/api/projects/{project['project_id']}/video-localization/reference-clips/ref_001",
+        json={"cleanliness": "clean", "asr_status": "verified", "asr_text": " "},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_REFERENCE_ASR_TEXT_MISSING"
+
+
 def test_video_localization_syncs_tts_batch_results_to_cues(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "同步 TTS", "description": ""}).json()

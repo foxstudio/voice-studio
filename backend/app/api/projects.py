@@ -7,7 +7,17 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from app.domains.video_localization import service as video_localization_service
 from app.errors import AppException
-from app.schemas.voice_studio import BatchTask, Project, ProjectCreate, ProjectTranscriptionImportRequest, ProjectTranscriptionImportResponse, Role, ScriptSegment, VideoLocalizationDraft
+from app.schemas.voice_studio import (
+    BatchTask,
+    Project,
+    ProjectCreate,
+    ProjectTranscriptionImportRequest,
+    ProjectTranscriptionImportResponse,
+    Role,
+    ScriptSegment,
+    VideoLocalizationDraft,
+    VideoLocalizationReferenceClipUpdate,
+)
 from app.services import batch_queue, project_store, task_queue
 
 router = APIRouter()
@@ -109,6 +119,14 @@ async def create_video_localization_reference_clips(project_id: str):
     return updated
 
 
+@router.patch("/{project_id}/video-localization/reference-clips/{reference_clip_id}", response_model=VideoLocalizationDraft)
+async def update_video_localization_reference_clip(project_id: str, reference_clip_id: str, patch: VideoLocalizationReferenceClipUpdate):
+    updated = video_localization_service.update_reference_clip(project_id, reference_clip_id, patch)
+    if not updated:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    return updated
+
+
 @router.post("/{project_id}/video-localization/localize/zh", response_model=VideoLocalizationDraft)
 async def generate_video_localization_chinese_draft(project_id: str):
     updated = video_localization_service.generate_localization_draft(project_id)
@@ -151,6 +169,14 @@ async def get_video_localization_cue_source_audio(project_id: str, cue_id: str):
     audio_path = video_localization_service.source_cue_audio_file(project_id, cue_id)
     if not audio_path:
         raise AppException(404, "VIDEO_LOCALIZATION_SOURCE_CUE_AUDIO_NOT_FOUND", "Source cue audio file not found")
+    return FileResponse(audio_path, filename=audio_path.name)
+
+
+@router.get("/{project_id}/video-localization/reference-clips/{reference_clip_id}/audio")
+async def get_video_localization_reference_clip_audio(project_id: str, reference_clip_id: str):
+    audio_path = video_localization_service.reference_clip_audio_file(project_id, reference_clip_id)
+    if not audio_path:
+        raise AppException(404, "VIDEO_LOCALIZATION_REFERENCE_AUDIO_NOT_FOUND", "Reference audio file not found")
     return FileResponse(audio_path, filename=audio_path.name)
 
 

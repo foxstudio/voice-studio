@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Api } from '$lib/api';
-	import type { BatchTask, GenerateRequest, Project, VideoLocalizationCue, VideoLocalizationDraft } from '$lib/api/types';
+	import type { BatchTask, GenerateRequest, Project, VideoLocalizationCue, VideoLocalizationDraft, VideoLocalizationReferenceClip, VideoLocalizationReferenceClipUpdate } from '$lib/api/types';
 	import {
 		AlertTriangle,
 		CheckCircle2,
@@ -41,6 +41,7 @@
 	let submittingBatch = $state(false);
 	let syncingBatch = $state(false);
 	let loadingBatches = $state(false);
+	let referenceUpdatingId = $state('');
 	let ttsBatchId = $state('');
 	let videoInput: HTMLInputElement | null = null;
 	let message = $state('');
@@ -219,6 +220,41 @@
 		} finally {
 			creatingReferences = false;
 		}
+	}
+
+	async function updateReferenceClip(referenceClipId: string, patch: VideoLocalizationReferenceClipUpdate, successMessage: string) {
+		if (!projectId) return;
+		referenceUpdatingId = referenceClipId;
+		error = '';
+		try {
+			draft = await Api.updateVideoLocalizationReference(projectId, referenceClipId, patch);
+			message = successMessage;
+			setTimeout(() => (message = ''), 1800);
+		} catch (e) {
+			error = (e as Error).message || '更新参考音状态失败';
+		} finally {
+			referenceUpdatingId = '';
+		}
+	}
+
+	function markReferenceClean(clip: VideoLocalizationReferenceClip) {
+		updateReferenceClip(
+			clip.reference_clip_id,
+			{
+				cleanliness: 'clean',
+				asr_status: 'verified',
+				asr_text: clip.asr_text ?? ''
+			},
+			'参考音已确认可用'
+		);
+	}
+
+	function markReferenceBlocked(clip: VideoLocalizationReferenceClip) {
+		updateReferenceClip(clip.reference_clip_id, { cleanliness: 'blocked', asr_status: 'failed' }, '参考音已标记阻断');
+	}
+
+	function markReferenceNeedsReview(clip: VideoLocalizationReferenceClip) {
+		updateReferenceClip(clip.reference_clip_id, { cleanliness: 'needs_review', asr_status: clip.asr_text ? 'candidate' : 'pending' }, '参考音已退回复听');
 	}
 
 	async function generateChineseDraft() {
@@ -434,6 +470,10 @@
 		return Boolean(clip?.audio_path && clip.cleanliness === 'clean' && clip.asr_status === 'verified');
 	}
 
+	function referenceCanBeConfirmed(clip: VideoLocalizationReferenceClip) {
+		return Boolean(clip.audio_path && clip.source_stem === 'vocals_clean' && clip.asr_text?.trim());
+	}
+
 	function referenceForCue(cue: VideoLocalizationCue | null) {
 		if (!cue?.reference_clip_id) return null;
 		return draft?.reference_clips.find((item) => item.reference_clip_id === cue.reference_clip_id) ?? null;
@@ -516,6 +556,10 @@
 
 	function ttsAudioUrl(cue: VideoLocalizationCue) {
 		return projectId && cue.tts_audio_path ? `/api/projects/${projectId}/video-localization/cues/${cue.cue_id}/tts-audio` : '';
+	}
+
+	function referenceAudioUrl(clip: VideoLocalizationReferenceClip) {
+		return projectId && clip.audio_path ? `/api/projects/${projectId}/video-localization/reference-clips/${clip.reference_clip_id}/audio` : '';
 	}
 
 	function sourceCueAudioUrl(cue: VideoLocalizationCue) {
@@ -854,6 +898,9 @@
 								<strong>{clip.reference_clip_id}</strong>
 								<p>{clip.audio_path || '尚未生成参考音文件'}</p>
 							</div>
+							{#if referenceAudioUrl(clip)}
+								<audio class="reference-audio" controls src={referenceAudioUrl(clip)}></audio>
+							{/if}
 							<div class="row">
 								<span class="badge role">{speakerLabel(clip.speaker_id)}</span>
 								<span class="badge">{durationLabel(clip.duration_ms)}</span>
@@ -862,6 +909,17 @@
 								</span>
 							</div>
 							<small>ASR: {clip.asr_text || '待独立 ASR'}</small>
+							<div class="reference-actions">
+								<button class="mini-btn" type="button" onclick={() => markReferenceClean(clip)} disabled={!referenceCanBeConfirmed(clip) || referenceUpdatingId === clip.reference_clip_id}>
+									确认可用
+								</button>
+								<button class="mini-btn danger-text" type="button" onclick={() => markReferenceBlocked(clip)} disabled={referenceUpdatingId === clip.reference_clip_id}>
+									标记阻断
+								</button>
+								<button class="mini-btn" type="button" onclick={() => markReferenceNeedsReview(clip)} disabled={referenceUpdatingId === clip.reference_clip_id}>
+									退回复听
+								</button>
+							</div>
 						</article>
 					{/each}
 					{#if !draft?.reference_clips.length}
@@ -1371,6 +1429,22 @@
 
 	.reference-card.review {
 		border-color: #604b18;
+	}
+
+	.reference-audio {
+		width: 100%;
+		height: 34px;
+	}
+
+	.reference-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+
+	.danger-text {
+		color: #ff9f9f;
+		border-color: #6d3030;
 	}
 
 	.reference-card p,

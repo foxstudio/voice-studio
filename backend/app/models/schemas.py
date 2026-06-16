@@ -733,6 +733,13 @@ class VideoLocalizationReferenceClip(VideoLocalizationExtensibleModel):
         return self
 
 
+class VideoLocalizationReferenceClipUpdate(BaseModel):
+    cleanliness: Literal["clean", "needs_review", "blocked", "mixed", "unknown"] | None = None
+    asr_status: Literal["pending", "candidate", "verified", "failed", "skipped"] | None = None
+    asr_text: str | None = None
+    notes: str | None = None
+
+
 class VideoLocalizationCue(VideoLocalizationExtensibleModel):
     cue_id: str
     speaker_id: str | None = None

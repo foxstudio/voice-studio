@@ -29,6 +29,7 @@ import type {
 	UploadResult,
 	VideoLocalizationDraft,
 	VideoLocalizationExport,
+	VideoLocalizationReferenceClipUpdate,
 	VoiceAsset,
 	VoiceAssetCreate,
 	SEREmotionResult,
@@ -107,6 +108,8 @@ export const Api = {
 	separateVideoLocalizationStems: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/stems`),
 	transcribeVideoLocalizationEnglish: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/asr/en`),
 	createVideoLocalizationReferences: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/reference-clips`),
+	updateVideoLocalizationReference: (id: string, referenceClipId: string, body: VideoLocalizationReferenceClipUpdate) =>
+		api.patch<VideoLocalizationDraft>(`/projects/${id}/video-localization/reference-clips/${referenceClipId}`, body),
 	generateVideoLocalizationChineseDraft: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/localize/zh`),
 	submitVideoLocalizationBatchTts: (id: string) => api.post<BatchTask>(`/projects/${id}/video-localization/tts/batch`),
 	syncVideoLocalizationBatchTts: (id: string, batchId: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/tts/batch/${batchId}/sync`),

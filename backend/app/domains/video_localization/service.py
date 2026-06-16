@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import UploadFile
 
 from app.domains.video_localization.quality_gate import evaluate_quality_gate
+from app.domains.video_localization.readiness import build_production_readiness_audit
 from app.errors import AppException
 from app.schemas.voice_studio import (
     BatchGenerateRequest,
@@ -19,6 +20,7 @@ from app.schemas.voice_studio import (
     VideoLocalizationDraft,
     VideoLocalizationExport,
     VideoLocalizationReferenceClip,
+    VideoLocalizationReferenceClipUpdate,
     VideoLocalizationTimeRange,
     now_iso,
 )
@@ -230,6 +232,50 @@ def create_reference_clips_from_cues(project_id: str) -> VideoLocalizationDraft 
     next_speakers = [speaker_updates.get(speaker.speaker_id, speaker) for speaker in draft.speakers]
     next_draft = draft.model_copy(update={"reference_clips": next_refs, "cues": next_cues, "speakers": next_speakers})
     return save_video_localization(project_id, next_draft)
+
+
+def update_reference_clip(project_id: str, reference_clip_id: str, patch: VideoLocalizationReferenceClipUpdate) -> VideoLocalizationDraft | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    updated = False
+    next_refs: list[VideoLocalizationReferenceClip] = []
+
+    for clip in draft.reference_clips:
+        if clip.reference_clip_id != reference_clip_id:
+            next_refs.append(clip)
+            continue
+        update = patch.model_dump(exclude_unset=True)
+        next_clip = clip.model_copy(update=update)
+        _validate_reference_clip_update(next_clip)
+        next_refs.append(_reference_clip_with_review_flags(next_clip))
+        updated = True
+
+    if not updated:
+        raise AppException(404, "VIDEO_LOCALIZATION_REFERENCE_CLIP_NOT_FOUND", "Reference clip not found")
+    return save_video_localization(project_id, draft.model_copy(update={"reference_clips": next_refs}))
+
+
+def _validate_reference_clip_update(clip: VideoLocalizationReferenceClip) -> None:
+    if clip.cleanliness == "clean":
+        if clip.source_stem != "vocals_clean":
+            raise AppException(400, "VIDEO_LOCALIZATION_REFERENCE_NOT_FROM_CLEAN_VOCALS", "Clean reference clips must come from separated clean vocals")
+        if not clip.audio_path or not Path(clip.audio_path).exists():
+            raise AppException(400, "VIDEO_LOCALIZATION_REFERENCE_FILE_MISSING", "Reference audio file is missing")
+    if clip.asr_status == "verified" and not (clip.asr_text or "").strip():
+        raise AppException(400, "VIDEO_LOCALIZATION_REFERENCE_ASR_TEXT_MISSING", "Verified reference clips require ASR text")
+
+
+def _reference_clip_with_review_flags(clip: VideoLocalizationReferenceClip) -> VideoLocalizationReferenceClip:
+    flags = [flag for flag in clip.quality_flags if flag not in {"needs_cleanliness_review", "human_verified_reference", "reference_blocked"}]
+    if clip.cleanliness == "clean" and clip.asr_status == "verified":
+        flags.append("human_verified_reference")
+    elif clip.cleanliness == "blocked" or clip.asr_status == "failed":
+        flags.append("reference_blocked")
+    else:
+        flags.append("needs_cleanliness_review")
+    return clip.model_copy(update={"quality_flags": flags})
 
 
 def generate_localization_draft(project_id: str) -> VideoLocalizationDraft | None:
@@ -467,6 +513,20 @@ def tts_audio_file(project_id: str, cue_id: str) -> Path | None:
     return path if path.exists() else None
 
 
+def reference_clip_audio_file(project_id: str, reference_clip_id: str) -> Path | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id)
+    if not draft:
+        return None
+    clip = next((item for item in draft.reference_clips if item.reference_clip_id == reference_clip_id), None)
+    if not clip or not clip.audio_path:
+        return None
+    path = Path(clip.audio_path)
+    return path if path.exists() else None
+
+
 def source_cue_audio_file(project_id: str, cue_id: str) -> Path | None:
     project = project_store.get_project(project_id)
     if not project:
@@ -524,19 +584,7 @@ def production_readiness_audit(project_id: str) -> dict | None:
     if not draft:
         return None
     next_draft = _with_fresh_gate(draft, updated_at=draft.updated_at)
-    checks = _readiness_checks(next_draft)
-    blocking = [check for check in checks if check["status"] == "blocked"]
-    warnings = [check for check in checks if check["status"] == "warning"]
-    return {
-        "project_id": project.project_id,
-        "project_name": project.name,
-        "generated_at": now_iso(),
-        "status": "blocked" if blocking else "warning" if warnings else "ready_for_mix",
-        "summary": _readiness_summary(next_draft),
-        "checks": checks,
-        "cue_status": [_readiness_cue_status(cue) for cue in next_draft.cues],
-        "next_actions": [item["action"] for item in checks if item.get("action")],
-    }
+    return build_production_readiness_audit(project_id=project.project_id, project_name=project.name, draft=next_draft)
 
 
 def _with_fresh_gate(draft: VideoLocalizationDraft, updated_at: str | None) -> VideoLocalizationDraft:
@@ -555,107 +603,6 @@ def _status_for_gate(draft: VideoLocalizationDraft, gate_status: str) -> str:
     if draft.cues:
         return "reviewing"
     return "draft"
-
-
-def _readiness_summary(draft: VideoLocalizationDraft) -> dict:
-    tts_route_cues = [cue for cue in draft.cues if cue.audio_route in {"clone_from_source", "preset_tts"}]
-    generated_cues = [cue for cue in tts_route_cues if _path_exists(cue.tts_audio_path)]
-    failed_cues = [cue for cue in draft.cues if cue.tts_batch_status in {"failed", "cancelled"}]
-    return {
-        "cue_count": len(draft.cues),
-        "tts_route_count": len(tts_route_cues),
-        "generated_tts_count": len(generated_cues),
-        "failed_tts_count": len(failed_cues),
-        "preserve_original_count": sum(1 for cue in draft.cues if cue.audio_route == "preserve_original_audio"),
-        "ready_or_locked_count": sum(1 for cue in draft.cues if cue.review_status in {"ready", "locked"}),
-        "quality_gate_status": draft.quality_gate.status,
-        "blocker_count": len(draft.quality_gate.blockers),
-        "warning_count": len(draft.quality_gate.warnings),
-    }
-
-
-def _readiness_checks(draft: VideoLocalizationDraft) -> list[dict]:
-    tts_route_cues = [cue for cue in draft.cues if cue.audio_route in {"clone_from_source", "preset_tts"}]
-    missing_tts_cue_ids = [cue.cue_id for cue in tts_route_cues if not _path_exists(cue.tts_audio_path)]
-    failed_tts_cue_ids = [cue.cue_id for cue in draft.cues if cue.tts_batch_status in {"failed", "cancelled"}]
-    return [
-        _readiness_check(
-            "source_video",
-            "源视频",
-            "pass" if draft.source_media.video_path or draft.source_media.filename else "blocked",
-            "导入源视频",
-        ),
-        _readiness_check(
-            "source_audio",
-            "源音轨",
-            "pass" if draft.source_media.audio_path or draft.stems.original_audio_path else "blocked",
-            "抽取源音轨",
-        ),
-        _readiness_check(
-            "background_stem",
-            "背景音乐/环境声 stem",
-            "pass" if draft.stems.background_path else "warning",
-            "运行人声/背景声分离",
-        ),
-        _readiness_check(
-            "clean_vocals",
-            "干净人声 stem",
-            "pass" if draft.stems.vocals_clean_path else "warning",
-            "运行人声/背景声分离",
-        ),
-        _readiness_check(
-            "quality_gate",
-            "质量门",
-            "pass" if draft.quality_gate.status != "blocked" else "blocked",
-            "修复质量门阻断项",
-            details={"status": draft.quality_gate.status},
-        ),
-        _readiness_check(
-            "tts_audio_coverage",
-            "中文 TTS 音频覆盖",
-            "pass" if not missing_tts_cue_ids else "blocked",
-            "继续生成或同步 TTS 结果",
-            details={"missing_cue_ids": missing_tts_cue_ids, "expected_count": len(tts_route_cues)},
-        ),
-        _readiness_check(
-            "tts_failures",
-            "TTS 失败状态",
-            "pass" if not failed_tts_cue_ids else "blocked",
-            "复查失败原因并重新生成",
-            details={"failed_cue_ids": failed_tts_cue_ids},
-        ),
-    ]
-
-
-def _readiness_check(code: str, label: str, status: str, action: str, *, details: dict | None = None) -> dict:
-    item = {"code": code, "label": label, "status": status}
-    if status != "pass":
-        item["action"] = action
-    if details:
-        item["details"] = details
-    return item
-
-
-def _readiness_cue_status(cue: VideoLocalizationCue) -> dict:
-    return {
-        "cue_id": cue.cue_id,
-        "speaker_id": cue.speaker_id,
-        "audio_route": cue.audio_route,
-        "review_status": cue.review_status,
-        "start_ms": cue.start_ms,
-        "end_ms": cue.end_ms,
-        "has_tts_audio": _path_exists(cue.tts_audio_path),
-        "tts_audio_path": cue.tts_audio_path,
-        "tts_batch_task_id": cue.tts_batch_task_id,
-        "tts_batch_status": cue.tts_batch_status,
-        "tts_batch_error": cue.tts_batch_error,
-        "generated_duration_ms": cue.generated_duration_ms,
-        "source_duration_ms": cue.source_duration_ms,
-    }
-
-
-def _path_exists(value: str | None) -> bool:
-    return bool(value and Path(value).exists())
 
 
 async def _save_uploaded_video(project_id: str, file: UploadFile) -> tuple[Path, bytes]:

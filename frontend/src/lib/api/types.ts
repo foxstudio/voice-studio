@@ -236,6 +236,13 @@ export interface VideoLocalizationReferenceClip {
 	[key: string]: unknown;
 }
 
+export interface VideoLocalizationReferenceClipUpdate {
+	cleanliness?: VideoLocalizationReferenceClip['cleanliness'] | null;
+	asr_status?: VideoLocalizationReferenceClip['asr_status'] | null;
+	asr_text?: string | null;
+	notes?: string | null;
+}
+
 export interface VideoLocalizationCue {
 	cue_id: string;
 	speaker_id: string | null;
