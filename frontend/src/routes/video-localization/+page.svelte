@@ -619,7 +619,7 @@
 				{operationBusy}
 			/>
 
-			<PreviewPanel {selectedCue} hasCleanReference={Boolean(draft?.reference_clips.some((clip) => clip.cleanliness === 'clean'))} />
+			<PreviewPanel {selectedCue} hasCleanReference={Boolean(draft?.reference_clips.some((clip) => clip.cleanliness === 'clean'))} {draft} {projectId} />
 		</div>
 
 		<section class="panel cue-panel">

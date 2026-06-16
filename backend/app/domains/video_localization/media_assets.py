@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from fastapi import UploadFile
 
@@ -115,37 +116,18 @@ def probe_video(path: Path) -> dict:
 
 
 def separate_audio_file(audio_path: Path, stems_dir: Path) -> dict:
-    demucs = shutil.which("demucs")
-    if not demucs:
-        raise AppException(500, "VIDEO_LOCALIZATION_DEMUCS_MISSING", "demucs is required to separate vocals and background")
-
-    output_root = stems_dir / "demucs"
-    command = [
-        demucs,
-        "--two-stems",
-        "vocals",
-        "--name",
-        "htdemucs",
-        "--out",
-        str(output_root),
-        str(audio_path),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    demucs_dir = output_root / "htdemucs" / audio_path.stem
-    vocals_path = demucs_dir / "vocals.wav"
-    background_path = demucs_dir / "no_vocals.wav"
-    if result.returncode != 0 or not vocals_path.exists() or not background_path.exists():
-        raise AppException(500, "VIDEO_LOCALIZATION_SEPARATION_FAILED", "Failed to separate vocals and background")
+    runtime = _load_demucs_runtime()
+    outputs = _separate_with_demucs(audio_path, runtime)
 
     vocals_clean_path = unique_path(stems_dir / f"{audio_path.stem}-vocals-clean.wav")
     background_dest = unique_path(stems_dir / f"{audio_path.stem}-background.wav")
-    shutil.copy2(vocals_path, vocals_clean_path)
-    shutil.copy2(background_path, background_dest)
+    audio_tools.write_audio(vocals_clean_path, outputs["vocals"], outputs["sample_rate"])
+    audio_tools.write_audio(background_dest, outputs["background"], outputs["sample_rate"])
     quality = audio_tools.quality_metrics(vocals_clean_path, min_duration_ms=1000)
     return {
         "vocals_clean_path": vocals_clean_path,
         "background_path": background_dest,
-        "engine_id": "demucs:htdemucs",
+        "engine_id": f"demucs:{outputs['model_name']}",
         "quality_flags": quality.get("warnings", []),
     }
 
@@ -219,3 +201,85 @@ def _frame_rate(value: object) -> float | None:
     if not top or not bottom:
         return None
     return top / bottom
+
+
+def _load_demucs_runtime() -> dict[str, Any]:
+    try:
+        import soundfile as sf
+        import torch
+        import torchaudio.functional as torchaudio_functional
+        from demucs.apply import apply_model
+        from demucs.pretrained import get_model
+    except ImportError as exc:
+        raise AppException(
+            500,
+            "VIDEO_LOCALIZATION_DEMUCS_MISSING",
+            "demucs extra is required to separate vocals and background",
+        ) from exc
+    return {
+        "sf": sf,
+        "torch": torch,
+        "torchaudio_functional": torchaudio_functional,
+        "apply_model": apply_model,
+        "get_model": get_model,
+    }
+
+
+def _separate_with_demucs(audio_path: Path, runtime: dict[str, Any], model_name: str = "htdemucs") -> dict[str, Any]:
+    sf = runtime["sf"]
+    torch = runtime["torch"]
+    torchaudio_functional = runtime["torchaudio_functional"]
+    get_model = runtime["get_model"]
+    apply_model = runtime["apply_model"]
+
+    audio, sample_rate = sf.read(str(audio_path), always_2d=True, dtype="float32")
+    if audio.size == 0:
+        raise AppException(500, "VIDEO_LOCALIZATION_SEPARATION_FAILED", "Source audio is empty")
+
+    model = get_model(model_name)
+    model_sample_rate = int(getattr(model, "samplerate", sample_rate) or sample_rate)
+    expected_channels = int(getattr(model, "audio_channels", 2) or 2)
+    mix = torch.from_numpy(audio.T)
+    if sample_rate != model_sample_rate:
+        mix = torchaudio_functional.resample(mix, sample_rate, model_sample_rate)
+    mix = _match_audio_channels(mix, expected_channels)
+
+    device = _demucs_device(torch)
+    try:
+        with torch.no_grad():
+            separated = apply_model(model, mix[None], device=device, progress=False)
+    except Exception as exc:
+        raise AppException(500, "VIDEO_LOCALIZATION_SEPARATION_FAILED", "Failed to separate vocals and background") from exc
+
+    sources = list(getattr(model, "sources", []))
+    if separated.ndim != 4 or "vocals" not in sources:
+        raise AppException(500, "VIDEO_LOCALIZATION_SEPARATION_FAILED", "Failed to separate vocals and background")
+    vocals_index = sources.index("vocals")
+    vocals = separated[0, vocals_index]
+    background = separated[0].sum(dim=0) - vocals
+    return {
+        "vocals": vocals.detach().cpu().numpy().T,
+        "background": background.detach().cpu().numpy().T,
+        "sample_rate": model_sample_rate,
+        "model_name": model_name,
+    }
+
+
+def _match_audio_channels(mix, expected_channels: int):
+    channels = int(mix.shape[0])
+    if channels == expected_channels:
+        return mix
+    if channels == 1 and expected_channels == 2:
+        return mix.repeat(2, 1)
+    if channels > expected_channels:
+        return mix[:expected_channels]
+    if channels < expected_channels:
+        repeats = (expected_channels + channels - 1) // channels
+        return mix.repeat(repeats, 1)[:expected_channels]
+    return mix
+
+
+def _demucs_device(torch) -> str:
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"

@@ -7,6 +7,36 @@ from app.domains.video_localization import tts_pipeline
 from app.domains.video_localization.schemas import VideoLocalizationDraft
 
 
+def source_video_path(draft: VideoLocalizationDraft) -> Path | None:
+    if not draft.source_media.video_path:
+        return None
+    path = Path(draft.source_media.video_path)
+    return path if path.exists() else None
+
+
+def source_audio_path(draft: VideoLocalizationDraft) -> Path | None:
+    for source_value in (draft.source_media.audio_path, draft.stems.original_audio_path):
+        if not source_value:
+            continue
+        path = Path(source_value)
+        if path.exists():
+            return path
+    return None
+
+
+def stem_audio_path(draft: VideoLocalizationDraft, kind: str) -> Path | None:
+    if kind == "vocals":
+        value = draft.stems.vocals_clean_path
+    elif kind == "background":
+        value = draft.stems.background_path
+    else:
+        return None
+    if not value:
+        return None
+    path = Path(value)
+    return path if path.exists() else None
+
+
 def tts_audio_path(draft: VideoLocalizationDraft, cue_id: str) -> Path | None:
     return tts_pipeline.tts_audio_path(draft, cue_id)
 

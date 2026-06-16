@@ -156,6 +156,36 @@ def tts_audio_file(project_id: str, cue_id: str) -> Path | None:
     return audio_access.tts_audio_path(draft, cue_id)
 
 
+def source_video_file(project_id: str) -> Path | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id)
+    if not draft:
+        return None
+    return audio_access.source_video_path(draft)
+
+
+def source_audio_file(project_id: str) -> Path | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id)
+    if not draft:
+        return None
+    return audio_access.source_audio_path(draft)
+
+
+def stem_audio_file(project_id: str, kind: str) -> Path | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id)
+    if not draft:
+        return None
+    return audio_access.stem_audio_path(draft, kind)
+
+
 def reference_clip_audio_file(project_id: str, reference_clip_id: str) -> Path | None:
     project = project_store.get_project(project_id)
     if not project:

@@ -1,19 +1,88 @@
 <script lang="ts">
 	import { AudioLines, Play } from 'lucide-svelte';
-	import type { VideoLocalizationCue } from '$lib/api/types';
+	import type { VideoLocalizationCue, VideoLocalizationDraft } from '$lib/api/types';
+	import { sourceAudioUrl, sourceVideoUrl, stemAudioUrl } from './utils';
 
-	let { selectedCue, hasCleanReference }: { selectedCue: VideoLocalizationCue | null; hasCleanReference: boolean } = $props();
+	let {
+		selectedCue,
+		hasCleanReference,
+		draft,
+		projectId
+	}: {
+		selectedCue: VideoLocalizationCue | null;
+		hasCleanReference: boolean;
+		draft: VideoLocalizationDraft | null;
+		projectId: string;
+	} = $props();
+
+	let sourceVideoFailed = $state(false);
+	let sourceAudioFailed = $state(false);
+	let vocalsFailed = $state(false);
+	let backgroundFailed = $state(false);
+
+	const previewVideoSrc = $derived(sourceVideoUrl(projectId, draft));
+	const previewSourceAudioSrc = $derived(sourceAudioUrl(projectId, draft));
+	const previewVocalsSrc = $derived(stemAudioUrl(projectId, draft, 'vocals'));
+	const previewBackgroundSrc = $derived(stemAudioUrl(projectId, draft, 'background'));
+
+	$effect(() => {
+		projectId;
+		draft?.updated_at;
+		draft?.source_media.video_path;
+		draft?.source_media.audio_path;
+		draft?.stems.original_audio_path;
+		draft?.stems.vocals_clean_path;
+		draft?.stems.background_path;
+		sourceVideoFailed = false;
+		sourceAudioFailed = false;
+		vocalsFailed = false;
+		backgroundFailed = false;
+	});
 </script>
 
 <section class="panel preview-panel">
 	<div class="video-preview">
-		<div class="video-glow"></div>
-		<div class="play-button"><span><Play size={24} /></span></div>
+		{#if previewVideoSrc && !sourceVideoFailed}
+			<!-- svelte-ignore a11y_media_has_caption -->
+			<video class="preview-video" controls preload="metadata" src={previewVideoSrc} onerror={() => (sourceVideoFailed = true)}></video>
+		{:else}
+			<div class="video-glow"></div>
+			<div class="play-button"><span><Play size={24} /></span></div>
+		{/if}
 		<div class="subtitle-overlay">
 			<p>{selectedCue?.zh_localized_subtitle_text || '中文字幕将在这里预览'}</p>
 			<span>{selectedCue?.en_subtitle_text || 'English subtitle preview'}</span>
 		</div>
 	</div>
+	<div class="media-audio-grid">
+		<div class="audio-card">
+			<span>源音频</span>
+			{#if previewSourceAudioSrc && !sourceAudioFailed}
+				<audio controls src={previewSourceAudioSrc} onerror={() => (sourceAudioFailed = true)}></audio>
+			{:else}
+				<p class="muted">{sourceAudioFailed ? '加载失败' : '待抽取'}</p>
+			{/if}
+		</div>
+		<div class="audio-card">
+			<span>人声</span>
+			{#if previewVocalsSrc && !vocalsFailed}
+				<audio controls src={previewVocalsSrc} onerror={() => (vocalsFailed = true)}></audio>
+			{:else}
+				<p class="muted">{vocalsFailed ? '加载失败' : '待分离'}</p>
+			{/if}
+		</div>
+		<div class="audio-card">
+			<span>背景音</span>
+			{#if previewBackgroundSrc && !backgroundFailed}
+				<audio controls src={previewBackgroundSrc} onerror={() => (backgroundFailed = true)}></audio>
+			{:else}
+				<p class="muted">{backgroundFailed ? '加载失败' : '待分离'}</p>
+			{/if}
+		</div>
+	</div>
+	{#if draft?.stems.separation_status === 'failed'}
+		<p class="media-status muted">人声分离失败。请检查本地分离依赖或重试当前任务。</p>
+	{/if}
 	<div class="wave-panel">
 		<div class="wave-head">
 			<span><AudioLines size={14} /> 分离人声</span>
@@ -98,6 +167,49 @@
 		margin-top: 12px;
 	}
 
+	.media-status {
+		margin: 8px 0 0;
+		font-size: 12px;
+	}
+
+	.preview-video {
+		width: 100%;
+		height: 100%;
+		object-fit: contain;
+		background: #050608;
+	}
+
+	.media-audio-grid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 8px;
+		margin-top: 12px;
+	}
+
+	.audio-card {
+		display: grid;
+		gap: 6px;
+		padding: 8px;
+		border: 1px solid var(--line);
+		border-radius: 7px;
+		background: #101215;
+	}
+
+	.audio-card span {
+		font-size: 12px;
+		color: var(--muted);
+	}
+
+	.audio-card audio {
+		width: 100%;
+		height: 32px;
+	}
+
+	.audio-card p {
+		margin: 0;
+		font-size: 12px;
+	}
+
 	.wave-head {
 		display: flex;
 		align-items: center;
@@ -168,4 +280,10 @@
 	.lane.a i { background: #4f9cf9; }
 	.lane.b i { background: #42c49b; }
 	.lane.mixed i { background: #e4ad42; }
+
+	@media (max-width: 900px) {
+		.media-audio-grid {
+			grid-template-columns: 1fr;
+		}
+	}
 </style>

@@ -78,6 +78,21 @@ export function ttsAudioUrl(projectId: string, cue: VideoLocalizationCue) {
 	return projectId && cue.tts_audio_path ? `/api/projects/${projectId}/video-localization/cues/${cue.cue_id}/tts-audio` : '';
 }
 
+export function sourceVideoUrl(projectId: string, current: VideoLocalizationDraft | null) {
+	return projectId && current?.source_media.video_path ? `/api/projects/${projectId}/video-localization/source-media/video` : '';
+}
+
+export function sourceAudioUrl(projectId: string, current: VideoLocalizationDraft | null) {
+	return projectId && (current?.source_media.audio_path || current?.stems.original_audio_path) ? `/api/projects/${projectId}/video-localization/source-media/audio` : '';
+}
+
+export function stemAudioUrl(projectId: string, current: VideoLocalizationDraft | null, kind: 'vocals' | 'background') {
+	if (!projectId || !current) return '';
+	if (kind === 'vocals' && !current.stems.vocals_clean_path) return '';
+	if (kind === 'background' && !current.stems.background_path) return '';
+	return `/api/projects/${projectId}/video-localization/stems/${kind}/audio`;
+}
+
 export function referenceAudioUrl(projectId: string, clip: VideoLocalizationReferenceClip) {
 	return projectId && clip.audio_path ? `/api/projects/${projectId}/video-localization/reference-clips/${clip.reference_clip_id}/audio` : '';
 }

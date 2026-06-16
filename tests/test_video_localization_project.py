@@ -4,6 +4,7 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,7 +19,7 @@ from app.domains.video_localization import operation_queue as video_localization
 from app.domains.video_localization import reference_clips as video_localization_reference_clips  # noqa: E402
 from app.domains.video_localization import service as video_localization_service  # noqa: E402
 from app.domains.video_localization import source_pipeline as video_localization_source_pipeline  # noqa: E402
-from app.services import batch_queue, database, settings_store, task_queue  # noqa: E402
+from app.services import audio_tools, batch_queue, database, settings_store, task_queue  # noqa: E402
 from app.api import video_localization as video_localization_api  # noqa: E402
 
 
@@ -305,6 +306,44 @@ def test_video_localization_import_source_media_updates_draft(tmp_path: Path, mo
     assert project["project_id"] in str(video_path)
 
 
+def test_video_localization_source_video_can_be_played_after_import(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "播放视频", "description": ""}).json()
+    client.post(
+        f"/api/projects/{project['project_id']}/video-localization/source-media",
+        files={"file": ("demo.mp4", b"fake-video-bytes", "video/mp4")},
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/source-media/video")
+
+    assert response.status_code == 200
+    assert response.content == b"fake-video-bytes"
+
+
+def test_video_localization_source_audio_endpoint_falls_back_to_original_stem(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "源音回退", "description": ""}).json()
+    original_audio = tmp_path / "projects" / project["project_id"] / "video_localization" / "audio" / "fallback.wav"
+    original_audio.parent.mkdir(parents=True, exist_ok=True)
+    original_audio.write_bytes(b"fallback-audio")
+    missing_audio = tmp_path / "projects" / project["project_id"] / "video_localization" / "audio" / "missing.wav"
+
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "demo.mp4", "audio_path": str(missing_audio)},
+            "stems": {"original_audio_path": str(original_audio)},
+        },
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/source-media/audio")
+
+    assert response.status_code == 200
+    assert response.content == b"fallback-audio"
+
+
 def test_video_localization_import_rejects_unsupported_media(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "导入失败", "description": ""}).json()
@@ -344,6 +383,10 @@ def test_video_localization_extract_source_audio_updates_draft(tmp_path: Path, m
     assert body["source_media"]["metadata"]["audio_sample_rate"] == 48000
     assert body["source_media"]["metadata"]["audio_channels"] == 2
     assert body["stems"]["original_audio_path"] == body["source_media"]["audio_path"]
+
+    audio = client.get(f"/api/projects/{project['project_id']}/video-localization/source-media/audio")
+    assert audio.status_code == 200
+    assert audio.content == b"fake-wav"
 
 
 def test_video_localization_extract_source_audio_requires_video(tmp_path: Path):
@@ -567,6 +610,49 @@ def test_video_localization_separate_source_audio_updates_stems(tmp_path: Path, 
     assert body["stems"]["background_path"].endswith("source-background.wav")
     assert body["stems"]["original_audio_path"] == str(audio_path)
     assert body["stems"]["quality_flags"] == ["needs_reference_review"]
+
+    vocals = client.get(f"/api/projects/{project['project_id']}/video-localization/stems/vocals/audio")
+    background = client.get(f"/api/projects/{project['project_id']}/video-localization/stems/background/audio")
+    assert vocals.status_code == 200
+    assert vocals.content == b"vocals"
+    assert background.status_code == 200
+    assert background.content == b"background"
+
+
+def test_video_localization_separate_audio_file_writes_demucs_outputs(tmp_path: Path, monkeypatch):
+    audio_path = tmp_path / "audio" / "source.wav"
+    stems_dir = tmp_path / "stems"
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    audio_path.write_bytes(b"placeholder")
+
+    vocals = np.full((8, 2), 0.25, dtype=np.float32)
+    background = np.full((8, 2), -0.25, dtype=np.float32)
+
+    monkeypatch.setattr(media_assets, "_load_demucs_runtime", lambda: {"fake": True})
+    monkeypatch.setattr(
+        media_assets,
+        "_separate_with_demucs",
+        lambda source_audio, runtime: {
+            "vocals": vocals,
+            "background": background,
+            "sample_rate": 44100,
+            "model_name": "htdemucs",
+        },
+    )
+    monkeypatch.setattr(audio_tools, "quality_metrics", lambda path, min_duration_ms=1000: {"warnings": ["needs_reference_review"]})
+
+    result = media_assets.separate_audio_file(audio_path, stems_dir)
+
+    assert result["engine_id"] == "demucs:htdemucs"
+    assert result["quality_flags"] == ["needs_reference_review"]
+    assert Path(result["vocals_clean_path"]).exists()
+    assert Path(result["background_path"]).exists()
+    vocals_audio, vocals_sr = audio_tools.read_audio(result["vocals_clean_path"])
+    background_audio, background_sr = audio_tools.read_audio(result["background_path"])
+    assert vocals_sr == 44100
+    assert background_sr == 44100
+    assert vocals_audio.size > 0
+    assert background_audio.size > 0
 
 
 def test_video_localization_english_asr_requires_source_audio(tmp_path: Path):

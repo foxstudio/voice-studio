@@ -30,6 +30,18 @@ async def import_video_localization_source_media(project_id: str, file: UploadFi
     return require_resource(updated)
 
 
+@router.get("/{project_id}/video-localization/source-media/video")
+async def get_video_localization_source_video(project_id: str):
+    video_path = video_localization_service.source_video_file(project_id)
+    return audio_file_response(video_path, code="VIDEO_LOCALIZATION_SOURCE_VIDEO_NOT_FOUND", message="Source video file not found")
+
+
+@router.get("/{project_id}/video-localization/source-media/audio")
+async def get_video_localization_source_audio(project_id: str):
+    audio_path = video_localization_service.source_audio_file(project_id)
+    return audio_file_response(audio_path, code="VIDEO_LOCALIZATION_SOURCE_AUDIO_NOT_FOUND", message="Source audio file not found")
+
+
 @router.get("/{project_id}/video-localization/operations", response_model=list[VideoLocalizationOperation])
 async def list_video_localization_operations(project_id: str):
     operations = operation_queue.list_operations(project_id)
@@ -70,6 +82,12 @@ async def extract_video_localization_source_audio(project_id: str):
 async def separate_video_localization_source_audio(project_id: str):
     updated = video_localization_service.separate_source_audio(project_id)
     return require_resource(updated)
+
+
+@router.get("/{project_id}/video-localization/stems/{kind}/audio")
+async def get_video_localization_stem_audio(project_id: str, kind: str):
+    audio_path = video_localization_service.stem_audio_file(project_id, kind)
+    return audio_file_response(audio_path, code="VIDEO_LOCALIZATION_STEM_AUDIO_NOT_FOUND", message="Stem audio file not found")
 
 
 @router.post("/{project_id}/video-localization/asr/en", response_model=VideoLocalizationDraft)
