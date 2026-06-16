@@ -28,11 +28,26 @@
 		Wand2
 	} from 'lucide-svelte';
 	import { onMount } from 'svelte';
-
-	type WorkflowStep = {
-		label: string;
-		status: 'done' | 'active' | 'blocked' | 'pending';
-	};
+	import {
+		batchOptionLabel,
+		batchProjectId,
+		buildWorkflow,
+		durationLabel,
+		gateBadgeClass,
+		gateLabel,
+		isActiveOperation,
+		operationBadgeClass,
+		operationStatusLabel,
+		referenceAudioUrl,
+		sortOperations,
+		sourceCueAudioUrl,
+		speakerColor,
+		statusLabel,
+		timeLabel,
+		ttsAudioUrl,
+		ttsBatchLabel,
+		type WorkflowStep
+	} from './utils';
 
 	let projects = $state<Project[]>([]);
 	let batches = $state<BatchTask[]>([]);
@@ -507,62 +522,10 @@
 		}
 	}
 
-	function buildWorkflow(current: VideoLocalizationDraft | null): WorkflowStep[] {
-		const hasSource = Boolean(current?.source_media.filename || current?.source_media.video_path);
-		const hasSourceAudio = Boolean(current?.source_media.audio_path || current?.stems.original_audio_path);
-		const stemsReady = current?.stems.separation_status === 'completed';
-		const hasAsr = Boolean(current?.cues.some((cue) => cue.en_subtitle_text?.trim()));
-		const hasSpeakers = Boolean(current?.speakers.length);
-		const hasReviewed = Boolean(current?.cues.some((cue) => cue.review_status === 'ready' || cue.review_status === 'locked'));
-		const hasTts = Boolean(current?.cues.some((cue) => cue.tts_audio_path || cue.tts_result_id));
-		const readyForTts = Boolean(current?.cues.some((cue) => cue.review_status === 'ready' && cue.tts_recommended_text?.trim()));
-		const blocked = current?.quality_gate.status === 'blocked';
-		return [
-			{ label: '导入', status: hasSource ? 'done' : 'active' },
-			{ label: '人声分离', status: stemsReady ? 'done' : hasSource ? 'active' : 'pending' },
-			{ label: '英文 ASR', status: hasAsr ? 'done' : hasSourceAudio ? 'active' : 'pending' },
-			{ label: '说话人', status: hasSpeakers ? 'done' : hasAsr ? 'active' : 'pending' },
-			{ label: '人工校对', status: blocked ? 'blocked' : hasReviewed ? 'active' : 'pending' },
-			{ label: 'TTS', status: hasTts ? 'done' : readyForTts ? 'active' : 'pending' },
-			{ label: 'JSON', status: current ? 'active' : 'pending' }
-		];
-	}
-
-	function statusLabel(status: VideoLocalizationCue['review_status']) {
-		return {
-			ready: '可生成',
-			needs_review: '待校对',
-			blocked: '阻断',
-			locked: '已锁定'
-		}[status];
-	}
-
-	function gateLabel(status: VideoLocalizationDraft['quality_gate']['status'] | undefined) {
-		return {
-			pass: '质量门通过',
-			warning: '存在警告',
-			blocked: '存在阻断',
-			unknown: '未检查'
-		}[status ?? 'unknown'];
-	}
-
-	function gateBadgeClass(status: VideoLocalizationDraft['quality_gate']['status'] | undefined) {
-		if (status === 'pass') return 'ok';
-		if (status === 'blocked') return 'fail';
-		if (status === 'warning') return 'warn';
-		return '';
-	}
-
 	function speakerLabel(speakerId: string | null | undefined) {
 		if (!speakerId) return '未选';
 		const speaker = draft?.speakers.find((item) => item.speaker_id === speakerId);
 		return speaker?.display_name || speakerId;
-	}
-
-	function speakerColor(speakerId: string | null | undefined) {
-		const colors = ['#4f9cf9', '#42c49b', '#e4ad42', '#b58cff', '#ff8c8c'];
-		const index = Math.abs([...(speakerId ?? 'unknown')].reduce((sum, char) => sum + char.charCodeAt(0), 0)) % colors.length;
-		return colors[index];
 	}
 
 	function referenceReady(referenceClipId: string | null | undefined) {
@@ -643,38 +606,6 @@
 		window.location.href = '/generate';
 	}
 
-	function msLabel(ms: number | null | undefined) {
-		if (ms === null || ms === undefined) return '--:--.--';
-		const totalSeconds = ms / 1000;
-		const minutes = Math.floor(totalSeconds / 60);
-		const seconds = totalSeconds % 60;
-		return `${String(minutes).padStart(2, '0')}:${seconds.toFixed(2).padStart(5, '0')}`;
-	}
-
-	function timeLabel(cue: VideoLocalizationCue) {
-		return `${msLabel(cue.start_ms)} - ${msLabel(cue.end_ms)}`;
-	}
-
-	function ttsAudioUrl(cue: VideoLocalizationCue) {
-		return projectId && cue.tts_audio_path ? `/api/projects/${projectId}/video-localization/cues/${cue.cue_id}/tts-audio` : '';
-	}
-
-	function referenceAudioUrl(clip: VideoLocalizationReferenceClip) {
-		return projectId && clip.audio_path ? `/api/projects/${projectId}/video-localization/reference-clips/${clip.reference_clip_id}/audio` : '';
-	}
-
-	function sourceCueAudioUrl(cue: VideoLocalizationCue) {
-		return projectId && cue.start_ms !== null && cue.end_ms !== null ? `/api/projects/${projectId}/video-localization/cues/${cue.cue_id}/source-audio` : '';
-	}
-
-	function sortOperations(items: VideoLocalizationOperation[]) {
-		return [...items].sort((a, b) => b.created_at.localeCompare(a.created_at));
-	}
-
-	function isActiveOperation(operation: VideoLocalizationOperation) {
-		return operation.status === 'queued' || operation.status === 'running';
-	}
-
 	function operationFor(kind: VideoLocalizationOperation['kind']) {
 		return operations.find((operation) => operation.kind === kind) ?? null;
 	}
@@ -682,24 +613,6 @@
 	function operationBusy(kind: VideoLocalizationOperation['kind']) {
 		const operation = operationFor(kind);
 		return Boolean(operation && isActiveOperation(operation));
-	}
-
-	function operationStatusLabel(operation: VideoLocalizationOperation | null | undefined) {
-		if (!operation) return '未开始';
-		if (operation.status === 'queued') return '排队中';
-		if (operation.status === 'running') return '处理中';
-		if (operation.status === 'success') return '已完成';
-		if (operation.status === 'failed') return '失败';
-		if (operation.status === 'cancelled') return '已取消';
-		return operation.status;
-	}
-
-	function operationBadgeClass(operation: VideoLocalizationOperation | null | undefined) {
-		if (!operation) return '';
-		if (operation.status === 'success') return 'ok';
-		if (operation.status === 'failed' || operation.status === 'cancelled') return 'fail';
-		if (isActiveOperation(operation)) return 'active';
-		return '';
 	}
 
 	async function refreshDraftOnly() {
@@ -740,35 +653,6 @@
 		}
 	}
 
-	function durationLabel(ms: number | null | undefined) {
-		if (!ms) return '未知';
-		return `${(ms / 1000).toFixed(1)}s`;
-	}
-
-	function batchProjectId(batch: BatchTask) {
-		const parameters = batch.parameters?.parameters;
-		if (!parameters || typeof parameters !== 'object') return '';
-		const value = (parameters as Record<string, unknown>).project_id;
-		return typeof value === 'string' ? value : '';
-	}
-
-	function batchOptionLabel(batch: BatchTask) {
-		const success = batch.segments.filter((segment) => segment.status === 'success').length;
-		const failed = batch.segments.filter((segment) => segment.status === 'failed').length;
-		return `${batch.batch_task_id} · ${ttsBatchLabel(batch.status)} · 成功 ${success}/${batch.segments.length}${failed ? ` · 失败 ${failed}` : ''}`;
-	}
-
-	function ttsBatchLabel(status: string | null | undefined) {
-		return {
-			queued: '队列中',
-			running: '生成中',
-			postprocessing: '处理中',
-			success: '已生成',
-			failed: '失败',
-			cancelled: '已取消',
-			retrying: '重试中'
-		}[status ?? ''] ?? '待生成';
-	}
 </script>
 
 <svelte:head>
@@ -1060,16 +944,16 @@
 						<div class="cue-audio-compare">
 							<div>
 								<span>原声</span>
-								{#if sourceCueAudioUrl(selectedCue)}
-									<audio class="cue-audio" controls src={sourceCueAudioUrl(selectedCue)}></audio>
+								{#if sourceCueAudioUrl(projectId, selectedCue)}
+									<audio class="cue-audio" controls src={sourceCueAudioUrl(projectId, selectedCue)}></audio>
 								{:else}
 									<button class="btn" type="button" disabled><Play size={14} /> 原声</button>
 								{/if}
 							</div>
 							<div>
 								<span>TTS</span>
-								{#if ttsAudioUrl(selectedCue)}
-									<audio class="cue-audio" controls src={ttsAudioUrl(selectedCue)}></audio>
+								{#if ttsAudioUrl(projectId, selectedCue)}
+									<audio class="cue-audio" controls src={ttsAudioUrl(projectId, selectedCue)}></audio>
 								{:else}
 									<button class="btn" type="button" disabled><Mic2 size={14} /> TTS</button>
 								{/if}
@@ -1102,8 +986,8 @@
 								<strong>{clip.reference_clip_id}</strong>
 								<p>{clip.audio_path || '尚未生成参考音文件'}</p>
 							</div>
-							{#if referenceAudioUrl(clip)}
-								<audio class="reference-audio" controls src={referenceAudioUrl(clip)}></audio>
+							{#if referenceAudioUrl(projectId, clip)}
+								<audio class="reference-audio" controls src={referenceAudioUrl(projectId, clip)}></audio>
 							{/if}
 							<div class="row">
 								<span class="badge role">{speakerLabel(clip.speaker_id)}</span>
