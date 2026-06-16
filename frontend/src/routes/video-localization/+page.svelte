@@ -184,14 +184,18 @@
 
 	async function importVideoFile(file: File | null | undefined) {
 		if (!file) return;
-		if (!projectId) {
-			error = '请先选择或新建项目';
-			return;
-		}
 		importing = true;
 		error = '';
 		try {
-			draft = await Api.importVideoLocalizationSource(projectId, file);
+			let targetProjectId = projectId;
+			if (!targetProjectId) {
+				const projectName = file.name.replace(/\.[^.]+$/, '') || '视频本土化项目';
+				const project = await Api.createProject(projectName, '外文视频中文配音草稿');
+				projects = [...projects, project];
+				projectId = project.project_id;
+				targetProjectId = project.project_id;
+			}
+			draft = await Api.importVideoLocalizationSource(targetProjectId, file);
 			message = '视频已导入';
 			setTimeout(() => (message = ''), 1800);
 		} catch (e) {
@@ -572,8 +576,8 @@
 				<button class="btn" type="button" onclick={createLocalizationProject} disabled={creating}>{creating ? '创建中' : '新建本土化项目'}</button>
 			{/if}
 			<input bind:this={videoInput} class="visually-hidden" type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm,.mkv" onchange={(event) => importVideoFile(event.currentTarget.files?.[0])} />
-			<button class="btn" type="button" onclick={() => videoInput?.click()} disabled={!projectId || importing}>
-				<UploadCloud size={15} /> {importing ? '导入中' : '导入视频'}
+			<button class="btn" type="button" onclick={() => videoInput?.click()} disabled={importing}>
+				<UploadCloud size={15} /> {importing ? '导入中' : projectId ? '导入视频' : '导入视频并新建项目'}
 			</button>
 			<button class="btn" type="button" onclick={saveDraft} disabled={!draft || saving}><Save size={15} /> {saving ? '保存中' : '保存草稿'}</button>
 			<button class="btn" type="button" onclick={exportJson} disabled={!draft}><FileJson size={15} /> 导出 JSON</button>
