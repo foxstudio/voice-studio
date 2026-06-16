@@ -15,7 +15,9 @@ from app.main import app  # noqa: E402
 from app.schemas.voice_studio import AppSettings, BatchSegmentResult, BatchTask, GenerationTask, HistoryItem, TaskStatus, VideoLocalizationOperation  # noqa: E402
 from app.domains.video_localization import media_assets  # noqa: E402
 from app.domains.video_localization import operation_queue as video_localization_operation_queue  # noqa: E402
+from app.domains.video_localization import reference_clips as video_localization_reference_clips  # noqa: E402
 from app.domains.video_localization import service as video_localization_service  # noqa: E402
+from app.domains.video_localization import source_pipeline as video_localization_source_pipeline  # noqa: E402
 from app.services import batch_queue, database, settings_store, task_queue  # noqa: E402
 from app.api import video_localization as video_localization_api  # noqa: E402
 
@@ -589,7 +591,7 @@ def test_video_localization_english_asr_creates_cue_draft(tmp_path: Path, monkey
             ],
         }
 
-    monkeypatch.setattr(video_localization_service.asr_service, "transcribe", fake_transcribe)
+    monkeypatch.setattr(video_localization_source_pipeline.asr_service, "transcribe", fake_transcribe)
 
     response = client.post(f"/api/projects/{project['project_id']}/video-localization/asr/en")
 
@@ -653,7 +655,7 @@ def test_video_localization_reference_candidates_from_clean_vocals(tmp_path: Pat
         return destination
 
     monkeypatch.setattr(media_assets, "cut_audio_clip", fake_cut)
-    monkeypatch.setattr(video_localization_service.audio_tools, "probe_audio", lambda path: {"duration_ms": 2200, "sample_rate": 24000, "channels": 1})
+    monkeypatch.setattr(video_localization_reference_clips.audio_tools, "probe_audio", lambda path: {"duration_ms": 2200, "sample_rate": 24000, "channels": 1})
 
     response = client.post(f"/api/projects/{project['project_id']}/video-localization/reference-clips")
 
@@ -703,7 +705,7 @@ def test_video_localization_async_reference_clip_operation_updates_draft(tmp_pat
         return destination
 
     monkeypatch.setattr(media_assets, "cut_audio_clip", fake_cut)
-    monkeypatch.setattr(video_localization_service.audio_tools, "probe_audio", lambda path: {"duration_ms": 2200, "sample_rate": 24000, "channels": 1})
+    monkeypatch.setattr(video_localization_reference_clips.audio_tools, "probe_audio", lambda path: {"duration_ms": 2200, "sample_rate": 24000, "channels": 1})
 
     response = client.post(
         f"/api/projects/{project['project_id']}/video-localization/operations",
