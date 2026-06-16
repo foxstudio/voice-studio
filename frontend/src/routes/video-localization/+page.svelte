@@ -2,7 +2,6 @@
 	import { Api } from '$lib/api';
 	import type {
 		BatchTask,
-		GenerateRequest,
 		Project,
 		VideoLocalizationCue,
 		VideoLocalizationCueUpdate,
@@ -28,10 +27,13 @@
 		Wand2
 	} from 'lucide-svelte';
 	import { onMount } from 'svelte';
+	import { downloadJson, downloadText } from './downloads';
 	import {
 		batchOptionLabel,
 		batchProjectId,
+		buildGenerateRequest,
 		buildWorkflow,
+		createManualCue,
 		durationLabel,
 		gateBadgeClass,
 		gateLabel,
@@ -363,13 +365,7 @@
 		error = '';
 		try {
 			const data = await Api.exportVideoLocalizationDraft(projectId);
-			const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-			const url = URL.createObjectURL(blob);
-			const link = document.createElement('a');
-			link.href = url;
-			link.download = `${projectId}-video-localization.json`;
-			link.click();
-			URL.revokeObjectURL(url);
+			downloadJson(`${projectId}-video-localization.json`, data);
 			message = 'JSON 已导出';
 			setTimeout(() => (message = ''), 1800);
 		} catch (e) {
@@ -382,13 +378,7 @@
 		error = '';
 		try {
 			const data = await Api.videoLocalizationReadiness(projectId);
-			const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-			const url = URL.createObjectURL(blob);
-			const link = document.createElement('a');
-			link.href = url;
-			link.download = `${projectId}-video-localization-readiness.json`;
-			link.click();
-			URL.revokeObjectURL(url);
+			downloadJson(`${projectId}-video-localization-readiness.json`, data);
 			message = 'Readiness JSON 已导出';
 			setTimeout(() => (message = ''), 1800);
 		} catch (e) {
@@ -439,13 +429,7 @@
 				throw new Error(data?.error?.message || '导出字幕失败');
 			}
 			const text = await response.text();
-			const blob = new Blob([text], { type: 'application/x-subrip;charset=utf-8' });
-			const url = URL.createObjectURL(blob);
-			const link = document.createElement('a');
-			link.href = url;
-			link.download = `${projectId}-video-localization-bilingual.srt`;
-			link.click();
-			URL.revokeObjectURL(url);
+			downloadText(`${projectId}-video-localization-bilingual.srt`, text, 'application/x-subrip;charset=utf-8');
 			message = '中英字幕草稿已导出';
 			setTimeout(() => (message = ''), 1800);
 		} catch (e) {
@@ -455,29 +439,7 @@
 
 	function addCue() {
 		if (!draft) return;
-		const index = draft.cues.length + 1;
-		const cue: VideoLocalizationCue = {
-			cue_id: `cue_${String(index).padStart(4, '0')}`,
-			speaker_id: draft.speakers[0]?.speaker_id ?? null,
-			start_ms: null,
-			end_ms: null,
-			audio_route: 'manual_review',
-			en_subtitle_text: '',
-			zh_localized_subtitle_text: '',
-			tts_recommended_text: '',
-			reference_clip_id: null,
-			tts_result_id: null,
-			tts_audio_path: null,
-			tts_batch_task_id: null,
-			tts_batch_status: null,
-			tts_batch_error: null,
-			tts_attempted_at: null,
-			source_duration_ms: null,
-			generated_duration_ms: null,
-			review_status: 'needs_review',
-			quality_flags: ['手动新增'],
-			notes: null
-		};
+		const cue = createManualCue(draft);
 		draft.cues = [...draft.cues, cue];
 		selectedCueId = cue.cue_id;
 	}
@@ -551,57 +513,7 @@
 	function sendSelectedCueToGenerate() {
 		if (!selectedCue || !cueCanSendToGenerate(selectedCue)) return;
 		const reference = referenceForCue(selectedCue);
-		const request: GenerateRequest = {
-			text: selectedCue.tts_recommended_text?.trim() ?? '',
-			engine_id: 'indextts-v2',
-			source: 'video_localization',
-			project_id: projectId,
-			segment_id: selectedCue.cue_id,
-			voice_id: null,
-			voice_source: 'reference_audio',
-			reference_audio_path: reference?.audio_path ?? null,
-			reference_audio_license_status: '本土化',
-			reference_audio_tags: ['视频本土化', '本土化', selectedCue.speaker_id ?? 'unknown'],
-			ref_text: reference?.asr_text || selectedCue.en_subtitle_text || null,
-			custom_reference_source_audio_path: reference?.audio_path ?? null,
-			custom_reference_source_duration_ms: reference?.duration_ms ?? null,
-			custom_reference_trim_start_ms: null,
-			custom_reference_trim_end_ms: null,
-			language: 'zh',
-			emotion_mode: 'follow_reference',
-			emotion: null,
-			emotion_values: null,
-			emotion_text: null,
-			style_instruction: null,
-			voice_design_prompt: null,
-			optimize_text_preview: false,
-			mimo_voice: null,
-			speaker_id: null,
-			prompt: null,
-			nfe_step: 32,
-			cfg_strength: 2,
-			target_rms: 0.1,
-			cross_fade_duration: 0.15,
-			sway_sampling_coef: -1,
-			fix_duration: 0,
-			remove_silence: false,
-			emo_alpha: 0.6,
-			speed: 1,
-			temperature: 0.8,
-			top_p: 0.8,
-			top_k: 30,
-			repetition_penalty: 10,
-			seed: null,
-			max_mel_tokens: 1500,
-			max_text_tokens_per_segment: 120,
-			interval_silence: 200,
-			segment_overlap_ms: 50,
-			diffusion_steps: 25,
-			cfg_rate: 0.7,
-			guidance_scale: 2,
-			duration: 0,
-			output_format: 'wav'
-		};
+		const request = buildGenerateRequest(projectId, selectedCue, reference);
 		sessionStorage.setItem('voice-studio-history-reuse', JSON.stringify(request));
 		window.location.href = '/generate';
 	}

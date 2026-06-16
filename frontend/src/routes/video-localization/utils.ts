@@ -1,4 +1,4 @@
-import type { BatchTask, VideoLocalizationCue, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationReferenceClip } from '$lib/api/types';
+import type { BatchTask, GenerateRequest, VideoLocalizationCue, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationReferenceClip } from '$lib/api/types';
 
 export type WorkflowStep = {
 	label: string;
@@ -135,4 +135,84 @@ export function ttsBatchLabel(status: string | null | undefined) {
 		cancelled: '已取消',
 		retrying: '重试中'
 	}[status ?? ''] ?? '待生成';
+}
+
+export function createManualCue(draft: VideoLocalizationDraft): VideoLocalizationCue {
+	const index = draft.cues.length + 1;
+	return {
+		cue_id: `cue_${String(index).padStart(4, '0')}`,
+		speaker_id: draft.speakers[0]?.speaker_id ?? null,
+		start_ms: null,
+		end_ms: null,
+		audio_route: 'manual_review',
+		en_subtitle_text: '',
+		zh_localized_subtitle_text: '',
+		tts_recommended_text: '',
+		reference_clip_id: null,
+		tts_result_id: null,
+		tts_audio_path: null,
+		tts_batch_task_id: null,
+		tts_batch_status: null,
+		tts_batch_error: null,
+		tts_attempted_at: null,
+		source_duration_ms: null,
+		generated_duration_ms: null,
+		review_status: 'needs_review',
+		quality_flags: ['手动新增'],
+		notes: null
+	};
+}
+
+export function buildGenerateRequest(projectId: string, cue: VideoLocalizationCue, reference: VideoLocalizationReferenceClip | null | undefined): GenerateRequest {
+	return {
+		text: cue.tts_recommended_text?.trim() ?? '',
+		engine_id: 'indextts-v2',
+		source: 'video_localization',
+		project_id: projectId,
+		segment_id: cue.cue_id,
+		voice_id: null,
+		voice_source: 'reference_audio',
+		reference_audio_path: reference?.audio_path ?? null,
+		reference_audio_license_status: '本土化',
+		reference_audio_tags: ['视频本土化', '本土化', cue.speaker_id ?? 'unknown'],
+		ref_text: reference?.asr_text || cue.en_subtitle_text || null,
+		custom_reference_source_audio_path: reference?.audio_path ?? null,
+		custom_reference_source_duration_ms: reference?.duration_ms ?? null,
+		custom_reference_trim_start_ms: null,
+		custom_reference_trim_end_ms: null,
+		language: 'zh',
+		emotion_mode: 'follow_reference',
+		emotion: null,
+		emotion_values: null,
+		emotion_text: null,
+		style_instruction: null,
+		voice_design_prompt: null,
+		optimize_text_preview: false,
+		mimo_voice: null,
+		speaker_id: null,
+		prompt: null,
+		nfe_step: 32,
+		cfg_strength: 2,
+		target_rms: 0.1,
+		cross_fade_duration: 0.15,
+		sway_sampling_coef: -1,
+		fix_duration: 0,
+		remove_silence: false,
+		emo_alpha: 0.6,
+		speed: 1,
+		temperature: 0.8,
+		top_p: 0.8,
+		top_k: 30,
+		repetition_penalty: 10,
+		seed: null,
+		max_mel_tokens: 1500,
+		max_text_tokens_per_segment: 120,
+		interval_silence: 200,
+		segment_overlap_ms: 50,
+		diffusion_steps: 25,
+		cfg_rate: 0.7,
+		guidance_scale: 2,
+		duration: 0,
+		output_format: 'wav'
+	};
 }
