@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -268,6 +269,63 @@ def test_video_localization_extract_source_audio_requires_video(tmp_path: Path):
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_SOURCE_MISSING"
+
+
+def test_video_localization_async_source_audio_operation_updates_draft(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "异步抽音频", "description": ""}).json()
+    imported = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/source-media",
+        files={"file": ("demo.mp4", b"fake-video-bytes", "video/mp4")},
+    ).json()
+
+    def fake_extract(video_path: Path, audio_path: Path) -> dict:
+        assert video_path == Path(imported["source_media"]["video_path"])
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        audio_path.write_bytes(b"fake-wav")
+        return {"duration_ms": 2345, "sample_rate": 44100, "channels": 1, "size_bytes": 8}
+
+    monkeypatch.setattr(media_assets, "extract_audio_file", fake_extract)
+
+    response = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/operations",
+        json={"kind": "source_audio"},
+    )
+
+    assert response.status_code == 200
+    operation = response.json()
+    assert operation["kind"] == "source_audio"
+    assert operation["status"] in {"queued", "running", "success"}
+
+    completed = None
+    for _ in range(30):
+        latest = client.get(f"/api/projects/{project['project_id']}/video-localization/operations/{operation['operation_id']}").json()
+        if latest["status"] == "success":
+            completed = latest
+            break
+        time.sleep(0.05)
+
+    assert completed is not None
+    assert completed["result_summary"]["duration_ms"] == 2345
+
+    draft = client.get(f"/api/projects/{project['project_id']}/video-localization").json()
+    assert draft["source_media"]["audio_path"].endswith("-source.wav")
+    assert Path(draft["source_media"]["audio_path"]).exists()
+    assert draft["source_media"]["metadata"]["audio_extract_status"] == "completed"
+    assert draft["operations"][0]["status"] == "success"
+
+
+def test_video_localization_async_operation_validates_prerequisites(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "异步缺源音", "description": ""}).json()
+
+    response = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/operations",
+        json={"kind": "stems"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_SOURCE_AUDIO_MISSING"
 
 
 def test_video_localization_separate_source_audio_requires_source_audio(tmp_path: Path):

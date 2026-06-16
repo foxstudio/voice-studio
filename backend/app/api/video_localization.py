@@ -5,9 +5,10 @@ import json
 from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
+from app.domains.video_localization import operation_queue
 from app.domains.video_localization import service as video_localization_service
 from app.errors import AppException
-from app.schemas.voice_studio import BatchTask, VideoLocalizationDraft, VideoLocalizationReferenceClipUpdate
+from app.schemas.voice_studio import BatchTask, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationOperationRequest, VideoLocalizationReferenceClipUpdate
 from app.services import batch_queue
 
 router = APIRouter()
@@ -35,6 +36,30 @@ async def import_video_localization_source_media(project_id: str, file: UploadFi
     if not updated:
         raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
     return updated
+
+
+@router.get("/{project_id}/video-localization/operations", response_model=list[VideoLocalizationOperation])
+async def list_video_localization_operations(project_id: str):
+    operations = operation_queue.list_operations(project_id)
+    if operations is None:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    return operations
+
+
+@router.post("/{project_id}/video-localization/operations", response_model=VideoLocalizationOperation)
+async def submit_video_localization_operation(project_id: str, request: VideoLocalizationOperationRequest):
+    operation = operation_queue.submit(project_id, request.kind, request.parameters)
+    if not operation:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    return operation
+
+
+@router.get("/{project_id}/video-localization/operations/{operation_id}", response_model=VideoLocalizationOperation)
+async def get_video_localization_operation(project_id: str, operation_id: str):
+    operation = operation_queue.get_operation(project_id, operation_id)
+    if not operation:
+        raise AppException(404, "VIDEO_LOCALIZATION_OPERATION_NOT_FOUND", "Operation not found")
+    return operation
 
 
 @router.post("/{project_id}/video-localization/source-audio", response_model=VideoLocalizationDraft)

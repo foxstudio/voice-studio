@@ -792,6 +792,27 @@ class VideoLocalizationExportState(VideoLocalizationExtensibleModel):
     last_exported_at: str | None = None
 
 
+class VideoLocalizationOperation(VideoLocalizationExtensibleModel):
+    operation_id: str = Field(default_factory=new_id)
+    project_id: str
+    kind: Literal["source_audio", "stems", "english_asr"]
+    status: Literal["queued", "running", "success", "failed", "cancelled"] = "queued"
+    label: str | None = None
+    progress: float = Field(default=0.0, ge=0.0, le=1.0)
+    error_code: str | None = None
+    error_message: str | None = None
+    result_summary: dict[str, Any] = Field(default_factory=dict)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(default_factory=now_iso)
+    started_at: str | None = None
+    completed_at: str | None = None
+
+
+class VideoLocalizationOperationRequest(BaseModel):
+    kind: Literal["source_audio", "stems", "english_asr"]
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
 class VideoLocalizationDraft(BaseModel):
     project_type: Literal["video_localization"] = "video_localization"
     schema_version: str = "v1"
@@ -803,6 +824,7 @@ class VideoLocalizationDraft(BaseModel):
     cues: list[VideoLocalizationCue] = Field(default_factory=list)
     quality_gate: VideoLocalizationQualityGate = Field(default_factory=VideoLocalizationQualityGate)
     exports: VideoLocalizationExportState = Field(default_factory=VideoLocalizationExportState)
+    operations: list[VideoLocalizationOperation] = Field(default_factory=list)
     updated_at: str | None = None
 
 

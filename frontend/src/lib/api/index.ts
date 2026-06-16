@@ -29,6 +29,7 @@ import type {
 	UploadResult,
 	VideoLocalizationDraft,
 	VideoLocalizationExport,
+	VideoLocalizationOperation,
 	VideoLocalizationReferenceClipUpdate,
 	VoiceAsset,
 	VoiceAssetCreate,
@@ -104,6 +105,10 @@ export const Api = {
 	videoLocalizationDraft: (id: string) => api.get<VideoLocalizationDraft>(`/projects/${id}/video-localization`),
 	saveVideoLocalizationDraft: (id: string, draft: VideoLocalizationDraft) => api.put<VideoLocalizationDraft>(`/projects/${id}/video-localization`, draft),
 	importVideoLocalizationSource: (id: string, file: File) => api.upload<VideoLocalizationDraft>(`/projects/${id}/video-localization/source-media`, file),
+	videoLocalizationOperations: (id: string) => api.get<VideoLocalizationOperation[]>(`/projects/${id}/video-localization/operations`),
+	videoLocalizationOperation: (id: string, operationId: string) => api.get<VideoLocalizationOperation>(`/projects/${id}/video-localization/operations/${operationId}`),
+	submitVideoLocalizationOperation: (id: string, kind: VideoLocalizationOperation['kind'], parameters: Record<string, unknown> = {}) =>
+		api.post<VideoLocalizationOperation>(`/projects/${id}/video-localization/operations`, { kind, parameters }),
 	extractVideoLocalizationAudio: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/source-audio`),
 	separateVideoLocalizationStems: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/stems`),
 	transcribeVideoLocalizationEnglish: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/asr/en`),

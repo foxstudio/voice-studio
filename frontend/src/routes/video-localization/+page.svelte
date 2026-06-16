@@ -1,6 +1,15 @@
 <script lang="ts">
 	import { Api } from '$lib/api';
-	import type { BatchTask, GenerateRequest, Project, VideoLocalizationCue, VideoLocalizationDraft, VideoLocalizationReferenceClip, VideoLocalizationReferenceClipUpdate } from '$lib/api/types';
+	import type {
+		BatchTask,
+		GenerateRequest,
+		Project,
+		VideoLocalizationCue,
+		VideoLocalizationDraft,
+		VideoLocalizationOperation,
+		VideoLocalizationReferenceClip,
+		VideoLocalizationReferenceClipUpdate
+	} from '$lib/api/types';
 	import {
 		AlertTriangle,
 		CheckCircle2,
@@ -26,6 +35,7 @@
 
 	let projects = $state<Project[]>([]);
 	let batches = $state<BatchTask[]>([]);
+	let operations = $state<VideoLocalizationOperation[]>([]);
 	let projectId = $state('');
 	let draft = $state<VideoLocalizationDraft | null>(null);
 	let selectedCueId = $state('');
@@ -44,6 +54,7 @@
 	let referenceUpdatingId = $state('');
 	let ttsBatchId = $state('');
 	let videoInput: HTMLInputElement | null = null;
+	let operationPollingTimer: ReturnType<typeof setInterval> | null = null;
 	let message = $state('');
 	let error = $state('');
 
@@ -55,12 +66,15 @@
 	const blockedCount = $derived(draft?.cues.filter((cue) => cue.review_status === 'blocked').length ?? 0);
 	const generatedCount = $derived(draft?.cues.filter((cue) => cue.tts_audio_path).length ?? 0);
 	const projectBatches = $derived(batches.filter((batch) => batchProjectId(batch) === projectId));
+	const hasActiveOperation = $derived(operations.some((operation) => isActiveOperation(operation)));
+	const latestOperation = $derived(operations[0] ?? null);
 	const canSubmitCount = $derived(
 		draft?.cues.filter((cue) => cue.review_status === 'ready' && cue.audio_route === 'clone_from_source' && cue.tts_recommended_text?.trim() && referenceReady(cue.reference_clip_id)).length ?? 0
 	);
 
 	onMount(() => {
 		loadProjects();
+		return () => stopOperationPolling();
 	});
 
 	async function loadProjects() {
@@ -86,10 +100,28 @@
 		error = '';
 		try {
 			draft = await Api.videoLocalizationDraft(nextProjectId);
+			operations = sortOperations(draft.operations ?? []);
 			selectedCueId = draft.cues[0]?.cue_id ?? '';
+			await loadOperations(nextProjectId);
 			await loadBatches();
 		} catch (e) {
 			error = (e as Error).message || '加载草稿失败';
+		}
+	}
+
+	async function loadOperations(nextProjectId = projectId) {
+		if (!nextProjectId) {
+			operations = [];
+			stopOperationPolling();
+			return;
+		}
+		try {
+			operations = sortOperations(await Api.videoLocalizationOperations(nextProjectId));
+			if (operations.some((operation) => isActiveOperation(operation))) startOperationPolling();
+			else stopOperationPolling();
+		} catch {
+			operations = [];
+			stopOperationPolling();
 		}
 	}
 
@@ -166,11 +198,9 @@
 		extractingAudio = true;
 		error = '';
 		try {
-			draft = await Api.extractVideoLocalizationAudio(projectId);
-			message = '源音轨已抽取';
-			setTimeout(() => (message = ''), 1800);
+			await submitMediaOperation('source_audio', '源音轨抽取任务已开始');
 		} catch (e) {
-			error = (e as Error).message || '抽取源音轨失败';
+			error = (e as Error).message || '提交源音轨抽取失败';
 		} finally {
 			extractingAudio = false;
 		}
@@ -181,12 +211,9 @@
 		transcribingAsr = true;
 		error = '';
 		try {
-			draft = await Api.transcribeVideoLocalizationEnglish(projectId);
-			selectedCueId = draft.cues[0]?.cue_id ?? '';
-			message = '英文字幕草稿已生成';
-			setTimeout(() => (message = ''), 1800);
+			await submitMediaOperation('english_asr', '英文字幕转录任务已开始', { engine_id: 'faster-whisper-turbo' });
 		} catch (e) {
-			error = (e as Error).message || '英文 ASR 失败';
+			error = (e as Error).message || '提交英文 ASR 失败';
 		} finally {
 			transcribingAsr = false;
 		}
@@ -197,14 +224,22 @@
 		separatingStems = true;
 		error = '';
 		try {
-			draft = await Api.separateVideoLocalizationStems(projectId);
-			message = '人声与背景声已分离';
-			setTimeout(() => (message = ''), 1800);
+			await submitMediaOperation('stems', '人声与背景声分离任务已开始');
 		} catch (e) {
-			error = (e as Error).message || '人声分离失败';
+			error = (e as Error).message || '提交人声分离失败';
 		} finally {
 			separatingStems = false;
 		}
+	}
+
+	async function submitMediaOperation(kind: VideoLocalizationOperation['kind'], successMessage: string, parameters: Record<string, unknown> = {}) {
+		if (!projectId) return;
+		const operation = await Api.submitVideoLocalizationOperation(projectId, kind, parameters);
+		operations = sortOperations([operation, ...operations.filter((item) => item.operation_id !== operation.operation_id)]);
+		await refreshDraftOnly();
+		message = successMessage;
+		setTimeout(() => (message = ''), 1800);
+		startOperationPolling();
 	}
 
 	async function createReferenceCandidates() {
@@ -566,6 +601,79 @@
 		return projectId && cue.start_ms !== null && cue.end_ms !== null ? `/api/projects/${projectId}/video-localization/cues/${cue.cue_id}/source-audio` : '';
 	}
 
+	function sortOperations(items: VideoLocalizationOperation[]) {
+		return [...items].sort((a, b) => b.created_at.localeCompare(a.created_at));
+	}
+
+	function isActiveOperation(operation: VideoLocalizationOperation) {
+		return operation.status === 'queued' || operation.status === 'running';
+	}
+
+	function operationFor(kind: VideoLocalizationOperation['kind']) {
+		return operations.find((operation) => operation.kind === kind) ?? null;
+	}
+
+	function operationBusy(kind: VideoLocalizationOperation['kind']) {
+		const operation = operationFor(kind);
+		return Boolean(operation && isActiveOperation(operation));
+	}
+
+	function operationStatusLabel(operation: VideoLocalizationOperation | null | undefined) {
+		if (!operation) return '未开始';
+		if (operation.status === 'queued') return '排队中';
+		if (operation.status === 'running') return '处理中';
+		if (operation.status === 'success') return '已完成';
+		if (operation.status === 'failed') return '失败';
+		if (operation.status === 'cancelled') return '已取消';
+		return operation.status;
+	}
+
+	function operationBadgeClass(operation: VideoLocalizationOperation | null | undefined) {
+		if (!operation) return '';
+		if (operation.status === 'success') return 'ok';
+		if (operation.status === 'failed' || operation.status === 'cancelled') return 'fail';
+		if (isActiveOperation(operation)) return 'active';
+		return '';
+	}
+
+	async function refreshDraftOnly() {
+		if (!projectId) return;
+		draft = await Api.videoLocalizationDraft(projectId);
+		operations = sortOperations(draft.operations ?? operations);
+		if (!selectedCueId && draft.cues[0]) selectedCueId = draft.cues[0].cue_id;
+	}
+
+	function startOperationPolling() {
+		if (operationPollingTimer) return;
+		operationPollingTimer = setInterval(() => {
+			void pollOperations();
+		}, 1500);
+	}
+
+	function stopOperationPolling() {
+		if (!operationPollingTimer) return;
+		clearInterval(operationPollingTimer);
+		operationPollingTimer = null;
+	}
+
+	async function pollOperations() {
+		if (!projectId) {
+			stopOperationPolling();
+			return;
+		}
+		try {
+			const latest = sortOperations(await Api.videoLocalizationOperations(projectId));
+			operations = latest;
+			await refreshDraftOnly();
+			if (!latest.some((operation) => isActiveOperation(operation))) stopOperationPolling();
+			const failed = latest.find((operation) => operation.status === 'failed');
+			if (failed?.error_message) error = failed.error_message;
+		} catch (e) {
+			error = (e as Error).message || '刷新任务状态失败';
+			stopOperationPolling();
+		}
+	}
+
 	function durationLabel(ms: number | null | undefined) {
 		if (!ms) return '未知';
 		return `${(ms / 1000).toFixed(1)}s`;
@@ -664,9 +772,11 @@
 					<div class="model-row">
 						<span>ASR</span>
 						<strong>faster-whisper-turbo</strong>
-						<span class={`badge ${draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? 'ok' : ''}`}>{draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? '有草稿' : '待转录'}</span>
-						<button class="mini-btn" type="button" onclick={transcribeEnglishSource} disabled={!(draft?.source_media.audio_path || draft?.stems.original_audio_path) || transcribingAsr}>
-							{transcribingAsr ? '转录中' : '转录'}
+						<span class={`badge ${operationBadgeClass(operationFor('english_asr')) || (draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? 'ok' : '')}`}>
+							{operationBusy('english_asr') ? operationStatusLabel(operationFor('english_asr')) : draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? '有草稿' : operationStatusLabel(operationFor('english_asr'))}
+						</span>
+						<button class="mini-btn" type="button" onclick={transcribeEnglishSource} disabled={!(draft?.source_media.audio_path || draft?.stems.original_audio_path) || transcribingAsr || operationBusy('english_asr')}>
+							{operationBusy('english_asr') || transcribingAsr ? '转录中' : '转录'}
 						</button>
 					</div>
 					<div class="model-row">
@@ -677,19 +787,32 @@
 					<div class="model-row">
 						<span>分离</span>
 						<strong>vocals_clean + background</strong>
-						<span class={`badge ${draft?.stems.separation_status === 'completed' ? 'ok' : ''}`}>{draft?.stems.separation_status || 'pending'}</span>
-						<button class="mini-btn" type="button" onclick={separateStems} disabled={!(draft?.source_media.audio_path || draft?.stems.original_audio_path) || separatingStems}>
-							{separatingStems ? '分离中' : '分离'}
+						<span class={`badge ${operationBadgeClass(operationFor('stems')) || (draft?.stems.separation_status === 'completed' ? 'ok' : '')}`}>
+							{operationBusy('stems') ? operationStatusLabel(operationFor('stems')) : draft?.stems.separation_status === 'completed' ? '已完成' : operationStatusLabel(operationFor('stems'))}
+						</span>
+						<button class="mini-btn" type="button" onclick={separateStems} disabled={!(draft?.source_media.audio_path || draft?.stems.original_audio_path) || separatingStems || operationBusy('stems')}>
+							{operationBusy('stems') || separatingStems ? '分离中' : '分离'}
 						</button>
 					</div>
 					<div class="model-row">
 						<span>源音</span>
 						<strong>{draft?.source_media.audio_path ? 'source.wav 已记录' : '等待抽取'}</strong>
-						<button class="mini-btn" type="button" onclick={extractSourceAudio} disabled={!draft?.source_media.video_path || extractingAudio}>
-							{extractingAudio ? '抽取中' : '抽取'}
+						<span class={`badge ${operationBadgeClass(operationFor('source_audio')) || (draft?.source_media.audio_path ? 'ok' : '')}`}>
+							{operationBusy('source_audio') ? operationStatusLabel(operationFor('source_audio')) : draft?.source_media.audio_path ? '已完成' : operationStatusLabel(operationFor('source_audio'))}
+						</span>
+						<button class="mini-btn" type="button" onclick={extractSourceAudio} disabled={!draft?.source_media.video_path || extractingAudio || operationBusy('source_audio')}>
+							{operationBusy('source_audio') || extractingAudio ? '抽取中' : '抽取'}
 						</button>
 					</div>
 				</div>
+				{#if latestOperation}
+					<p class:active={hasActiveOperation} class="operation-note">
+						最近任务：{latestOperation.label || latestOperation.kind} · {operationStatusLabel(latestOperation)}
+						{#if latestOperation.error_message}
+							· {latestOperation.error_message}
+						{/if}
+					</p>
+				{/if}
 			</section>
 
 			<section class="panel preview-panel">
@@ -1004,6 +1127,12 @@
 		background: #2b1515;
 	}
 
+	.badge.active {
+		color: #9cc9ff;
+		border-color: #27527e;
+		background: #101d2d;
+	}
+
 	.visually-hidden {
 		position: absolute;
 		width: 1px;
@@ -1101,6 +1230,17 @@
 
 	.model-row > span:first-child {
 		color: var(--muted);
+	}
+
+	.operation-note {
+		margin: 10px 0 0;
+		color: var(--muted);
+		font-size: 12px;
+		line-height: 1.45;
+	}
+
+	.operation-note.active {
+		color: #9cc9ff;
 	}
 
 	.mini-btn {

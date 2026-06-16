@@ -293,6 +293,23 @@ export interface VideoLocalizationExportState {
 	[key: string]: unknown;
 }
 
+export interface VideoLocalizationOperation {
+	operation_id: string;
+	project_id: string;
+	kind: 'source_audio' | 'stems' | 'english_asr';
+	status: 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
+	label: string | null;
+	progress: number;
+	error_code: string | null;
+	error_message: string | null;
+	result_summary: Record<string, unknown>;
+	parameters: Record<string, unknown>;
+	created_at: string;
+	started_at: string | null;
+	completed_at: string | null;
+	[key: string]: unknown;
+}
+
 export interface VideoLocalizationDraft {
 	project_type: 'video_localization';
 	schema_version: string;
@@ -304,6 +321,7 @@ export interface VideoLocalizationDraft {
 	cues: VideoLocalizationCue[];
 	quality_gate: VideoLocalizationQualityGate;
 	exports: VideoLocalizationExportState;
+	operations: VideoLocalizationOperation[];
 	updated_at: string | null;
 }
 

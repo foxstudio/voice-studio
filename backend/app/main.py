@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api import asr, audio_tools, batches, community_voice_packs, engines, evaluations, exports, generate, history, longform, presets, projects, ser, settings, tasks, text_tools, video_localization, voice_seeds, voices
+from app.domains.video_localization import operation_queue as video_localization_operation_queue
 from app.errors import AppException
 from app.services import asr_tasks, batch_queue, engine_registry, longform_queue, qwen_forced_aligner, settings_store, task_queue
 
@@ -21,10 +22,12 @@ async def lifespan(app: FastAPI):
     settings_store.ensure_directories()
     task_queue.start_worker()
     longform_queue.start_worker()
+    video_localization_operation_queue.start_worker()
     try:
         yield
     finally:
         await asr_tasks.shutdown()
+        await video_localization_operation_queue.shutdown()
         await longform_queue.shutdown()
         await task_queue.shutdown()
         await batch_queue.shutdown()
