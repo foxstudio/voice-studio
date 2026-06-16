@@ -10,6 +10,7 @@ from fastapi import UploadFile
 from app.domains.video_localization.quality_gate import evaluate_quality_gate
 from app.domains.video_localization.readiness import build_production_readiness_audit
 from app.domains.video_localization import tts_pipeline
+from app.domains.video_localization import subtitles
 from app.errors import AppException
 from app.schemas.voice_studio import (
     BatchGenerateRequest,
@@ -345,28 +346,7 @@ def export_subtitles(project_id: str, kind: str) -> str | None:
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    if kind not in {"en", "zh", "bilingual"}:
-        raise AppException(400, "VIDEO_LOCALIZATION_SUBTITLE_KIND_UNSUPPORTED", "Subtitle kind must be en, zh, or bilingual")
-
-    blocks: list[str] = []
-    for cue in draft.cues:
-        if cue.start_ms is None or cue.end_ms is None or cue.end_ms <= cue.start_ms:
-            continue
-        lines = _subtitle_lines_for(cue, kind)
-        if not lines:
-            continue
-        blocks.append(
-            "\n".join(
-                [
-                    str(len(blocks) + 1),
-                    f"{_format_srt_time(cue.start_ms)} --> {_format_srt_time(cue.end_ms)}",
-                    *lines,
-                ]
-            )
-        )
-    if not blocks:
-        raise AppException(400, "VIDEO_LOCALIZATION_SUBTITLES_EMPTY", "No timed subtitle cues are available")
-    return "\n\n".join(blocks) + "\n"
+    return subtitles.export_srt(draft, kind)
 
 
 def sync_tts_batch_results(project_id: str, batch_task_id: str) -> VideoLocalizationDraft | None:
@@ -708,20 +688,3 @@ def _source_cue_cache_path(cache_dir: Path, source_path: Path, cue: VideoLocaliz
     name = f"{_safe_identifier(cue.cue_id)}-{cue.start_ms}-{cue.end_ms}-{signature}-source.wav"
     return cache_dir / name
 
-
-def _subtitle_lines_for(cue: VideoLocalizationCue, kind: str) -> list[str]:
-    english = (cue.en_subtitle_text or "").strip()
-    chinese = (cue.zh_localized_subtitle_text or "").strip()
-    if kind == "en":
-        return [english] if english else []
-    if kind == "zh":
-        return [chinese] if chinese else []
-    return [line for line in [english, chinese] if line]
-
-
-def _format_srt_time(value_ms: int) -> str:
-    total_ms = max(0, int(value_ms))
-    hours, remainder = divmod(total_ms, 3_600_000)
-    minutes, remainder = divmod(remainder, 60_000)
-    seconds, millis = divmod(remainder, 1000)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
