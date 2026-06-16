@@ -13,29 +13,23 @@
 	import {
 		AlertTriangle,
 		CheckCircle2,
-		Download,
 		FileJson,
 		Film,
-		Languages,
 		Lock,
 		Mic2,
 		Play,
 		Send,
 		Save,
-		UploadCloud,
-		Wand2
+		UploadCloud
 	} from 'lucide-svelte';
 	import { onMount } from 'svelte';
 	import { downloadJson, downloadText } from './downloads';
 	import {
-		batchOptionLabel,
 		batchProjectId,
 		buildGenerateRequest,
 		buildWorkflow,
 		createManualCue,
 		durationLabel,
-		gateBadgeClass,
-		gateLabel,
 		isActiveOperation,
 		operationBadgeClass,
 		operationStatusLabel,
@@ -46,6 +40,7 @@
 		type WorkflowStep
 	} from './utils';
 	import CueTable from './CueTable.svelte';
+	import DeliveryPanel from './DeliveryPanel.svelte';
 	import PreviewPanel from './PreviewPanel.svelte';
 	import ReferencePool from './ReferencePool.svelte';
 	import WorkflowStrip from './WorkflowStrip.svelte';
@@ -807,39 +802,24 @@
 				onMarkNeedsReview={markReferenceNeedsReview}
 			/>
 
-			<section class="panel export-panel">
-				<div class="section-title">
-					<h2>批量与交付</h2>
-					<span class={`badge ${gateBadgeClass(draft?.quality_gate.status)}`}>{gateLabel(draft?.quality_gate.status)}</span>
-				</div>
-				<div class="handoff-summary">
-					<div><strong>{canSubmitCount}</strong><span>可提交</span></div>
-					<div><strong>{generatedCount}</strong><span>已生成</span></div>
-					<div><strong>{draft?.quality_gate.blockers.length ?? 0}</strong><span>阻断</span></div>
-					<div><strong>{draft?.quality_gate.warnings.length ?? 0}</strong><span>警告</span></div>
-				</div>
-				<p class="muted small-note">
-					{draft?.quality_gate.checked_at ? `最近检查：${draft.quality_gate.checked_at}` : '保存或导出后会自动刷新质量门。'}
-				</p>
-				<div class="stack">
-					<button class="btn success" type="button" onclick={submitBatchTts} disabled={!canSubmitCount || submittingBatch}><Wand2 size={14} /> {submittingBatch ? '提交中' : '批量发送可生成片段'}</button>
-					<div class="batch-sync-row">
-						<select value={ttsBatchId} aria-label="选择当前项目批次" onchange={(event) => (ttsBatchId = event.currentTarget.value)} disabled={loadingBatches}>
-							<option value="">{loadingBatches ? '加载批次中' : projectBatches.length ? '选择最近批次' : '暂无项目批次'}</option>
-							{#each projectBatches as batch}
-								<option value={batch.batch_task_id}>{batchOptionLabel(batch)}</option>
-							{/each}
-						</select>
-						<input value={ttsBatchId} oninput={(event) => (ttsBatchId = event.currentTarget.value)} placeholder="batch id" aria-label="批量 TTS 任务 ID" />
-						<button class="btn" type="button" onclick={syncBatchTtsResults} disabled={!ttsBatchId.trim() || syncingBatch}>
-							<Mic2 size={14} /> {syncingBatch ? '同步中' : '同步 TTS 结果'}
-						</button>
-					</div>
-					<button class="btn" type="button" onclick={exportJson} disabled={!draft}><Download size={14} /> 下载 production JSON</button>
-					<button class="btn" type="button" onclick={exportReadinessAudit} disabled={!draft}><FileJson size={14} /> 下载 readiness JSON</button>
-					<button class="btn" type="button" onclick={exportBilingualSrt} disabled={!draft?.cues.some((cue) => cue.start_ms !== null && cue.end_ms !== null)}><Languages size={14} /> 导出中英字幕草稿</button>
-				</div>
-			</section>
+			<DeliveryPanel
+				qualityGate={draft?.quality_gate}
+				{canSubmitCount}
+				{generatedCount}
+				{projectBatches}
+				{ttsBatchId}
+				{loadingBatches}
+				{submittingBatch}
+				{syncingBatch}
+				hasDraft={Boolean(draft)}
+				canExportBilingual={Boolean(draft?.cues.some((cue) => cue.start_ms !== null && cue.end_ms !== null))}
+				onSubmitBatch={submitBatchTts}
+				onSyncBatch={syncBatchTtsResults}
+				onExportJson={exportJson}
+				onExportReadiness={exportReadinessAudit}
+				onExportBilingual={exportBilingualSrt}
+				onTtsBatchIdChange={(batchId) => (ttsBatchId = batchId)}
+			/>
 		</aside>
 	</section>
 </main>
@@ -1039,54 +1019,6 @@
 	.cue-audio-compare span {
 		font-size: 11px;
 		color: var(--muted);
-	}
-
-	.handoff-summary {
-		display: grid;
-		grid-template-columns: repeat(3, 1fr);
-		gap: 8px;
-		margin-bottom: 8px;
-	}
-
-	.handoff-summary div {
-		border: 1px solid var(--line);
-		border-radius: 7px;
-		padding: 8px;
-		background: #101215;
-	}
-
-	.handoff-summary strong,
-	.handoff-summary span {
-		display: block;
-	}
-
-	.handoff-summary strong {
-		font-size: 18px;
-	}
-
-	.handoff-summary span,
-	.small-note {
-		font-size: 12px;
-	}
-
-	.export-panel .btn {
-		justify-content: center;
-	}
-
-	.batch-sync-row {
-		display: grid;
-		grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr) auto;
-		gap: 8px;
-	}
-
-	.batch-sync-row input,
-	.batch-sync-row select {
-		min-width: 0;
-		border: 1px solid var(--line);
-		border-radius: 7px;
-		padding: 8px 10px;
-		background: #fff;
-		color: var(--ink);
 	}
 
 	@media (max-width: 1500px) {
