@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import UploadFile
 
 from app.domains.video_localization import cues as cue_tools
+from app.domains.video_localization import localization
 from app.domains.video_localization import media_assets
 from app.domains.video_localization.quality_gate import evaluate_quality_gate
 from app.domains.video_localization import reference_clips
@@ -14,14 +15,13 @@ from app.domains.video_localization import subtitles
 from app.errors import AppException
 from app.schemas.voice_studio import (
     BatchGenerateRequest,
-    VideoLocalizationCue,
     VideoLocalizationCueUpdate,
     VideoLocalizationDraft,
     VideoLocalizationExport,
     VideoLocalizationReferenceClipUpdate,
     now_iso,
 )
-from app.services import asr_service, audio_tools, batch_queue, project_store, text_normalizer
+from app.services import asr_service, audio_tools, batch_queue, project_store
 
 VIDEO_LOCALIZATION_KEY = "video_localization"
 
@@ -198,39 +198,7 @@ def generate_localization_draft(project_id: str) -> VideoLocalizationDraft | Non
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    if not draft.cues:
-        raise AppException(400, "VIDEO_LOCALIZATION_CUES_MISSING", "Create English ASR cues before generating Chinese localization draft")
-
-    changed = False
-    next_cues: list[VideoLocalizationCue] = []
-    for cue in draft.cues:
-        patch: dict[str, object] = {}
-        flags = list(cue.quality_flags)
-        zh_text = (cue.zh_localized_subtitle_text or "").strip()
-        if not zh_text:
-            source_text = (cue.en_subtitle_text or "").strip()
-            if not source_text:
-                next_cues.append(cue)
-                continue
-            zh_text = f"【待本土化】{source_text}"
-            patch["zh_localized_subtitle_text"] = zh_text
-            flags = cue_tools.add_flags(flags, ["localization_draft", "needs_human_localization"])
-            changed = True
-
-        if not (cue.tts_recommended_text or "").strip():
-            patch["tts_recommended_text"] = text_normalizer.normalize_spoken_numbers(zh_text)
-            flags = cue_tools.add_flags(flags, ["tts_text_normalized"])
-            changed = True
-
-        if patch:
-            patch["quality_flags"] = flags
-            next_cues.append(cue.model_copy(update=patch))
-        else:
-            next_cues.append(cue)
-
-    if not changed:
-        raise AppException(400, "VIDEO_LOCALIZATION_LOCALIZATION_UNCHANGED", "All cues already have Chinese subtitle and TTS text")
-    return save_video_localization(project_id, draft.model_copy(update={"cues": next_cues}))
+    return save_video_localization(project_id, localization.with_chinese_draft(draft))
 
 
 def build_tts_batch_request(project_id: str, engine_id: str = "indextts-v2") -> BatchGenerateRequest | None:
