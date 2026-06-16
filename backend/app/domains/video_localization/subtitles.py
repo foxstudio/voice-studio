@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.errors import AppException
-from app.schemas.voice_studio import VideoLocalizationCue, VideoLocalizationDraft
+from app.domains.video_localization.schemas import VideoLocalizationCue, VideoLocalizationDraft
 
 
 def export_srt(draft: VideoLocalizationDraft, kind: str) -> str:

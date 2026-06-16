@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import UploadFile
 
 from app.errors import AppException
-from app.schemas.voice_studio import VideoLocalizationCue
+from app.domains.video_localization.schemas import VideoLocalizationCue
 from app.services import audio_tools, settings_store
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}

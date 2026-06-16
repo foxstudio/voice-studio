@@ -7,7 +7,7 @@ from fastapi import UploadFile
 from app.domains.video_localization import cues as cue_tools
 from app.domains.video_localization import media_assets
 from app.errors import AppException
-from app.schemas.voice_studio import VideoLocalizationDraft, now_iso
+from app.domains.video_localization.schemas import VideoLocalizationDraft, now_iso
 from app.services import asr_service
 
 

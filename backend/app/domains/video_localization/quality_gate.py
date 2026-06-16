@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.schemas.voice_studio import (
+from app.domains.video_localization.schemas import (
     VideoLocalizationCue,
     VideoLocalizationDraft,
     VideoLocalizationQualityGate,

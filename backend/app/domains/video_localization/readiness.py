@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.schemas.voice_studio import VideoLocalizationCue, VideoLocalizationDraft, now_iso
+from app.domains.video_localization.schemas import VideoLocalizationCue, VideoLocalizationDraft, now_iso
 
 
 def build_production_readiness_audit(*, project_id: str, project_name: str, draft: VideoLocalizationDraft) -> dict:

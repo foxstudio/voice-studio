@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 from app.errors import AppException
-from app.schemas.voice_studio import VideoLocalizationDraft, VideoLocalizationOperation
+from app.domains.video_localization.schemas import VideoLocalizationDraft, VideoLocalizationOperation
 
 OperationKind = Literal["source_audio", "stems", "english_asr", "reference_clips"]
 OperationStatus = Literal["queued", "running", "success", "failed", "cancelled"]

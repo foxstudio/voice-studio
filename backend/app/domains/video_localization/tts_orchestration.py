@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.domains.video_localization import media_assets
 from app.domains.video_localization import tts_pipeline
 from app.errors import AppException
-from app.schemas.voice_studio import BatchGenerateRequest, VideoLocalizationDraft, now_iso
+from app.domains.video_localization.schemas import BatchGenerateRequest, VideoLocalizationDraft, now_iso
 from app.services import batch_queue
 
 

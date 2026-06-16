@@ -14,7 +14,7 @@ from app.domains.video_localization import source_pipeline
 from app.domains.video_localization import tts_orchestration
 from app.domains.video_localization import tts_pipeline
 from app.errors import AppException
-from app.schemas.voice_studio import (
+from app.domains.video_localization.schemas import (
     BatchGenerateRequest,
     VideoLocalizationCueUpdate,
     VideoLocalizationDraft,

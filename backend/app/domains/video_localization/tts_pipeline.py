@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from app.errors import AppException
-from app.schemas.voice_studio import (
+from app.domains.video_localization.schemas import (
     BatchGenerateRequest,
     BatchSegmentInput,
     BatchSegmentResult,

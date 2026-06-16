@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import ValidationError
 
 from app.errors import AppException
-from app.schemas.voice_studio import VideoLocalizationCue, VideoLocalizationCueUpdate, VideoLocalizationDraft
+from app.domains.video_localization.schemas import VideoLocalizationCue, VideoLocalizationCueUpdate, VideoLocalizationDraft
 
 
 def from_asr_segments(

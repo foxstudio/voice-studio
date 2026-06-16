@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.domains.video_localization import cues as cue_tools
 from app.errors import AppException
-from app.schemas.voice_studio import VideoLocalizationCue, VideoLocalizationDraft
+from app.domains.video_localization.schemas import VideoLocalizationCue, VideoLocalizationDraft
 from app.services import text_normalizer
 
 

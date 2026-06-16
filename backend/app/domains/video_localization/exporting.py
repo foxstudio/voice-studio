@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.domains.video_localization import draft_store
 from app.domains.video_localization import subtitles
 from app.domains.video_localization.readiness import build_production_readiness_audit
-from app.schemas.voice_studio import VideoLocalizationDraft, VideoLocalizationExport, now_iso
+from app.domains.video_localization.schemas import VideoLocalizationDraft, VideoLocalizationExport, now_iso
 
 
 def export_subtitles(draft: VideoLocalizationDraft, kind: str) -> str:

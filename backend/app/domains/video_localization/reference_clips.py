@@ -5,7 +5,7 @@ from pathlib import Path
 
 from app.domains.video_localization import media_assets
 from app.errors import AppException
-from app.schemas.voice_studio import (
+from app.domains.video_localization.schemas import (
     VideoLocalizationCue,
     VideoLocalizationDraft,
     VideoLocalizationReferenceClip,

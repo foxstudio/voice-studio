@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.domains.video_localization.quality_gate import evaluate_quality_gate
-from app.schemas.voice_studio import VideoLocalizationDraft, now_iso
+from app.domains.video_localization.schemas import VideoLocalizationDraft, now_iso
 from app.services import project_store
 
 VIDEO_LOCALIZATION_KEY = "video_localization"

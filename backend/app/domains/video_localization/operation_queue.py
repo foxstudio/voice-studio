@@ -7,7 +7,7 @@ import threading
 from app.domains.video_localization import operation_state
 from app.domains.video_localization import service
 from app.errors import AppException
-from app.schemas.voice_studio import VideoLocalizationDraft, VideoLocalizationOperation, now_iso
+from app.domains.video_localization.schemas import VideoLocalizationDraft, VideoLocalizationOperation, now_iso
 from app.services import project_store
 
 OperationKind = operation_state.OperationKind

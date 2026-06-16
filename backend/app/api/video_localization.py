@@ -6,7 +6,7 @@ from app.api.video_localization_responses import audio_file_response, json_attac
 from app.domains.video_localization import operation_queue
 from app.domains.video_localization import service as video_localization_service
 from app.errors import AppException
-from app.schemas.voice_studio import BatchTask, VideoLocalizationCueUpdate, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationOperationRequest, VideoLocalizationReferenceClipUpdate
+from app.domains.video_localization.schemas import BatchTask, VideoLocalizationCueUpdate, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationOperationRequest, VideoLocalizationReferenceClipUpdate
 from app.services import batch_queue
 
 router = APIRouter()

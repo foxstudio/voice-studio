@@ -4,7 +4,7 @@ from pathlib import Path
 
 from app.domains.video_localization import media_assets
 from app.domains.video_localization import tts_pipeline
-from app.schemas.voice_studio import VideoLocalizationDraft
+from app.domains.video_localization.schemas import VideoLocalizationDraft
 
 
 def tts_audio_path(draft: VideoLocalizationDraft, cue_id: str) -> Path | None:
