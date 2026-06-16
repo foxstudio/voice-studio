@@ -5,9 +5,9 @@ from pathlib import Path
 from fastapi import UploadFile
 
 from app.domains.video_localization import cues as cue_tools
+from app.domains.video_localization import draft_store
 from app.domains.video_localization import localization
 from app.domains.video_localization import media_assets
-from app.domains.video_localization.quality_gate import evaluate_quality_gate
 from app.domains.video_localization import reference_clips
 from app.domains.video_localization.readiness import build_production_readiness_audit
 from app.domains.video_localization import tts_pipeline
@@ -23,25 +23,15 @@ from app.schemas.voice_studio import (
 )
 from app.services import asr_service, audio_tools, batch_queue, project_store
 
-VIDEO_LOCALIZATION_KEY = "video_localization"
+VIDEO_LOCALIZATION_KEY = draft_store.VIDEO_LOCALIZATION_KEY
 
 
 def get_video_localization(project_id: str) -> VideoLocalizationDraft | None:
-    project = project_store.get_project(project_id)
-    if not project:
-        return None
-    raw = project.parameters.get(VIDEO_LOCALIZATION_KEY) or {}
-    return VideoLocalizationDraft(**raw)
+    return draft_store.get(project_id)
 
 
 def save_video_localization(project_id: str, draft: VideoLocalizationDraft) -> VideoLocalizationDraft | None:
-    project = project_store.get_project(project_id)
-    if not project:
-        return None
-    next_draft = _with_fresh_gate(draft, updated_at=now_iso())
-    project.parameters = {**project.parameters, VIDEO_LOCALIZATION_KEY: next_draft.model_dump()}
-    project_store.save_project(project)
-    return next_draft
+    return draft_store.save(project_id, draft)
 
 
 async def import_source_media(project_id: str, file: UploadFile) -> VideoLocalizationDraft | None:
@@ -312,9 +302,9 @@ def export_video_localization(project_id: str) -> VideoLocalizationExport | None
     draft = get_video_localization(project_id)
     if not draft:
         return None
-    next_draft = _with_fresh_gate(draft, updated_at=draft.updated_at)
-    project.parameters = {**project.parameters, VIDEO_LOCALIZATION_KEY: next_draft.model_dump()}
-    project_store.save_project(project)
+    next_draft = draft_store.save(project_id, draft, updated_at=draft.updated_at)
+    if not next_draft:
+        return None
     summary = {
         "cue_count": len(next_draft.cues),
         "ready_cue_count": sum(1 for cue in next_draft.cues if cue.review_status in {"ready", "locked"}),
@@ -337,23 +327,5 @@ def production_readiness_audit(project_id: str) -> dict | None:
     draft = get_video_localization(project_id)
     if not draft:
         return None
-    next_draft = _with_fresh_gate(draft, updated_at=draft.updated_at)
+    next_draft = draft_store.with_fresh_gate(draft, updated_at=draft.updated_at)
     return build_production_readiness_audit(project_id=project.project_id, project_name=project.name, draft=next_draft)
-
-
-def _with_fresh_gate(draft: VideoLocalizationDraft, updated_at: str | None) -> VideoLocalizationDraft:
-    gate = evaluate_quality_gate(draft)
-    status = _status_for_gate(draft, gate.status)
-    return draft.model_copy(update={"quality_gate": gate, "status": status, "updated_at": updated_at})
-
-
-def _status_for_gate(draft: VideoLocalizationDraft, gate_status: str) -> str:
-    if gate_status == "blocked":
-        return "blocked"
-    if draft.status in {"tts_running", "candidate"}:
-        return draft.status
-    if gate_status == "pass" and draft.cues:
-        return "ready_for_tts"
-    if draft.cues:
-        return "reviewing"
-    return "draft"
