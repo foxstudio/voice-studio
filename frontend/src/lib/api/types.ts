@@ -197,7 +197,7 @@ export interface VideoLocalizationStems {
 	background_path: string | null;
 	original_audio_path: string | null;
 	separation_engine_id: string | null;
-	separation_status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+	separation_status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'skipped';
 	quality_flags: string[];
 	[key: string]: unknown;
 }
@@ -319,6 +319,7 @@ export interface VideoLocalizationOperation {
 	progress: number;
 	error_code: string | null;
 	error_message: string | null;
+	cancel_requested: boolean;
 	result_summary: Record<string, unknown>;
 	parameters: Record<string, unknown>;
 	created_at: string;

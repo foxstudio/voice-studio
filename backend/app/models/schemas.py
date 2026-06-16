@@ -686,7 +686,7 @@ class VideoLocalizationStems(VideoLocalizationExtensibleModel):
     background_path: str | None = None
     original_audio_path: str | None = None
     separation_engine_id: str | None = None
-    separation_status: Literal["pending", "running", "completed", "failed", "skipped"] = "pending"
+    separation_status: Literal["pending", "running", "completed", "failed", "cancelled", "skipped"] = "pending"
     quality_flags: list[str] = Field(default_factory=list)
 
 
@@ -815,6 +815,7 @@ class VideoLocalizationOperation(VideoLocalizationExtensibleModel):
     progress: float = Field(default=0.0, ge=0.0, le=1.0)
     error_code: str | None = None
     error_message: str | None = None
+    cancel_requested: bool = False
     result_summary: dict[str, Any] = Field(default_factory=dict)
     parameters: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=now_iso)

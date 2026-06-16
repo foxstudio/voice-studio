@@ -62,6 +62,22 @@ async def get_video_localization_operation(project_id: str, operation_id: str):
     return operation
 
 
+@router.post("/{project_id}/video-localization/operations/{operation_id}/cancel", response_model=VideoLocalizationOperation)
+async def cancel_video_localization_operation(project_id: str, operation_id: str):
+    operation = operation_queue.cancel(project_id, operation_id)
+    if not operation:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    return operation
+
+
+@router.post("/{project_id}/video-localization/operations/{operation_id}/retry", response_model=VideoLocalizationOperation)
+async def retry_video_localization_operation(project_id: str, operation_id: str):
+    operation = operation_queue.retry(project_id, operation_id)
+    if not operation:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    return operation
+
+
 @router.post("/{project_id}/video-localization/source-audio", response_model=VideoLocalizationDraft)
 async def extract_video_localization_source_audio(project_id: str):
     updated = video_localization_service.extract_source_audio(project_id)

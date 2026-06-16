@@ -20,6 +20,7 @@ _lock = threading.Lock()
 _queued_operation_ids: set[str] = set()
 
 _ACTIVE_STATUSES = {"queued", "running"}
+_TERMINAL_STATUSES = {"success", "failed", "cancelled"}
 _KIND_LABELS: dict[OperationKind, str] = {
     "source_audio": "抽取源音轨",
     "stems": "分离人声与背景声",
@@ -67,6 +68,41 @@ def get_operation(project_id: str, operation_id: str) -> VideoLocalizationOperat
     return next((operation for operation in draft.operations if operation.operation_id == operation_id), None)
 
 
+def cancel(project_id: str, operation_id: str) -> VideoLocalizationOperation | None:
+    draft = service.get_video_localization(project_id)
+    if draft is None:
+        return None
+    operation = _operation_from_draft(draft, operation_id)
+    if not operation:
+        raise AppException(404, "VIDEO_LOCALIZATION_OPERATION_NOT_FOUND", "Operation not found")
+    if operation.status not in _ACTIVE_STATUSES:
+        return operation
+
+    completed_at = now_iso() if operation.status == "queued" else None
+    updates = {
+        "status": "cancelled",
+        "cancel_requested": True,
+        "completed_at": completed_at,
+        "error_message": "已取消" if operation.status == "queued" else "已请求取消；当前处理结束后会丢弃任务结果。",
+    }
+    _mark_operation(project_id, operation_id, kind=operation.kind, **updates)
+    updated = get_operation(project_id, operation_id)
+    return updated or operation.model_copy(update=updates)
+
+
+def retry(project_id: str, operation_id: str) -> VideoLocalizationOperation | None:
+    draft = service.get_video_localization(project_id)
+    if draft is None:
+        return None
+    operation = _operation_from_draft(draft, operation_id)
+    if not operation:
+        raise AppException(404, "VIDEO_LOCALIZATION_OPERATION_NOT_FOUND", "Operation not found")
+    if operation.status in _ACTIVE_STATUSES:
+        raise AppException(409, "VIDEO_LOCALIZATION_OPERATION_ACTIVE", "Operation is still active")
+    service.save_video_localization(project_id, _with_kind_status(draft, operation.kind, "queued"))
+    return submit(project_id, operation.kind, operation.parameters)
+
+
 def submit(project_id: str, kind: OperationKind, parameters: dict | None = None) -> VideoLocalizationOperation | None:
     project = project_store.get_project(project_id)
     if not project:
@@ -110,10 +146,11 @@ def _process(operation_id: str) -> None:
     project_id, operation = _find_operation(operation_id)
     if not project_id or not operation:
         return
-    if operation.status == "cancelled":
+    if operation.status == "cancelled" or operation.cancel_requested:
+        _mark_operation(project_id, operation_id, kind=operation.kind, status="cancelled", completed_at=operation.completed_at or now_iso())
         return
 
-    _mark_operation(project_id, operation_id, status="running", progress=0.2, started_at=now_iso())
+    _mark_operation(project_id, operation_id, kind=operation.kind, status="running", progress=0.2, started_at=now_iso())
     try:
         if operation.kind == "source_audio":
             updated = service.extract_source_audio(project_id)
@@ -132,15 +169,28 @@ def _process(operation_id: str) -> None:
             raise AppException(400, "VIDEO_LOCALIZATION_OPERATION_UNSUPPORTED", f"Unsupported operation: {operation.kind}")
         if updated is None:
             raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
-        _mark_operation(project_id, operation_id, status="success", progress=1.0, completed_at=now_iso(), result_summary=summary)
+        latest = get_operation(project_id, operation_id)
+        if _operation_was_cancelled(latest):
+            _mark_operation(project_id, operation_id, kind=operation.kind, status="cancelled", progress=1.0, completed_at=now_iso(), error_message="已取消，任务结果未作为成功状态保留。")
+            return
+        _mark_operation(project_id, operation_id, kind=operation.kind, status="success", progress=1.0, completed_at=now_iso(), result_summary=summary)
     except AppException as exc:
+        latest = get_operation(project_id, operation_id)
+        if _operation_was_cancelled(latest):
+            _mark_operation(project_id, operation_id, kind=operation.kind, status="cancelled", progress=1.0, completed_at=now_iso(), error_message="已取消，失败结果未保留。")
+            return
         _mark_kind_failed(project_id, operation.kind, exc.code, exc.message)
-        _mark_operation(project_id, operation_id, status="failed", progress=1.0, completed_at=now_iso(), error_code=exc.code, error_message=exc.message)
+        _mark_operation(project_id, operation_id, kind=operation.kind, status="failed", progress=1.0, completed_at=now_iso(), error_code=exc.code, error_message=exc.message)
     except Exception as exc:
+        latest = get_operation(project_id, operation_id)
+        if _operation_was_cancelled(latest):
+            _mark_operation(project_id, operation_id, kind=operation.kind, status="cancelled", progress=1.0, completed_at=now_iso(), error_message="已取消，失败结果未保留。")
+            return
         _mark_kind_failed(project_id, operation.kind, "VIDEO_LOCALIZATION_OPERATION_FAILED", str(exc))
         _mark_operation(
             project_id,
             operation_id,
+            kind=operation.kind,
             status="failed",
             progress=1.0,
             completed_at=now_iso(),
@@ -166,7 +216,11 @@ def _recover_active_operations() -> None:
         draft = VideoLocalizationDraft(**raw)
         changed = False
         for operation in draft.operations:
-            if operation.status in _ACTIVE_STATUSES:
+            if operation.cancel_requested:
+                operation.status = "cancelled"
+                operation.completed_at = operation.completed_at or now_iso()
+                changed = True
+            elif operation.status in _ACTIVE_STATUSES:
                 operation.status = "queued"
                 operation.started_at = None
                 operation.error_message = None
@@ -216,7 +270,11 @@ def _find_operation(operation_id: str) -> tuple[str | None, VideoLocalizationOpe
     return None, None
 
 
-def _mark_operation(project_id: str, operation_id: str, **updates) -> None:
+def _operation_from_draft(draft: VideoLocalizationDraft, operation_id: str) -> VideoLocalizationOperation | None:
+    return next((operation for operation in draft.operations if operation.operation_id == operation_id), None)
+
+
+def _mark_operation(project_id: str, operation_id: str, *, kind: OperationKind | None = None, **updates) -> None:
     draft = service.get_video_localization(project_id)
     if draft is None:
         return
@@ -226,7 +284,15 @@ def _mark_operation(project_id: str, operation_id: str, **updates) -> None:
             next_operations.append(operation.model_copy(update=updates))
         else:
             next_operations.append(operation)
-    service.save_video_localization(project_id, draft.model_copy(update={"operations": next_operations}))
+    next_draft = draft.model_copy(update={"operations": next_operations})
+    status = updates.get("status")
+    if kind and status in _TERMINAL_STATUSES.union(_ACTIVE_STATUSES):
+        next_draft = _with_kind_status(next_draft, kind, status)
+    service.save_video_localization(project_id, next_draft)
+
+
+def _operation_was_cancelled(operation: VideoLocalizationOperation | None) -> bool:
+    return bool(operation and (operation.cancel_requested or operation.status == "cancelled"))
 
 
 def _mark_kind_failed(project_id: str, kind: OperationKind, code: str, message: str) -> None:
@@ -250,27 +316,53 @@ def _with_kind_status(
 ) -> VideoLocalizationDraft:
     metadata = dict(draft.source_media.metadata)
     stems = draft.stems
+    clears_errors = status in {"queued", "running", "success", "cancelled"}
+    draft_status = _draft_status_for_operation_status(status)
     if kind == "source_audio":
-        metadata["audio_extract_status"] = status
+        metadata["audio_extract_status"] = draft_status
+        if clears_errors:
+            metadata.pop("audio_extract_error_code", None)
+            metadata.pop("audio_extract_error", None)
         if error_code:
             metadata["audio_extract_error_code"] = error_code
         if error_message:
             metadata["audio_extract_error"] = error_message
     elif kind == "english_asr":
-        metadata["english_asr_status"] = status
+        metadata["english_asr_status"] = draft_status
+        if clears_errors:
+            metadata.pop("english_asr_error_code", None)
+            metadata.pop("english_asr_error", None)
         if error_code:
             metadata["english_asr_error_code"] = error_code
         if error_message:
             metadata["english_asr_error"] = error_message
+    elif kind == "reference_clips":
+        metadata["reference_clips_status"] = draft_status
+        if clears_errors:
+            metadata.pop("reference_clips_error_code", None)
+            metadata.pop("reference_clips_error", None)
+        if error_code:
+            metadata["reference_clips_error_code"] = error_code
+        if error_message:
+            metadata["reference_clips_error"] = error_message
     elif kind == "stems":
+        quality_flags = draft.stems.quality_flags
+        if clears_errors:
+            quality_flags = [flag for flag in quality_flags if not flag.startswith("VIDEO_LOCALIZATION_")]
         stems = draft.stems.model_copy(
             update={
-                "separation_status": "running" if status in {"queued", "running"} else status,
-                "quality_flags": sorted(set([*draft.stems.quality_flags, error_code] if error_code else draft.stems.quality_flags)),
+                "separation_status": "running" if status in {"queued", "running"} else draft_status,
+                "quality_flags": sorted(set([*quality_flags, error_code] if error_code else quality_flags)),
             }
         )
     source_media = draft.source_media.model_copy(update={"metadata": metadata})
     return draft.model_copy(update={"source_media": source_media, "stems": stems})
+
+
+def _draft_status_for_operation_status(status: OperationStatus | str) -> str:
+    if status == "success":
+        return "completed"
+    return str(status)
 
 
 def _source_audio_summary(draft: VideoLocalizationDraft | None) -> dict:

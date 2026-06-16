@@ -54,6 +54,7 @@
 	let syncingBatch = $state(false);
 	let loadingBatches = $state(false);
 	let referenceUpdatingId = $state('');
+	let operationActionId = $state('');
 	let ttsBatchId = $state('');
 	let videoInput: HTMLInputElement | null = null;
 	let operationPollingTimer: ReturnType<typeof setInterval> | null = null;
@@ -242,6 +243,41 @@
 		message = successMessage;
 		setTimeout(() => (message = ''), 1800);
 		startOperationPolling();
+	}
+
+	async function cancelOperation(operation: VideoLocalizationOperation) {
+		if (!projectId || !isActiveOperation(operation)) return;
+		operationActionId = operation.operation_id;
+		error = '';
+		try {
+			const updated = await Api.cancelVideoLocalizationOperation(projectId, operation.operation_id);
+			operations = sortOperations([updated, ...operations.filter((item) => item.operation_id !== updated.operation_id)]);
+			await refreshDraftOnly();
+			message = '任务已取消';
+			setTimeout(() => (message = ''), 1800);
+		} catch (e) {
+			error = (e as Error).message || '取消任务失败';
+		} finally {
+			operationActionId = '';
+		}
+	}
+
+	async function retryOperation(operation: VideoLocalizationOperation) {
+		if (!projectId || isActiveOperation(operation)) return;
+		operationActionId = operation.operation_id;
+		error = '';
+		try {
+			const retry = await Api.retryVideoLocalizationOperation(projectId, operation.operation_id);
+			operations = sortOperations([retry, ...operations]);
+			await refreshDraftOnly();
+			message = '任务已重新提交';
+			setTimeout(() => (message = ''), 1800);
+			startOperationPolling();
+		} catch (e) {
+			error = (e as Error).message || '重试任务失败';
+		} finally {
+			operationActionId = '';
+		}
 	}
 
 	async function createReferenceCandidates() {
@@ -836,12 +872,23 @@
 					</div>
 				</div>
 				{#if latestOperation}
-					<p class:active={hasActiveOperation} class="operation-note">
-						最近任务：{latestOperation.label || latestOperation.kind} · {operationStatusLabel(latestOperation)}
-						{#if latestOperation.error_message}
-							· {latestOperation.error_message}
+					<div class:active={hasActiveOperation} class="operation-note">
+						<span>
+							最近任务：{latestOperation.label || latestOperation.kind} · {operationStatusLabel(latestOperation)}
+							{#if latestOperation.error_message}
+								· {latestOperation.error_message}
+							{/if}
+						</span>
+						{#if isActiveOperation(latestOperation)}
+							<button class="mini-btn" type="button" onclick={() => cancelOperation(latestOperation)} disabled={operationActionId === latestOperation.operation_id}>
+								{operationActionId === latestOperation.operation_id ? '取消中' : '取消'}
+							</button>
+						{:else if latestOperation.status === 'failed' || latestOperation.status === 'cancelled'}
+							<button class="mini-btn" type="button" onclick={() => retryOperation(latestOperation)} disabled={operationActionId === latestOperation.operation_id || hasActiveOperation}>
+								{operationActionId === latestOperation.operation_id ? '重试中' : '重试'}
+							</button>
 						{/if}
-					</p>
+					</div>
 				{/if}
 			</section>
 
@@ -1271,6 +1318,10 @@
 		color: var(--muted);
 		font-size: 12px;
 		line-height: 1.45;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
 	}
 
 	.operation-note.active {

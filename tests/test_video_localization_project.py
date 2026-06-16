@@ -12,8 +12,9 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
-from app.schemas.voice_studio import AppSettings, BatchSegmentResult, BatchTask, GenerationTask, HistoryItem, TaskStatus  # noqa: E402
+from app.schemas.voice_studio import AppSettings, BatchSegmentResult, BatchTask, GenerationTask, HistoryItem, TaskStatus, VideoLocalizationOperation  # noqa: E402
 from app.domains.video_localization import media_assets  # noqa: E402
+from app.domains.video_localization import operation_queue as video_localization_operation_queue  # noqa: E402
 from app.domains.video_localization import service as video_localization_service  # noqa: E402
 from app.services import batch_queue, database, settings_store, task_queue  # noqa: E402
 from app.api import video_localization as video_localization_api  # noqa: E402
@@ -393,6 +394,109 @@ def test_video_localization_async_operation_validates_prerequisites(tmp_path: Pa
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_SOURCE_AUDIO_MISSING"
+
+
+def test_video_localization_cancel_queued_operation_marks_cancelled(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "取消后台任务", "description": ""}).json()
+    operation = VideoLocalizationOperation(project_id=project["project_id"], kind="english_asr", status="queued", label="英文 ASR 转字幕")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "operations": [operation.model_dump()],
+        },
+    )
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/operations/{operation.operation_id}/cancel")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "cancelled"
+    assert body["cancel_requested"] is True
+    draft = client.get(f"/api/projects/{project['project_id']}/video-localization").json()
+    assert draft["operations"][0]["status"] == "cancelled"
+    assert draft["source_media"]["metadata"]["english_asr_status"] == "cancelled"
+
+
+def test_video_localization_retry_failed_operation_creates_new_operation(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "重试后台任务", "description": ""}).json()
+    monkeypatch.setattr(video_localization_operation_queue, "_enqueue", lambda operation_id: None)
+    video_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "source" / "demo.mp4"
+    video_path.parent.mkdir(parents=True, exist_ok=True)
+    video_path.write_bytes(b"fake-video")
+    operation = VideoLocalizationOperation(
+        project_id=project["project_id"],
+        kind="source_audio",
+        status="failed",
+        label="抽取源音轨",
+        error_code="VIDEO_LOCALIZATION_OPERATION_FAILED",
+        error_message="previous failure",
+    )
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {
+                "filename": "demo.mp4",
+                "video_path": str(video_path),
+                "metadata": {
+                    "audio_extract_status": "failed",
+                    "audio_extract_error_code": "VIDEO_LOCALIZATION_OPERATION_FAILED",
+                    "audio_extract_error": "previous failure",
+                },
+            },
+            "operations": [operation.model_dump()],
+        },
+    )
+
+    response = client.post(f"/api/projects/{project['project_id']}/video-localization/operations/{operation.operation_id}/retry")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["operation_id"] != operation.operation_id
+    assert body["kind"] == "source_audio"
+    assert body["status"] == "queued"
+    draft = client.get(f"/api/projects/{project['project_id']}/video-localization").json()
+    assert len(draft["operations"]) == 2
+    assert draft["source_media"]["metadata"]["audio_extract_status"] == "queued"
+    assert "audio_extract_error_code" not in draft["source_media"]["metadata"]
+    assert "audio_extract_error" not in draft["source_media"]["metadata"]
+
+
+def test_video_localization_running_cancel_keeps_cancelled_after_late_exception(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "运行中取消", "description": ""}).json()
+    video_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "source" / "demo.mp4"
+    video_path.parent.mkdir(parents=True, exist_ok=True)
+    video_path.write_bytes(b"fake-video")
+    operation = VideoLocalizationOperation(project_id=project["project_id"], kind="source_audio", status="queued", label="抽取源音轨")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "demo.mp4", "video_path": str(video_path)},
+            "operations": [operation.model_dump()],
+        },
+    )
+
+    def fake_extract(project_id: str):
+        video_localization_operation_queue.cancel(project_id, operation.operation_id)
+        raise RuntimeError("late extractor failure")
+
+    monkeypatch.setattr(video_localization_service, "extract_source_audio", fake_extract)
+
+    video_localization_operation_queue._process(operation.operation_id)
+
+    draft = client.get(f"/api/projects/{project['project_id']}/video-localization").json()
+    assert draft["operations"][0]["status"] == "cancelled"
+    assert draft["operations"][0]["cancel_requested"] is True
+    assert draft["source_media"]["metadata"]["audio_extract_status"] == "cancelled"
+    assert "audio_extract_error_code" not in draft["source_media"]["metadata"]
 
 
 def test_video_localization_separate_source_audio_requires_source_audio(tmp_path: Path):

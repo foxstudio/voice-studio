@@ -110,6 +110,8 @@ export const Api = {
 	videoLocalizationOperation: (id: string, operationId: string) => api.get<VideoLocalizationOperation>(`/projects/${id}/video-localization/operations/${operationId}`),
 	submitVideoLocalizationOperation: (id: string, kind: VideoLocalizationOperation['kind'], parameters: Record<string, unknown> = {}) =>
 		api.post<VideoLocalizationOperation>(`/projects/${id}/video-localization/operations`, { kind, parameters }),
+	cancelVideoLocalizationOperation: (id: string, operationId: string) => api.post<VideoLocalizationOperation>(`/projects/${id}/video-localization/operations/${operationId}/cancel`),
+	retryVideoLocalizationOperation: (id: string, operationId: string) => api.post<VideoLocalizationOperation>(`/projects/${id}/video-localization/operations/${operationId}/retry`),
 	extractVideoLocalizationAudio: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/source-audio`),
 	separateVideoLocalizationStems: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/stems`),
 	transcribeVideoLocalizationEnglish: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/asr/en`),
