@@ -12,6 +12,7 @@ if str(BACKEND) not in sys.path:
 
 from app.main import app  # noqa: E402
 from app.schemas.voice_studio import AppSettings, BatchSegmentResult, BatchTask, GenerationTask, HistoryItem, TaskStatus  # noqa: E402
+from app.domains.video_localization import media_assets  # noqa: E402
 from app.domains.video_localization import service as video_localization_service  # noqa: E402
 from app.services import batch_queue, database, settings_store, task_queue  # noqa: E402
 from app.api import video_localization as video_localization_api  # noqa: E402
@@ -245,7 +246,7 @@ def test_video_localization_extract_source_audio_updates_draft(tmp_path: Path, m
         audio_path.write_bytes(b"fake-wav")
         return {"duration_ms": 1234, "sample_rate": 48000, "channels": 2, "size_bytes": 8}
 
-    monkeypatch.setattr(video_localization_service, "_extract_audio_file", fake_extract)
+    monkeypatch.setattr(media_assets, "extract_audio_file", fake_extract)
 
     response = client.post(f"/api/projects/{project['project_id']}/video-localization/source-audio")
 
@@ -308,7 +309,7 @@ def test_video_localization_separate_source_audio_updates_stems(tmp_path: Path, 
             "quality_flags": ["needs_reference_review"],
         }
 
-    monkeypatch.setattr(video_localization_service, "_separate_audio_file", fake_separate)
+    monkeypatch.setattr(media_assets, "separate_audio_file", fake_separate)
 
     response = client.post(f"/api/projects/{project['project_id']}/video-localization/stems")
 
@@ -422,7 +423,7 @@ def test_video_localization_reference_candidates_from_clean_vocals(tmp_path: Pat
         destination.write_bytes(b"clip")
         return destination
 
-    monkeypatch.setattr(video_localization_service, "_cut_audio_clip", fake_cut)
+    monkeypatch.setattr(media_assets, "cut_audio_clip", fake_cut)
     monkeypatch.setattr(video_localization_service.audio_tools, "probe_audio", lambda path: {"duration_ms": 2200, "sample_rate": 24000, "channels": 1})
 
     response = client.post(f"/api/projects/{project['project_id']}/video-localization/reference-clips")
@@ -883,7 +884,7 @@ def test_video_localization_source_cue_audio_slices_clean_vocals(tmp_path: Path,
         captured["end_ms"] = end_ms
         destination.write_bytes(b"source-cue")
 
-    monkeypatch.setattr(video_localization_service, "_cut_audio_clip", fake_slice_audio)
+    monkeypatch.setattr(media_assets, "cut_audio_clip", fake_slice_audio)
 
     response = client.get(f"/api/projects/{project['project_id']}/video-localization/cues/cue_0001/source-audio")
 

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import re
-import shutil
-import subprocess
 from pathlib import Path
 
 from fastapi import UploadFile
 
+from app.domains.video_localization import media_assets
 from app.domains.video_localization.quality_gate import evaluate_quality_gate
 from app.domains.video_localization.readiness import build_production_readiness_audit
 from app.domains.video_localization import tts_pipeline
@@ -22,10 +21,9 @@ from app.schemas.voice_studio import (
     VideoLocalizationTimeRange,
     now_iso,
 )
-from app.services import asr_service, audio_tools, batch_queue, project_store, settings_store, text_normalizer
+from app.services import asr_service, audio_tools, batch_queue, project_store, text_normalizer
 
 VIDEO_LOCALIZATION_KEY = "video_localization"
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 
 
 def get_video_localization(project_id: str) -> VideoLocalizationDraft | None:
@@ -50,7 +48,7 @@ async def import_source_media(project_id: str, file: UploadFile) -> VideoLocaliz
     project = project_store.get_project(project_id)
     if not project:
         return None
-    source_path, content = await _save_uploaded_video(project_id, file)
+    source_path, content = await media_assets.save_uploaded_video(project_id, file)
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
     source_media = draft.source_media.model_copy(
         update={
@@ -81,10 +79,10 @@ def extract_source_audio(project_id: str) -> VideoLocalizationDraft | None:
     if not video_path.exists():
         raise AppException(400, "VIDEO_LOCALIZATION_SOURCE_NOT_FOUND", "Source video file is missing")
 
-    audio_dir = _project_video_localization_dir(project_id) / "audio"
+    audio_dir = media_assets.project_video_localization_dir(project_id) / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
-    audio_path = _unique_path(audio_dir / f"{video_path.stem}-source.wav")
-    audio_meta = _extract_audio_file(video_path, audio_path)
+    audio_path = media_assets.unique_path(audio_dir / f"{video_path.stem}-source.wav")
+    audio_meta = media_assets.extract_audio_file(video_path, audio_path)
     source_media = draft.source_media.model_copy(
         update={
             "audio_path": str(audio_path),
@@ -114,9 +112,9 @@ def separate_source_audio(project_id: str) -> VideoLocalizationDraft | None:
     if not audio_path.exists():
         raise AppException(400, "VIDEO_LOCALIZATION_SOURCE_AUDIO_NOT_FOUND", "Source audio file is missing")
 
-    stems_dir = _project_video_localization_dir(project_id) / "stems"
+    stems_dir = media_assets.project_video_localization_dir(project_id) / "stems"
     stems_dir.mkdir(parents=True, exist_ok=True)
-    separation = _separate_audio_file(audio_path, stems_dir)
+    separation = media_assets.separate_audio_file(audio_path, stems_dir)
     stems = draft.stems.model_copy(
         update={
             "vocals_clean_path": str(separation["vocals_clean_path"]),
@@ -183,7 +181,7 @@ def create_reference_clips_from_cues(project_id: str) -> VideoLocalizationDraft 
     if not vocals_path.exists():
         raise AppException(400, "VIDEO_LOCALIZATION_CLEAN_VOCALS_NOT_FOUND", "Clean vocals file is missing")
 
-    refs_dir = _project_video_localization_dir(project_id) / "references"
+    refs_dir = media_assets.project_video_localization_dir(project_id) / "references"
     refs_dir.mkdir(parents=True, exist_ok=True)
     existing_refs = {clip.reference_clip_id: clip for clip in draft.reference_clips}
     next_refs = list(draft.reference_clips)
@@ -197,8 +195,8 @@ def create_reference_clips_from_cues(project_id: str) -> VideoLocalizationDraft 
             continue
         reference_id = _reference_id_for_cue(cue)
         if reference_id not in existing_refs:
-            clip_path = _unique_path(refs_dir / f"{reference_id}.wav")
-            _cut_audio_clip(vocals_path, clip_path, cue.start_ms or 0, cue.end_ms or 0)
+            clip_path = media_assets.unique_path(refs_dir / f"{reference_id}.wav")
+            media_assets.cut_audio_clip(vocals_path, clip_path, cue.start_ms or 0, cue.end_ms or 0)
             meta = audio_tools.probe_audio(clip_path)
             reference = VideoLocalizationReferenceClip(
                 reference_clip_id=reference_id,
@@ -325,7 +323,7 @@ def build_tts_batch_request(project_id: str, engine_id: str = "indextts-v2") -> 
         project_id=project_id,
         project_name=project.name,
         draft=draft,
-        output_dir=_project_video_localization_dir(project_id) / "tts",
+        output_dir=media_assets.project_video_localization_dir(project_id) / "tts",
         engine_id=engine_id,
     )
 
@@ -412,11 +410,11 @@ def source_cue_audio_file(project_id: str, cue_id: str) -> Path | None:
     source_path = Path(source_value)
     if not source_path.exists():
         return None
-    cache_dir = _project_video_localization_dir(project_id) / "cue-source-audio"
+    cache_dir = media_assets.project_video_localization_dir(project_id) / "cue-source-audio"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    destination = _source_cue_cache_path(cache_dir, source_path, cue)
+    destination = media_assets.source_cue_cache_path(cache_dir, source_path, cue)
     if not destination.exists():
-        _cut_audio_clip(source_path, destination, cue.start_ms, cue.end_ms)
+        media_assets.cut_audio_clip(source_path, destination, cue.start_ms, cue.end_ms)
     return destination if destination.exists() else None
 
 
@@ -472,135 +470,6 @@ def _status_for_gate(draft: VideoLocalizationDraft, gate_status: str) -> str:
     if draft.cues:
         return "reviewing"
     return "draft"
-
-
-async def _save_uploaded_video(project_id: str, file: UploadFile) -> tuple[Path, bytes]:
-    filename = file.filename or "source.mp4"
-    suffix = Path(filename).suffix.lower()
-    if suffix not in VIDEO_EXTENSIONS:
-        raise AppException(400, "VIDEO_LOCALIZATION_UNSUPPORTED_MEDIA", "Only mp4, mov, m4v, webm, and mkv videos are supported")
-
-    content = await file.read()
-    if not content:
-        raise AppException(400, "VIDEO_LOCALIZATION_EMPTY_UPLOAD", "Uploaded video is empty")
-
-    settings_store.ensure_directories()
-    source_dir = _project_video_localization_dir(project_id) / "source"
-    source_dir.mkdir(parents=True, exist_ok=True)
-    destination = _unique_path(source_dir / _safe_filename(filename))
-    destination.write_bytes(content)
-    return destination, content
-
-
-def _safe_filename(filename: str) -> str:
-    name = Path(filename).name.strip() or "source.mp4"
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(name).stem).strip("._-") or "source"
-    suffix = Path(name).suffix.lower() or ".mp4"
-    return f"{stem}{suffix}"
-
-
-def _unique_path(path: Path) -> Path:
-    if not path.exists():
-        return path
-    for index in range(1, 1000):
-        candidate = path.with_name(f"{path.stem}-{index}{path.suffix}")
-        if not candidate.exists():
-            return candidate
-    raise AppException(500, "VIDEO_LOCALIZATION_UPLOAD_COLLISION", "Could not allocate a unique video path")
-
-
-def _project_video_localization_dir(project_id: str) -> Path:
-    settings_store.ensure_directories()
-    return settings_store.expand_path(settings_store.get().project_dir) / project_id / "video_localization"
-
-
-def _extract_audio_file(video_path: Path, audio_path: Path) -> dict:
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        raise AppException(500, "VIDEO_LOCALIZATION_FFMPEG_MISSING", "ffmpeg is required to extract source audio")
-    audio_path.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        ffmpeg,
-        "-y",
-        "-i",
-        str(video_path),
-        "-vn",
-        "-ac",
-        "2",
-        "-ar",
-        "48000",
-        str(audio_path),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    if result.returncode != 0 or not audio_path.exists():
-        audio_path.unlink(missing_ok=True)
-        raise AppException(500, "VIDEO_LOCALIZATION_AUDIO_EXTRACT_FAILED", "Failed to extract source audio")
-    return audio_tools.probe_audio(audio_path)
-
-
-def _separate_audio_file(audio_path: Path, stems_dir: Path) -> dict:
-    demucs = shutil.which("demucs")
-    if not demucs:
-        raise AppException(500, "VIDEO_LOCALIZATION_DEMUCS_MISSING", "demucs is required to separate vocals and background")
-
-    output_root = stems_dir / "demucs"
-    command = [
-        demucs,
-        "--two-stems",
-        "vocals",
-        "--name",
-        "htdemucs",
-        "--out",
-        str(output_root),
-        str(audio_path),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    demucs_dir = output_root / "htdemucs" / audio_path.stem
-    vocals_path = demucs_dir / "vocals.wav"
-    background_path = demucs_dir / "no_vocals.wav"
-    if result.returncode != 0 or not vocals_path.exists() or not background_path.exists():
-        raise AppException(500, "VIDEO_LOCALIZATION_SEPARATION_FAILED", "Failed to separate vocals and background")
-
-    vocals_clean_path = _unique_path(stems_dir / f"{audio_path.stem}-vocals-clean.wav")
-    background_dest = _unique_path(stems_dir / f"{audio_path.stem}-background.wav")
-    shutil.copy2(vocals_path, vocals_clean_path)
-    shutil.copy2(background_path, background_dest)
-    quality = audio_tools.quality_metrics(vocals_clean_path, min_duration_ms=1000)
-    return {
-        "vocals_clean_path": vocals_clean_path,
-        "background_path": background_dest,
-        "engine_id": "demucs:htdemucs",
-        "quality_flags": quality.get("warnings", []),
-    }
-
-
-def _cut_audio_clip(source_path: Path, destination: Path, start_ms: int, end_ms: int) -> Path:
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        raise AppException(500, "VIDEO_LOCALIZATION_FFMPEG_MISSING", "ffmpeg is required to create reference clips")
-    if end_ms <= start_ms:
-        raise AppException(400, "VIDEO_LOCALIZATION_REFERENCE_RANGE_INVALID", "Reference clip time range is invalid")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        ffmpeg,
-        "-y",
-        "-i",
-        str(source_path),
-        "-ss",
-        f"{start_ms / 1000:.3f}",
-        "-to",
-        f"{end_ms / 1000:.3f}",
-        "-ac",
-        "1",
-        "-ar",
-        "24000",
-        str(destination),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    if result.returncode != 0 or not destination.exists():
-        destination.unlink(missing_ok=True)
-        raise AppException(500, "VIDEO_LOCALIZATION_REFERENCE_CLIP_FAILED", "Failed to create reference clip")
-    return destination
 
 
 def _cues_from_asr_segments(
@@ -680,11 +549,4 @@ def _reference_id_for_cue(cue: VideoLocalizationCue) -> str:
 
 def _safe_identifier(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_") or "item"
-
-
-def _source_cue_cache_path(cache_dir: Path, source_path: Path, cue: VideoLocalizationCue) -> Path:
-    stat = source_path.stat()
-    signature = f"{stat.st_size}-{stat.st_mtime_ns}"
-    name = f"{_safe_identifier(cue.cue_id)}-{cue.start_ms}-{cue.end_ms}-{signature}-source.wav"
-    return cache_dir / name
 
