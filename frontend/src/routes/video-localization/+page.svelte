@@ -39,7 +39,6 @@
 		isActiveOperation,
 		operationBadgeClass,
 		operationStatusLabel,
-		referenceAudioUrl,
 		sortOperations,
 		sourceCueAudioUrl,
 		statusLabel,
@@ -48,6 +47,7 @@
 	} from './utils';
 	import CueTable from './CueTable.svelte';
 	import PreviewPanel from './PreviewPanel.svelte';
+	import ReferencePool from './ReferencePool.svelte';
 	import WorkflowStrip from './WorkflowStrip.svelte';
 
 	let projects = $state<Project[]>([]);
@@ -495,10 +495,6 @@
 		return Boolean(clip?.audio_path && clip.cleanliness === 'clean' && clip.asr_status === 'verified');
 	}
 
-	function referenceCanBeConfirmed(clip: VideoLocalizationReferenceClip) {
-		return Boolean(clip.audio_path && clip.source_stem === 'vocals_clean' && clip.asr_text?.trim());
-	}
-
 	function referenceForCue(cue: VideoLocalizationCue | null) {
 		if (!cue?.reference_clip_id) return null;
 		return draft?.reference_clips.find((item) => item.reference_clip_id === cue.reference_clip_id) ?? null;
@@ -797,53 +793,19 @@
 				{/if}
 			</section>
 
-			<section class="panel refs-panel">
-				<div class="section-title">
-					<h2>干净参考音色池</h2>
-					<div class="row">
-						<span class="badge ok">{draft?.reference_clips.length ?? 0} 候选</span>
-						<span class={`badge ${operationBadgeClass(operationFor('reference_clips'))}`}>{operationStatusLabel(operationFor('reference_clips'))}</span>
-						<button class="mini-btn" type="button" onclick={createReferenceCandidates} disabled={draft?.stems.separation_status !== 'completed' || creatingReferences || operationBusy('reference_clips')}>
-							{creatingReferences || operationBusy('reference_clips') ? '生成中' : '生成候选'}
-						</button>
-					</div>
-				</div>
-				<div class="reference-list">
-					{#each draft?.reference_clips ?? [] as clip}
-						<article class={`reference-card ${clip.cleanliness === 'clean' && clip.asr_status === 'verified' ? 'ready' : clip.cleanliness === 'blocked' ? 'blocked' : 'review'}`}>
-							<div>
-								<strong>{clip.reference_clip_id}</strong>
-								<p>{clip.audio_path || '尚未生成参考音文件'}</p>
-							</div>
-							{#if referenceAudioUrl(projectId, clip)}
-								<audio class="reference-audio" controls src={referenceAudioUrl(projectId, clip)}></audio>
-							{/if}
-							<div class="row">
-								<span class="badge role">{speakerLabel(clip.speaker_id)}</span>
-								<span class="badge">{durationLabel(clip.duration_ms)}</span>
-								<span class={`badge ${clip.cleanliness === 'clean' && clip.asr_status === 'verified' ? 'ok' : clip.cleanliness === 'blocked' ? 'fail' : 'warn'}`}>
-									{clip.cleanliness === 'clean' && clip.asr_status === 'verified' ? '可用' : clip.cleanliness === 'blocked' ? '阻断' : '复听'}
-								</span>
-							</div>
-							<small>ASR: {clip.asr_text || '待独立 ASR'}</small>
-							<div class="reference-actions">
-								<button class="mini-btn" type="button" onclick={() => markReferenceClean(clip)} disabled={!referenceCanBeConfirmed(clip) || referenceUpdatingId === clip.reference_clip_id}>
-									确认可用
-								</button>
-								<button class="mini-btn danger-text" type="button" onclick={() => markReferenceBlocked(clip)} disabled={referenceUpdatingId === clip.reference_clip_id}>
-									标记阻断
-								</button>
-								<button class="mini-btn" type="button" onclick={() => markReferenceNeedsReview(clip)} disabled={referenceUpdatingId === clip.reference_clip_id}>
-									退回复听
-								</button>
-							</div>
-						</article>
-					{/each}
-					{#if !draft?.reference_clips.length}
-						<p class="muted">暂无参考音候选。下一批接入人声分离和参考音裁切。</p>
-					{/if}
-				</div>
-			</section>
+			<ReferencePool
+				clips={draft?.reference_clips ?? []}
+				operation={operationFor('reference_clips')}
+				{creatingReferences}
+				canCreateCandidates={draft?.stems.separation_status === 'completed' && !operationBusy('reference_clips')}
+				{referenceUpdatingId}
+				{projectId}
+				{speakerLabel}
+				onGenerateCandidates={createReferenceCandidates}
+				onMarkClean={markReferenceClean}
+				onMarkBlocked={markReferenceBlocked}
+				onMarkNeedsReview={markReferenceNeedsReview}
+			/>
 
 			<section class="panel export-panel">
 				<div class="section-title">
@@ -1077,52 +1039,6 @@
 	.cue-audio-compare span {
 		font-size: 11px;
 		color: var(--muted);
-	}
-
-	.reference-list {
-		display: grid;
-		gap: 8px;
-	}
-
-	.reference-card {
-		display: grid;
-		gap: 7px;
-		border: 1px solid var(--line);
-		border-radius: 7px;
-		padding: 10px;
-		background: #101215;
-	}
-
-	.reference-card.ready {
-		border-color: #23634f;
-	}
-
-	.reference-card.review {
-		border-color: #604b18;
-	}
-
-	.reference-audio {
-		width: 100%;
-		height: 34px;
-	}
-
-	.reference-actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-	}
-
-	.danger-text {
-		color: #ff9f9f;
-		border-color: #6d3030;
-	}
-
-	.reference-card p,
-	.reference-card small {
-		margin: 0;
-		color: var(--muted);
-		font-size: 12px;
-		line-height: 1.45;
 	}
 
 	.handoff-summary {
