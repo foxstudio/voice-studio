@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import asr, audio_tools, batches, community_voice_packs, engines, evaluations, exports, generate, history, longform, presets, projects, ser, settings, tasks, text_tools, voice_seeds, voices
+from app.api import asr, audio_tools, batches, community_voice_packs, engines, evaluations, exports, generate, history, longform, presets, projects, ser, settings, tasks, text_tools, video_localization, voice_seeds, voices
 from app.errors import AppException
 from app.services import asr_tasks, batch_queue, engine_registry, longform_queue, qwen_forced_aligner, settings_store, task_queue
 
@@ -50,6 +50,7 @@ app.include_router(batches.router, prefix="/api/batches", tags=["batches"])
 app.include_router(tasks.router, prefix="/api/tasks", tags=["tasks"])
 app.include_router(history.router, prefix="/api/history", tags=["history"])
 app.include_router(projects.router, prefix="/api/projects", tags=["projects"])
+app.include_router(video_localization.router, prefix="/api/projects", tags=["video-localization"])
 app.include_router(exports.router, prefix="/api/exports", tags=["exports"])
 app.include_router(evaluations.router, prefix="/api/evaluations", tags=["evaluations"])
 app.include_router(presets.router, prefix="/api/presets", tags=["presets"])

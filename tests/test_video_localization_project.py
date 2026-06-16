@@ -14,7 +14,7 @@ from app.main import app  # noqa: E402
 from app.schemas.voice_studio import AppSettings, BatchSegmentResult, BatchTask, GenerationTask, HistoryItem, TaskStatus  # noqa: E402
 from app.domains.video_localization import service as video_localization_service  # noqa: E402
 from app.services import batch_queue, database, settings_store, task_queue  # noqa: E402
-from app.api import projects as projects_api  # noqa: E402
+from app.api import video_localization as video_localization_api  # noqa: E402
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -623,7 +623,7 @@ def test_video_localization_tts_batch_submits_ready_clean_reference_cues(tmp_pat
             segments=[BatchSegmentResult(segment_id="cue_0001", text=payload["segments"][0]["text"], status=TaskStatus.queued)],
         )
 
-    monkeypatch.setattr(projects_api.batch_queue, "submit", fake_submit)
+    monkeypatch.setattr(video_localization_api.batch_queue, "submit", fake_submit)
 
     response = client.post(f"/api/projects/{project['project_id']}/video-localization/tts/batch")
 
@@ -755,7 +755,7 @@ def test_video_localization_reference_clip_review_enables_tts_batch(tmp_path: Pa
             segments=[BatchSegmentResult(segment_id="cue_0001", text=payload["segments"][0]["text"], status=TaskStatus.queued)],
         )
 
-    monkeypatch.setattr(projects_api.batch_queue, "submit", fake_submit)
+    monkeypatch.setattr(video_localization_api.batch_queue, "submit", fake_submit)
 
     response = client.post(f"/api/projects/{project['project_id']}/video-localization/tts/batch")
     assert response.status_code == 200
