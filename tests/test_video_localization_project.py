@@ -200,6 +200,73 @@ def test_video_localization_complete_clone_cue_can_pass_quality_gate(tmp_path: P
     assert body["quality_gate"]["pending_issues"] == 0
 
 
+def test_video_localization_patch_cue_updates_single_row_and_quality_gate(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "局部保存 cue", "description": ""}).json()
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 2200,
+                    "en_subtitle_text": "Original English.",
+                },
+                {
+                    "cue_id": "cue_0002",
+                    "speaker_id": "speaker_02",
+                    "start_ms": 2300,
+                    "end_ms": 3200,
+                    "en_subtitle_text": "Keep this line.",
+                },
+            ],
+        },
+    )
+
+    response = client.patch(
+        f"/api/projects/{project['project_id']}/video-localization/cues/cue_0001",
+        json={
+            "zh_localized_subtitle_text": "显示字幕。",
+            "tts_recommended_text": "显示字幕。",
+            "review_status": "ready",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cues"][0]["zh_localized_subtitle_text"] == "显示字幕。"
+    assert body["cues"][0]["review_status"] == "ready"
+    assert body["cues"][1]["en_subtitle_text"] == "Keep this line."
+    blocker_codes = {issue["code"] for issue in body["quality_gate"]["blockers"]}
+    assert "ZH_SUBTITLE_MISSING" not in {issue["code"] for issue in body["quality_gate"]["blockers"] if issue.get("cue_id") == "cue_0001"}
+    assert "ZH_SUBTITLE_MISSING" in blocker_codes
+
+
+def test_video_localization_patch_cue_rejects_invalid_time_range(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "局部坏时间", "description": ""}).json()
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [{"cue_id": "cue_0001", "start_ms": 1000, "end_ms": 2000}],
+        },
+    )
+
+    response = client.patch(
+        f"/api/projects/{project['project_id']}/video-localization/cues/cue_0001",
+        json={"end_ms": 500},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_CUE_INVALID"
+
+
 def test_video_localization_import_source_media_updates_draft(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "导入视频", "description": ""}).json()

@@ -267,6 +267,23 @@ export interface VideoLocalizationCue {
 	[key: string]: unknown;
 }
 
+export type VideoLocalizationCueUpdate = Partial<
+	Pick<
+		VideoLocalizationCue,
+		| 'speaker_id'
+		| 'start_ms'
+		| 'end_ms'
+		| 'audio_route'
+		| 'en_subtitle_text'
+		| 'zh_localized_subtitle_text'
+		| 'tts_recommended_text'
+		| 'reference_clip_id'
+		| 'review_status'
+		| 'quality_flags'
+		| 'notes'
+	>
+>;
+
 export interface VideoLocalizationQualityIssue {
 	code: string;
 	message: string;

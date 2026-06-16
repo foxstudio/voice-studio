@@ -29,6 +29,7 @@ import type {
 	UploadResult,
 	VideoLocalizationDraft,
 	VideoLocalizationExport,
+	VideoLocalizationCueUpdate,
 	VideoLocalizationOperation,
 	VideoLocalizationReferenceClipUpdate,
 	VoiceAsset,
@@ -113,6 +114,7 @@ export const Api = {
 	separateVideoLocalizationStems: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/stems`),
 	transcribeVideoLocalizationEnglish: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/asr/en`),
 	createVideoLocalizationReferences: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/reference-clips`),
+	updateVideoLocalizationCue: (id: string, cueId: string, body: VideoLocalizationCueUpdate) => api.patch<VideoLocalizationDraft>(`/projects/${id}/video-localization/cues/${cueId}`, body),
 	updateVideoLocalizationReference: (id: string, referenceClipId: string, body: VideoLocalizationReferenceClipUpdate) =>
 		api.patch<VideoLocalizationDraft>(`/projects/${id}/video-localization/reference-clips/${referenceClipId}`, body),
 	generateVideoLocalizationChineseDraft: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/localize/zh`),

@@ -5,6 +5,7 @@
 		GenerateRequest,
 		Project,
 		VideoLocalizationCue,
+		VideoLocalizationCueUpdate,
 		VideoLocalizationDraft,
 		VideoLocalizationOperation,
 		VideoLocalizationReferenceClip,
@@ -41,6 +42,7 @@
 	let selectedCueId = $state('');
 	let loading = $state(true);
 	let saving = $state(false);
+	let savingCue = $state(false);
 	let creating = $state(false);
 	let importing = $state(false);
 	let extractingAudio = $state(false);
@@ -439,6 +441,36 @@
 	function updateSelectedCueTime(field: 'start_ms' | 'end_ms', value: string) {
 		const normalized = value.trim();
 		updateSelectedCue({ [field]: normalized ? Math.max(0, Number(normalized)) : null });
+	}
+
+	async function saveSelectedCue() {
+		if (!projectId || !selectedCue) return;
+		savingCue = true;
+		error = '';
+		const cueId = selectedCue.cue_id;
+		const patch: VideoLocalizationCueUpdate = {
+			speaker_id: selectedCue.speaker_id,
+			start_ms: selectedCue.start_ms,
+			end_ms: selectedCue.end_ms,
+			audio_route: selectedCue.audio_route,
+			en_subtitle_text: selectedCue.en_subtitle_text,
+			zh_localized_subtitle_text: selectedCue.zh_localized_subtitle_text,
+			tts_recommended_text: selectedCue.tts_recommended_text,
+			reference_clip_id: selectedCue.reference_clip_id,
+			review_status: selectedCue.review_status,
+			quality_flags: selectedCue.quality_flags,
+			notes: selectedCue.notes
+		};
+		try {
+			draft = await Api.updateVideoLocalizationCue(projectId, cueId, patch);
+			selectedCueId = cueId;
+			message = '当前片段已保存';
+			setTimeout(() => (message = ''), 1800);
+		} catch (e) {
+			error = (e as Error).message || '保存当前片段失败';
+		} finally {
+			savingCue = false;
+		}
 	}
 
 	function buildWorkflow(current: VideoLocalizationDraft | null): WorkflowStep[] {
@@ -977,6 +1009,9 @@
 						<label class="field"><span>TTS 台词</span><textarea rows="3" value={selectedCue.tts_recommended_text ?? ''} oninput={(event) => updateSelectedCue({ tts_recommended_text: event.currentTarget.value })}></textarea></label>
 					</div>
 					<div class="row editor-actions">
+						<button class="btn primary" type="button" onclick={saveSelectedCue} disabled={savingCue}>
+							<Save size={14} /> {savingCue ? '保存中' : '保存当前片段'}
+						</button>
 						<div class="cue-audio-compare">
 							<div>
 								<span>原声</span>

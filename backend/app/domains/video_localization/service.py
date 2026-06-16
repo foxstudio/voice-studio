@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from fastapi import UploadFile
+from pydantic import ValidationError
 
 from app.domains.video_localization import media_assets
 from app.domains.video_localization.quality_gate import evaluate_quality_gate
@@ -14,6 +15,7 @@ from app.errors import AppException
 from app.schemas.voice_studio import (
     BatchGenerateRequest,
     VideoLocalizationCue,
+    VideoLocalizationCueUpdate,
     VideoLocalizationDraft,
     VideoLocalizationExport,
     VideoLocalizationReferenceClip,
@@ -251,6 +253,28 @@ def update_reference_clip(project_id: str, reference_clip_id: str, patch: VideoL
     if not updated:
         raise AppException(404, "VIDEO_LOCALIZATION_REFERENCE_CLIP_NOT_FOUND", "Reference clip not found")
     return save_video_localization(project_id, draft.model_copy(update={"reference_clips": next_refs}))
+
+
+def update_cue(project_id: str, cue_id: str, patch: VideoLocalizationCueUpdate) -> VideoLocalizationDraft | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    update = patch.model_dump(exclude_unset=True)
+    updated = False
+    next_cues: list[VideoLocalizationCue] = []
+    for cue in draft.cues:
+        if cue.cue_id != cue_id:
+            next_cues.append(cue)
+            continue
+        try:
+            next_cues.append(VideoLocalizationCue(**{**cue.model_dump(), **update}))
+        except ValidationError as exc:
+            raise AppException(400, "VIDEO_LOCALIZATION_CUE_INVALID", "Cue update is invalid", {"errors": exc.errors()}) from exc
+        updated = True
+    if not updated:
+        raise AppException(404, "VIDEO_LOCALIZATION_CUE_NOT_FOUND", "Cue not found")
+    return save_video_localization(project_id, draft.model_copy(update={"cues": next_cues}))
 
 
 def _validate_reference_clip_update(clip: VideoLocalizationReferenceClip) -> None:
@@ -549,4 +573,3 @@ def _reference_id_for_cue(cue: VideoLocalizationCue) -> str:
 
 def _safe_identifier(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_") or "item"
-

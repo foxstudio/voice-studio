@@ -769,6 +769,20 @@ class VideoLocalizationCue(VideoLocalizationExtensibleModel):
         return self
 
 
+class VideoLocalizationCueUpdate(BaseModel):
+    speaker_id: str | None = None
+    start_ms: int | None = Field(default=None, ge=0)
+    end_ms: int | None = Field(default=None, ge=0)
+    audio_route: Literal["clone_from_source", "preset_tts", "preserve_original_audio", "manual_review"] | None = None
+    en_subtitle_text: str | None = None
+    zh_localized_subtitle_text: str | None = None
+    tts_recommended_text: str | None = None
+    reference_clip_id: str | None = None
+    review_status: Literal["needs_review", "ready", "blocked", "locked"] | None = None
+    quality_flags: list[str] | None = None
+    notes: str | None = None
+
+
 class VideoLocalizationQualityIssue(VideoLocalizationExtensibleModel):
     code: str
     message: str

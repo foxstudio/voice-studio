@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from app.domains.video_localization import operation_queue
 from app.domains.video_localization import service as video_localization_service
 from app.errors import AppException
-from app.schemas.voice_studio import BatchTask, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationOperationRequest, VideoLocalizationReferenceClipUpdate
+from app.schemas.voice_studio import BatchTask, VideoLocalizationCueUpdate, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationOperationRequest, VideoLocalizationReferenceClipUpdate
 from app.services import batch_queue
 
 router = APIRouter()
@@ -97,6 +97,14 @@ async def create_video_localization_reference_clips(project_id: str):
 @router.patch("/{project_id}/video-localization/reference-clips/{reference_clip_id}", response_model=VideoLocalizationDraft)
 async def update_video_localization_reference_clip(project_id: str, reference_clip_id: str, patch: VideoLocalizationReferenceClipUpdate):
     updated = video_localization_service.update_reference_clip(project_id, reference_clip_id, patch)
+    if not updated:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    return updated
+
+
+@router.patch("/{project_id}/video-localization/cues/{cue_id}", response_model=VideoLocalizationDraft)
+async def update_video_localization_cue(project_id: str, cue_id: str, patch: VideoLocalizationCueUpdate):
+    updated = video_localization_service.update_cue(project_id, cue_id, patch)
     if not updated:
         raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
     return updated
