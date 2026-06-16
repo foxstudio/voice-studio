@@ -179,6 +179,18 @@ async def export_video_localization(project_id: str):
     )
 
 
+@router.get("/{project_id}/video-localization/readiness")
+async def export_video_localization_readiness(project_id: str):
+    data = video_localization_service.production_readiness_audit(project_id)
+    if not data:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    filename = f"{project_id}-video-localization-readiness.json"
+    return JSONResponse(
+        content=data,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post("/{project_id}/transcriptions/import", response_model=ProjectTranscriptionImportResponse)
 async def import_transcriptions(project_id: str, data: ProjectTranscriptionImportRequest):
     if not data.transcription_ids:

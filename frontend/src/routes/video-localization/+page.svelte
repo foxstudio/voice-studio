@@ -255,6 +255,25 @@
 		}
 	}
 
+	async function exportReadinessAudit() {
+		if (!projectId) return;
+		error = '';
+		try {
+			const data = await Api.videoLocalizationReadiness(projectId);
+			const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+			const url = URL.createObjectURL(blob);
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = `${projectId}-video-localization-readiness.json`;
+			link.click();
+			URL.revokeObjectURL(url);
+			message = 'Readiness JSON 已导出';
+			setTimeout(() => (message = ''), 1800);
+		} catch (e) {
+			error = (e as Error).message || '导出 readiness 失败';
+		}
+	}
+
 	async function submitBatchTts() {
 		if (!projectId || !canSubmitCount) return;
 		submittingBatch = true;
@@ -880,6 +899,7 @@
 						</button>
 					</div>
 					<button class="btn" type="button" onclick={exportJson} disabled={!draft}><Download size={14} /> 下载 production JSON</button>
+					<button class="btn" type="button" onclick={exportReadinessAudit} disabled={!draft}><FileJson size={14} /> 下载 readiness JSON</button>
 					<button class="btn" type="button" onclick={exportBilingualSrt} disabled={!draft?.cues.some((cue) => cue.start_ms !== null && cue.end_ms !== null)}><Languages size={14} /> 导出中英字幕草稿</button>
 				</div>
 			</section>

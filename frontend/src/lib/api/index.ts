@@ -111,6 +111,7 @@ export const Api = {
 	submitVideoLocalizationBatchTts: (id: string) => api.post<BatchTask>(`/projects/${id}/video-localization/tts/batch`),
 	syncVideoLocalizationBatchTts: (id: string, batchId: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/tts/batch/${batchId}/sync`),
 	exportVideoLocalizationDraft: (id: string) => api.get<VideoLocalizationExport>(`/projects/${id}/video-localization/export`),
+	videoLocalizationReadiness: (id: string) => api.get<Record<string, unknown>>(`/projects/${id}/video-localization/readiness`),
 	importTranscriptionsToProject: (
 		id: string,
 		body: { transcription_ids: string[]; mode?: 'append' | 'replace'; role_id?: string | null; default_engine_id?: string | null; default_voice_id?: string | null }

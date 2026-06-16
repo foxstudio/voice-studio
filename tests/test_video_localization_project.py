@@ -936,3 +936,125 @@ def test_video_localization_export_adds_project_metadata(tmp_path: Path):
     assert body["export_summary"]["cue_count"] == 1
     assert body["quality_gate"]["status"] == "blocked"
     assert body["cues"][0]["tts_recommended_text"] == "你好。"
+
+
+def test_video_localization_readiness_exports_ready_for_mix(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "就绪审计", "description": ""}).json()
+    tts_audio = tmp_path / "outputs" / "cue_0001.wav"
+    tts_audio.parent.mkdir(parents=True, exist_ok=True)
+    tts_audio.write_bytes(b"fake-tts-audio")
+
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "source.mp4", "audio_path": str(tmp_path / "source.wav")},
+            "stems": {
+                "separation_status": "completed",
+                "original_audio_path": str(tmp_path / "source.wav"),
+                "vocals_clean_path": str(tmp_path / "vocals.wav"),
+                "background_path": str(tmp_path / "background.wav"),
+            },
+            "speakers": [{"speaker_id": "speaker_01", "display_name": "A", "route": "clone_from_source"}],
+            "reference_clips": [
+                {
+                    "reference_clip_id": "ref_001",
+                    "speaker_id": "speaker_01",
+                    "source_stem": "vocals_clean",
+                    "audio_path": str(tmp_path / "ref_001.wav"),
+                    "cleanliness": "clean",
+                    "asr_text": "This is a clean reference.",
+                    "asr_status": "verified",
+                }
+            ],
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 3000,
+                    "audio_route": "clone_from_source",
+                    "en_subtitle_text": "In 1992, this changed everything.",
+                    "zh_localized_subtitle_text": "1992 年，这件事改变了一切。",
+                    "tts_recommended_text": "一九九二年，这件事，改变了一切。",
+                    "reference_clip_id": "ref_001",
+                    "tts_audio_path": str(tts_audio),
+                    "generated_duration_ms": 2000,
+                    "source_duration_ms": 2000,
+                    "review_status": "ready",
+                }
+            ],
+        },
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/readiness")
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"].endswith(f'{project["project_id"]}-video-localization-readiness.json"')
+    body = response.json()
+    assert body["status"] == "ready_for_mix"
+    assert body["summary"]["generated_tts_count"] == 1
+    assert body["summary"]["quality_gate_status"] == "pass"
+    assert body["cue_status"][0]["has_tts_audio"] is True
+    assert all(check["status"] == "pass" for check in body["checks"])
+
+
+def test_video_localization_readiness_blocks_missing_or_failed_tts(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "失败审计", "description": ""}).json()
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "source.mp4", "audio_path": str(tmp_path / "source.wav")},
+            "stems": {
+                "separation_status": "completed",
+                "original_audio_path": str(tmp_path / "source.wav"),
+                "vocals_clean_path": str(tmp_path / "vocals.wav"),
+                "background_path": str(tmp_path / "background.wav"),
+            },
+            "speakers": [{"speaker_id": "speaker_01", "display_name": "A", "route": "clone_from_source"}],
+            "reference_clips": [
+                {
+                    "reference_clip_id": "ref_001",
+                    "speaker_id": "speaker_01",
+                    "source_stem": "vocals_clean",
+                    "audio_path": str(tmp_path / "ref_001.wav"),
+                    "cleanliness": "clean",
+                    "asr_text": "This is a clean reference.",
+                    "asr_status": "verified",
+                }
+            ],
+            "cues": [
+                {
+                    "cue_id": "cue_failed",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1000,
+                    "end_ms": 3000,
+                    "audio_route": "clone_from_source",
+                    "en_subtitle_text": "In 1992, this changed everything.",
+                    "zh_localized_subtitle_text": "1992 年，这件事改变了一切。",
+                    "tts_recommended_text": "一九九二年，这件事，改变了一切。",
+                    "reference_clip_id": "ref_001",
+                    "tts_batch_status": "failed",
+                    "tts_batch_error": "REFERENCE_AUDIO_NOT_FOUND",
+                    "review_status": "ready",
+                }
+            ],
+        },
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/readiness")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "blocked"
+    check_by_code = {check["code"]: check for check in body["checks"]}
+    assert check_by_code["tts_audio_coverage"]["status"] == "blocked"
+    assert check_by_code["tts_audio_coverage"]["details"]["missing_cue_ids"] == ["cue_failed"]
+    assert check_by_code["tts_failures"]["status"] == "blocked"
+    assert check_by_code["tts_failures"]["details"]["failed_cue_ids"] == ["cue_failed"]
+    assert body["cue_status"][0]["tts_batch_error"] == "REFERENCE_AUDIO_NOT_FOUND"
