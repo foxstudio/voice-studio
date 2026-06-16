@@ -249,11 +249,9 @@
 		creatingReferences = true;
 		error = '';
 		try {
-			draft = await Api.createVideoLocalizationReferences(projectId);
-			message = '参考音候选已生成';
-			setTimeout(() => (message = ''), 1800);
+			await submitMediaOperation('reference_clips', '参考音候选生成任务已开始');
 		} catch (e) {
-			error = (e as Error).message || '生成参考音候选失败';
+			error = (e as Error).message || '提交参考音候选任务失败';
 		} finally {
 			creatingReferences = false;
 		}
@@ -1044,8 +1042,9 @@
 					<h2>干净参考音色池</h2>
 					<div class="row">
 						<span class="badge ok">{draft?.reference_clips.length ?? 0} 候选</span>
-						<button class="mini-btn" type="button" onclick={createReferenceCandidates} disabled={draft?.stems.separation_status !== 'completed' || creatingReferences}>
-							{creatingReferences ? '生成中' : '生成候选'}
+						<span class={`badge ${operationBadgeClass(operationFor('reference_clips'))}`}>{operationStatusLabel(operationFor('reference_clips'))}</span>
+						<button class="mini-btn" type="button" onclick={createReferenceCandidates} disabled={draft?.stems.separation_status !== 'completed' || creatingReferences || operationBusy('reference_clips')}>
+							{creatingReferences || operationBusy('reference_clips') ? '生成中' : '生成候选'}
 						</button>
 					</div>
 				</div>

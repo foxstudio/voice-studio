@@ -313,7 +313,7 @@ export interface VideoLocalizationExportState {
 export interface VideoLocalizationOperation {
 	operation_id: string;
 	project_id: string;
-	kind: 'source_audio' | 'stems' | 'english_asr';
+	kind: 'source_audio' | 'stems' | 'english_asr' | 'reference_clips';
 	status: 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
 	label: string | null;
 	progress: number;

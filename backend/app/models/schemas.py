@@ -809,7 +809,7 @@ class VideoLocalizationExportState(VideoLocalizationExtensibleModel):
 class VideoLocalizationOperation(VideoLocalizationExtensibleModel):
     operation_id: str = Field(default_factory=new_id)
     project_id: str
-    kind: Literal["source_audio", "stems", "english_asr"]
+    kind: Literal["source_audio", "stems", "english_asr", "reference_clips"]
     status: Literal["queued", "running", "success", "failed", "cancelled"] = "queued"
     label: str | None = None
     progress: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -823,7 +823,7 @@ class VideoLocalizationOperation(VideoLocalizationExtensibleModel):
 
 
 class VideoLocalizationOperationRequest(BaseModel):
-    kind: Literal["source_audio", "stems", "english_asr"]
+    kind: Literal["source_audio", "stems", "english_asr", "reference_clips"]
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 

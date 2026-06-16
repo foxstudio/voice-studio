@@ -11,7 +11,7 @@ from app.errors import AppException
 from app.schemas.voice_studio import VideoLocalizationDraft, VideoLocalizationOperation, now_iso
 from app.services import project_store
 
-OperationKind = Literal["source_audio", "stems", "english_asr"]
+OperationKind = Literal["source_audio", "stems", "english_asr", "reference_clips"]
 OperationStatus = Literal["queued", "running", "success", "failed", "cancelled"]
 
 _queue: queue.Queue[str | None] | None = None
@@ -24,6 +24,7 @@ _KIND_LABELS: dict[OperationKind, str] = {
     "source_audio": "抽取源音轨",
     "stems": "分离人声与背景声",
     "english_asr": "英文 ASR 转字幕",
+    "reference_clips": "生成参考音候选",
 }
 
 
@@ -124,6 +125,9 @@ def _process(operation_id: str) -> None:
             engine_id = str(operation.parameters.get("engine_id") or "faster-whisper-turbo")
             updated = service.transcribe_english_source_audio(project_id, engine_id=engine_id)
             summary = _english_asr_summary(updated)
+        elif operation.kind == "reference_clips":
+            updated = service.create_reference_clips_from_cues(project_id)
+            summary = _reference_clips_summary(updated)
         else:
             raise AppException(400, "VIDEO_LOCALIZATION_OPERATION_UNSUPPORTED", f"Unsupported operation: {operation.kind}")
         if updated is None:
@@ -188,6 +192,13 @@ def _validate_prerequisites(kind: OperationKind, draft: VideoLocalizationDraft) 
             raise AppException(400, "VIDEO_LOCALIZATION_SOURCE_AUDIO_MISSING", "Extract source audio before running this operation")
         if not Path(audio_path_value).exists():
             raise AppException(400, "VIDEO_LOCALIZATION_SOURCE_AUDIO_NOT_FOUND", "Source audio file is missing")
+        return
+
+    if kind == "reference_clips":
+        if draft.stems.separation_status != "completed" or not draft.stems.vocals_clean_path:
+            raise AppException(400, "VIDEO_LOCALIZATION_CLEAN_VOCALS_MISSING", "Separate clean vocals before creating reference clips")
+        if not Path(draft.stems.vocals_clean_path).exists():
+            raise AppException(400, "VIDEO_LOCALIZATION_CLEAN_VOCALS_NOT_FOUND", "Clean vocals file is missing")
         return
 
 
@@ -290,4 +301,13 @@ def _english_asr_summary(draft: VideoLocalizationDraft | None) -> dict:
         "engine_id": draft.source_media.metadata.get("english_asr_engine_id"),
         "segment_count": draft.source_media.metadata.get("english_asr_segment_count"),
         "cue_count": len(draft.cues),
+    }
+
+
+def _reference_clips_summary(draft: VideoLocalizationDraft | None) -> dict:
+    if not draft:
+        return {}
+    return {
+        "reference_clip_count": len(draft.reference_clips),
+        "clean_reference_count": len([clip for clip in draft.reference_clips if clip.cleanliness == "clean"]),
     }
