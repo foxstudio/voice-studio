@@ -271,6 +271,104 @@ def test_video_localization_patch_cue_rejects_invalid_time_range(tmp_path: Path)
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_CUE_INVALID"
 
 
+def test_video_localization_can_create_speaker_and_assign_cue(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "说话人分配", "description": ""}).json()
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "start_ms": 1000,
+                    "end_ms": 3200,
+                    "audio_route": "manual_review",
+                    "en_subtitle_text": "This changed everything.",
+                    "quality_flags": ["generated_by_asr", "needs_speaker_assignment", "needs_zh_localization"],
+                }
+            ],
+        },
+    )
+
+    created = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/speakers",
+        json={"display_name": "A", "route": "clone_from_source"},
+    )
+
+    assert created.status_code == 200
+    speaker = created.json()["speakers"][0]
+    assert speaker["speaker_id"] == "speaker_01"
+    assert speaker["display_name"] == "A"
+    assert speaker["route"] == "clone_from_source"
+
+    updated = client.patch(
+        f"/api/projects/{project['project_id']}/video-localization/cues/cue_0001",
+        json={
+            "speaker_id": "speaker_01",
+            "audio_route": "clone_from_source",
+            "zh_localized_subtitle_text": "这改变了一切。",
+            "tts_recommended_text": "这，改变了一切。",
+        },
+    )
+
+    assert updated.status_code == 200
+    body = updated.json()
+    cue = body["cues"][0]
+    assert cue["speaker_id"] == "speaker_01"
+    assert cue["audio_route"] == "clone_from_source"
+    assert "needs_speaker_assignment" not in cue["quality_flags"]
+    assert "needs_zh_localization" not in cue["quality_flags"]
+    assert body["speakers"][0]["time_ranges"] == [{"start_ms": 1000, "end_ms": 3200, "source": "cue"}]
+
+
+def test_video_localization_patch_speaker_keeps_reconciled_tracks(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "更新说话人", "description": ""}).json()
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "speakers": [{"speaker_id": "speaker_01", "display_name": "A"}],
+            "reference_clips": [
+                {
+                    "reference_clip_id": "ref_001",
+                    "speaker_id": "speaker_01",
+                    "source_stem": "vocals_clean",
+                    "audio_path": str(tmp_path / "ref_001.wav"),
+                    "cleanliness": "clean",
+                    "asr_status": "verified",
+                    "asr_text": "Reference line.",
+                }
+            ],
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "speaker_id": "speaker_01",
+                    "start_ms": 1500,
+                    "end_ms": 4200,
+                    "en_subtitle_text": "Reference line.",
+                }
+            ],
+        },
+    )
+
+    updated = client.patch(
+        f"/api/projects/{project['project_id']}/video-localization/speakers/speaker_01",
+        json={"display_name": "旁白 A", "route": "preset_tts", "review_status": "ready"},
+    )
+
+    assert updated.status_code == 200
+    speaker = updated.json()["speakers"][0]
+    assert speaker["display_name"] == "旁白 A"
+    assert speaker["route"] == "preset_tts"
+    assert speaker["review_status"] == "ready"
+    assert speaker["reference_clip_ids"] == ["ref_001"]
+    assert speaker["time_ranges"] == [{"start_ms": 1500, "end_ms": 4200, "source": "cue"}]
+
+
 def test_video_localization_import_source_media_updates_draft(tmp_path: Path, monkeypatch):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "导入视频", "description": ""}).json()

@@ -220,6 +220,21 @@ export interface VideoLocalizationSpeaker {
 	[key: string]: unknown;
 }
 
+export interface VideoLocalizationSpeakerCreate {
+	speaker_id?: string | null;
+	display_name?: string | null;
+	route?: VideoLocalizationSpeaker['route'];
+	review_status?: VideoLocalizationSpeaker['review_status'];
+	notes?: string | null;
+}
+
+export interface VideoLocalizationSpeakerUpdate {
+	display_name?: string | null;
+	route?: VideoLocalizationSpeaker['route'] | null;
+	review_status?: VideoLocalizationSpeaker['review_status'] | null;
+	notes?: string | null;
+}
+
 export interface VideoLocalizationReferenceClip {
 	reference_clip_id: string;
 	speaker_id: string | null;

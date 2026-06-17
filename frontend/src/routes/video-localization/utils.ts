@@ -1,4 +1,4 @@
-import type { BatchTask, GenerateRequest, VideoLocalizationCue, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationReferenceClip } from '$lib/api/types';
+import type { BatchTask, GenerateRequest, VideoLocalizationCue, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationReferenceClip, VideoLocalizationSpeaker } from '$lib/api/types';
 
 export type WorkflowStep = {
 	label: string;
@@ -176,6 +176,21 @@ export function createManualCue(draft: VideoLocalizationDraft): VideoLocalizatio
 		quality_flags: ['手动新增'],
 		notes: null
 	};
+}
+
+export function suggestSpeakerSeed(speakers: VideoLocalizationSpeaker[]) {
+	const usedIds = new Set(speakers.map((speaker) => speaker.speaker_id));
+	let index = speakers.length + 1;
+	while (usedIds.has(`speaker_${String(index).padStart(2, '0')}`)) index += 1;
+	return {
+		speaker_id: `speaker_${String(index).padStart(2, '0')}`,
+		display_name: speakerDisplaySeed(index - 1)
+	};
+}
+
+function speakerDisplaySeed(index: number) {
+	const labels = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+	return labels[index] ?? `S${index + 1}`;
 }
 
 export function buildGenerateRequest(projectId: string, cue: VideoLocalizationCue, reference: VideoLocalizationReferenceClip | null | undefined): GenerateRequest {

@@ -10,6 +10,7 @@ from app.domains.video_localization import draft_store
 from app.domains.video_localization import exporting
 from app.domains.video_localization import localization
 from app.domains.video_localization import reference_clips
+from app.domains.video_localization import speakers
 from app.domains.video_localization import source_pipeline
 from app.domains.video_localization import tts_orchestration
 from app.domains.video_localization import tts_pipeline
@@ -20,6 +21,8 @@ from app.domains.video_localization.schemas import (
     VideoLocalizationDraft,
     VideoLocalizationExport,
     VideoLocalizationReferenceClipUpdate,
+    VideoLocalizationSpeakerCreate,
+    VideoLocalizationSpeakerUpdate,
 )
 from app.services import project_store
 
@@ -71,7 +74,8 @@ def create_reference_clips_from_cues(project_id: str) -> VideoLocalizationDraft 
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    return save_video_localization(project_id, reference_clips.with_reference_clips_from_cues(project_id, draft))
+    next_draft = reference_clips.with_reference_clips_from_cues(project_id, draft)
+    return save_video_localization(project_id, speakers.reconcile_speakers(next_draft))
 
 
 def update_reference_clip(project_id: str, reference_clip_id: str, patch: VideoLocalizationReferenceClipUpdate) -> VideoLocalizationDraft | None:
@@ -79,7 +83,8 @@ def update_reference_clip(project_id: str, reference_clip_id: str, patch: VideoL
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    return save_video_localization(project_id, reference_clips.with_updated_reference_clip(draft, reference_clip_id, patch))
+    next_draft = reference_clips.with_updated_reference_clip(draft, reference_clip_id, patch)
+    return save_video_localization(project_id, speakers.reconcile_speakers(next_draft))
 
 
 def update_cue(project_id: str, cue_id: str, patch: VideoLocalizationCueUpdate) -> VideoLocalizationDraft | None:
@@ -87,7 +92,24 @@ def update_cue(project_id: str, cue_id: str, patch: VideoLocalizationCueUpdate) 
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    return save_video_localization(project_id, cue_tools.with_updated_cue(draft, cue_id, patch))
+    next_draft = cue_tools.with_updated_cue(draft, cue_id, patch)
+    return save_video_localization(project_id, speakers.reconcile_speakers(next_draft))
+
+
+def create_speaker(project_id: str, payload: VideoLocalizationSpeakerCreate) -> VideoLocalizationDraft | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    return save_video_localization(project_id, speakers.with_created_speaker(draft, payload))
+
+
+def update_speaker(project_id: str, speaker_id: str, payload: VideoLocalizationSpeakerUpdate) -> VideoLocalizationDraft | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    return save_video_localization(project_id, speakers.with_updated_speaker(draft, speaker_id, payload))
 
 
 def generate_localization_draft(project_id: str) -> VideoLocalizationDraft | None:

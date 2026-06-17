@@ -27,6 +27,8 @@ import type {
 	TTSVerificationRequest,
 	TTSVerificationResponse,
 	UploadResult,
+	VideoLocalizationSpeakerCreate,
+	VideoLocalizationSpeakerUpdate,
 	VideoLocalizationDraft,
 	VideoLocalizationExport,
 	VideoLocalizationCueUpdate,
@@ -116,6 +118,9 @@ export const Api = {
 	separateVideoLocalizationStems: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/stems`),
 	transcribeVideoLocalizationEnglish: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/asr/en`),
 	createVideoLocalizationReferences: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/reference-clips`),
+	createVideoLocalizationSpeaker: (id: string, body: VideoLocalizationSpeakerCreate) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/speakers`, body),
+	updateVideoLocalizationSpeaker: (id: string, speakerId: string, body: VideoLocalizationSpeakerUpdate) =>
+		api.patch<VideoLocalizationDraft>(`/projects/${id}/video-localization/speakers/${speakerId}`, body),
 	updateVideoLocalizationCue: (id: string, cueId: string, body: VideoLocalizationCueUpdate) => api.patch<VideoLocalizationDraft>(`/projects/${id}/video-localization/cues/${cueId}`, body),
 	updateVideoLocalizationReference: (id: string, referenceClipId: string, body: VideoLocalizationReferenceClipUpdate) =>
 		api.patch<VideoLocalizationDraft>(`/projects/${id}/video-localization/reference-clips/${referenceClipId}`, body),

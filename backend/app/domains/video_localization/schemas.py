@@ -17,6 +17,9 @@ from app.schemas.voice_studio import (
     VideoLocalizationQualityIssue,
     VideoLocalizationReferenceClip,
     VideoLocalizationReferenceClipUpdate,
+    VideoLocalizationSpeaker,
+    VideoLocalizationSpeakerCreate,
+    VideoLocalizationSpeakerUpdate,
     VideoLocalizationTimeRange,
     now_iso,
 )
@@ -38,6 +41,9 @@ __all__ = [
     "VideoLocalizationQualityIssue",
     "VideoLocalizationReferenceClip",
     "VideoLocalizationReferenceClipUpdate",
+    "VideoLocalizationSpeaker",
+    "VideoLocalizationSpeakerCreate",
+    "VideoLocalizationSpeakerUpdate",
     "VideoLocalizationTimeRange",
     "now_iso",
 ]

@@ -52,7 +52,7 @@ def with_updated_cue(draft: VideoLocalizationDraft, cue_id: str, patch: VideoLoc
             next_cues.append(cue)
             continue
         try:
-            next_cues.append(VideoLocalizationCue(**{**cue.model_dump(), **update}))
+            next_cues.append(_normalize_cue_flags(VideoLocalizationCue(**{**cue.model_dump(), **update})))
         except ValidationError as exc:
             raise AppException(400, "VIDEO_LOCALIZATION_CUE_INVALID", "Cue update is invalid", {"errors": exc.errors()}) from exc
         updated = True
@@ -71,6 +71,28 @@ def add_flags(flags: list[str], additions: list[str]) -> list[str]:
         if flag not in next_flags:
             next_flags.append(flag)
     return next_flags
+
+
+def _normalize_cue_flags(cue: VideoLocalizationCue) -> VideoLocalizationCue:
+    removable = {"needs_speaker_assignment", "needs_zh_localization", "segment_timing_missing"}
+    flags = [flag for flag in cue.quality_flags if flag not in removable]
+
+    if not cue.speaker_id:
+        flags.append("needs_speaker_assignment")
+    if not _localized_tracks_ready(cue):
+        flags.append("needs_zh_localization")
+    if cue.start_ms is None or cue.end_ms is None:
+        flags.append("segment_timing_missing")
+
+    return cue.model_copy(update={"quality_flags": flags})
+
+
+def _localized_tracks_ready(cue: VideoLocalizationCue) -> bool:
+    zh_text = (cue.zh_localized_subtitle_text or "").strip()
+    tts_text = (cue.tts_recommended_text or "").strip()
+    if not zh_text or not tts_text:
+        return False
+    return not zh_text.startswith("【待本土化】") and not tts_text.startswith("【待本土化】")
 
 
 def _next_cue_id(existing_cue_ids: set[str], index: int) -> str:

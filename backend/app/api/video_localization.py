@@ -6,7 +6,16 @@ from app.api.video_localization_responses import audio_file_response, json_attac
 from app.domains.video_localization import operation_queue
 from app.domains.video_localization import service as video_localization_service
 from app.errors import AppException
-from app.domains.video_localization.schemas import BatchTask, VideoLocalizationCueUpdate, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationOperationRequest, VideoLocalizationReferenceClipUpdate
+from app.domains.video_localization.schemas import (
+    BatchTask,
+    VideoLocalizationCueUpdate,
+    VideoLocalizationDraft,
+    VideoLocalizationOperation,
+    VideoLocalizationOperationRequest,
+    VideoLocalizationReferenceClipUpdate,
+    VideoLocalizationSpeakerCreate,
+    VideoLocalizationSpeakerUpdate,
+)
 from app.services import batch_queue
 
 router = APIRouter()
@@ -111,6 +120,18 @@ async def update_video_localization_reference_clip(project_id: str, reference_cl
 @router.patch("/{project_id}/video-localization/cues/{cue_id}", response_model=VideoLocalizationDraft)
 async def update_video_localization_cue(project_id: str, cue_id: str, patch: VideoLocalizationCueUpdate):
     updated = video_localization_service.update_cue(project_id, cue_id, patch)
+    return require_resource(updated)
+
+
+@router.post("/{project_id}/video-localization/speakers", response_model=VideoLocalizationDraft)
+async def create_video_localization_speaker(project_id: str, payload: VideoLocalizationSpeakerCreate):
+    updated = video_localization_service.create_speaker(project_id, payload)
+    return require_resource(updated)
+
+
+@router.patch("/{project_id}/video-localization/speakers/{speaker_id}", response_model=VideoLocalizationDraft)
+async def update_video_localization_speaker(project_id: str, speaker_id: str, payload: VideoLocalizationSpeakerUpdate):
+    updated = video_localization_service.update_speaker(project_id, speaker_id, payload)
     return require_resource(updated)
 
 

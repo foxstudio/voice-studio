@@ -8,7 +8,8 @@
 		VideoLocalizationDraft,
 		VideoLocalizationOperation,
 		VideoLocalizationReferenceClip,
-		VideoLocalizationReferenceClipUpdate
+		VideoLocalizationReferenceClipUpdate,
+		VideoLocalizationSpeakerCreate
 	} from '$lib/api/types';
 	import {
 		AlertTriangle,
@@ -27,6 +28,7 @@
 		createManualCue,
 		isActiveOperation,
 		sortOperations,
+		suggestSpeakerSeed,
 		type WorkflowStep
 	} from './utils';
 	import CueEditor from './CueEditor.svelte';
@@ -35,6 +37,7 @@
 	import LocalizationTextImport from './LocalizationTextImport.svelte';
 	import PreviewPanel from './PreviewPanel.svelte';
 	import ReferencePool from './ReferencePool.svelte';
+	import SpeakerRoster from './SpeakerRoster.svelte';
 	import SourceModelPanel from './SourceModelPanel.svelte';
 	import WorkflowStrip from './WorkflowStrip.svelte';
 
@@ -43,11 +46,13 @@
 	let operations = $state<VideoLocalizationOperation[]>([]);
 	let projectId = $state('');
 	let draft = $state<VideoLocalizationDraft | null>(null);
+	let draftOnlyCueIds = $state<string[]>([]);
 	let selectedCueId = $state('');
 	let loading = $state(true);
 	let saving = $state(false);
 	let savingCue = $state(false);
 	let creating = $state(false);
+	let creatingSpeaker = $state(false);
 	let importing = $state(false);
 	let extractingAudio = $state(false);
 	let separatingStems = $state(false);
@@ -75,6 +80,7 @@
 	const projectBatches = $derived(batches.filter((batch) => batchProjectId(batch) === projectId));
 	const hasActiveOperation = $derived(operations.some((operation) => isActiveOperation(operation)));
 	const latestOperation = $derived(operations[0] ?? null);
+	const speakerSeed = $derived(suggestSpeakerSeed(draft?.speakers ?? []));
 	const canSubmitCount = $derived(
 		draft?.cues.filter((cue) => cue.review_status === 'ready' && cue.audio_route === 'clone_from_source' && cue.tts_recommended_text?.trim() && referenceReady(cue.reference_clip_id)).length ?? 0
 	);
@@ -102,11 +108,13 @@
 	async function loadDraft(nextProjectId = projectId) {
 		if (!nextProjectId) {
 			draft = null;
+			draftOnlyCueIds = [];
 			return;
 		}
 		error = '';
 		try {
 			draft = await Api.videoLocalizationDraft(nextProjectId);
+			draftOnlyCueIds = [];
 			operations = sortOperations(draft.operations ?? []);
 			selectedCueId = draft.cues[0]?.cue_id ?? '';
 			await loadOperations(nextProjectId);
@@ -171,6 +179,7 @@
 		error = '';
 		try {
 			draft = await Api.saveVideoLocalizationDraft(projectId, draft);
+			draftOnlyCueIds = [];
 			message = '草稿已保存';
 			setTimeout(() => (message = ''), 1800);
 		} catch (e) {
@@ -417,12 +426,62 @@
 		if (!draft) return;
 		const cue = createManualCue(draft);
 		draft.cues = [...draft.cues, cue];
+		draftOnlyCueIds = [...draftOnlyCueIds, cue.cue_id];
 		selectedCueId = cue.cue_id;
 	}
 
 	function updateSelectedCue(patch: Partial<VideoLocalizationCue>) {
 		if (!draft || !selectedCue) return;
 		draft.cues = draft.cues.map((cue) => (cue.cue_id === selectedCue.cue_id ? { ...cue, ...patch } : cue));
+	}
+
+	async function createSpeaker(payload: VideoLocalizationSpeakerCreate, assignCurrentCue: boolean) {
+		if (!projectId) return;
+		creatingSpeaker = true;
+		error = '';
+		try {
+			if (draftOnlyCueIds.length) {
+				await persistDraftSnapshot();
+			}
+			draft = await Api.createVideoLocalizationSpeaker(projectId, payload);
+			message = assignCurrentCue && selectedCue ? '说话人已新增，正在绑定当前片段' : '说话人已新增';
+			if (assignCurrentCue && selectedCue) {
+				await assignSpeakerToCue(payload.speaker_id || speakerSeed.speaker_id, false);
+			} else {
+				setTimeout(() => (message = ''), 1800);
+			}
+		} catch (e) {
+			error = (e as Error).message || '新增说话人失败';
+		} finally {
+			creatingSpeaker = false;
+		}
+	}
+
+	async function assignSpeakerToCue(speakerId: string, showToast = true) {
+		if (!projectId || !selectedCue || !speakerId) return;
+		savingCue = true;
+		error = '';
+		try {
+			if (cueNeedsDraftSave(selectedCue.cue_id)) {
+				await persistDraftSnapshot();
+			}
+			draft = await Api.updateVideoLocalizationCue(projectId, selectedCue.cue_id, {
+				speaker_id: speakerId,
+				audio_route: selectedCue.audio_route === 'manual_review' ? (draft?.speakers.find((speaker) => speaker.speaker_id === speakerId)?.route ?? 'clone_from_source') : selectedCue.audio_route
+			});
+			selectedCueId = selectedCue.cue_id;
+			if (showToast) {
+				message = '当前片段已绑定说话人';
+				setTimeout(() => (message = ''), 1800);
+			} else {
+				message = '说话人已新增并绑定当前片段';
+				setTimeout(() => (message = ''), 1800);
+			}
+		} catch (e) {
+			error = (e as Error).message || '绑定说话人失败';
+		} finally {
+			savingCue = false;
+		}
 	}
 
 	function updateSelectedCueTime(field: 'start_ms' | 'end_ms', value: string) {
@@ -473,6 +532,9 @@
 			notes: selectedCue.notes
 		};
 		try {
+			if (cueNeedsDraftSave(cueId)) {
+				await persistDraftSnapshot();
+			}
 			draft = await Api.updateVideoLocalizationCue(projectId, cueId, patch);
 			selectedCueId = cueId;
 			message = '当前片段已保存';
@@ -526,8 +588,19 @@
 	async function refreshDraftOnly() {
 		if (!projectId) return;
 		draft = await Api.videoLocalizationDraft(projectId);
+		draftOnlyCueIds = [];
 		operations = sortOperations(draft.operations ?? operations);
 		if (!selectedCueId && draft.cues[0]) selectedCueId = draft.cues[0].cue_id;
+	}
+
+	function cueNeedsDraftSave(cueId: string) {
+		return draftOnlyCueIds.includes(cueId);
+	}
+
+	async function persistDraftSnapshot() {
+		if (!projectId || !draft) return;
+		draft = await Api.saveVideoLocalizationDraft(projectId, draft);
+		draftOnlyCueIds = [];
 	}
 
 	function startOperationPolling() {
@@ -673,6 +746,16 @@
 				onUpdateCueTime={updateSelectedCueTime}
 				onSave={saveSelectedCue}
 				onSend={sendSelectedCueToGenerate}
+			/>
+
+			<SpeakerRoster
+				speakers={draft?.speakers ?? []}
+				{selectedCue}
+				{creatingSpeaker}
+				suggestedSpeakerId={speakerSeed.speaker_id}
+				suggestedDisplayName={speakerSeed.display_name}
+				onCreateSpeaker={createSpeaker}
+				onAssignToCue={assignSpeakerToCue}
 			/>
 
 			<ReferencePool

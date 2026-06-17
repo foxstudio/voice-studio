@@ -92,7 +92,7 @@
 			</article>
 		{/each}
 		{#if !clips.length}
-			<p class="muted">暂无参考音候选。下一批接入人声分离和参考音裁切。</p>
+			<p class="muted">暂无参考音候选。先给 cue 绑定说话人，再从干净人声里生成可复听的参考音。</p>
 		{/if}
 	</div>
 </section>

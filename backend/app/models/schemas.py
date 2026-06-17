@@ -712,6 +712,21 @@ class VideoLocalizationSpeaker(VideoLocalizationExtensibleModel):
     notes: str | None = None
 
 
+class VideoLocalizationSpeakerCreate(BaseModel):
+    speaker_id: str | None = None
+    display_name: str | None = None
+    route: Literal["clone_from_source", "preset_tts", "preserve_original_audio", "manual_review"] = "manual_review"
+    review_status: Literal["needs_review", "ready", "blocked", "locked"] = "needs_review"
+    notes: str | None = None
+
+
+class VideoLocalizationSpeakerUpdate(BaseModel):
+    display_name: str | None = None
+    route: Literal["clone_from_source", "preset_tts", "preserve_original_audio", "manual_review"] | None = None
+    review_status: Literal["needs_review", "ready", "blocked", "locked"] | None = None
+    notes: str | None = None
+
+
 class VideoLocalizationReferenceClip(VideoLocalizationExtensibleModel):
     reference_clip_id: str
     speaker_id: str | None = None

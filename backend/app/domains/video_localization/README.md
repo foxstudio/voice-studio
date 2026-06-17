@@ -9,6 +9,7 @@ This package owns the backend business rules for English video to Chinese subtit
 - `schemas.py`: domain schema facade. It re-exports the current stable Pydantic models so domain code has one import boundary while preserving class identity.
 - `source_pipeline.py`: source media import, source-audio extraction, stem separation, and English ASR draft generation.
 - `cues.py`: ASR cue creation, cue patch validation, and cue quality flags.
+- `speakers.py`: speaker roster creation/update plus cue/reference-derived speaker timeline reconciliation.
 - `localization.py`: Chinese subtitle draft and TTS-readable text draft rules.
 - `reference_clips.py`: clean-vocal reference clip candidates and manual reference review updates.
 - `tts_pipeline.py`: pure cue-level TTS request/result mapping.
