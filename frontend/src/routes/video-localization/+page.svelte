@@ -45,6 +45,15 @@
 	import SourceModelPanel from './SourceModelPanel.svelte';
 	import WorkflowStrip from './WorkflowStrip.svelte';
 
+	type AsrEngineId = 'faster-whisper-turbo' | 'qwen3-asr-mlx' | 'mimo-v2.5-asr';
+	type AsrEngineHealth = {
+		healthy: boolean;
+		status: string;
+		detail: string;
+	};
+
+	const ASR_ENGINE_PRIORITY: AsrEngineId[] = ['faster-whisper-turbo', 'qwen3-asr-mlx', 'mimo-v2.5-asr'];
+
 	let projects = $state<Project[]>([]);
 	let batches = $state<BatchTask[]>([]);
 	let operations = $state<VideoLocalizationOperation[]>([]);
@@ -63,7 +72,13 @@
 	let separatingStems = $state(false);
 	let transcribingAsr = $state(false);
 	let localizingDraft = $state(false);
-	let selectedAsrEngineId = $state<'faster-whisper-turbo' | 'qwen3-asr-mlx' | 'mimo-v2.5-asr'>('faster-whisper-turbo');
+	let selectedAsrEngineId = $state<AsrEngineId>('faster-whisper-turbo');
+	let selectedAsrEngineTouched = $state(false);
+	let asrEngineHealth = $state<Record<AsrEngineId, AsrEngineHealth | null>>({
+		'faster-whisper-turbo': null,
+		'qwen3-asr-mlx': null,
+		'mimo-v2.5-asr': null
+	});
 	let creatingReferences = $state(false);
 	let submittingBatch = $state(false);
 	let syncingBatch = $state(false);
@@ -102,9 +117,41 @@
 	const hasResettableDraft = $derived(Boolean(projectId && draft && hasResettableContent(draft)));
 
 	onMount(() => {
+		void loadAsrEngineHealth();
 		loadProjects();
 		return () => stopOperationPolling();
 	});
+
+	function normalizeAsrHealth(payload: Record<string, unknown>): AsrEngineHealth {
+		const healthy = payload.healthy === true;
+		const status = String(payload.status ?? (healthy ? 'ready' : 'unknown'));
+		const detail =
+			String(payload.detail ?? '').trim() ||
+			(Array.isArray(payload.missing) ? payload.missing.map((item) => String(item)).join(', ') : '') ||
+			(healthy ? '可用' : '当前不可用');
+		return { healthy, status, detail };
+	}
+
+	function recommendedAsrEngine(healthMap: Record<AsrEngineId, AsrEngineHealth | null>): AsrEngineId {
+		return ASR_ENGINE_PRIORITY.find((engineId) => healthMap[engineId]?.healthy) ?? 'mimo-v2.5-asr';
+	}
+
+	async function loadAsrEngineHealth() {
+		try {
+			const entries = await Promise.all(
+				ASR_ENGINE_PRIORITY.map(async (engineId) => {
+					const result = await Api.healthEngine(engineId);
+					return [engineId, normalizeAsrHealth(result)] as const;
+				})
+			);
+			asrEngineHealth = Object.fromEntries(entries) as Record<AsrEngineId, AsrEngineHealth>;
+			if (!selectedAsrEngineTouched) {
+				selectedAsrEngineId = recommendedAsrEngine(asrEngineHealth);
+			}
+		} catch {
+			// 健康检查失败时保留当前选项，不阻断页面使用。
+		}
+	}
 
 	async function loadProjects() {
 		loading = true;
@@ -130,6 +177,12 @@
 		error = '';
 		try {
 			draft = await Api.videoLocalizationDraft(nextProjectId);
+			const lastEngineId = draft.source_media.metadata?.english_asr_engine_id;
+			if (typeof lastEngineId === 'string' && ASR_ENGINE_PRIORITY.includes(lastEngineId as AsrEngineId)) {
+				selectedAsrEngineId = lastEngineId as AsrEngineId;
+			} else if (!selectedAsrEngineTouched) {
+				selectedAsrEngineId = recommendedAsrEngine(asrEngineHealth);
+			}
 			draftOnlyCueIds = [];
 			operations = sortOperations(draft.operations ?? []);
 			selectedCueId = draft.cues[0]?.cue_id ?? '';
@@ -270,6 +323,18 @@
 		transcribingAsr = true;
 		error = '';
 		try {
+			const selectedHealth = asrEngineHealth[selectedAsrEngineId];
+			if (selectedHealth?.healthy === false) {
+				const fallbackEngineId = recommendedAsrEngine(asrEngineHealth);
+				if (fallbackEngineId !== selectedAsrEngineId && asrEngineHealth[fallbackEngineId]?.healthy) {
+					selectedAsrEngineId = fallbackEngineId;
+					await submitMediaOperation('english_asr', `英文字幕转录任务已开始（已自动切换到 ${fallbackEngineId}）`, {
+						engine_id: fallbackEngineId
+					});
+					return;
+				}
+				throw new Error(selectedHealth.detail || `${selectedAsrEngineId} 当前不可用`);
+			}
 			await submitMediaOperation('english_asr', `英文字幕转录任务已开始（${selectedAsrEngineId}）`, { engine_id: selectedAsrEngineId });
 		} catch (e) {
 			error = (e as Error).message || '提交英文 ASR 失败';
@@ -398,6 +463,11 @@
 
 	function markReferenceNeedsReview(clip: VideoLocalizationReferenceClip) {
 		updateReferenceClip(clip.reference_clip_id, { cleanliness: 'needs_review', asr_status: clip.asr_text ? 'candidate' : 'pending' }, '参考音已退回复听');
+	}
+
+	function handleAsrEngineChange(engineId: AsrEngineId) {
+		selectedAsrEngineTouched = true;
+		selectedAsrEngineId = engineId;
 	}
 
 	async function exportJson() {
@@ -778,12 +848,13 @@
 					{transcribingAsr}
 					{localizingDraft}
 					{selectedAsrEngineId}
+					{asrEngineHealth}
 					onImportVideo={importVideoFile}
 					onExtractAudio={extractSourceAudio}
 					onSeparateStems={separateStems}
 					onTranscribeEnglish={transcribeEnglishSource}
 					onLocalizeDraft={localizeChineseDraft}
-					onSelectedAsrEngineIdChange={(engineId) => (selectedAsrEngineId = engineId)}
+					onSelectedAsrEngineIdChange={handleAsrEngineChange}
 					onCancelOperation={cancelOperation}
 					onRetryOperation={retryOperation}
 					{operationFor}

@@ -14,6 +14,7 @@
 		transcribingAsr,
 		localizingDraft,
 		selectedAsrEngineId,
+		asrEngineHealth,
 		onImportVideo,
 		onExtractAudio,
 		onSeparateStems,
@@ -35,6 +36,7 @@
 		transcribingAsr: boolean;
 		localizingDraft: boolean;
 		selectedAsrEngineId: 'faster-whisper-turbo' | 'qwen3-asr-mlx' | 'mimo-v2.5-asr';
+		asrEngineHealth: Record<string, { healthy: boolean; status: string; detail: string } | null>;
 		onImportVideo: (file: File) => void;
 		onExtractAudio: () => void;
 		onSeparateStems: () => void;
@@ -103,6 +105,11 @@
 					<option value="qwen3-asr-mlx">qwen3-asr-mlx / Local fallback</option>
 					<option value="mimo-v2.5-asr">mimo-v2.5-asr / Cloud fallback</option>
 				</select>
+				{#if asrEngineHealth[selectedAsrEngineId]}
+					<p class:health-fail={asrEngineHealth[selectedAsrEngineId]?.healthy === false} class="health-note">
+						{asrEngineHealth[selectedAsrEngineId]?.healthy ? `可用 · ${asrEngineHealth[selectedAsrEngineId]?.status}` : `不可用 · ${asrEngineHealth[selectedAsrEngineId]?.detail}`}
+					</p>
+				{/if}
 			</div>
 			<span class={`badge ${operationBadgeClass(operationFor('english_asr')) || (draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? 'ok' : '')}`}>
 				{operationBusy('english_asr') ? operationStatusLabel(operationFor('english_asr')) : draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? '有草稿' : operationStatusLabel(operationFor('english_asr'))}
@@ -215,6 +222,17 @@
 	.model-cell select {
 		max-width: 240px;
 		font-size: 12px;
+	}
+
+	.health-note {
+		margin: 0;
+		color: var(--muted);
+		font-size: 11px;
+		line-height: 1.4;
+	}
+
+	.health-note.health-fail {
+		color: #ff8b8b;
 	}
 
 	.operation-note {

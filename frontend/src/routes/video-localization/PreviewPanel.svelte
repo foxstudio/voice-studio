@@ -136,6 +136,7 @@
 		display: grid;
 		place-items: center;
 		color: #fff;
+		pointer-events: none;
 	}
 
 	.play-button span {
@@ -152,9 +153,10 @@
 		position: absolute;
 		left: 18px;
 		right: 18px;
-		bottom: 16px;
+		bottom: 52px;
 		text-align: center;
 		text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7);
+		pointer-events: none;
 	}
 
 	.subtitle-overlay p {
