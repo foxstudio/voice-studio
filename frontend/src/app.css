@@ -215,7 +215,8 @@ textarea { resize: vertical; min-height: 120px; line-height: 1.5; }
 	max-height: 240px;
 	overflow-y: auto;
 	overscroll-behavior: contain;
-	white-space: pre-line;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 	word-break: break-word;
 	line-height: 1.65;
 	padding: 11px 12px;

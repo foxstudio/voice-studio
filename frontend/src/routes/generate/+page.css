@@ -1527,6 +1527,7 @@
 		box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
 		z-index: 130;
 		text-align: left;
+		overflow-wrap: anywhere;
 		transition:
 			opacity 120ms ease 0s,
 			visibility 0s linear 120ms;
@@ -1542,8 +1543,11 @@
 
 	.param-panel > strong {
 		font-size: 12px;
-		line-height: 1.2;
+		line-height: 1.35;
 		color: #ffffff;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+		word-break: break-word;
 	}
 
 	.param-grid {

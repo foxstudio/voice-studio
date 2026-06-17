@@ -79,7 +79,8 @@
 		padding: 9px 10px;
 		font-size: 11.5px;
 		line-height: 1.55;
-		white-space: pre-line;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
 		word-break: break-word;
 		box-shadow: 0 16px 34px rgba(0, 0, 0, 0.34);
 	}

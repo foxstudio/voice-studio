@@ -150,6 +150,8 @@
 		border-radius: 10px;
 		background: rgba(12, 15, 20, 0.96);
 		color: #eef3fb;
+		text-align: left;
+		overflow-wrap: anywhere;
 		box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
 		transition: opacity 120ms ease, visibility 0s linear 120ms;
 	}
@@ -165,14 +167,19 @@
 
 	.hover-copy-head {
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		justify-content: space-between;
 		gap: 10px;
 	}
 
 	.hover-copy-head strong {
+		flex: 1;
+		min-width: 0;
 		font-size: 12px;
-		line-height: 1.2;
+		line-height: 1.35;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+		word-break: break-word;
 	}
 
 	.hover-copy-btn {
@@ -221,10 +228,15 @@
 	}
 
 	.hover-copy-body {
+		display: block;
+		width: 100%;
+		min-width: 0;
+		max-width: 100%;
 		font-size: 11.5px;
 		line-height: 1.55;
 		color: #dbe6f4;
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
+		word-break: break-word;
 	}
 </style>
