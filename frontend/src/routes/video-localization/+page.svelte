@@ -34,12 +34,13 @@
 		suggestSpeakerSeed,
 		type WorkflowStep
 	} from './utils';
+	import BatchSentenceReviewPanel from './BatchSentenceReviewPanel.svelte';
 	import CueEditor from './CueEditor.svelte';
-	import CueTable from './CueTable.svelte';
 	import DeliveryPanel from './DeliveryPanel.svelte';
 	import LocalizationTextImport from './LocalizationTextImport.svelte';
 	import PreviewPanel from './PreviewPanel.svelte';
 	import ReferencePool from './ReferencePool.svelte';
+	import SentenceRail from './SentenceRail.svelte';
 	import SpeakerRoster from './SpeakerRoster.svelte';
 	import SourceModelPanel from './SourceModelPanel.svelte';
 	import WorkflowStrip from './WorkflowStrip.svelte';
@@ -71,6 +72,8 @@
 	let operationActionId = $state('');
 	let ttsBatchId = $state('');
 	let localizationImportOpen = $state(false);
+	let viewMode = $state<'single' | 'batch'>('single');
+	let rightPanelMode = $state<'speakers' | 'references' | 'delivery'>('speakers');
 	let videoInput: HTMLInputElement | null = null;
 	let operationPollingTimer: ReturnType<typeof setInterval> | null = null;
 	let message = $state('');
@@ -480,6 +483,11 @@
 		draft.cues = [...draft.cues, cue];
 		draftOnlyCueIds = [...draftOnlyCueIds, cue.cue_id];
 		selectedCueId = cue.cue_id;
+		viewMode = 'single';
+	}
+
+	function selectCue(cueId: string) {
+		selectedCueId = cueId;
 	}
 
 	function updateSelectedCue(patch: Partial<VideoLocalizationCue>) {
@@ -744,135 +752,195 @@
 
 	<WorkflowStrip steps={workflow} />
 
-	<section class="localization-shell">
-		<div class="stack left-rail">
-			<SourceModelPanel
-				{draft}
-				{selectedProject}
-				{latestOperation}
-				{hasActiveOperation}
-				{operationActionId}
-				{extractingAudio}
-				{separatingStems}
-				{transcribingAsr}
-				{localizingDraft}
-				{selectedAsrEngineId}
-				onImportVideo={importVideoFile}
-				onExtractAudio={extractSourceAudio}
-				onSeparateStems={separateStems}
-				onTranscribeEnglish={transcribeEnglishSource}
-				onLocalizeDraft={localizeChineseDraft}
-				onSelectedAsrEngineIdChange={(engineId) => (selectedAsrEngineId = engineId)}
-				onCancelOperation={cancelOperation}
-				onRetryOperation={retryOperation}
-				{operationFor}
-				{operationBusy}
-			/>
-
-			<PreviewPanel {selectedCue} hasCleanReference={Boolean(draft?.reference_clips.some((clip) => clip.cleanliness === 'clean'))} {draft} {projectId} />
+	<section class="view-switcher">
+		<div class="segmented-tabs">
+			<button class:active={viewMode === 'single'} type="button" onclick={() => (viewMode = 'single')}>单句精修</button>
+			<button class:active={viewMode === 'batch'} type="button" onclick={() => (viewMode = 'batch')}>批量逐句审校</button>
 		</div>
-
-		<section class="panel cue-panel">
-			<div class="section-title">
-				<div>
-					<h2>cue 审校表</h2>
-					<p class="muted">英文字幕、中文字幕和 TTS 台词独立维护；翻译在外部完成后粘贴进来。</p>
-				</div>
-				<div class="row">
-					<button class="mini-btn" type="button" onclick={() => (localizationImportOpen = !localizationImportOpen)} disabled={!draft?.cues.length}>
-						{localizationImportOpen ? '收起中文稿' : '粘贴中文稿'}
-					</button>
-					<span class="badge ok">{readyCount} 可生成</span>
-					<span class="badge warn">{reviewCount} 待校对</span>
-					<span class="badge fail">{blockedCount} 阻断</span>
-				</div>
-			</div>
-
-			<LocalizationTextImport open={localizationImportOpen} cueCount={draft?.cues.length ?? 0} onApply={applyLocalizationText} onClose={() => (localizationImportOpen = false)} />
-
-			<div class="quality-bar">
-				<span class={`badge ${draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? 'ok' : 'warn'}`}><CheckCircle2 size={13} /> ASR 覆盖</span>
-				<span class={`badge ${localizedCount ? 'ok' : 'warn'}`}><CheckCircle2 size={13} /> 中文打样 {localizedCount}/{draft?.cues.length ?? 0}</span>
-				<span class={`badge ${draft?.reference_clips.some((clip) => clip.asr_status === 'verified') ? 'ok' : 'warn'}`}><CheckCircle2 size={13} /> 参考音 ASR</span>
-				{#each draft?.quality_gate.warnings ?? [] as issue}
-					<span class="badge warn"><AlertTriangle size={13} /> {issue.message}</span>
-				{/each}
-				{#each draft?.quality_gate.blockers ?? [] as issue}
-					<span class="badge fail"><AlertTriangle size={13} /> {issue.message}</span>
-				{/each}
-				{#if !(draft?.quality_gate.warnings.length || draft?.quality_gate.blockers.length)}
-					<span class="badge">暂无质量门结果</span>
-				{/if}
-			</div>
-
-			<CueTable cues={draft?.cues ?? []} {selectedCueId} {speakerLabel} onSelect={(cueId) => (selectedCueId = cueId)} />
-			<div class="row table-actions">
-				<button class="btn" type="button" onclick={addCue} disabled={!draft}>新增 cue</button>
-			</div>
-		</section>
-
-		<aside class="stack right-editor">
-			<CueEditor
-				{selectedCue}
-				speakers={draft?.speakers ?? []}
-				referenceClips={draft?.reference_clips ?? []}
-				{projectId}
-				timelineAudioSrc={cueTimelineAudioSrc}
-				timelineAudioLabel={cueTimelineAudioLabel}
-				timelineDurationMs={cueTimelineDurationMs}
-				{savingCue}
-				{speakerLabel}
-				canSendToGenerate={cueCanSendToGenerate(selectedCue)}
-				onUpdateCue={updateSelectedCue}
-				onUpdateCueTime={updateSelectedCueTime}
-				onSave={saveSelectedCue}
-				onSend={sendSelectedCueToGenerate}
-			/>
-
-			<SpeakerRoster
-				speakers={draft?.speakers ?? []}
-				{selectedCue}
-				{creatingSpeaker}
-				suggestedSpeakerId={speakerSeed.speaker_id}
-				suggestedDisplayName={speakerSeed.display_name}
-				onCreateSpeaker={createSpeaker}
-				onAssignToCue={assignSpeakerToCue}
-			/>
-
-			<ReferencePool
-				clips={draft?.reference_clips ?? []}
-				operation={operationFor('reference_clips')}
-				{creatingReferences}
-				canCreateCandidates={draft?.stems.separation_status === 'completed' && !operationBusy('reference_clips')}
-				{referenceUpdatingId}
-				{projectId}
-				{speakerLabel}
-				onGenerateCandidates={createReferenceCandidates}
-				onMarkClean={markReferenceClean}
-				onMarkBlocked={markReferenceBlocked}
-				onMarkNeedsReview={markReferenceNeedsReview}
-			/>
-
-			<DeliveryPanel
-				qualityGate={draft?.quality_gate}
-				{canSubmitCount}
-				{generatedCount}
-				{projectBatches}
-				{ttsBatchId}
-				{loadingBatches}
-				{submittingBatch}
-				{syncingBatch}
-				hasDraft={Boolean(draft)}
-				canExportBilingual={Boolean(draft?.cues.some((cue) => cue.start_ms !== null && cue.end_ms !== null))}
-				onSubmitBatch={submitBatchTts}
-				onSyncBatch={syncBatchTtsResults}
-				onExportJson={exportJson}
-				onExportReadiness={exportReadinessAudit}
-				onExportBilingual={exportBilingualSrt}
-				onTtsBatchIdChange={(batchId) => (ttsBatchId = batchId)}
-			/>
-		</aside>
+		<div class="row compact">
+			<span class="badge ok">{readyCount} 可生成</span>
+			<span class="badge warn">{reviewCount} 待校对</span>
+			<span class="badge fail">{blockedCount} 阻断</span>
+		</div>
 	</section>
+
+	{#if viewMode === 'single'}
+		<section class="single-shell">
+			<aside class="stack single-left">
+				<SourceModelPanel
+					{draft}
+					{selectedProject}
+					{latestOperation}
+					{hasActiveOperation}
+					{operationActionId}
+					{extractingAudio}
+					{separatingStems}
+					{transcribingAsr}
+					{localizingDraft}
+					{selectedAsrEngineId}
+					onImportVideo={importVideoFile}
+					onExtractAudio={extractSourceAudio}
+					onSeparateStems={separateStems}
+					onTranscribeEnglish={transcribeEnglishSource}
+					onLocalizeDraft={localizeChineseDraft}
+					onSelectedAsrEngineIdChange={(engineId) => (selectedAsrEngineId = engineId)}
+					onCancelOperation={cancelOperation}
+					onRetryOperation={retryOperation}
+					{operationFor}
+					{operationBusy}
+				/>
+
+				<section class="panel sentence-progress-panel">
+					<div class="section-title">
+						<div>
+							<h2>句子进度</h2>
+							<p class="muted">把工作拆成一句一句，当前页只专注一条。</p>
+						</div>
+					</div>
+					<div class="progress-grid">
+						<div><strong>{draft?.cues.length ?? 0}</strong><span>总句数</span></div>
+						<div><strong>{localizedCount}</strong><span>已打样</span></div>
+						<div><strong>{draft?.reference_clips.filter((clip) => clip.cleanliness === 'clean').length ?? 0}</strong><span>干净参考音</span></div>
+						<div><strong>{generatedCount}</strong><span>已生成 TTS</span></div>
+					</div>
+					<div class="quality-bar">
+						<span class={`badge ${draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? 'ok' : 'warn'}`}><CheckCircle2 size={13} /> ASR 覆盖</span>
+						<span class={`badge ${localizedCount ? 'ok' : 'warn'}`}><CheckCircle2 size={13} /> 中文打样</span>
+						<span class={`badge ${draft?.reference_clips.some((clip) => clip.asr_status === 'verified') ? 'ok' : 'warn'}`}><CheckCircle2 size={13} /> 参考音 ASR</span>
+					</div>
+					<div class="row progress-actions">
+						<button class="mini-btn" type="button" onclick={() => (localizationImportOpen = !localizationImportOpen)} disabled={!draft?.cues.length}>
+							{localizationImportOpen ? '收起中文稿' : '粘贴中文稿'}
+						</button>
+						<button class="mini-btn" type="button" onclick={addCue} disabled={!draft}>新增句子</button>
+					</div>
+				</section>
+			</aside>
+
+			<section class="stack main-workbench">
+				<PreviewPanel {selectedCue} hasCleanReference={Boolean(draft?.reference_clips.some((clip) => clip.cleanliness === 'clean'))} {draft} {projectId} />
+				<LocalizationTextImport open={localizationImportOpen} cueCount={draft?.cues.length ?? 0} onApply={applyLocalizationText} onClose={() => (localizationImportOpen = false)} />
+				{#if draft?.quality_gate.warnings.length || draft?.quality_gate.blockers.length}
+					<div class="quality-bar panel-inline">
+						{#each draft?.quality_gate.warnings ?? [] as issue}
+							<span class="badge warn"><AlertTriangle size={13} /> {issue.message}</span>
+						{/each}
+						{#each draft?.quality_gate.blockers ?? [] as issue}
+							<span class="badge fail"><AlertTriangle size={13} /> {issue.message}</span>
+						{/each}
+					</div>
+				{/if}
+				<CueEditor
+					{selectedCue}
+					speakers={draft?.speakers ?? []}
+					referenceClips={draft?.reference_clips ?? []}
+					{projectId}
+					timelineAudioSrc={cueTimelineAudioSrc}
+					timelineAudioLabel={cueTimelineAudioLabel}
+					timelineDurationMs={cueTimelineDurationMs}
+					{savingCue}
+					{speakerLabel}
+					canSendToGenerate={cueCanSendToGenerate(selectedCue)}
+					onUpdateCue={updateSelectedCue}
+					onUpdateCueTime={updateSelectedCueTime}
+					onSave={saveSelectedCue}
+					onSend={sendSelectedCueToGenerate}
+				/>
+			</section>
+
+			<aside class="stack single-right">
+				<SentenceRail cues={draft?.cues ?? []} {selectedCueId} {speakerLabel} onSelect={selectCue} />
+
+				<section class="context-panel">
+					<div class="segmented-tabs context-tabs">
+						<button class:active={rightPanelMode === 'speakers'} type="button" onclick={() => (rightPanelMode = 'speakers')}>说话人</button>
+						<button class:active={rightPanelMode === 'references'} type="button" onclick={() => (rightPanelMode = 'references')}>参考音</button>
+						<button class:active={rightPanelMode === 'delivery'} type="button" onclick={() => (rightPanelMode = 'delivery')}>批量与交付</button>
+					</div>
+					{#if rightPanelMode === 'speakers'}
+						<SpeakerRoster
+							speakers={draft?.speakers ?? []}
+							{selectedCue}
+							{creatingSpeaker}
+							suggestedSpeakerId={speakerSeed.speaker_id}
+							suggestedDisplayName={speakerSeed.display_name}
+							onCreateSpeaker={createSpeaker}
+							onAssignToCue={assignSpeakerToCue}
+						/>
+					{:else if rightPanelMode === 'references'}
+						<ReferencePool
+							clips={draft?.reference_clips ?? []}
+							operation={operationFor('reference_clips')}
+							{creatingReferences}
+							canCreateCandidates={draft?.stems.separation_status === 'completed' && !operationBusy('reference_clips')}
+							{referenceUpdatingId}
+							{projectId}
+							{speakerLabel}
+							onGenerateCandidates={createReferenceCandidates}
+							onMarkClean={markReferenceClean}
+							onMarkBlocked={markReferenceBlocked}
+							onMarkNeedsReview={markReferenceNeedsReview}
+						/>
+					{:else}
+						<DeliveryPanel
+							qualityGate={draft?.quality_gate}
+							{canSubmitCount}
+							{generatedCount}
+							{projectBatches}
+							{ttsBatchId}
+							{loadingBatches}
+							{submittingBatch}
+							{syncingBatch}
+							hasDraft={Boolean(draft)}
+							canExportBilingual={Boolean(draft?.cues.some((cue) => cue.start_ms !== null && cue.end_ms !== null))}
+							onSubmitBatch={submitBatchTts}
+							onSyncBatch={syncBatchTtsResults}
+							onExportJson={exportJson}
+							onExportReadiness={exportReadinessAudit}
+							onExportBilingual={exportBilingualSrt}
+							onTtsBatchIdChange={(batchId) => (ttsBatchId = batchId)}
+						/>
+					{/if}
+				</section>
+			</aside>
+		</section>
+	{:else}
+		<section class="batch-shell">
+			<aside class="stack batch-left">
+				<PreviewPanel {selectedCue} hasCleanReference={Boolean(draft?.reference_clips.some((clip) => clip.cleanliness === 'clean'))} {draft} {projectId} />
+				<DeliveryPanel
+					qualityGate={draft?.quality_gate}
+					{canSubmitCount}
+					{generatedCount}
+					{projectBatches}
+					{ttsBatchId}
+					{loadingBatches}
+					{submittingBatch}
+					{syncingBatch}
+					hasDraft={Boolean(draft)}
+					canExportBilingual={Boolean(draft?.cues.some((cue) => cue.start_ms !== null && cue.end_ms !== null))}
+					onSubmitBatch={submitBatchTts}
+					onSyncBatch={syncBatchTtsResults}
+					onExportJson={exportJson}
+					onExportReadiness={exportReadinessAudit}
+					onExportBilingual={exportBilingualSrt}
+					onTtsBatchIdChange={(batchId) => (ttsBatchId = batchId)}
+				/>
+			</aside>
+			<section class="batch-main">
+				<BatchSentenceReviewPanel
+					cues={draft?.cues ?? []}
+					speakers={draft?.speakers ?? []}
+					referenceClips={draft?.reference_clips ?? []}
+					{selectedCueId}
+					{projectId}
+					on:select={(event) => {
+						selectCue(event.detail.cueId);
+					}}
+				/>
+			</section>
+		</section>
+	{/if}
 </main>
 
 <style>
@@ -944,13 +1012,6 @@
 		border: 0;
 	}
 
-	.localization-shell {
-		display: grid;
-		grid-template-columns: minmax(310px, 0.85fr) minmax(460px, 1.35fr) minmax(310px, 0.86fr);
-		gap: 14px;
-		align-items: start;
-	}
-
 	.section-title {
 		display: flex;
 		align-items: flex-start;
@@ -987,19 +1048,140 @@
 		margin-bottom: 10px;
 	}
 
-	.table-actions {
-		margin-top: 12px;
-		justify-content: flex-end;
+	.view-switcher {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		margin: 0 0 14px;
+		flex-wrap: wrap;
 	}
 
-	@media (max-width: 1500px) {
-		.localization-shell {
-			grid-template-columns: minmax(320px, 0.95fr) minmax(460px, 1.25fr);
+	.segmented-tabs {
+		display: inline-flex;
+		padding: 4px;
+		border-radius: 9px;
+		background: #0f1318;
+		border: 1px solid var(--line);
+	}
+
+	.segmented-tabs button {
+		border: 0;
+		background: transparent;
+		color: var(--muted);
+		padding: 8px 14px;
+		border-radius: 7px;
+		font-size: 12px;
+		cursor: pointer;
+	}
+
+	.segmented-tabs button.active {
+		background: #1a2432;
+		color: #e7f0fd;
+	}
+
+	.compact {
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+
+	.single-shell {
+		display: grid;
+		grid-template-columns: minmax(280px, 0.78fr) minmax(560px, 1.35fr) minmax(340px, 0.9fr);
+		gap: 14px;
+		align-items: start;
+	}
+
+	.batch-shell {
+		display: grid;
+		grid-template-columns: minmax(320px, 0.82fr) minmax(760px, 1.4fr);
+		gap: 14px;
+		align-items: start;
+	}
+
+	.single-left,
+	.main-workbench,
+	.single-right,
+	.batch-left {
+		align-self: start;
+	}
+
+	.main-workbench {
+		display: grid;
+		gap: 12px;
+	}
+
+	.context-panel {
+		display: grid;
+		gap: 10px;
+	}
+
+	.context-tabs {
+		width: 100%;
+	}
+
+	.sentence-progress-panel {
+		display: grid;
+		gap: 12px;
+	}
+
+	.progress-grid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 8px;
+	}
+
+	.progress-grid div {
+		display: grid;
+		gap: 4px;
+		padding: 10px;
+		border-radius: 8px;
+		border: 1px solid var(--line);
+		background: #101215;
+	}
+
+	.progress-grid strong {
+		font-size: 18px;
+	}
+
+	.progress-grid span {
+		color: var(--muted);
+		font-size: 12px;
+	}
+
+	.progress-actions {
+		justify-content: space-between;
+	}
+
+	.panel-inline {
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		padding: 10px;
+		background: #101215;
+	}
+
+	.batch-main {
+		min-width: 0;
+	}
+
+	@media (max-width: 1560px) {
+		.single-shell {
+			grid-template-columns: minmax(300px, 0.9fr) minmax(520px, 1.1fr);
 		}
 
-		.right-editor {
+		.single-right {
 			grid-column: 1 / -1;
-			grid-template-columns: repeat(3, minmax(0, 1fr));
+			grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1fr);
+			display: grid;
+			gap: 14px;
+		}
+	}
+
+	@media (max-width: 1100px) {
+		.single-shell,
+		.batch-shell,
+		.single-right {
+			grid-template-columns: 1fr;
 		}
 	}
 
@@ -1008,14 +1190,12 @@
 			align-items: flex-start;
 		}
 
-		.workflow-strip,
-		.localization-shell,
-		.right-editor {
-			grid-template-columns: 1fr;
-		}
-
 		.head-actions {
 			justify-content: flex-start;
+		}
+
+		.view-switcher {
+			align-items: flex-start;
 		}
 	}
 </style>
