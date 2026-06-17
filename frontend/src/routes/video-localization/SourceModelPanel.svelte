@@ -12,10 +12,14 @@
 		extractingAudio,
 		separatingStems,
 		transcribingAsr,
+		localizingDraft,
+		selectedAsrEngineId,
 		onImportVideo,
 		onExtractAudio,
 		onSeparateStems,
 		onTranscribeEnglish,
+		onLocalizeDraft,
+		onSelectedAsrEngineIdChange,
 		onCancelOperation,
 		onRetryOperation,
 		operationFor,
@@ -29,10 +33,14 @@
 		extractingAudio: boolean;
 		separatingStems: boolean;
 		transcribingAsr: boolean;
+		localizingDraft: boolean;
+		selectedAsrEngineId: 'faster-whisper-turbo' | 'qwen3-asr-mlx' | 'mimo-v2.5-asr';
 		onImportVideo: (file: File) => void;
 		onExtractAudio: () => void;
 		onSeparateStems: () => void;
 		onTranscribeEnglish: () => void;
+		onLocalizeDraft: () => void;
+		onSelectedAsrEngineIdChange: (engineId: 'faster-whisper-turbo' | 'qwen3-asr-mlx' | 'mimo-v2.5-asr') => void;
 		onCancelOperation: (operation: VideoLocalizationOperation) => void;
 		onRetryOperation: (operation: VideoLocalizationOperation) => void;
 		operationFor: (kind: VideoLocalizationOperation['kind']) => VideoLocalizationOperation | null;
@@ -88,7 +96,14 @@
 	<div class="model-list">
 		<div class="model-row">
 			<span>ASR</span>
-			<strong>faster-whisper-turbo</strong>
+			<div class="model-cell">
+				<strong>{selectedAsrEngineId}</strong>
+				<select aria-label="视频本土化 ASR 引擎" value={selectedAsrEngineId} onchange={(event) => onSelectedAsrEngineIdChange(event.currentTarget.value as typeof selectedAsrEngineId)}>
+					<option value="faster-whisper-turbo">faster-whisper-turbo / Fast</option>
+					<option value="qwen3-asr-mlx">qwen3-asr-mlx / Local fallback</option>
+					<option value="mimo-v2.5-asr">mimo-v2.5-asr / Cloud fallback</option>
+				</select>
+			</div>
 			<span class={`badge ${operationBadgeClass(operationFor('english_asr')) || (draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? 'ok' : '')}`}>
 				{operationBusy('english_asr') ? operationStatusLabel(operationFor('english_asr')) : draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? '有草稿' : operationStatusLabel(operationFor('english_asr'))}
 			</span>
@@ -98,8 +113,18 @@
 		</div>
 		<div class="model-row">
 			<span>备用</span>
-			<strong>qwen3-asr-mlx / mimo-v2.5</strong>
+			<strong>主用 turbo，缺模型时切 qwen3 / mimo</strong>
 			<span class="badge">可选</span>
+		</div>
+		<div class="model-row">
+			<span>中文稿</span>
+			<strong>本土化草稿 + TTS 台词正规化</strong>
+			<span class={`badge ${draft?.cues.some((cue) => cue.zh_localized_subtitle_text?.trim() || cue.tts_recommended_text?.trim()) ? 'ok' : ''}`}>
+				{draft?.cues.some((cue) => cue.zh_localized_subtitle_text?.trim() || cue.tts_recommended_text?.trim()) ? '有草稿' : '待生成'}
+			</span>
+			<button class="mini-btn" type="button" onclick={onLocalizeDraft} disabled={!draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) || localizingDraft}>
+				{localizingDraft ? '生成中' : '中文打样'}
+			</button>
 		</div>
 		<div class="model-row">
 			<span>分离</span>
@@ -180,6 +205,16 @@
 
 	.model-row > span:first-child {
 		color: var(--muted);
+	}
+
+	.model-cell {
+		display: grid;
+		gap: 4px;
+	}
+
+	.model-cell select {
+		max-width: 240px;
+		font-size: 12px;
 	}
 
 	.operation-note {

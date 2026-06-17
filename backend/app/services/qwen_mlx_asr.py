@@ -66,7 +66,10 @@ def transcribe_audio(*, audio_path: str, language: str, model_path: str) -> dict
     # unverified runtime argument here.
     output_base = Path(tempfile.gettempdir()) / f"qwen3-asr-{int(started * 1000)}"
     transcription = generate_transcription(model=model, audio=audio_path, output_path=str(output_base), format="txt", verbose=False)
-    text = getattr(transcription, "text", None) or str(transcription).strip()
+    if hasattr(transcription, "text"):
+        text = str(getattr(transcription, "text") or "").strip()
+    else:
+        text = str(transcription).strip()
     segments = [
         {
             "start_ms": int(round(float(item.get("start", 0)) * 1000)),

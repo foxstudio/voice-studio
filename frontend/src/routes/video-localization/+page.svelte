@@ -59,6 +59,8 @@
 	let extractingAudio = $state(false);
 	let separatingStems = $state(false);
 	let transcribingAsr = $state(false);
+	let localizingDraft = $state(false);
+	let selectedAsrEngineId = $state<'faster-whisper-turbo' | 'qwen3-asr-mlx' | 'mimo-v2.5-asr'>('faster-whisper-turbo');
 	let creatingReferences = $state(false);
 	let submittingBatch = $state(false);
 	let syncingBatch = $state(false);
@@ -79,6 +81,9 @@
 	const reviewCount = $derived(draft?.cues.filter((cue) => cue.review_status === 'needs_review').length ?? 0);
 	const blockedCount = $derived(draft?.cues.filter((cue) => cue.review_status === 'blocked').length ?? 0);
 	const generatedCount = $derived(draft?.cues.filter((cue) => cue.tts_audio_path).length ?? 0);
+	const localizedCount = $derived(
+		draft?.cues.filter((cue) => cue.zh_localized_subtitle_text?.trim() || cue.tts_recommended_text?.trim()).length ?? 0
+	);
 	const projectBatches = $derived(batches.filter((batch) => batchProjectId(batch) === projectId));
 	const hasActiveOperation = $derived(operations.some((operation) => isActiveOperation(operation)));
 	const latestOperation = $derived(operations[0] ?? null);
@@ -236,7 +241,7 @@
 		transcribingAsr = true;
 		error = '';
 		try {
-			await submitMediaOperation('english_asr', '英文字幕转录任务已开始', { engine_id: 'faster-whisper-turbo' });
+			await submitMediaOperation('english_asr', `英文字幕转录任务已开始（${selectedAsrEngineId}）`, { engine_id: selectedAsrEngineId });
 		} catch (e) {
 			error = (e as Error).message || '提交英文 ASR 失败';
 		} finally {
@@ -254,6 +259,22 @@
 			error = (e as Error).message || '提交人声分离失败';
 		} finally {
 			separatingStems = false;
+		}
+	}
+
+	async function localizeChineseDraft() {
+		if (!projectId || !draft?.cues.some((cue) => cue.en_subtitle_text?.trim())) return;
+		localizingDraft = true;
+		error = '';
+		try {
+			draft = await Api.generateVideoLocalizationChineseDraft(projectId);
+			if (!selectedCueId && draft.cues[0]) selectedCueId = draft.cues[0].cue_id;
+			message = '已生成中文草稿，请继续人工校对';
+			setTimeout(() => (message = ''), 2200);
+		} catch (e) {
+			error = (e as Error).message || '生成中文草稿失败';
+		} finally {
+			localizingDraft = false;
 		}
 	}
 
@@ -689,10 +710,14 @@
 				{extractingAudio}
 				{separatingStems}
 				{transcribingAsr}
+				{localizingDraft}
+				{selectedAsrEngineId}
 				onImportVideo={importVideoFile}
 				onExtractAudio={extractSourceAudio}
 				onSeparateStems={separateStems}
 				onTranscribeEnglish={transcribeEnglishSource}
+				onLocalizeDraft={localizeChineseDraft}
+				onSelectedAsrEngineIdChange={(engineId) => (selectedAsrEngineId = engineId)}
 				onCancelOperation={cancelOperation}
 				onRetryOperation={retryOperation}
 				{operationFor}
@@ -722,6 +747,7 @@
 
 			<div class="quality-bar">
 				<span class={`badge ${draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) ? 'ok' : 'warn'}`}><CheckCircle2 size={13} /> ASR 覆盖</span>
+				<span class={`badge ${localizedCount ? 'ok' : 'warn'}`}><CheckCircle2 size={13} /> 中文打样 {localizedCount}/{draft?.cues.length ?? 0}</span>
 				<span class={`badge ${draft?.reference_clips.some((clip) => clip.asr_status === 'verified') ? 'ok' : 'warn'}`}><CheckCircle2 size={13} /> 参考音 ASR</span>
 				{#each draft?.quality_gate.warnings ?? [] as issue}
 					<span class="badge warn"><AlertTriangle size={13} /> {issue.message}</span>
