@@ -33,6 +33,12 @@ async def put_video_localization(project_id: str, draft: VideoLocalizationDraft)
     return require_resource(updated)
 
 
+@router.delete("/{project_id}/video-localization", response_model=VideoLocalizationDraft)
+async def reset_video_localization(project_id: str):
+    updated = video_localization_service.reset_video_localization(project_id)
+    return require_resource(updated)
+
+
 @router.post("/{project_id}/video-localization/source-media", response_model=VideoLocalizationDraft)
 async def import_video_localization_source_media(project_id: str, file: UploadFile = File(...)):
     updated = await video_localization_service.import_source_media(project_id, file)

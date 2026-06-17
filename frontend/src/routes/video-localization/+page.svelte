@@ -17,6 +17,7 @@
 		FileJson,
 		Send,
 		Save,
+		Trash2,
 		UploadCloud
 	} from 'lucide-svelte';
 	import { onMount } from 'svelte';
@@ -52,6 +53,7 @@
 	let selectedCueId = $state('');
 	let loading = $state(true);
 	let saving = $state(false);
+	let resetting = $state(false);
 	let savingCue = $state(false);
 	let creating = $state(false);
 	let creatingSpeaker = $state(false);
@@ -94,6 +96,7 @@
 	const canSubmitCount = $derived(
 		draft?.cues.filter((cue) => cue.review_status === 'ready' && cue.audio_route === 'clone_from_source' && cue.tts_recommended_text?.trim() && referenceReady(cue.reference_clip_id)).length ?? 0
 	);
+	const hasResettableDraft = $derived(Boolean(projectId && draft && hasResettableContent(draft)));
 
 	onMount(() => {
 		loadProjects();
@@ -196,6 +199,29 @@
 			error = (e as Error).message || '保存失败';
 		} finally {
 			saving = false;
+		}
+	}
+
+	async function resetCurrentTask() {
+		if (!projectId || !draft || !hasResettableContent(draft)) return;
+		const confirmed = window.confirm('这会清空当前项目的视频、本土化 cue、参考音、分离结果和当前页面状态，并回到初始空白态。项目本身会保留，是否继续？');
+		if (!confirmed) return;
+		resetting = true;
+		error = '';
+		try {
+			draft = await Api.resetVideoLocalizationDraft(projectId);
+			draftOnlyCueIds = [];
+			selectedCueId = '';
+			operations = [];
+			ttsBatchId = '';
+			localizationImportOpen = false;
+			stopOperationPolling();
+			message = '当前任务已清空，已回到初始状态';
+			setTimeout(() => (message = ''), 2200);
+		} catch (e) {
+			error = (e as Error).message || '清空当前任务失败';
+		} finally {
+			resetting = false;
 		}
 	}
 
@@ -625,6 +651,22 @@
 		return draftOnlyCueIds.includes(cueId);
 	}
 
+	function hasResettableContent(currentDraft: VideoLocalizationDraft | null) {
+		if (!currentDraft) return false;
+		return Boolean(
+			currentDraft.source_media.filename ||
+				currentDraft.source_media.video_path ||
+				currentDraft.source_media.audio_path ||
+				currentDraft.stems.original_audio_path ||
+				currentDraft.stems.vocals_clean_path ||
+				currentDraft.stems.background_path ||
+				currentDraft.cues.length ||
+				currentDraft.speakers.length ||
+				currentDraft.reference_clips.length ||
+				currentDraft.operations.length
+		);
+	}
+
 	async function persistDraftSnapshot() {
 		if (!projectId || !draft) return;
 		draft = await Api.saveVideoLocalizationDraft(projectId, draft);
@@ -686,6 +728,9 @@
 			<input bind:this={videoInput} data-video-localization-file class="visually-hidden" type="file" accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm,.mkv" onchange={(event) => importVideoFile(event.currentTarget.files?.[0])} />
 			<button class="btn" type="button" onclick={() => videoInput?.click()} disabled={importing}>
 				<UploadCloud size={15} /> {importing ? '导入中' : projectId ? '导入视频' : '导入视频并新建项目'}
+			</button>
+			<button class="btn btn-danger" type="button" onclick={resetCurrentTask} disabled={!hasResettableDraft || resetting}>
+				<Trash2 size={15} /> {resetting ? '清空中' : '清空当前任务'}
 			</button>
 			<button class="btn" type="button" onclick={saveDraft} disabled={!draft || saving}><Save size={15} /> {saving ? '保存中' : '保存草稿'}</button>
 			<button class="btn" type="button" onclick={exportJson} disabled={!draft}><FileJson size={15} /> 导出 JSON</button>
@@ -867,6 +912,18 @@
 		color: #ff9a9a;
 		border-color: #6d3030;
 		background: #2b1515;
+	}
+
+	.btn-danger {
+		color: #ffb0b0;
+		border-color: #6d3030;
+		background: #261617;
+	}
+
+	.btn-danger:disabled {
+		color: var(--muted);
+		border-color: var(--line);
+		background: #15181d;
 	}
 
 	.badge.active {

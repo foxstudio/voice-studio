@@ -107,6 +107,7 @@ export const Api = {
 	putSegments: (id: string, segments: ScriptSegment[]) => api.put<Project>(`/projects/${id}/segments`, segments),
 	videoLocalizationDraft: (id: string) => api.get<VideoLocalizationDraft>(`/projects/${id}/video-localization`),
 	saveVideoLocalizationDraft: (id: string, draft: VideoLocalizationDraft) => api.put<VideoLocalizationDraft>(`/projects/${id}/video-localization`, draft),
+	resetVideoLocalizationDraft: (id: string) => api.delete<VideoLocalizationDraft>(`/projects/${id}/video-localization`),
 	importVideoLocalizationSource: (id: string, file: File) => api.upload<VideoLocalizationDraft>(`/projects/${id}/video-localization/source-media`, file),
 	videoLocalizationOperations: (id: string) => api.get<VideoLocalizationOperation[]>(`/projects/${id}/video-localization/operations`),
 	videoLocalizationOperation: (id: string, operationId: string) => api.get<VideoLocalizationOperation>(`/projects/${id}/video-localization/operations/${operationId}`),

@@ -9,6 +9,7 @@ from app.domains.video_localization import cues as cue_tools
 from app.domains.video_localization import draft_store
 from app.domains.video_localization import exporting
 from app.domains.video_localization import localization
+from app.domains.video_localization import media_assets
 from app.domains.video_localization import reference_clips
 from app.domains.video_localization import speakers
 from app.domains.video_localization import source_pipeline
@@ -35,6 +36,21 @@ def get_video_localization(project_id: str) -> VideoLocalizationDraft | None:
 
 def save_video_localization(project_id: str, draft: VideoLocalizationDraft) -> VideoLocalizationDraft | None:
     return draft_store.save(project_id, draft)
+
+
+def reset_video_localization(project_id: str) -> VideoLocalizationDraft | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    if any(operation.status == "running" for operation in draft.operations):
+        raise AppException(409, "VIDEO_LOCALIZATION_RESET_BLOCKED", "当前仍有后台任务在运行，请先取消或等待完成后再清空")
+
+    media_assets.clear_project_video_localization_dir(project_id)
+    if VIDEO_LOCALIZATION_KEY in project.parameters:
+        project.parameters = {key: value for key, value in project.parameters.items() if key != VIDEO_LOCALIZATION_KEY}
+        project_store.save_project(project)
+    return VideoLocalizationDraft()
 
 
 async def import_source_media(project_id: str, file: UploadFile) -> VideoLocalizationDraft | None:

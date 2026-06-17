@@ -39,6 +39,12 @@ def project_video_localization_dir(project_id: str) -> Path:
     return settings_store.expand_path(settings_store.get().project_dir) / project_id / "video_localization"
 
 
+def clear_project_video_localization_dir(project_id: str) -> None:
+    path = project_video_localization_dir(project_id)
+    if path.exists():
+        shutil.rmtree(path)
+
+
 def safe_filename(filename: str) -> str:
     name = Path(filename).name.strip() or "source.mp4"
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(name).stem).strip("._-") or "source"

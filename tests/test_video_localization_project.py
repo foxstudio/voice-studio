@@ -103,6 +103,80 @@ def test_video_localization_empty_draft_has_contract_defaults(tmp_path: Path):
     assert body["quality_gate"]["pending_issues"] == 0
 
 
+def test_video_localization_reset_clears_draft_and_project_assets(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "重置草稿", "description": ""}).json()
+    project_dir = tmp_path / "projects" / project["project_id"] / "video_localization"
+    source_dir = project_dir / "source"
+    stems_dir = project_dir / "stems"
+    refs_dir = project_dir / "references"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    refs_dir.mkdir(parents=True, exist_ok=True)
+    video_path = source_dir / "demo.mp4"
+    audio_path = project_dir / "audio" / "demo-source.wav"
+    vocals_path = stems_dir / "demo-vocals.wav"
+    reference_path = refs_dir / "ref_001.wav"
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    video_path.write_bytes(b"video")
+    audio_path.write_bytes(b"audio")
+    vocals_path.write_bytes(b"vocals")
+    reference_path.write_bytes(b"reference")
+
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "demo.mp4", "video_path": str(video_path), "audio_path": str(audio_path)},
+            "stems": {"original_audio_path": str(audio_path), "vocals_clean_path": str(vocals_path), "separation_status": "completed"},
+            "speakers": [{"speaker_id": "speaker_01", "display_name": "A"}],
+            "reference_clips": [{"reference_clip_id": "ref_001", "speaker_id": "speaker_01", "audio_path": str(reference_path), "cleanliness": "clean", "asr_status": "verified"}],
+            "cues": [{"cue_id": "cue_0001", "speaker_id": "speaker_01", "start_ms": 0, "end_ms": 1000, "en_subtitle_text": "Hello."}],
+            "operations": [VideoLocalizationOperation(project_id=project["project_id"], kind="english_asr", status="queued", label="英文 ASR 转字幕").model_dump()],
+        },
+    )
+
+    response = client.delete(f"/api/projects/{project['project_id']}/video-localization")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "draft"
+    assert body["source_media"]["filename"] is None
+    assert body["source_media"]["video_path"] is None
+    assert body["stems"]["separation_status"] == "pending"
+    assert body["speakers"] == []
+    assert body["reference_clips"] == []
+    assert body["cues"] == []
+    assert body["operations"] == []
+    assert not project_dir.exists()
+
+    stored_project = client.get(f"/api/projects/{project['project_id']}").json()
+    assert "video_localization" not in stored_project["parameters"]
+
+
+def test_video_localization_reset_blocks_running_operations(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "重置阻断", "description": ""}).json()
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "demo.mp4"},
+            "operations": [VideoLocalizationOperation(project_id=project["project_id"], kind="stems", status="running", label="分离人声与背景声").model_dump()],
+        },
+    )
+
+    response = client.delete(f"/api/projects/{project['project_id']}/video-localization")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_RESET_BLOCKED"
+    draft = client.get(f"/api/projects/{project['project_id']}/video-localization").json()
+    assert draft["source_media"]["filename"] == "demo.mp4"
+    assert draft["operations"][0]["status"] == "running"
+
+
 def test_video_localization_rejects_inverted_time_ranges(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "坏时间码", "description": ""}).json()
