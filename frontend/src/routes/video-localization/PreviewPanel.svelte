@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { AudioLines, Play } from 'lucide-svelte';
+	import { AudioLines, Play, ScissorsLineDashed, UsersRound } from 'lucide-svelte';
 	import type { VideoLocalizationCue, VideoLocalizationDraft } from '$lib/api/types';
-	import { sourceAudioUrl, sourceVideoUrl, stemAudioUrl } from './utils';
+	import { durationLabel, sourceAudioUrl, sourceVideoUrl, stemAudioUrl } from './utils';
 
 	let {
 		selectedCue,
@@ -85,20 +85,27 @@
 	{/if}
 	<div class="wave-panel">
 		<div class="wave-head">
-			<span><AudioLines size={14} /> 分离人声</span>
+			<span><AudioLines size={14} /> 编辑基线</span>
 			<span class={`badge ${hasCleanReference ? 'ok' : ''}`}>
-				{hasCleanReference ? '有干净参考音' : '待选择参考音'}
+				{hasCleanReference ? '已有干净参考音' : '待确认参考音'}
 			</span>
 		</div>
-		<div class="waveform-line" aria-hidden="true">
-			{#each Array.from({ length: 42 }) as _, index}
-				<span style={`height:${12 + ((index * 17) % 36)}px`}></span>
-			{/each}
-		</div>
-		<div class="speaker-lanes">
-			<div class="lane a"><span>A</span><i style="left:8%;width:24%"></i><i style="left:42%;width:18%"></i></div>
-			<div class="lane b"><span>B</span><i style="left:30%;width:14%"></i><i style="left:66%;width:18%"></i></div>
-			<div class="lane mixed"><span>混合</span><i style="left:58%;width:10%"></i></div>
+		<div class="media-summary-grid">
+			<div class="summary-card">
+				<span><ScissorsLineDashed size={13} /> 当前裁切轨道</span>
+				<strong>{draft?.stems.vocals_clean_path ? '分离人声 stem' : draft?.source_media.audio_path || draft?.stems.original_audio_path ? '源音轨' : '待抽取音频'}</strong>
+				<small>{draft?.stems.vocals_clean_path ? '更适合框定说话段落和挑选参考音色。' : '完成人声分离后，这里会自动切换到更干净的人声轨。'}</small>
+			</div>
+			<div class="summary-card">
+				<span><UsersRound size={13} /> 说话人进度</span>
+				<strong>{draft?.speakers.length ?? 0} 位说话人 / {draft?.reference_clips.filter((clip) => clip.cleanliness === 'clean').length ?? 0} 条干净参考音</strong>
+				<small>{selectedCue?.speaker_id ? `当前 cue 已绑定 ${selectedCue.speaker_id}` : '当前 cue 还没有绑定说话人。'}</small>
+			</div>
+			<div class="summary-card">
+				<span><AudioLines size={13} /> 当前 cue</span>
+				<strong>{selectedCue ? durationLabel((selectedCue.end_ms ?? 0) - (selectedCue.start_ms ?? 0)) : '未选择 cue'}</strong>
+				<small>{selectedCue && selectedCue.start_ms !== null && selectedCue.end_ms !== null ? `${selectedCue.start_ms}ms - ${selectedCue.end_ms}ms` : '请在右侧时间轴里拖动 IN / OUT。'}</small>
+			</div>
 		</div>
 	</div>
 </section>
@@ -226,63 +233,48 @@
 		gap: 6px;
 	}
 
-	.waveform-line {
-		height: 58px;
-		display: flex;
-		align-items: center;
-		gap: 3px;
-		padding: 8px;
-		border-radius: 7px;
-		background: #101215;
-		border: 1px solid var(--line);
+	.media-summary-grid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 8px;
 	}
 
-	.waveform-line span {
-		width: 4px;
-		border-radius: 999px;
-		background: #4f9cf9;
-		opacity: 0.72;
-	}
-
-	.speaker-lanes {
+	.summary-card {
 		display: grid;
 		gap: 6px;
-		margin-top: 8px;
-	}
-
-	.lane {
-		position: relative;
-		height: 20px;
-		border-radius: 6px;
-		background: #101215;
+		padding: 10px;
 		border: 1px solid var(--line);
-		overflow: hidden;
+		border-radius: 7px;
+		background: #101215;
 	}
 
-	.lane span {
-		position: relative;
-		z-index: 1;
-		display: inline-flex;
-		align-items: center;
-		height: 100%;
-		padding-left: 8px;
-		font-size: 11px;
+	.summary-card span,
+	.summary-card small {
 		color: var(--muted);
 	}
 
-	.lane i {
-		position: absolute;
-		top: 4px;
-		bottom: 4px;
-		border-radius: 999px;
+	.summary-card span {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 12px;
 	}
 
-	.lane.a i { background: #4f9cf9; }
-	.lane.b i { background: #42c49b; }
-	.lane.mixed i { background: #e4ad42; }
+	.summary-card strong {
+		font-size: 13px;
+	}
+
+	.summary-card small {
+		font-size: 11px;
+		line-height: 1.5;
+	}
 
 	@media (max-width: 900px) {
 		.media-audio-grid {
+			grid-template-columns: 1fr;
+		}
+
+		.media-summary-grid {
 			grid-template-columns: 1fr;
 		}
 	}

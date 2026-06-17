@@ -27,6 +27,8 @@
 		buildWorkflow,
 		createManualCue,
 		isActiveOperation,
+		sourceAudioUrl,
+		stemAudioUrl,
 		sortOperations,
 		suggestSpeakerSeed,
 		type WorkflowStep
@@ -81,6 +83,9 @@
 	const hasActiveOperation = $derived(operations.some((operation) => isActiveOperation(operation)));
 	const latestOperation = $derived(operations[0] ?? null);
 	const speakerSeed = $derived(suggestSpeakerSeed(draft?.speakers ?? []));
+	const cueTimelineAudioSrc = $derived(stemAudioUrl(projectId, draft, 'vocals') || sourceAudioUrl(projectId, draft));
+	const cueTimelineAudioLabel = $derived(draft?.stems.vocals_clean_path ? '分离后人声' : '源音轨');
+	const cueTimelineDurationMs = $derived(draft?.source_media.duration_ms ?? null);
 	const canSubmitCount = $derived(
 		draft?.cues.filter((cue) => cue.review_status === 'ready' && cue.audio_route === 'clone_from_source' && cue.tts_recommended_text?.trim() && referenceReady(cue.reference_clip_id)).length ?? 0
 	);
@@ -484,9 +489,11 @@
 		}
 	}
 
-	function updateSelectedCueTime(field: 'start_ms' | 'end_ms', value: string) {
-		const normalized = value.trim();
-		updateSelectedCue({ [field]: normalized ? Math.max(0, Number(normalized)) : null });
+	function updateSelectedCueTime(field: 'start_ms' | 'end_ms', value: string | number) {
+		const raw = typeof value === 'number' ? String(value) : value;
+		const normalized = raw.trim();
+		const parsed = normalized ? Number(normalized) : null;
+		updateSelectedCue({ [field]: parsed !== null && Number.isFinite(parsed) ? Math.max(0, parsed) : null });
 	}
 
 	function applyLocalizationText(text: string) {
@@ -739,6 +746,9 @@
 				speakers={draft?.speakers ?? []}
 				referenceClips={draft?.reference_clips ?? []}
 				{projectId}
+				timelineAudioSrc={cueTimelineAudioSrc}
+				timelineAudioLabel={cueTimelineAudioLabel}
+				timelineDurationMs={cueTimelineDurationMs}
 				{savingCue}
 				{speakerLabel}
 				canSendToGenerate={cueCanSendToGenerate(selectedCue)}

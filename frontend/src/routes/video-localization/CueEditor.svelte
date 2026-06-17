@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { VideoLocalizationCue, VideoLocalizationReferenceClip, VideoLocalizationSpeaker } from '$lib/api/types';
 	import { Lock, Mic2, Play, Save, Send } from 'lucide-svelte';
+	import CueTimelineEditor from './CueTimelineEditor.svelte';
 	import { sourceCueAudioUrl, statusLabel, ttsAudioUrl } from './utils';
 
 	let {
@@ -8,6 +9,9 @@
 		speakers,
 		referenceClips,
 		projectId,
+		timelineAudioSrc,
+		timelineAudioLabel,
+		timelineDurationMs,
 		savingCue,
 		speakerLabel,
 		canSendToGenerate,
@@ -20,11 +24,14 @@
 		speakers: VideoLocalizationSpeaker[];
 		referenceClips: VideoLocalizationReferenceClip[];
 		projectId: string;
+		timelineAudioSrc: string;
+		timelineAudioLabel: string;
+		timelineDurationMs: number | null;
 		savingCue: boolean;
 		speakerLabel: (speakerId: string | null | undefined) => string;
 		canSendToGenerate: boolean;
 		onUpdateCue: (patch: Partial<VideoLocalizationCue>) => void;
-		onUpdateCueTime: (field: 'start_ms' | 'end_ms', value: string) => void;
+		onUpdateCueTime: (field: 'start_ms' | 'end_ms', value: string | number) => void;
 		onSave: () => void;
 		onSend: () => void;
 	} = $props();
@@ -38,6 +45,7 @@
 		</span>
 	</div>
 	{#if selectedCue}
+		<CueTimelineEditor {selectedCue} audioSrc={timelineAudioSrc} audioLabel={timelineAudioLabel} audioDurationMs={timelineDurationMs} {onUpdateCueTime} />
 		<div class="editor-grid">
 			<label class="field">
 				<span>说话人</span>
@@ -50,8 +58,8 @@
 				</select>
 			</label>
 			<div class="time-fields">
-				<label class="field"><span>入点 ms</span><input value={selectedCue.start_ms ?? ''} aria-label="入点" oninput={(event) => onUpdateCueTime('start_ms', event.currentTarget.value)} /></label>
-				<label class="field"><span>出点 ms</span><input value={selectedCue.end_ms ?? ''} aria-label="出点" oninput={(event) => onUpdateCueTime('end_ms', event.currentTarget.value)} /></label>
+				<label class="field"><span>入点 ms</span><input type="number" min="0" step="100" value={selectedCue.start_ms ?? ''} aria-label="入点" oninput={(event) => onUpdateCueTime('start_ms', event.currentTarget.value)} /></label>
+				<label class="field"><span>出点 ms</span><input type="number" min="0" step="100" value={selectedCue.end_ms ?? ''} aria-label="出点" oninput={(event) => onUpdateCueTime('end_ms', event.currentTarget.value)} /></label>
 			</div>
 			<label class="field">
 				<span>参考音色</span>
@@ -110,6 +118,7 @@
 	.editor-grid {
 		display: grid;
 		gap: 10px;
+		margin-top: 12px;
 	}
 
 	.field span {
