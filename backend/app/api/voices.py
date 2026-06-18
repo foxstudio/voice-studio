@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
@@ -69,6 +70,14 @@ async def register_voice(
         license_status=license_status,
     )
     return voice_store.create_voice(data)
+
+
+@router.get("/files/{file_id}/audio")
+async def get_voice_file_audio(file_id: str):
+    vf = voice_store.get_file(file_id)
+    if not vf or not vf.path or not Path(vf.path).exists():
+        raise AppException(404, "AUDIO_NOT_FOUND", "Audio not found")
+    return FileResponse(vf.path)
 
 
 @router.get("/{voice_id}", response_model=VoiceAsset)

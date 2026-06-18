@@ -85,6 +85,53 @@ export interface AppSettings {
 	theme: 'system' | 'dark' | 'light';
 }
 
+export interface StorageLocation {
+	key: string;
+	label: string;
+	path: string;
+	category: string;
+	description: string;
+	exists: boolean;
+	size_bytes: number;
+	file_count: number;
+	truncated: boolean;
+	cleanup_key: string | null;
+	cleanup_label: string | null;
+	cleanup_risk: 'low' | 'medium' | 'high' | string | null;
+}
+
+export interface StorageFlow {
+	name: string;
+	path: string;
+	description: string;
+}
+
+export interface StorageAudit {
+	locations: StorageLocation[];
+	flows: StorageFlow[];
+	total_bytes: number;
+}
+
+export interface StorageCleanupResponse {
+	cleaned: {
+		target: string;
+		path: string;
+		before_bytes: number;
+		after_bytes: number;
+		removed_bytes: number;
+		before_files: number;
+		after_files: number;
+	}[];
+	skipped: string[];
+	removed_bytes: number;
+}
+
+export interface StorageOpenResponse {
+	status: string;
+	key: string;
+	path: string;
+}
+
 export interface VoiceAssetCreate {
 	name: string;
 	voice_type: string;

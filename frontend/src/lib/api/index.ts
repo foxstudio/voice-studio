@@ -24,6 +24,9 @@ import type {
 	ScriptSegment,
 	TranscriptionRecord,
 	TranscriptionTask,
+	StorageAudit,
+	StorageCleanupResponse,
+	StorageOpenResponse,
 	TTSVerificationRequest,
 	TTSVerificationResponse,
 	UploadResult,
@@ -49,6 +52,9 @@ export const Api = {
 	settings: () => api.get<AppSettings>('/settings'),
 	saveSettings: (settings: AppSettings) => api.patch<AppSettings>('/settings', settings),
 	saveMimoSecret: (body: { api_key?: string | null; clear?: boolean }) => api.patch<AppSettings>('/settings/mimo-secret', body),
+	settingsStorage: () => api.get<StorageAudit>('/settings/storage'),
+	cleanupSettingsStorage: (targets: string[]) => api.post<StorageCleanupResponse>('/settings/storage/cleanup', { targets }),
+	openSettingsStorageLocation: (key: string) => api.post<StorageOpenResponse>('/settings/storage/open', { key }),
 	engines: () => api.get<EngineDetail[]>('/engines'),
 	engineSpeakers: (id: string, params: { q?: string; gender?: 'all' | 'F' | 'M'; limit?: number } = {}) => {
 		const search = new URLSearchParams();

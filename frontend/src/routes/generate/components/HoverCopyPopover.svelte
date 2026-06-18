@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { Check, Clipboard, ClipboardX } from 'lucide-svelte';
 
@@ -12,12 +13,18 @@
 	let { label, copyText, title, children }: Props = $props();
 	let open = $state(false);
 	let copyState = $state<'idle' | 'copied' | 'failed'>('idle');
+	let rootEl: HTMLSpanElement | undefined;
+	let panelEl: HTMLSpanElement | undefined;
+	let panelStyle = $state('');
+	let placement = $state<'top' | 'bottom'>('top');
+	let arrowLeft = $state(14);
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
 	let hideTimer: ReturnType<typeof setTimeout> | undefined;
 
 	function openPanel() {
 		if (hideTimer) clearTimeout(hideTimer);
 		open = true;
+		void positionPanel();
 	}
 
 	function scheduleHide() {
@@ -80,9 +87,50 @@
 		if (copyTimer) clearTimeout(copyTimer);
 		copyTimer = setTimeout(() => (copyState = 'idle'), 1400);
 	}
+
+	async function positionPanel() {
+		await tick();
+		if (!rootEl || !panelEl || typeof window === 'undefined') return;
+
+		const trigger = rootEl.getBoundingClientRect();
+		const panel = panelEl.getBoundingClientRect();
+		const gap = 10;
+		const pad = 8;
+		const maxLeft = window.innerWidth - panel.width - pad;
+		const maxTop = window.innerHeight - panel.height - pad;
+
+		let left = trigger.left;
+		left = Math.max(pad, Math.min(left, maxLeft));
+
+		let top = trigger.top - panel.height - gap;
+		placement = 'top';
+		if (top < pad) {
+			top = trigger.bottom + gap;
+			placement = 'bottom';
+		}
+		if (top > maxTop) {
+			top = Math.max(pad, maxTop);
+		}
+
+		const triggerCenter = trigger.left + trigger.width / 2;
+		arrowLeft = Math.max(14, Math.min(panel.width - 18, triggerCenter - left));
+		panelStyle = `left:${Math.round(left)}px; top:${Math.round(top)}px; --arrow-left:${Math.round(arrowLeft)}px;`;
+	}
+
+	$effect(() => {
+		if (!open || typeof window === 'undefined') return;
+		const reposition = () => void positionPanel();
+		window.addEventListener('resize', reposition);
+		window.addEventListener('scroll', reposition, true);
+		return () => {
+			window.removeEventListener('resize', reposition);
+			window.removeEventListener('scroll', reposition, true);
+		};
+	});
 </script>
 
 <span
+	bind:this={rootEl}
 	class="hover-copy-pop"
 	role="group"
 	onmouseenter={openPanel}
@@ -94,8 +142,11 @@
 		{@render children?.()}
 	</span>
 	<span
+		bind:this={panelEl}
 		class="hover-copy-panel"
 		class:open
+		data-placement={placement}
+		style={panelStyle}
 		role="tooltip"
 		onmouseenter={openPanel}
 		onmouseleave={scheduleHide}
@@ -133,16 +184,16 @@
 	}
 
 	.hover-copy-panel {
-		position: absolute;
-		left: 0;
-		bottom: calc(100% + 10px);
+		position: fixed;
 		z-index: 150;
 		display: grid;
 		gap: 8px;
 		visibility: hidden;
 		opacity: 0;
 		pointer-events: none;
-		width: min(360px, calc(100vw - 32px));
+		width: max-content;
+		min-width: min(180px, calc(100vw - 24px));
+		max-width: min(320px, calc(100vw - 24px));
 		max-height: 260px;
 		overflow: auto;
 		padding: 10px;
@@ -156,8 +207,29 @@
 		transition: opacity 120ms ease, visibility 0s linear 120ms;
 	}
 
-	.hover-copy-pop:hover .hover-copy-panel,
-	.hover-copy-pop:focus-within .hover-copy-panel,
+	.hover-copy-panel::before {
+		content: '';
+		position: absolute;
+		left: var(--arrow-left, 14px);
+		width: 10px;
+		height: 10px;
+		border: inherit;
+		background: inherit;
+		transform: rotate(45deg);
+	}
+
+	.hover-copy-panel[data-placement='top']::before {
+		bottom: -6px;
+		border-left: 0;
+		border-top: 0;
+	}
+
+	.hover-copy-panel[data-placement='bottom']::before {
+		top: -6px;
+		border-right: 0;
+		border-bottom: 0;
+	}
+
 	.hover-copy-panel.open {
 		visibility: visible;
 		opacity: 1;
