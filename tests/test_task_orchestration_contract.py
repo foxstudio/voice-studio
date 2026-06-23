@@ -11,7 +11,7 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.schemas.voice_studio import AppSettings, BatchGenerateRequest, BatchSegmentInput, BatchSegmentResult, BatchTask, GenerateRequest, GenerationTask, LongformGenerateRequest, LongformSegmentTask, LongformTask, TaskStatus  # noqa: E402
+from app.schemas.voice_studio import AppSettings, BatchGenerateRequest, BatchSegmentInput, BatchSegmentResult, BatchTask, ExportRecord, GenerateRequest, GenerationTask, LongformGenerateRequest, LongformSegmentTask, LongformTask, TaskStatus  # noqa: E402
 from app.services import batch_queue, longform_queue, task_queue  # noqa: E402
 
 
@@ -116,6 +116,7 @@ async def test_longform_failure_is_reported_to_parent_status(fake_longform_db):
         engine_id="indextts-v2",
         status=TaskStatus.queued,
         input_text="第一段。第二段。第三段。",
+        merge_enabled=False,
         segments=[
             LongformSegmentTask(index=1, text="第一段。", char_count=4),
             LongformSegmentTask(index=2, text="第二段。", char_count=4),
@@ -159,6 +160,68 @@ async def test_longform_failure_is_reported_to_parent_status(fake_longform_db):
     assert task.segments[2].status == TaskStatus.success
     assert task.progress == 1.0
     assert task.result_ids == ["result-1", "result-3"]
+
+
+@pytest.mark.asyncio
+async def test_longform_partial_failure_still_merges_success_segments(fake_longform_db, monkeypatch):
+    created_exports: list[list[str]] = []
+    added_exports: list[str] = []
+    task = LongformTask(
+        longform_task_id="lf-partial-merge",
+        engine_id="indextts-v2",
+        status=TaskStatus.queued,
+        input_text="第一段。第二段。第三段。",
+        segments=[
+            LongformSegmentTask(index=1, text="第一段。", char_count=4),
+            LongformSegmentTask(index=2, text="第二段。", char_count=4),
+            LongformSegmentTask(index=3, text="第三段。", char_count=4),
+        ],
+        parameters=LongformGenerateRequest(
+            generate_request=GenerateRequest(
+                text="第一段。第二段。第三段。",
+                engine_id="indextts-v2",
+                output_format="wav",
+            ),
+            verify_enabled=False,
+            merge_enabled=True,
+            stop_merge_on_verification_failed=True,
+        ).model_dump(),
+    )
+
+    fake_longform_db.upsert("longform_tasks", task.longform_task_id, task.model_dump())
+
+    async def fake_process_segment(_task: LongformTask, segment: LongformSegmentTask, _req: LongformGenerateRequest) -> bool:
+        if segment.index == 2:
+            segment.status = TaskStatus.failed
+            segment.error_message = "段落失败"
+            return False
+        segment.status = TaskStatus.success
+        segment.result_id = f"result-{segment.index}"
+        segment.duration_ms = 1000
+        return True
+
+    def fake_create_export(req):
+        created_exports.append(list(req.result_ids))
+        return ExportRecord(export_id="export-partial", path="/tmp/partial.wav", format=req.format, source_count=len(req.result_ids))
+
+    def fake_add_completed_longform_export(_task, record, **_kwargs):
+        added_exports.append(record.export_id)
+
+    monkeypatch.setattr(longform_queue, "_process_segment", fake_process_segment)
+    monkeypatch.setattr(longform_queue.export_store, "create_export", fake_create_export)
+    monkeypatch.setattr(longform_queue.task_queue, "add_completed_longform_export", fake_add_completed_longform_export)
+    monkeypatch.setattr(longform_queue, "_notify_clients", lambda: None)
+
+    await longform_queue._process(task)
+
+    assert task.status == TaskStatus.failed
+    assert task.progress == 1.0
+    assert task.result_ids == ["result-1", "result-3"]
+    assert task.export_id == "export-partial"
+    assert task.export_path == "/tmp/partial.wav"
+    assert created_exports == [["result-1", "result-3"]]
+    assert added_exports == ["export-partial"]
+    assert "已合并 2/3 个成功段" in (task.error_message or "")
 
 
 @pytest.mark.asyncio

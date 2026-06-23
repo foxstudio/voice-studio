@@ -341,10 +341,6 @@ async def _process(task: LongformTask) -> None:
             _restore_cancelled_segment_state(task)
             task.status = TaskStatus.cancelled
             task.error_message = "任务已取消"
-        elif failed_segments and task.stop_merge_on_verification_failed:
-            task.progress = 1.0
-            task.status = TaskStatus.failed
-            task.error_message = f"{len(failed_segments)} 个段落生成或校对失败，已完成 {len(success_segments)}/{len(task.segments)} 段"
         elif task.merge_enabled and len(task.result_ids) > 1:
             record = export_store.create_export(
                 ExportRequest(
