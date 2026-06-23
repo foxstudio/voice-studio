@@ -110,18 +110,20 @@ def test_recover_incomplete_tasks_skips_terminal_task_rows(fake_task_db, status)
 
 @pytest.mark.asyncio
 async def test_longform_failure_is_reported_to_parent_status(fake_longform_db):
+    seen_segments: list[int] = []
     task = LongformTask(
         longform_task_id="lf-1",
         engine_id="indextts-v2",
         status=TaskStatus.queued,
-        input_text="第一段。第二段。",
+        input_text="第一段。第二段。第三段。",
         segments=[
             LongformSegmentTask(index=1, text="第一段。", char_count=4),
             LongformSegmentTask(index=2, text="第二段。", char_count=4),
+            LongformSegmentTask(index=3, text="第三段。", char_count=4),
         ],
         parameters=LongformGenerateRequest(
             generate_request=GenerateRequest(
-                text="第一段。第二段。",
+                text="第一段。第二段。第三段。",
                 engine_id="indextts-v2",
             ),
             verify_enabled=False,
@@ -131,6 +133,7 @@ async def test_longform_failure_is_reported_to_parent_status(fake_longform_db):
 
     fake_longform_db.upsert("longform_tasks", task.longform_task_id, task.model_dump())
     async def fake_process_segment(_task: LongformTask, segment: LongformSegmentTask, _req: LongformGenerateRequest) -> bool:
+        seen_segments.append(segment.index)
         if segment.index == 2:
             segment.status = TaskStatus.failed
             segment.error_message = "段落失败"
@@ -149,9 +152,13 @@ async def test_longform_failure_is_reported_to_parent_status(fake_longform_db):
 
     assert task.status == TaskStatus.failed
     assert "段落生成或校对失败" in (task.error_message or "")
+    assert seen_segments == [1, 2, 3]
     assert task.segments[0].status == TaskStatus.success
     assert task.segments[1].status == TaskStatus.failed
     assert task.segments[1].error_message == "段落失败"
+    assert task.segments[2].status == TaskStatus.success
+    assert task.progress == 1.0
+    assert task.result_ids == ["result-1", "result-3"]
 
 
 @pytest.mark.asyncio

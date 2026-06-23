@@ -331,8 +331,6 @@ async def _process(task: LongformTask) -> None:
                 return
             task.progress = (index + 1) / total * 0.9
             _save(task)
-            if not ok and task.stop_merge_on_verification_failed:
-                break
         success_segments = [segment for segment in task.segments if segment.status == TaskStatus.success and segment.result_id]
         failed_segments = [segment for segment in task.segments if segment.status == TaskStatus.failed]
         task.result_ids = [segment.result_id for segment in success_segments if segment.result_id]
@@ -343,9 +341,10 @@ async def _process(task: LongformTask) -> None:
             _restore_cancelled_segment_state(task)
             task.status = TaskStatus.cancelled
             task.error_message = "任务已取消"
-        elif failed_segments:
+        elif failed_segments and task.stop_merge_on_verification_failed:
+            task.progress = 1.0
             task.status = TaskStatus.failed
-            task.error_message = f"{len(failed_segments)} 个段落生成或校对失败"
+            task.error_message = f"{len(failed_segments)} 个段落生成或校对失败，已完成 {len(success_segments)}/{len(task.segments)} 段"
         elif task.merge_enabled and len(task.result_ids) > 1:
             record = export_store.create_export(
                 ExportRequest(
@@ -364,10 +363,18 @@ async def _process(task: LongformTask) -> None:
                 generation_time_ms=_segments_generation_time_ms(task),
             )
             task.progress = 1.0
-            task.status = TaskStatus.success
+            if failed_segments:
+                task.status = TaskStatus.failed
+                task.error_message = f"{len(failed_segments)} 个段落生成或校对失败，已合并 {len(success_segments)}/{len(task.segments)} 个成功段"
+            else:
+                task.status = TaskStatus.success
         else:
             task.progress = 1.0
-            task.status = TaskStatus.success
+            if failed_segments:
+                task.status = TaskStatus.failed
+                task.error_message = f"{len(failed_segments)} 个段落生成或校对失败，已完成 {len(success_segments)}/{len(task.segments)} 段"
+            else:
+                task.status = TaskStatus.success
     except Exception as exc:
         task.status = TaskStatus.failed
         task.error_message = str(exc)
