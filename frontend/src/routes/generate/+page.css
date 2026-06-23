@@ -1183,36 +1183,57 @@
 		gap: 8px;
 		min-width: 0;
 		height: 30px;
+		min-height: 30px;
+		max-height: 30px;
 		padding: 0;
 		border: 0;
 		border-radius: 0;
 		background: transparent;
 		width: fit-content;
 		max-width: 100%;
-		flex: 0 1 auto;
+		flex: 0 0 auto;
 	}
 
 	.result-play-btn,
 	.result-download-btn {
+		flex: 0 0 30px;
 		width: 30px;
+		min-width: 30px;
+		max-width: 30px;
 		height: 30px;
+		min-height: 30px;
+		max-height: 30px;
 		border-radius: 7px;
 	}
 
-		.result-play-btn.playing {
-			background: var(--accent);
-			border-color: var(--accent);
-			color: #07121f;
-		}
+	.result-audio-compact .gen-icon-btn {
+		transform: none;
+		transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+	}
+
+	.result-audio-compact .gen-icon-btn:active:not(:disabled) {
+		transform: none;
+	}
+
+	.result-play-btn.playing {
+		background: var(--accent);
+		border-color: var(--accent);
+		color: #07121f;
+	}
 
 	.audio-compact-label {
 		display: inline-flex;
 		align-items: center;
+		justify-content: center;
+		box-sizing: border-box;
+		flex: 0 0 44px;
+		width: 44px;
+		min-width: 44px;
+		max-width: 44px;
 		height: 22px;
 		min-height: 22px;
 		max-height: 22px;
-		min-width: 0;
-		padding: 2px 7px;
+		padding: 0 7px;
 		border: 1px solid var(--line);
 		border-radius: 999px;
 		background: rgba(255, 255, 255, 0.02);
@@ -1221,6 +1242,11 @@
 		font-weight: 400;
 		line-height: 1.35;
 		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		font-variant-numeric: tabular-nums;
+		transform: none;
+		transition: none;
 	}
 
 	.progress-block {
@@ -1291,12 +1317,22 @@
 	.result-audio-compact .audio-compact-label:hover,
 	.result-audio-compact .audio-compact-label:focus-visible,
 	.result-card.playing .audio-compact-label {
+		flex-basis: 44px;
+		width: 44px;
+		min-width: 44px;
+		max-width: 44px;
+		height: 22px;
+		min-height: 22px;
+		max-height: 22px;
+		padding: 0 7px;
 		border-color: var(--line);
 		background: rgba(255, 255, 255, 0.02);
 		color: var(--muted);
 		font-size: 11px;
 		font-weight: 400;
 		line-height: 1.35;
+		transform: none;
+		transition: none;
 	}
 
 	.result-footer {
