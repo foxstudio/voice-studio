@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
+from app.services import confucius4_paths
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -37,6 +38,8 @@ def evict_cache(engine_id: str) -> None:
     """Remove a model from the cache when its engine stops."""
     with _model_cache_lock:
         _model_cache.pop(engine_id, None)
+        for key in [key for key in _model_cache if str(key).startswith(f"{engine_id}:")]:
+            _model_cache.pop(key, None)
 def _audio_meta(path: str, sample_rate: int) -> dict:
     try:
         import soundfile as sf
@@ -72,6 +75,17 @@ def _external_python(root: Path) -> str:
     if not python.exists():
         raise RuntimeError(f"External Python not found: {python}")
     return str(python)
+
+
+def _prepare_confucius4_runtime(root: Path) -> None:
+    if not (root / "mlx_audio" / "tts" / "models" / "confucius4" / "confucius4.py").exists():
+        raise RuntimeError(f"Confucius4 MLX runtime not found: {root}")
+    root_str = str(root)
+    if sys.path[0] != root_str:
+        sys.path.insert(0, root_str)
+    for name in list(sys.modules):
+        if name == "mlx_audio" or name.startswith("mlx_audio."):
+            sys.modules.pop(name, None)
 
 
 @contextmanager
@@ -169,6 +183,8 @@ def _build_omnivoice_kwargs(**kwargs):
     diffusion_steps = kwargs.pop("diffusion_steps", None) or kwargs.pop("num_step", None)
     guidance_scale = kwargs.pop("guidance_scale", None)
     duration = kwargs.pop("duration", None)
+    audio_chunk_duration = kwargs.pop("audio_chunk_duration", None)
+    audio_chunk_threshold = kwargs.pop("audio_chunk_threshold", None)
 
     gen_kwargs = {"text": text}
     if language and language != "auto":
@@ -181,12 +197,19 @@ def _build_omnivoice_kwargs(**kwargs):
         gen_kwargs["instruct"] = instruction
     if speed != 1.0:
         gen_kwargs["speed"] = speed
-    if diffusion_steps:
-        gen_kwargs["num_step"] = int(diffusion_steps)
-    if guidance_scale is not None:
-        gen_kwargs["guidance_scale"] = float(guidance_scale)
     if duration is not None and float(duration) > 0:
         gen_kwargs["duration"] = float(duration)
+    generation_config: dict[str, float | int] = {}
+    if diffusion_steps:
+        generation_config["num_step"] = int(diffusion_steps)
+    if guidance_scale is not None:
+        generation_config["guidance_scale"] = float(guidance_scale)
+    if audio_chunk_duration is not None:
+        generation_config["audio_chunk_duration"] = float(audio_chunk_duration)
+    if audio_chunk_threshold is not None:
+        generation_config["audio_chunk_threshold"] = float(audio_chunk_threshold)
+    if generation_config:
+        gen_kwargs["generation_config"] = generation_config
 
     return engine_id, output_path, device, gen_kwargs
 
@@ -206,6 +229,10 @@ def run_omnivoice(**kwargs):
                 load_kwargs["dtype"] = torch.float32
             model = OmniVoice.from_pretrained("k2-fsa/OmniVoice", **load_kwargs)
             _model_cache[engine_id] = model
+    if isinstance(gen_kwargs.get("generation_config"), dict):
+        from omnivoice.models.omnivoice import OmniVoiceGenerationConfig
+
+        gen_kwargs["generation_config"] = OmniVoiceGenerationConfig.from_dict(gen_kwargs["generation_config"])
     result = model.generate(**gen_kwargs)
     if isinstance(result, (str, Path)):
         shutil.copy2(str(result), output_path)
@@ -295,6 +322,146 @@ def run_emotivoice(**kwargs):
             raise RuntimeError(f"EmotiVoice output missing: {generated}")
         shutil.copy2(generated, output_path)
     meta = _audio_meta(output_path, 16000)
+    meta.update({"output_path": output_path, "generation_time_ms": int((time.perf_counter() - start) * 1000)})
+    return meta
+
+
+def _build_confucius4_mlx_kwargs(**kwargs):
+    engine_id = kwargs.pop("engine_id", confucius4_paths.ENGINE_ID)
+    output_path = kwargs.pop("output_path")
+    text = kwargs.pop("text").strip()
+    ref_audio = kwargs.pop("reference_audio", None)
+    model_dir = confucius4_paths.model_dir(kwargs.pop("model_dir", None))
+    runtime_root = Path(kwargs.pop("runtime_root", None) or confucius4_paths.runtime_root())
+    language = str(kwargs.pop("language", "zh") or "zh")
+    temperature = float(kwargs.pop("temperature", 0.8) or 0.8)
+    top_k = int(kwargs.pop("top_k", 30) or 30)
+    top_p = float(kwargs.pop("top_p", 0.8) or 0.8)
+    repetition_penalty = float(kwargs.pop("repetition_penalty", 10.0) or 10.0)
+    diffusion_steps = int(kwargs.pop("diffusion_steps", 25) or 25)
+    cfg_rate = float(kwargs.pop("cfg_rate", 0.7) or 0.7)
+    seed = int(kwargs.pop("seed", 0) or 0)
+    return engine_id, output_path, text, ref_audio, model_dir, runtime_root, language, temperature, top_k, top_p, repetition_penalty, diffusion_steps, cfg_rate, seed
+
+
+def _confucius4_ref_audio_16k(ref_audio: str, tmp_dir: Path) -> str:
+    import soundfile as sf
+
+    audio, sample_rate = sf.read(ref_audio)
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    if int(sample_rate) == 16000:
+        return ref_audio
+    import librosa
+
+    converted = librosa.resample(audio, orig_sr=int(sample_rate), target_sr=16000)
+    out = tmp_dir / "reference-16k.wav"
+    sf.write(out, np.asarray(converted, dtype=np.float32), 16000, subtype="PCM_16")
+    return str(out)
+
+
+def _confucius4_char_count(text: str) -> int:
+    return len("".join(text.split()))
+
+
+def _confucius4_split_text(text: str, max_chars: int = 24) -> list[str]:
+    import re
+
+    normalized = text.strip()
+    if _confucius4_char_count(normalized) <= max_chars:
+        return [normalized] if normalized else []
+
+    raw_parts = re.split(r"(?<=[。！？!?；;])\s*|\n+", normalized)
+    units: list[str] = []
+    for part in [item.strip() for item in raw_parts if item.strip()]:
+        if _confucius4_char_count(part) <= max_chars:
+            units.append(part)
+            continue
+        weak_parts = re.split(r"(?<=[，,、：:])\s*", part)
+        for weak in [item.strip() for item in weak_parts if item.strip()]:
+            if _confucius4_char_count(weak) <= max_chars:
+                units.append(weak)
+            else:
+                chunk = ""
+                for ch in weak:
+                    chunk += ch
+                    if _confucius4_char_count(chunk) >= max_chars:
+                        units.append(chunk.strip())
+                        chunk = ""
+                if chunk.strip():
+                    units.append(chunk.strip())
+
+    merged: list[str] = []
+    current = ""
+    for unit in units:
+        candidate = f"{current}{unit}" if current else unit
+        if current and _confucius4_char_count(candidate) > max_chars:
+            merged.append(current.strip())
+            current = unit
+        else:
+            current = candidate
+    if current.strip():
+        merged.append(current.strip())
+    return merged
+
+
+def run_confucius4_mlx(**kwargs):
+    engine_id, output_path, text, ref_audio, model_dir, runtime_root, language, temperature, top_k, top_p, repetition_penalty, diffusion_steps, cfg_rate, seed = _build_confucius4_mlx_kwargs(**kwargs)
+    if not text:
+        raise RuntimeError("Text is empty")
+    if not ref_audio:
+        raise RuntimeError("REFERENCE_AUDIO_REQUIRED")
+    if not Path(ref_audio).exists():
+        raise RuntimeError("REFERENCE_AUDIO_NOT_FOUND")
+    missing_model = confucius4_paths.missing_model_files(model_dir)
+    missing_runtime = confucius4_paths.missing_runtime_files(runtime_root)
+    if missing_model or missing_runtime:
+        missing = [*(f"model:{item}" for item in missing_model), *(f"runtime:{item}" for item in missing_runtime)]
+        raise RuntimeError(f"Confucius4 MLX files missing: {', '.join(missing)}")
+
+    start = time.perf_counter()
+    with _file_lock(model_dir / ".voice_studio" / "confucius4-mlx.lock"), tempfile.TemporaryDirectory(prefix="voice-studio-confucius4-") as tmp:
+        _prepare_confucius4_runtime(runtime_root)
+        from mlx_audio.tts.utils import load
+
+        cache_key = f"{engine_id}:{model_dir}"
+        with _model_cache_lock:
+            model = _model_cache.get(cache_key)
+            if model is None:
+                model = load(str(model_dir), lazy=False, strict=False)
+                _model_cache[cache_key] = model
+        import soundfile as sf
+
+        ref_16k = _confucius4_ref_audio_16k(ref_audio, Path(tmp))
+        parts = _confucius4_split_text(text)
+        audio_parts: list[np.ndarray] = []
+        sample_rate = 22050
+        for index, part in enumerate(parts):
+            result = next(
+                model.generate(
+                    text=part,
+                    ref_audio=ref_16k,
+                    lang=language,
+                    temperature=temperature,
+                    top_k=top_k,
+                    top_p=top_p,
+                    repetition_penalty=repetition_penalty,
+                    diffusion_steps=diffusion_steps,
+                    cfg_rate=cfg_rate,
+                    seed=seed + index,
+                )
+            )
+            sample_rate = int(getattr(result, "sample_rate", 22050) or 22050)
+            audio_parts.append(np.asarray(result.audio).reshape(-1).astype(np.float32))
+            if index < len(parts) - 1:
+                audio_parts.append(np.zeros(int(sample_rate * 0.18), dtype=np.float32))
+
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        audio = np.concatenate(audio_parts) if audio_parts else np.zeros(0, dtype=np.float32)
+        sf.write(out, np.clip(audio, -1, 1), sample_rate, subtype="PCM_16")
+    meta = _audio_meta(output_path, 22050)
     meta.update({"output_path": output_path, "generation_time_ms": int((time.perf_counter() - start) * 1000)})
     return meta
 
@@ -407,6 +574,7 @@ import json
 import sys
 from pathlib import Path
 
+import torch
 import torchaudio
 
 sys.path.insert(0, ".")
@@ -417,9 +585,16 @@ payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 model = AutoModel(model_dir=payload["model_dir"])
 speakers = model.list_available_spks()
 speaker = payload["speaker_id"] if payload["speaker_id"] in speakers else speakers[0]
+chunks = []
 for item in model.inference_sft(payload["text"], speaker, stream=False, speed=payload["speed"]):
-    torchaudio.save(payload["output_path"], item["tts_speech"].cpu(), model.sample_rate)
-    break
+    speech = item["tts_speech"].detach().cpu()
+    if speech.ndim == 1:
+        speech = speech.unsqueeze(0)
+    chunks.append(speech)
+if not chunks:
+    raise RuntimeError("CosyVoice returned no audio")
+speech = chunks[0] if len(chunks) == 1 else torch.cat(chunks, dim=1)
+torchaudio.save(payload["output_path"], speech, model.sample_rate)
 """
     start = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="voice-studio-cosyvoice-") as tmp:
@@ -464,6 +639,7 @@ import json
 import sys
 from pathlib import Path
 
+import torch
 import torchaudio
 
 sys.path.insert(0, ".")
@@ -472,6 +648,7 @@ from cosyvoice.cli.cosyvoice import AutoModel
 
 payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 model = AutoModel(model_dir=payload["model_dir"])
+chunks = []
 for item in model.inference_zero_shot(
     payload["text"],
     payload["ref_text"],
@@ -479,8 +656,14 @@ for item in model.inference_zero_shot(
     stream=False,
     speed=payload["speed"],
 ):
-    torchaudio.save(payload["output_path"], item["tts_speech"].cpu(), model.sample_rate)
-    break
+    speech = item["tts_speech"].detach().cpu()
+    if speech.ndim == 1:
+        speech = speech.unsqueeze(0)
+    chunks.append(speech)
+if not chunks:
+    raise RuntimeError("CosyVoice returned no audio")
+speech = chunks[0] if len(chunks) == 1 else torch.cat(chunks, dim=1)
+torchaudio.save(payload["output_path"], speech, model.sample_rate)
 """
     start = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="voice-studio-cosyvoice-zero-") as tmp:
@@ -496,6 +679,7 @@ RUNNERS = {
     "indextts-v2": run_indextts_v2,
     "omnivoice": run_omnivoice,
     "emotivoice": run_emotivoice,
+    "confucius4-mlx-int8": run_confucius4_mlx,
     "f5-tts": run_f5_tts,
     "cosyvoice-sft": run_cosyvoice_sft,
     "cosyvoice-zero-shot": run_cosyvoice_zero_shot,

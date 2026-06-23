@@ -13,8 +13,8 @@
 	let sidebarCollapsed = $state(false);
 	let sidebarMobileOpen = $state(false);
 
-	$effect(() => {
-		Api.health()
+	function checkHealth() {
+		return Api.health()
 			.then((h) => {
 				status = h.status;
 				engines = Object.fromEntries(
@@ -23,11 +23,14 @@
 			})
 			.catch(() => {
 				status = 'offline';
+				engines = {};
 			});
-	});
+	}
 
 	onMount(() => {
 		initTooltips();
+		checkHealth();
+		const healthTimer = setInterval(checkHealth, 5000);
 		sidebarCollapsed = localStorage.getItem('voice-studio-sidebar') === 'collapsed';
 		const onPlay = (event: Event) => {
 			const current = event.target;
@@ -37,7 +40,10 @@
 			});
 		};
 		document.addEventListener('play', onPlay, true);
-		return () => document.removeEventListener('play', onPlay, true);
+		return () => {
+			clearInterval(healthTimer);
+			document.removeEventListener('play', onPlay, true);
+		};
 	});
 
 	function toggleSidebar() {

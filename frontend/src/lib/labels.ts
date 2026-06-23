@@ -39,6 +39,8 @@ export function capabilityLabel(capability: string) {
 		voice_clone: '声音克隆',
 		zero_shot: '零样本',
 		emotion_control: '情绪控制',
+		emotion_transfer: '情绪迁移',
+		cross_lingual: '跨语种',
 		long_text: '长文本',
 		pinyin_control: '拼音校正',
 		voice_design: '声音设计',

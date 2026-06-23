@@ -1,4 +1,4 @@
-import type { EngineDetail, GenerationTask, GenerateRequest, LongformTask, TTSVerificationResponse, VoiceAsset } from '$lib/api/types';
+import type { EngineDetail, GenerationTask, GenerateRequest, LongformTask, ParameterSchema, TTSVerificationResponse, VoiceAsset } from '$lib/api/types';
 import { taskStatusLabel } from '$lib/labels';
 
 export type TaskStatusTab = 'all' | 'active' | 'success' | 'failed';
@@ -48,18 +48,31 @@ export function requestFromTask(task: GenerationTask): GenerateRequest {
 	} as GenerateRequest;
 }
 
+function taskRequestParameters(task: GenerationTask): Record<string, unknown> {
+	const nested = task.parameters.generate_request;
+	if (nested && typeof nested === 'object' && !Array.isArray(nested)) return nested as Record<string, unknown>;
+	return task.parameters;
+}
+
+function paramValue(task: GenerationTask, key: string) {
+	return taskRequestParameters(task)[key];
+}
+
 export function voiceName(task: GenerationTask, voiceMap: Map<string, VoiceAsset>) {
-	return task.voice_id ? voiceMap.get(task.voice_id)?.name ?? '' : '';
+	const requestVoiceId = paramValue(task, 'voice_id');
+	const voiceId = task.voice_id || (typeof requestVoiceId === 'string' ? requestVoiceId : '');
+	return voiceId ? voiceMap.get(voiceId)?.name ?? '' : '';
 }
 
 export function voiceBadgeLabel(task: GenerationTask, voiceMap: Map<string, VoiceAsset>) {
 	const localVoice = voiceName(task, voiceMap);
 	if (localVoice) return localVoice;
-	const mimoVoice = task.parameters.mimo_voice;
+	const params = taskRequestParameters(task);
+	const mimoVoice = params.mimo_voice;
 	if (typeof mimoVoice === 'string' && mimoVoice.trim()) return mimoVoice.trim();
-	const speakerId = task.parameters.speaker_id;
+	const speakerId = params.speaker_id;
 	if (typeof speakerId === 'string' && speakerId.trim()) return speakerId.trim();
-	if (typeof task.parameters.voice_design_prompt === 'string' && task.parameters.voice_design_prompt.trim()) return '声音设计';
+	if (typeof params.voice_design_prompt === 'string' && params.voice_design_prompt.trim()) return '声音设计';
 	return '未选音色';
 }
 
@@ -182,6 +195,7 @@ const RUNTIME_PROFILES: Record<string, { slowAfterSeconds: number; timeoutSecond
 	omnivoice: { slowAfterSeconds: 480, timeoutSeconds: 600 },
 	'indextts-v2': { slowAfterSeconds: 150, timeoutSeconds: 420 },
 	emotivoice: { slowAfterSeconds: 150, timeoutSeconds: 420 },
+	'confucius4-mlx-int8': { slowAfterSeconds: 210, timeoutSeconds: 600 },
 	'f5-tts': { slowAfterSeconds: 210, timeoutSeconds: 600 },
 	'cosyvoice-sft': { slowAfterSeconds: 360, timeoutSeconds: 900 },
 	'cosyvoice-zero-shot': { slowAfterSeconds: 360, timeoutSeconds: 900 },
@@ -225,33 +239,88 @@ export function verificationStatusLabel(status: TTSVerificationResponse['status'
 	return { passed: '校对通过', warning: '需要复听', failed: '缺句风险', skipped: '未校对' }[status] ?? status;
 }
 
-export function numericParam(task: GenerationTask, key: string) { const v = task.parameters[key]; return typeof v === 'number' ? v : null; }
-export function textParam(task: GenerationTask, key: string) { const v = task.parameters[key]; return typeof v === 'string' && v.trim() ? v : null; }
+export function numericParam(task: GenerationTask, key: string) { const v = paramValue(task, key); return typeof v === 'number' ? v : null; }
+export function textParam(task: GenerationTask, key: string) { const v = paramValue(task, key); return typeof v === 'string' && v.trim() ? v : null; }
 export function taskSupportsParam(task: GenerationTask, key: string, engineMap: Map<string, EngineDetail>) {
 	return (engineMap.get(task.engine_id)?.manifest.parameter_schema ?? []).some(p => p.key === key);
 }
 
 type ParameterEntry = { label: string; value: string };
 
+function isDisplayableParamValue(value: unknown) {
+	return value !== undefined && value !== null && value !== '';
+}
+
+function formatNumber(value: number) {
+	return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function formatParameterValue(param: ParameterSchema, value: unknown) {
+	if (typeof value === 'boolean') return value ? '是' : '否';
+	if (typeof value === 'number') return formatNumber(value);
+	if (typeof value === 'string') {
+		const option = param.options.find((item) => item.value === value);
+		return option ? option.label : value;
+	}
+	if (Array.isArray(value)) return value.map(String).join('、');
+	if (value && typeof value === 'object') return JSON.stringify(value);
+	return String(value);
+}
+
+function pushEntry(entries: ParameterEntry[], seen: Set<string>, key: string, label: string, value: unknown) {
+	if (!isDisplayableParamValue(value) || seen.has(key)) return;
+	entries.push({ label, value: String(value) });
+	seen.add(key);
+}
+
+function pushSchemaEntries(entries: ParameterEntry[], seen: Set<string>, task: GenerationTask, engine: EngineDetail | undefined) {
+	const params = taskRequestParameters(task);
+	for (const schema of engine?.manifest.parameter_schema ?? []) {
+		const value = params[schema.key];
+		if (!isDisplayableParamValue(value)) continue;
+		pushEntry(entries, seen, schema.key, schema.label, formatParameterValue(schema, value));
+	}
+}
+
+function pushLongformEntries(entries: ParameterEntry[], seen: Set<string>, task: GenerationTask) {
+	const params = task.parameters;
+	const longformEntries: Array<[string, string, unknown]> = [
+		['longform_segment_count', '长文本段数', params.longform_segment_count ?? task.longform_segment_count],
+		['verify_enabled', '自动校对', params.verify_enabled],
+		['merge_enabled', '自动合并', params.merge_enabled],
+		['max_retries', '最大重试', params.max_retries],
+		['asr_engine_id', '校对 ASR', params.asr_engine_id],
+		['silence_ms', '合并静音 ms', params.silence_ms],
+		['normalize', '合并归一化', params.normalize],
+		['longform_export_id', '长文本导出', params.longform_export_id ?? task.longform_export_id]
+	];
+	for (const [key, label, value] of longformEntries) {
+		if (typeof value === 'boolean') pushEntry(entries, seen, key, label, value ? '是' : '否');
+		else pushEntry(entries, seen, key, label, value);
+	}
+	const sourceResultIds = params.source_result_ids;
+	if (Array.isArray(sourceResultIds)) pushEntry(entries, seen, 'source_result_ids', '来源结果数', sourceResultIds.length);
+}
+
 export function taskParameterEntries(task: GenerationTask, engineMap: Map<string, EngineDetail>, voiceMap: Map<string, VoiceAsset>): ParameterEntry[] {
+	const engine = engineMap.get(task.engine_id);
+	const params = taskRequestParameters(task);
+	const seen = new Set<string>();
 	const e: ParameterEntry[] = [
-		{ label: '引擎', value: engineMap.get(task.engine_id)?.manifest.display_name ?? task.engine_id },
+		{ label: '引擎', value: engine?.manifest.display_name ?? task.engine_id },
 		{ label: '来源', value: engineTypeLabel(task.engine_id, engineMap) }
 	];
+	seen.add('engine_id');
 	const vn = voiceName(task, voiceMap);
 	if (vn) e.push({ label: '音色', value: vn });
-	if (taskSupportsParam(task, 'language', engineMap) && textParam(task, 'language')) e.push({ label: '语言', value: textParam(task, 'language')! });
-	if (taskSupportsParam(task, 'emotion', engineMap) && textParam(task, 'emotion')) e.push({ label: '情绪', value: textParam(task, 'emotion')! });
-	if (taskSupportsParam(task, 'mimo_voice', engineMap) && textParam(task, 'mimo_voice')) e.push({ label: 'MiMo 音色', value: textParam(task, 'mimo_voice')! });
-	if (taskSupportsParam(task, 'speaker_id', engineMap) && textParam(task, 'speaker_id')) e.push({ label: '预置音色', value: textParam(task, 'speaker_id')! });
-	if (taskSupportsParam(task, 'speed', engineMap) && numericParam(task, 'speed') !== null) e.push({ label: '语速', value: numericParam(task, 'speed')!.toFixed(2) });
-	if (taskSupportsParam(task, 'temperature', engineMap) && numericParam(task, 'temperature') !== null) e.push({ label: 'Temperature', value: numericParam(task, 'temperature')!.toFixed(2) });
-	if (taskSupportsParam(task, 'top_p', engineMap) && numericParam(task, 'top_p') !== null) e.push({ label: 'Top-P', value: numericParam(task, 'top_p')!.toFixed(2) });
-	if (taskSupportsParam(task, 'top_k', engineMap) && numericParam(task, 'top_k') !== null) e.push({ label: 'Top-K', value: String(numericParam(task, 'top_k')) });
-	if (taskSupportsParam(task, 'emo_alpha', engineMap) && numericParam(task, 'emo_alpha') !== null) e.push({ label: '情绪强度', value: numericParam(task, 'emo_alpha')!.toFixed(2) });
-	if (taskSupportsParam(task, 'diffusion_steps', engineMap) && numericParam(task, 'diffusion_steps') !== null) e.push({ label: '扩散步数', value: String(numericParam(task, 'diffusion_steps')) });
-	if (taskSupportsParam(task, 'cfg_rate', engineMap) && numericParam(task, 'cfg_rate') !== null) e.push({ label: 'CFG', value: numericParam(task, 'cfg_rate')!.toFixed(2) });
-	if (textParam(task, 'output_format')) e.push({ label: '格式', value: textParam(task, 'output_format')!.toUpperCase() });
+	if (vn) seen.add('voice_id');
+	pushSchemaEntries(e, seen, task, engine);
+	pushEntry(e, seen, 'voice_id', '音色 ID', params.voice_id);
+	pushEntry(e, seen, 'reference_audio_path', '参考音频', params.reference_audio_path);
+	pushEntry(e, seen, 'ref_text', '参考文本', params.ref_text);
+	const format = params.output_format;
+	if (typeof format === 'string' && format.trim()) pushEntry(e, seen, 'output_format', '格式', format.toUpperCase());
+	if (task.task_type === 'export' || task.longform_task_id || task.parameters.generate_request) pushLongformEntries(e, seen, task);
 	return e;
 }
 

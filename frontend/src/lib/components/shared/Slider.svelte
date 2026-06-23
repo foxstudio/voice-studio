@@ -18,10 +18,13 @@
 	}: Props = $props();
 
 	let inputValue = $state(formatValue(value));
-	const rangeValue = $derived(Number.isFinite(value) ? value : min);
+	let rangeInputValue = $state(Number.isFinite(value) ? value : 0);
+	const rangeValue = $derived(Number.isFinite(rangeInputValue) ? rangeInputValue : min);
 
 	$effect(() => {
-		inputValue = formatValue(value);
+		const nextValue = Number.isFinite(value) ? clamp(value) : min;
+		rangeInputValue = nextValue;
+		inputValue = formatValue(nextValue);
 	});
 
 	function formatValue(nextValue: number) {
@@ -40,6 +43,7 @@
 	function commit(nextValue: number) {
 		const rounded = roundToTwo(clamp(nextValue));
 		value = rounded;
+		rangeInputValue = rounded;
 		inputValue = formatValue(rounded);
 		onChange(rounded);
 	}
@@ -80,7 +84,15 @@
 	/>
 {:else}
 	<div class="slider">
-		<input type="range" value={rangeValue} {min} {max} {step} oninput={handleRangeInput} aria-label="数值滑块" />
+		<input
+			type="range"
+			bind:value={rangeInputValue}
+			{min}
+			{max}
+			{step}
+			oninput={handleRangeInput}
+			aria-label="数值滑块"
+		/>
 		<span class="value">{formatValue(rangeValue)}</span>
 	</div>
 {/if}

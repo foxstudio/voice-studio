@@ -668,8 +668,9 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
         # Avoid OmniVoice's on-the-fly Whisper auto-transcription in isolated jobs.
         # Missing transcripts should not turn a short TTS request into a 10-minute ASR timeout.
         ref_text = ""
-    if req.engine_id == "indextts-v2" and not ref:
-        raise AppException(400, "REFERENCE_AUDIO_REQUIRED", "IndexTTS v2 需要参考音频")
+    if req.engine_id in {"indextts-v2", "confucius4-mlx-int8"} and not ref:
+        message = "Confucius4-TTS 需要参考音频" if req.engine_id == "confucius4-mlx-int8" else "IndexTTS v2 需要参考音频"
+        raise AppException(400, "REFERENCE_AUDIO_REQUIRED", message)
     if req.engine_id in {"f5-tts", "cosyvoice-zero-shot"}:
         if not ref:
             raise AppException(400, "REFERENCE_AUDIO_REQUIRED", "该引擎需要参考音频")
@@ -698,6 +699,13 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
             output_path,
             reference_audio=ref,
             ref_text=ref_text,
+        )
+    if req.engine_id == "confucius4-mlx-int8":
+        return engine_request_builder.build_confucius4_mlx_single_kwargs(
+            req,
+            output_path,
+            reference_audio=ref,
+            model_dir=model_dir,
         )
     if req.engine_id == "indextts-v2":
         return engine_request_builder.build_indextts_v2_single_kwargs(

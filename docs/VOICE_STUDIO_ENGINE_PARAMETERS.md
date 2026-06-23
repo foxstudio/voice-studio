@@ -7,6 +7,7 @@
 - IndexTTS v2 是本地声音克隆主力，支持语速、采样、分段、情绪和扩散类参数。
 - OmniVoice 是本地多语言/声音设计引擎，当前接入只消费语言、参考音频或声音描述、语速。
 - EmotiVoice 是本地中文情感 TTS，当前接入使用官方开源预训练说话人和中文情绪提示。
+- Confucius4-TTS MLX int8 是网易有道子曰4 TTS 的 Apple Silicon MLX 量化版本，当前接入使用音色库或自定义参考音频，支持 14 种语言的跨语种声音克隆和情绪迁移。
 - F5-TTS 是本地参考音频 TTS，当前接入要求已授权参考音频和对应 `ref_text`，不会自动调用 Whisper 听写参考音频。
 - CosyVoice SFT 是本地官方预训练音色 TTS，当前接入使用官方 SFT 预置 speaker。
 - CosyVoice Zero-Shot 是本地参考音频复刻 TTS，使用音色库参考音频和对应 `ref_text`；不要和 SFT 预置音色混用。
@@ -21,6 +22,8 @@
 - MiMo 模型超参：https://platform.xiaomimimo.com/docs/zh-CN/quick-start/model-hyperparameters
 - MiMo ASR API：https://platform.xiaomimimo.com/docs/zh-CN/api/audio/Speech-Recognition
 - EmotiVoice README / voice wiki：https://github.com/netease-youdao/EmotiVoice
+- Confucius4-TTS MLX int8：https://huggingface.co/beyoru/Confucius4-TTS-mlx-int8
+- Confucius4 MLX runtime PR：https://github.com/Hert4/mlx-audio/pull/88
 - F5-TTS README / CLI 参数：https://github.com/SWivid/F5-TTS
 - CosyVoice README / inference API：https://github.com/FunAudioLLM/CosyVoice
 
@@ -36,6 +39,7 @@
 - EmotiVoice 官方提供 2000+ voices；本项目已加载一组精选 `speaker_id` 到 `GET /api/engines` 的 `emotivoice.parameter_schema`，来源是本地 EmotiVoice 仓库的 `data/youdao/text/README.md`。
 - CosyVoice SFT 官方预置 speaker 已加载为 `cosyvoice-sft.speaker_id`，包括 `中文女`、`中文男`、`粤语女`、`日语男`、`韩语女`。
 - F5-TTS 没有固定官方 speaker 库；它主要使用 `ref_audio + ref_text` 做参考音色生成。
+- Confucius4-TTS 没有固定官方 speaker 库；它使用 `reference_audio_path` 或音色库 `voice_id` 的参考音频做声音克隆和情绪迁移，不强制 `ref_text`。
 - CosyVoice Zero-Shot 没有固定本地 speaker 选择；它使用音色库里的参考音频和对应台词。
 - MiMo preset 是云端官方预置音色目录；MiMo voiceclone 才使用本地参考音频并上传云端。
 
@@ -94,6 +98,7 @@ curl -X POST http://127.0.0.1:8000/api/generate \
 | `indextts-v2` | 本地 TTS | `voice_id`/`reference_audio_path`, `ref_text`, `language`, `emotion_mode`, `emotion`, `emo_alpha`, `speed`, `temperature`, `top_p`, `top_k`, `max_text_tokens_per_segment`, `interval_silence`, `diffusion_steps`, `cfg_rate`, `output_format` | MiMo 专属 `mimo_voice`, `style_instruction`, `voice_design_prompt`, `optimize_text_preview` |
 | `omnivoice` | 本地 TTS | `voice_id` 或 `emotion_text`, `ref_text`, `language`, `speed`, `output_format` | `temperature`, `top_p`, `top_k`, 分段参数、IndexTTS 情绪向量、MiMo 专属参数 |
 | `emotivoice` | 本地 TTS | `speaker_id`, `prompt`, `output_format` | 本地 `voice_id`、F5 `nfe_step/cfg_strength`、MiMo 专属参数 |
+| `confucius4-mlx-int8` | 本地 TTS | `voice_id`/`reference_audio_path`, `language`, `temperature`, `top_p`, `top_k`, `repetition_penalty`, `diffusion_steps`, `cfg_rate`, `seed`, `output_format` | `ref_text` 不强制；`speed`、F5/CosyVoice speaker、MiMo 专属参数无效 |
 | `f5-tts` | 本地 TTS | `voice_id`/`reference_audio_path`, `ref_text`, `speed`, `nfe_step`, `cfg_strength`, `target_rms`, `cross_fade_duration`, `remove_silence`, `seed`, `output_format` | 没有参考文本时不要自动听写；MiMo 专属参数、IndexTTS 情绪向量无效 |
 | `cosyvoice-sft` | 本地 TTS | `speaker_id`, `speed`, `output_format` | 本地 `voice_id`、参考文本、IndexTTS 情绪向量、MiMo 专属参数 |
 | `cosyvoice-zero-shot` | 本地 TTS | `voice_id`/`reference_audio_path`, `ref_text`, `speed`, `output_format` | `speaker_id`、F5 采样参数、IndexTTS 情绪向量、MiMo 专属参数 |
@@ -135,6 +140,7 @@ TTS 调用方可以选择系统音色库、调用方提供的参考声音，或�
 | `indextts-v2` | `speed=1.0`, `temperature=0.8`, `top_p=0.8`, `top_k=30`, `emotion=跟随参考音色`, `emo_alpha=0.6`, `max_text_tokens_per_segment=120`, `interval_silence=200`, `diffusion_steps=25`, `cfg_rate=0.7`, `max_mel_tokens=1500`, `repetition_penalty=10` | 贴近参考音色、轻微开心、强情绪短句、教程慢讲、信息流快讲、长文本剪辑 |
 | `omnivoice` | `language=auto`, `speed=1.0`, 声音描述为空 | OmniVoice 女青年设计 |
 | `emotivoice` | `speaker_id=8051`, `prompt=开心` | 清晰女声开心、浑厚男声中立、活泼女声兴奋 |
+| `confucius4-mlx-int8` | `language=zh`, `temperature=0.8`, `top_p=0.8`, `top_k=30`, `repetition_penalty=10`, `diffusion_steps=25`, `cfg_rate=0.7`, `seed=0` | 中文情绪迁移、英文跨语种、日文跨语种、稳定低随机 |
 | `f5-tts` | `speed=1.0`, `nfe_step=32`, `cfg_strength=2.0`, `target_rms=0.1`, `cross_fade_duration=0.15`, `remove_silence=false` | 官方默认复刻、快速试听、短句去静音 |
 | `cosyvoice-sft` | `speaker_id=中文女`, `speed=1.0` | 中文女声、中文男声、粤语女声 |
 | `cosyvoice-zero-shot` | `speed=1.0` | 参考音色复刻、慢速清晰 |
@@ -175,8 +181,10 @@ curl -X POST http://127.0.0.1:8000/api/presets \
 推荐写法：
 
 - IndexTTS v2：正文直接放 `text`。多音字或读音不稳时，可在正文里加拼音标注；语速、情绪和采样仍用独立参数。
-- OmniVoice：正文放 `text`。未选择参考音色时，用 `emotion_text` 描述声音；短句可尝试非语言标签。
+- OmniVoice：正文放 `text`。未选择参考音色时，用 `emotion_text` 描述声音；短句可尝试官方非语言标签，例如 `[laughter]`、`[sigh]`、`[sniff]`、`[question-ah]`、`[surprise-wa]`、`[dissatisfaction-hnn]`。生成页同时保留 `[pause]`、`[cough]` 作为历史兼容快捷标签；耳语/小声属于声音设计描述。实测同格式非按钮标签也可能生效，例如 `[question-ha]`、`[surprise-huh]`、`[dissatisfaction-mm]`，但这类写法必须先试听确认，不应当作为稳定合同批量交付。
+- OmniVoice 标签和正文拟声词二选一：写了 `[question-ah]` 就不要再写“啊”，写了 `[dissatisfaction-hnn]` 就不要再写“哼”，否则模型可能执行标签后又把正文拟声词读一遍。推荐 `[question-ah] 这句真的要这么说吗？`，不要写 `[question-ah] 啊，这句真的要这么说吗？`。
 - EmotiVoice：正文放 `text`，官方预置说话人放 `speaker_id`，情绪/风格提示放 `prompt`。它不使用本地 `voice_id` 做复刻。
+- Confucius4-TTS：正文放 `text`，参考音色用 `voice_id` 或 `reference_audio_path`，目标语言放 `language`。它会从参考音频迁移音色和情绪，不要求参考台词；长文本建议分段试听。
 - F5-TTS：正文放 `text`，参考音色用 `voice_id` 或 `reference_audio_path`，必须提供准确 `ref_text`。`ref_text` 为空时官方会自动 ASR；本项目会拦截为 `REFERENCE_TEXT_REQUIRED`，避免后台 agent 触发额外下载和慢等待。
 - CosyVoice SFT：正文放 `text`，官方预置音色放 `speaker_id`。它不使用本地 `voice_id`。
 - CosyVoice Zero-Shot：正文放 `text`，参考音色用 `voice_id` 或 `reference_audio_path`，必须提供准确 `ref_text`。目标文本明显短于参考文本时，官方实现会提示效果可能下降。
@@ -203,8 +211,11 @@ MiMo 支持自然语言控制和音频标签，但这些标签只应写进 MiMo 
 
 | 引擎 | 提示阈值 | 强提醒阈值 | 推荐动作 |
 | --- | ---: | ---: | --- |
-| `omnivoice` | 80 字 | 150 字 | `split_generate` |
+| `omnivoice` | 150 字 | 300 字 | `split_verify_merge` |
 | `indextts-v2` | 300 字 | 600 字 | `split_verify_merge` |
+| `confucius4-mlx-int8` | 24 字 | 48 字 | `split_verify_merge` |
+| `cosyvoice-sft` | 80 字 | 320 字 | `split_verify_merge` |
+| `cosyvoice-zero-shot` | 80 字 | 240 字 | `split_verify_merge` |
 | `mimo-v2.5-tts-preset` | 600 字 | 1200 字 | `split_verify_merge` |
 | `mimo-v2.5-tts-voiceclone` | 400 字 | 800 字 | `split_verify_merge` |
 | `mimo-v2.5-tts-voicedesign` | 400 字 | 800 字 | `split_generate` |
@@ -305,11 +316,25 @@ agent 规则：
 - `diffusion_steps`：扩散步数。更多步通常更慢。
 - `cfg_rate`：引导强度，控制生成贴合条件的力度。
 
+### Confucius4-TTS MLX int8
+
+- `voice_id`：音色库里的本地参考音频。Confucius4 需要参考音频做零样本声音克隆和情绪迁移。
+- `reference_audio_path`：直接指定参考音频路径；显式提供时优先于 `voice_id`。
+- `language`：目标文本语言代码，例如 `zh`、`en`、`ja`、`ko`。
+- `temperature`：T2S 采样随机性。官方默认 0.8。
+- `top_p`：T2S 核采样范围。官方默认 0.8。
+- `top_k`：T2S Top-K 候选数量。官方默认 30。
+- `repetition_penalty`：T2S 重复惩罚。官方默认 10.0。
+- `diffusion_steps`：S2A 声学采样步数，对应官方 `n_timesteps`。官方默认 25；更高通常更慢。
+- `cfg_rate`：S2A classifier-free guidance，对应官方 `inference_cfg_rate`。官方默认 0.7。
+- `seed`：同时影响 T2S 采样和 S2A 噪声初始化，便于参数对比复现。
+- 当前不暴露官方 `num_beams`，因为 MLX runtime 没有 beam search 实现；不暴露官方 `max_length`，因为当前更可靠的做法是在 Voice Studio 层强制短分段，避免再次触发 10 秒左右的单窗截断。
+
 ### OmniVoice
 
 - `voice_id`：使用音色库里的本地参考音频做声音克隆。
 - `reference_audio_path`：直接指定参考音频路径；显式提供时优先于 `voice_id`。
-- `emotion_text`：未选择参考音色时，作为声音设计/生成指令传给 OmniVoice。
+- `emotion_text`：未选择参考音色时，作为声音设计/生成指令传给 OmniVoice。只使用支持词表里的组合，例如 `女，青年，中音调`、`女，青年，耳语`、`男，中年，低音调`；不要传 `自然口播`、`压低声音`、`谨慎` 等自由描述，后端会报 unsupported instruct items。
 - `ref_text`：参考音频台词，可提升克隆稳定性。
 - `language`：`auto` 或具体语言代码。
 - `speed`：语速倍率。
@@ -396,6 +421,7 @@ MiMo TTS 的目标合成文本放在 `assistant` message；风格/音色描述�
 2. 调 `GET /api/presets`，只展示 `engine_id` 与当前引擎一致的预设。
 3. 只展示和传入 schema 中存在的参数；滑块类参数同时允许精确数值输入，但仍要遵守 schema/后端校验范围。
 4. 按引擎写合成文本提示。MiMo 的风格写 `style_instruction` 或 `voice_design_prompt`，不要给 MiMo 传本地 `speed/top_k/segment` 参数。
-5. 调用 MiMo voiceclone 前，确认用户允许本次参考音频上传云端。
-6. 生成后轮询任务状态，只有 `status: success` 且存在 `result_audio_id` 时才报告成功。
-7. 批量任务优先使用 `scripts/voice_studio_batch.py`；每段可以覆盖 `engine_id`、`voice_id`、`speed`、`emotion`、`style_instruction` 等有效参数。
+5. 写 OmniVoice 文本时，标签和正文拟声词不要重复；非按钮同格式标签可以作为试音探针，但批量生产前必须试听确认。
+6. 调用 MiMo voiceclone 前，确认用户允许本次参考音频上传云端。
+7. 生成后轮询任务状态，只有 `status: success` 且存在 `result_audio_id` 时才报告成功。
+8. 批量任务优先使用 `scripts/voice_studio_batch.py`；每段可以覆盖 `engine_id`、`voice_id`、`speed`、`emotion`、`style_instruction` 等有效参数。

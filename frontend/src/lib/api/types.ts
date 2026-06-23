@@ -461,6 +461,8 @@ export interface GenerateRequest {
 	cfg_rate: number;
 	guidance_scale: number;
 	duration: number;
+	audio_chunk_duration?: number;
+	audio_chunk_threshold?: number;
 	output_format: OutputFormat;
 }
 

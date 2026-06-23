@@ -242,7 +242,7 @@ def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
         ref_text = ""
     has_segment_refs = _all_segments_have_reference(req)
     has_segment_ref_texts = _all_segments_have_reference_text(req)
-    if req.engine_id == "indextts-v2" and not (ref or has_segment_refs):
+    if req.engine_id in {"indextts-v2", "confucius4-mlx-int8"} and not (ref or has_segment_refs):
         raise ValueError("REFERENCE_AUDIO_REQUIRED")
     if req.engine_id in {"f5-tts", "cosyvoice-zero-shot"}:
         if not (ref or has_segment_refs):
@@ -270,6 +270,13 @@ def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
         return engine_request_builder.build_indextts_v2_batch_common_kwargs(
             values,
             parameters=req.parameters,
+            reference_audio=ref,
+            language=req.language,
+            model_dir=str(settings_store.model_path(req.engine_id)),
+        )
+    if req.engine_id == "confucius4-mlx-int8":
+        return engine_request_builder.build_confucius4_mlx_batch_common_kwargs(
+            values,
             reference_audio=ref,
             language=req.language,
             model_dir=str(settings_store.model_path(req.engine_id)),

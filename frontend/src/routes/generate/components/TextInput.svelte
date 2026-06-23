@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Hash, Plus, Scissors, Send, Wand2 } from 'lucide-svelte';
+	import { Hash, Scissors, Send, Wand2 } from 'lucide-svelte';
 
 	interface TagTool {
 		label: string;
@@ -69,6 +69,66 @@
 					label: '咳嗽',
 					insert: '[cough]',
 					hint: '在文本中插入 OmniVoice 咳嗽标签，模拟咳嗽音效'
+				},
+				{
+					label: '吸鼻',
+					insert: '[sniff]',
+					hint: '在文本中插入 OmniVoice 吸鼻音标签'
+				},
+				{
+					label: '确认',
+					insert: '[confirmation-en]',
+					hint: '在文本中插入 OmniVoice 英文确认语气标签'
+				},
+				{
+					label: '疑问-en',
+					insert: '[question-en]',
+					hint: '在文本中插入 OmniVoice 英文疑问语气标签'
+				},
+				{
+					label: '疑问-ah',
+					insert: '[question-ah]',
+					hint: '在文本中插入 OmniVoice ah 疑问音标签'
+				},
+				{
+					label: '疑问-oh',
+					insert: '[question-oh]',
+					hint: '在文本中插入 OmniVoice oh 疑问音标签'
+				},
+				{
+					label: '疑问-ei',
+					insert: '[question-ei]',
+					hint: '在文本中插入 OmniVoice ei 疑问音标签'
+				},
+				{
+					label: '疑问-yi',
+					insert: '[question-yi]',
+					hint: '在文本中插入 OmniVoice yi 疑问音标签'
+				},
+				{
+					label: '惊讶-ah',
+					insert: '[surprise-ah]',
+					hint: '在文本中插入 OmniVoice ah 惊讶音标签'
+				},
+				{
+					label: '惊讶-oh',
+					insert: '[surprise-oh]',
+					hint: '在文本中插入 OmniVoice oh 惊讶音标签'
+				},
+				{
+					label: '惊讶-wa',
+					insert: '[surprise-wa]',
+					hint: '在文本中插入 OmniVoice wa 惊讶音标签'
+				},
+				{
+					label: '惊讶-yo',
+					insert: '[surprise-yo]',
+					hint: '在文本中插入 OmniVoice yo 惊讶音标签'
+				},
+				{
+					label: '不满',
+					insert: '[dissatisfaction-hnn]',
+					hint: '在文本中插入 OmniVoice 不满鼻音标签'
 				}
 			];
 		}
@@ -152,7 +212,6 @@
 					data-text={tool.hint}
 					onclick={() => insertAtCursor(tool.insert)}
 				>
-					<Plus size={14} />
 					<span class="tool-label">{tool.label}</span>
 				</button>
 			{/each}

@@ -154,6 +154,13 @@ MiMo 文本提示注意：
 - `voice_design_prompt` 只用于 `mimo-v2.5-tts-voicedesign` 的音色描述。
 - MiMo 不消费本地 `speed/top_k/segment` 参数；不要把 IndexTTS 的参数模板直接套给 MiMo。
 
+OmniVoice 文本提示注意：
+
+- 非语言标签只用于 `omnivoice`，不要跨模型复用到 IndexTTS、MiMo、F5 或 CosyVoice。
+- 官方/常用标签包括 `[pause]`、`[cough]`、`[laughter]`、`[sigh]`、`[sniff]`、`[question-ah]`、`[surprise-wa]`、`[dissatisfaction-hnn]` 等；同格式但不在按钮里的标签可以试音，例如 `[question-ha]`，但交付前必须人工听一遍。
+- 标签和正文拟声词不要重复。写了 `[question-ah]` 就不要再写“啊”，写了 `[dissatisfaction-hnn]` 就不要再写“哼”，否则模型可能读出两次。
+- `emotion_text` 使用支持词表组合，例如 `女，青年，中音调`、`女，青年，耳语`、`男，中年，低音调`；不要传自由描述长句。
+
 MiMo VoiceDesign 示例：
 
 ```json

@@ -60,6 +60,23 @@ OMNIVOICE_LANGUAGES = [
     {"label": "西班牙语 es", "value": "es"},
 ]
 
+CONFUCIUS4_LANGUAGES = [
+    {"label": "中文 zh", "value": "zh"},
+    {"label": "英文 en", "value": "en"},
+    {"label": "日语 ja", "value": "ja"},
+    {"label": "韩语 ko", "value": "ko"},
+    {"label": "德语 de", "value": "de"},
+    {"label": "法语 fr", "value": "fr"},
+    {"label": "西班牙语 es", "value": "es"},
+    {"label": "印尼语 id", "value": "id"},
+    {"label": "意大利语 it", "value": "it"},
+    {"label": "泰语 th", "value": "th"},
+    {"label": "葡萄牙语 pt", "value": "pt"},
+    {"label": "俄语 ru", "value": "ru"},
+    {"label": "马来语 ms", "value": "ms"},
+    {"label": "越南语 vi", "value": "vi"},
+]
+
 
 
 
@@ -127,6 +144,8 @@ ENGINES: dict[str, EngineDetail] = {
                 ParameterSchema(key="diffusion_steps", label="扩散步数 Num Step", type="slider", default=32, min=4, max=64, step=1, level="advanced", description="OmniVoice 生成步数。越高通常越细致但更慢。"),
                 ParameterSchema(key="guidance_scale", label="引导强度 Guidance", type="slider", default=2.0, min=0.1, max=5.0, step=0.1, level="advanced", description="控制生成结果贴合文本、音色或声音描述的力度。默认 2.0。"),
                 ParameterSchema(key="duration", label="固定时长 s", type="number", default=0, min=0, max=120, step=0.5, level="advanced", description="可选。0 表示自动估算；填秒数会强制目标音频时长。"),
+                ParameterSchema(key="audio_chunk_duration", label="长文本分段目标 s", type="number", default=15.0, min=1.0, max=120.0, step=1.0, level="advanced", description="OmniVoice 官方长文本切分目标时长。默认每段约 15 秒。"),
+                ParameterSchema(key="audio_chunk_threshold", label="长文本切分阈值 s", type="number", default=30.0, min=1.0, max=600.0, step=1.0, level="advanced", description="预计音频超过该时长时启用 OmniVoice 内置长文本切分。官方默认 30 秒。"),
             ],
         ),
         state=EngineState(engine_id="omnivoice", status=EngineStatus.stopped),
@@ -165,6 +184,38 @@ ENGINES: dict[str, EngineDetail] = {
             ],
         ),
         state=EngineState(engine_id="emotivoice", status=EngineStatus.stopped),
+    ),
+    "confucius4-mlx-int8": EngineDetail(
+        manifest=EngineManifest(
+            engine_id="confucius4-mlx-int8",
+            display_name="Confucius4-TTS MLX int8",
+            provider="NetEase Youdao / Hert4 MLX",
+            version="int8 MLX",
+            description="网易有道子曰4 TTS 的 Apple Silicon MLX int8 版本，支持跨语种零样本声音克隆和情绪迁移",
+            supported_languages=[item["value"] for item in CONFUCIUS4_LANGUAGES],
+            capabilities=["local_inference", "voice_clone", "zero_shot", "emotion_transfer", "cross_lingual", "multilingual"],
+            sample_rate=22050,
+            default_use_case="使用音色库或自定义参考音频做跨语种情绪迁移",
+            privacy_level="local_only_research",
+            parameter_schema=[
+                ParameterSchema(
+                    key="language",
+                    label="目标语言",
+                    type="select",
+                    default="zh",
+                    options=CONFUCIUS4_LANGUAGES,
+                    description="目标文本语言提示。跨语种生成时建议手动选择对应语言。",
+                ),
+                ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.8, min=0.1, max=1.5, step=0.05, level="advanced", description="控制生成随机性。官方默认 0.8；较低更稳定，较高更有变化。"),
+                ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.8, min=0.01, max=1.0, step=0.01, level="advanced", description="核采样概率，控制候选范围。默认 0.8。"),
+                ParameterSchema(key="top_k", label="候选数量 Top-K", type="slider", default=30, min=1, max=100, step=1, level="advanced", description="保留最高概率候选数量。默认 30。"),
+                ParameterSchema(key="repetition_penalty", label="重复惩罚", type="slider", default=10.0, min=1.0, max=20.0, step=0.5, level="advanced", description="抑制重复发音或重复片段。默认 10。"),
+                ParameterSchema(key="diffusion_steps", label="声学采样步数", type="slider", default=25, min=1, max=60, step=1, level="advanced", description="Confucius4 S2A 采样步数。官方默认 25；越高通常越细但更慢。"),
+                ParameterSchema(key="cfg_rate", label="声学引导强度 CFG", type="slider", default=0.7, min=0.0, max=1.0, step=0.05, level="advanced", description="Confucius4 S2A classifier-free guidance。官方默认 0.7。"),
+                ParameterSchema(key="seed", label="随机种子", type="number", default=0, min=0, max=2147483647, step=1, level="developer", description="用于可复现测试。0 表示使用固定默认种子。"),
+            ],
+        ),
+        state=EngineState(engine_id="confucius4-mlx-int8", status=EngineStatus.stopped),
     ),
     "f5-tts": EngineDetail(
         manifest=EngineManifest(

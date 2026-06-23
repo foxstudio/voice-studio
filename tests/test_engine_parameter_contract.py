@@ -168,6 +168,61 @@ def test_cosyvoice_zero_shot_single_batch_worker_contract(tmp_path, monkeypatch)
     assert batch_speed == params["speed"]
 
 
+def test_confucius4_single_batch_worker_payload_contract(tmp_path, monkeypatch):
+    model_dir = tmp_path / "confucius4-model"
+    monkeypatch.setattr(task_queue.settings_store, "model_path", lambda engine_id: model_dir)
+    monkeypatch.setattr(batch_queue.settings_store, "model_path", lambda engine_id: model_dir)
+
+    params = {
+        "language": "en",
+        "temperature": 0.66,
+        "top_p": 0.77,
+        "top_k": 22,
+        "repetition_penalty": 9.5,
+        "diffusion_steps": 31,
+        "cfg_rate": 0.85,
+        "seed": 2026,
+    }
+    reference_audio_path = _ref_file(tmp_path)
+    req = GenerateRequest(
+        text="Confucius4 single test",
+        engine_id="confucius4-mlx-int8",
+        reference_audio_path=reference_audio_path,
+        **params,
+    )
+    single = task_queue._kwargs(req, str(tmp_path / "single.wav"))
+
+    batch_req = BatchGenerateRequest(
+        engine_id="confucius4-mlx-int8",
+        reference_audio_path=reference_audio_path,
+        language="en",
+        parameters=params,
+        segments=[BatchSegmentInput(text="Confucius4 batch test")],
+    )
+    batch = _batch_payload(batch_req, tmp_path)
+
+    for payload, text in [(single, "Confucius4 single test"), (batch, "Confucius4 batch test")]:
+        assert payload["text"] == text
+        assert payload["reference_audio"] == reference_audio_path
+        assert payload["model_dir"] == str(model_dir)
+        for key, expected in params.items():
+            assert payload[key] == expected
+
+        _, out, parsed_text, ref_audio, parsed_model_dir, _, language, temperature, top_k, top_p, repetition_penalty, diffusion_steps, cfg_rate, seed = inference_runner._build_confucius4_mlx_kwargs(**payload)
+        assert out == payload["output_path"]
+        assert parsed_text == text
+        assert ref_audio == reference_audio_path
+        assert parsed_model_dir == model_dir
+        assert language == params["language"]
+        assert temperature == params["temperature"]
+        assert top_k == params["top_k"]
+        assert top_p == params["top_p"]
+        assert repetition_penalty == params["repetition_penalty"]
+        assert diffusion_steps == params["diffusion_steps"]
+        assert cfg_rate == params["cfg_rate"]
+        assert seed == params["seed"]
+
+
 def test_single_request_prefers_explicit_reference_audio_over_voice_id(tmp_path):
     original_db = database.DB_PATH
     database.set_db_path(tmp_path / "voice_studio.db")
@@ -248,6 +303,7 @@ def test_single_request_does_not_fallback_when_explicit_reference_is_missing(tmp
     [
         ("indextts-v2", "reference_audio"),
         ("omnivoice", "reference_audio"),
+        ("confucius4-mlx-int8", "reference_audio"),
         ("mimo-v2.5-tts-voiceclone", "reference_audio_path"),
         ("f5-tts", "reference_audio"),
         ("cosyvoice-zero-shot", "reference_audio"),
@@ -270,6 +326,112 @@ def test_custom_reference_audio_flows_to_all_reference_voice_engines(tmp_path, m
     assert kwargs[reference_key] == reference
     if engine_id in {"omnivoice", "f5-tts", "cosyvoice-zero-shot"}:
         assert kwargs["ref_text"] == "自定义音色对应的参考台词。"
+
+
+def test_confucius4_requires_reference_audio(tmp_path):
+    req = GenerateRequest(text="测试文本", engine_id="confucius4-mlx-int8")
+
+    with pytest.raises(Exception) as exc:
+        task_queue._kwargs(req, str(tmp_path / "out.wav"))
+
+    assert getattr(exc.value, "code", None) == "REFERENCE_AUDIO_REQUIRED"
+
+
+def test_confucius4_runner_defaults_match_official_values(tmp_path):
+    payload = {
+        "output_path": str(tmp_path / "out.wav"),
+        "text": "默认值测试",
+        "reference_audio": str(tmp_path / "ref.wav"),
+        "model_dir": str(tmp_path / "confucius4-model"),
+    }
+
+    _, _, _, _, _, _, language, temperature, top_k, top_p, repetition_penalty, diffusion_steps, cfg_rate, seed = inference_runner._build_confucius4_mlx_kwargs(**payload)
+
+    assert language == "zh"
+    assert temperature == 0.8
+    assert top_k == 30
+    assert top_p == 0.8
+    assert repetition_penalty == 10.0
+    assert diffusion_steps == 25
+    assert cfg_rate == 0.7
+    assert seed == 0
+
+
+def test_confucius4_runner_passes_sampling_kwargs_to_mlx_model(tmp_path, monkeypatch):
+    import types
+
+    model_dir = tmp_path / "model"
+    runtime_root = tmp_path / "runtime"
+    for rel in inference_runner.confucius4_paths.REQUIRED_MODEL_FILES:
+        target = model_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"x")
+    for rel in inference_runner.confucius4_paths.REQUIRED_RUNTIME_FILES:
+        target = runtime_root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("# test runtime\n", encoding="utf-8")
+
+    captured: dict = {}
+
+    class FakeResult:
+        sample_rate = 22050
+        audio = inference_runner.np.zeros(32, dtype=inference_runner.np.float32)
+
+    class FakeModel:
+        def generate(self, **kwargs):
+            captured.update(kwargs)
+            yield FakeResult()
+
+    fake_utils = types.ModuleType("mlx_audio.tts.utils")
+    fake_utils.load = lambda *args, **kwargs: FakeModel()
+    monkeypatch.setitem(sys.modules, "mlx_audio", types.ModuleType("mlx_audio"))
+    monkeypatch.setitem(sys.modules, "mlx_audio.tts", types.ModuleType("mlx_audio.tts"))
+    monkeypatch.setitem(sys.modules, "mlx_audio.tts.utils", fake_utils)
+    monkeypatch.setattr(inference_runner, "_prepare_confucius4_runtime", lambda root: None)
+    monkeypatch.setattr(inference_runner, "_confucius4_ref_audio_16k", lambda ref, tmp: ref)
+
+    ref_path = tmp_path / "ref.wav"
+    ref_path.write_bytes(b"fake")
+    output_path = tmp_path / "out.wav"
+    inference_runner.run_confucius4_mlx(
+        text="参数传递测试",
+        reference_audio=str(ref_path),
+        output_path=str(output_path),
+        model_dir=str(model_dir),
+        runtime_root=str(runtime_root),
+        language="zh",
+        temperature=0.83,
+        top_p=0.76,
+        top_k=18,
+        repetition_penalty=9.0,
+        diffusion_steps=5,
+        cfg_rate=0.4,
+        seed=7,
+    )
+
+    assert output_path.exists()
+    assert captured["temperature"] == 0.83
+    assert captured["top_p"] == 0.76
+    assert captured["top_k"] == 18
+    assert captured["repetition_penalty"] == 9.0
+    assert captured["diffusion_steps"] == 5
+    assert captured["cfg_rate"] == 0.4
+    assert captured["seed"] == 7
+
+
+def test_confucius4_splits_text_before_runner_window(tmp_path):
+    text = (
+        "你问 GPT-3：腿上有几只眼睛？它说：两只。"
+        "你再问它：太阳有几只眼睛？它说：一只。"
+        "这不是它不认识眼睛。它只是没搞懂，眼睛到底属于哪种情境。"
+        "腿，会被它拉向身体。太阳，会被它拉向刺眼的句子。"
+    )
+
+    parts = inference_runner._confucius4_split_text(text)
+
+    assert len(parts) > 1
+    assert "".join(parts) == text
+    assert all(inference_runner._confucius4_char_count(part) <= 24 for part in parts)
 
 
 def test_batch_segment_reference_audio_can_replace_library_voice(tmp_path):

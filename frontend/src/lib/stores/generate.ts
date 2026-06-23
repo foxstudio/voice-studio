@@ -103,8 +103,11 @@ export type GenerateStoreState = {
 	cfgRate: number;
 	guidanceScale: number;
 	duration: number;
+	audioChunkDuration: number;
+	audioChunkThreshold: number;
 	maxMelTokens: number;
 	repetitionPenalty: number;
+	seed: number | null;
 	outputFormat: 'wav' | 'mp3' | 'flac';
 	showAdvanced: boolean;
 	showMoreParams: boolean;
@@ -163,7 +166,9 @@ const MIMO_DEFAULTS = {
 const OMNIVOICE_DEFAULTS = {
 	diffusionSteps: 32,
 	guidanceScale: 2.0,
-	duration: 0
+	duration: 0,
+	audioChunkDuration: 15,
+	audioChunkThreshold: 30
 };
 
 const F5_DEFAULTS = {
@@ -174,6 +179,14 @@ const F5_DEFAULTS = {
 	swaySamplingCoef: -1.0,
 	fixDuration: 0,
 	removeSilence: false
+};
+
+const CONFUCIUS4_DEFAULTS = {
+	temperature: 0.8,
+	topP: 0.8,
+	topK: 30,
+	repetitionPenalty: 10,
+	seed: 0
 };
 
 const DEFAULT_PRESET_DRAFT: PresetDraft = {
@@ -189,6 +202,7 @@ const DEFAULT_VOICE_DESIGN_PROMPT = '中年男性，声线沉稳偏正式，吐�
 export const REFERENCE_VOICE_ENGINE_IDS = [
 	'indextts-v2',
 	'omnivoice',
+	'confucius4-mlx-int8',
 	'mimo-v2.5-tts-voiceclone',
 	'f5-tts',
 	'cosyvoice-zero-shot'
@@ -271,8 +285,11 @@ function createInitialState(): GenerateStoreState {
 		cfgRate: INDEX_TTS_DEFAULTS.cfgRate,
 		guidanceScale: OMNIVOICE_DEFAULTS.guidanceScale,
 		duration: OMNIVOICE_DEFAULTS.duration,
+		audioChunkDuration: OMNIVOICE_DEFAULTS.audioChunkDuration,
+		audioChunkThreshold: OMNIVOICE_DEFAULTS.audioChunkThreshold,
 		maxMelTokens: INDEX_TTS_DEFAULTS.maxMelTokens,
 		repetitionPenalty: INDEX_TTS_DEFAULTS.repetitionPenalty,
+		seed: null,
 		outputFormat: INDEX_TTS_DEFAULTS.outputFormat,
 		showAdvanced: false,
 		showMoreParams: false,
@@ -325,6 +342,9 @@ function getEngineDefaults(state: GenerateStoreState, engineId: string) {
 	const speakerParam = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'speaker_id');
 	const promptParam = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'prompt');
 	const languageParam = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'language');
+	const parameterDefault = (key: string, fallback: unknown) =>
+		selectedEngine?.manifest.parameter_schema.find((param) => param.key === key)?.default ?? fallback;
+	const seedDefault = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'seed')?.default;
 
 	return {
 		engineId,
@@ -334,13 +354,13 @@ function getEngineDefaults(state: GenerateStoreState, engineId: string) {
 		emotion: INDEX_TTS_DEFAULTS.emotion,
 		emoAlpha: INDEX_TTS_DEFAULTS.emoAlpha,
 		speed: INDEX_TTS_DEFAULTS.speed,
-		temperature: isMimoEngine(engineId) ? MIMO_DEFAULTS.temperature : INDEX_TTS_DEFAULTS.temperature,
-		topP: isMimoEngine(engineId) ? MIMO_DEFAULTS.topP : INDEX_TTS_DEFAULTS.topP,
-		topK: INDEX_TTS_DEFAULTS.topK,
+		temperature: Number(parameterDefault('temperature', isMimoEngine(engineId) ? MIMO_DEFAULTS.temperature : engineId === 'confucius4-mlx-int8' ? CONFUCIUS4_DEFAULTS.temperature : INDEX_TTS_DEFAULTS.temperature)),
+		topP: Number(parameterDefault('top_p', isMimoEngine(engineId) ? MIMO_DEFAULTS.topP : CONFUCIUS4_DEFAULTS.topP)),
+		topK: Number(parameterDefault('top_k', CONFUCIUS4_DEFAULTS.topK)),
 		maxTextTokensPerSegment: INDEX_TTS_DEFAULTS.maxTextTokensPerSegment,
 		intervalSilence: INDEX_TTS_DEFAULTS.intervalSilence,
-		diffusionSteps: engineId === 'omnivoice' ? OMNIVOICE_DEFAULTS.diffusionSteps : INDEX_TTS_DEFAULTS.diffusionSteps,
-		cfgRate: INDEX_TTS_DEFAULTS.cfgRate,
+		diffusionSteps: engineId === 'omnivoice' ? OMNIVOICE_DEFAULTS.diffusionSteps : Number(parameterDefault('diffusion_steps', INDEX_TTS_DEFAULTS.diffusionSteps)),
+		cfgRate: Number(parameterDefault('cfg_rate', INDEX_TTS_DEFAULTS.cfgRate)),
 		guidanceScale: OMNIVOICE_DEFAULTS.guidanceScale,
 		duration: OMNIVOICE_DEFAULTS.duration,
 		outputFormat: INDEX_TTS_DEFAULTS.outputFormat,
@@ -349,6 +369,8 @@ function getEngineDefaults(state: GenerateStoreState, engineId: string) {
 		targetRms: F5_DEFAULTS.targetRms,
 		crossFadeDuration: F5_DEFAULTS.crossFadeDuration,
 		removeSilence: F5_DEFAULTS.removeSilence,
+		repetitionPenalty: Number(parameterDefault('repetition_penalty', CONFUCIUS4_DEFAULTS.repetitionPenalty)),
+		seed: seedDefault === undefined || seedDefault === null ? null : Number(seedDefault),
 		speakerId: String(speakerParam?.default ?? speakerParam?.options?.[0]?.value ?? ''),
 		voicePrompt: String(promptParam?.default ?? promptParam?.options?.[0]?.value ?? '')
 	};
@@ -410,6 +432,7 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 		top_p: state.topP,
 		top_k: state.topK,
 		repetition_penalty: state.repetitionPenalty,
+		seed: state.seed,
 		max_mel_tokens: state.maxMelTokens,
 		max_text_tokens_per_segment: state.maxTextTokensPerSegment,
 		interval_silence: state.intervalSilence,
@@ -418,6 +441,8 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 		cfg_rate: state.cfgRate,
 		guidance_scale: state.guidanceScale,
 		duration: state.duration,
+		audio_chunk_duration: state.audioChunkDuration,
+		audio_chunk_threshold: state.audioChunkThreshold,
 		output_format: state.outputFormat
 	};
 }
@@ -474,19 +499,21 @@ function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<
 		removeSilence: req.remove_silence ?? F5_DEFAULTS.removeSilence,
 		emoAlpha: req.emo_alpha ?? INDEX_TTS_DEFAULTS.emoAlpha,
 		speed: req.speed ?? INDEX_TTS_DEFAULTS.speed,
-		temperature:
-			req.temperature ?? (isMimoEngineRequest ? MIMO_DEFAULTS.temperature : INDEX_TTS_DEFAULTS.temperature),
-		topP: req.top_p ?? (isMimoEngineRequest ? MIMO_DEFAULTS.topP : INDEX_TTS_DEFAULTS.topP),
+		temperature: req.temperature ?? engineDefaults.temperature,
+		topP: req.top_p ?? engineDefaults.topP,
 		topK: req.top_k ?? INDEX_TTS_DEFAULTS.topK,
 		maxTextTokensPerSegment:
 			req.max_text_tokens_per_segment ?? INDEX_TTS_DEFAULTS.maxTextTokensPerSegment,
 		intervalSilence: req.interval_silence ?? INDEX_TTS_DEFAULTS.intervalSilence,
-		diffusionSteps: req.diffusion_steps ?? (req.engine_id === 'omnivoice' ? OMNIVOICE_DEFAULTS.diffusionSteps : INDEX_TTS_DEFAULTS.diffusionSteps),
-		cfgRate: req.cfg_rate ?? INDEX_TTS_DEFAULTS.cfgRate,
+		diffusionSteps: req.diffusion_steps ?? engineDefaults.diffusionSteps,
+		cfgRate: req.cfg_rate ?? engineDefaults.cfgRate,
 		guidanceScale: req.guidance_scale ?? OMNIVOICE_DEFAULTS.guidanceScale,
 		duration: req.duration ?? OMNIVOICE_DEFAULTS.duration,
+		audioChunkDuration: req.audio_chunk_duration ?? OMNIVOICE_DEFAULTS.audioChunkDuration,
+		audioChunkThreshold: req.audio_chunk_threshold ?? OMNIVOICE_DEFAULTS.audioChunkThreshold,
 		maxMelTokens: req.max_mel_tokens ?? INDEX_TTS_DEFAULTS.maxMelTokens,
 		repetitionPenalty: req.repetition_penalty ?? INDEX_TTS_DEFAULTS.repetitionPenalty,
+		seed: req.seed ?? engineDefaults.seed ?? null,
 		outputFormat: req.output_format ?? INDEX_TTS_DEFAULTS.outputFormat,
 		showAdvanced: req.engine_id === 'f5-tts'
 	};

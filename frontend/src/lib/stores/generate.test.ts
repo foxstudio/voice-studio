@@ -1,8 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { createGenerateStore, REFERENCE_VOICE_ENGINE_IDS } from './generate';
-import type { EngineDetail } from '$lib/api/types';
+import type { EngineDetail, ParameterSchema } from '$lib/api/types';
 
-function engineDetail(engineId: string): EngineDetail {
+function parameter(partial: Partial<ParameterSchema> & Pick<ParameterSchema, 'key' | 'label' | 'type'>): ParameterSchema {
+	return {
+		default: null,
+		description: null,
+		min: null,
+		max: null,
+		step: null,
+		options: [],
+		required: false,
+		capability: null,
+		level: 'basic',
+		...partial
+	};
+}
+
+function engineDetail(engineId: string, parameterSchema: EngineDetail['manifest']['parameter_schema'] = []): EngineDetail {
 	return {
 		manifest: {
 			engine_id: engineId,
@@ -17,7 +32,7 @@ function engineDetail(engineId: string): EngineDetail {
 			max_tokens: null,
 			privacy_level: 'local',
 			default_use_case: '',
-			parameter_schema: []
+			parameter_schema: parameterSchema
 		},
 		state: {
 			engine_id: engineId,
@@ -64,6 +79,39 @@ describe('generate store custom reference voice requests', () => {
 			expect(request.reference_audio_license_status).toBe('self_voice');
 			expect(request.reference_audio_tags).toEqual(['custom-reference']);
 		}
+	});
+
+	it('applies Confucius4 manifest defaults including seed', () => {
+		const store = createGenerateStore();
+
+		store.update((state) => ({
+			...state,
+			engines: [
+				engineDetail('confucius4-mlx-int8', [
+					parameter({ key: 'language', label: '目标语言', type: 'select', default: 'zh', options: [{ label: '中文', value: 'zh' }] }),
+					parameter({ key: 'temperature', label: '随机性', type: 'slider', default: 0.8, min: 0.1, max: 1.5, step: 0.05, level: 'advanced' }),
+					parameter({ key: 'top_p', label: 'Top-P', type: 'slider', default: 0.8, min: 0.01, max: 1, step: 0.01, level: 'advanced' }),
+					parameter({ key: 'top_k', label: 'Top-K', type: 'slider', default: 30, min: 1, max: 100, step: 1, level: 'advanced' }),
+					parameter({ key: 'repetition_penalty', label: '重复惩罚', type: 'slider', default: 10, min: 1, max: 20, step: 0.5, level: 'advanced' }),
+					parameter({ key: 'diffusion_steps', label: '声学采样步数', type: 'slider', default: 25, min: 1, max: 60, step: 1, level: 'advanced' }),
+					parameter({ key: 'cfg_rate', label: '声学引导强度', type: 'slider', default: 0.7, min: 0, max: 1, step: 0.05, level: 'advanced' }),
+					parameter({ key: 'seed', label: '随机种子', type: 'number', default: 0, min: 0, max: 2147483647, step: 1, level: 'developer' })
+				])
+			]
+		}));
+
+		store.setEngine('confucius4-mlx-int8');
+		const request = store.toRequest();
+
+		expect(request.engine_id).toBe('confucius4-mlx-int8');
+		expect(request.language).toBe('zh');
+		expect(request.temperature).toBe(0.8);
+		expect(request.top_p).toBe(0.8);
+		expect(request.top_k).toBe(30);
+		expect(request.repetition_penalty).toBe(10);
+		expect(request.diffusion_steps).toBe(25);
+		expect(request.cfg_rate).toBe(0.7);
+		expect(request.seed).toBe(0);
 	});
 
 	it('preserves video localization context across request restore', () => {

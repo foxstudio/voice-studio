@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.schemas.voice_studio import AppSettings
-from app.services import database as db
+from app.services import confucius4_paths, database as db
 from app.services.paths import PROJECT_ROOT, expand_path
 
 
@@ -73,6 +73,8 @@ def model_candidates(engine_id: str) -> list[Path]:
     base = expand_path(s.model_dir, PROJECT_ROOT)
     if engine_id == "indextts-v2":
         return [base / "mlx-indexTTS-2.0"]
+    if engine_id == confucius4_paths.ENGINE_ID:
+        return confucius4_paths.model_candidates(base)
     if engine_id == "qwen3-asr-mlx":
         return [
             base / "qwen3-asr-mlx",

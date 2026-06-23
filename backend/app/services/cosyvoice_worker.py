@@ -23,6 +23,7 @@ model_dir = root / "pretrained_models" / "CosyVoice-300M-SFT"
 try:
     sys.path.insert(0, ".")
     sys.path.append("third_party/Matcha-TTS")
+    import torch
     import torchaudio
     with contextlib.redirect_stdout(sys.stderr):
         from cosyvoice.cli.cosyvoice import AutoModel
@@ -41,10 +42,18 @@ def audio_meta(path):
     except Exception:
         return {"duration_ms": None, "sample_rate": getattr(model, "sample_rate", 22050)}
 
-def first_result(generator):
+def collect_speech(generator):
+    chunks = []
     for item in generator:
-        return item
-    raise RuntimeError("CosyVoice returned no audio")
+        speech = item["tts_speech"].detach().cpu()
+        if speech.ndim == 1:
+            speech = speech.unsqueeze(0)
+        chunks.append(speech)
+    if not chunks:
+        raise RuntimeError("CosyVoice returned no audio")
+    if len(chunks) == 1:
+        return chunks[0], 1
+    return torch.cat(chunks, dim=1), len(chunks)
 
 for line in sys.stdin:
     try:
@@ -59,7 +68,7 @@ for line in sys.stdin:
             if engine_id == "cosyvoice-sft":
                 speaker_id = str(payload.get("speaker_id") or "中文女")
                 speaker = speaker_id if speaker_id in speakers else speakers[0]
-                item = first_result(model.inference_sft(text, speaker, stream=False, speed=speed))
+                speech, chunk_count = collect_speech(model.inference_sft(text, speaker, stream=False, speed=speed))
             elif engine_id == "cosyvoice-zero-shot":
                 reference_audio = payload.get("reference_audio")
                 ref_text = (payload.get("ref_text") or "").strip()
@@ -67,11 +76,11 @@ for line in sys.stdin:
                     raise RuntimeError("REFERENCE_AUDIO_REQUIRED")
                 if not ref_text:
                     raise RuntimeError("REFERENCE_TEXT_REQUIRED")
-                item = first_result(model.inference_zero_shot(text, ref_text, reference_audio, stream=False, speed=speed))
+                speech, chunk_count = collect_speech(model.inference_zero_shot(text, ref_text, reference_audio, stream=False, speed=speed))
             else:
                 raise RuntimeError(f"Unsupported CosyVoice engine: {engine_id}")
-            torchaudio.save(output_path, item["tts_speech"].cpu(), model.sample_rate)
-        result = {"output_path": output_path, **audio_meta(output_path)}
+            torchaudio.save(output_path, speech, model.sample_rate)
+        result = {"output_path": output_path, "chunk_count": chunk_count, **audio_meta(output_path)}
         print(json.dumps({"ok": True, "result": result}, ensure_ascii=False), flush=True)
     except Exception as exc:
         print(json.dumps({"ok": False, "error": str(exc), "traceback": traceback.format_exc()[-2000:]}, ensure_ascii=False), flush=True)

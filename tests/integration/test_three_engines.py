@@ -28,6 +28,25 @@ if _backend_dir not in sys.path:
     sys.path.insert(0, _backend_dir)
 
 from app.main import app
+from app.services import database
+
+
+@pytest.fixture(autouse=True)
+def isolated_voice_studio_data(tmp_path, monkeypatch):
+    original_db = database.DB_PATH
+    data_dir = tmp_path / "VoiceStudio"
+    monkeypatch.setenv("VOICE_STUDIO_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("VOICE_STUDIO_OUTPUTS_DIR", str(data_dir / "outputs"))
+    monkeypatch.setenv("VOICE_STUDIO_VOICES_DIR", str(data_dir / "voices"))
+    monkeypatch.setenv("VOICE_STUDIO_CACHE_DIR", str(data_dir / "cache"))
+    monkeypatch.setenv("VOICE_STUDIO_EXPORTS_DIR", str(data_dir / "exports"))
+    monkeypatch.setenv("VOICE_STUDIO_PROJECTS_DIR", str(data_dir / "projects"))
+    monkeypatch.setenv("VOICE_STUDIO_LOGS_DIR", str(data_dir / "logs"))
+    database.set_db_path(data_dir / "config" / "voice_studio.db")
+    try:
+        yield
+    finally:
+        database.set_db_path(original_db)
 
 
 @pytest.fixture
@@ -78,6 +97,7 @@ class TestEngineRegistryAPI:
             "indextts-v2",
             "omnivoice",
             "emotivoice",
+            "confucius4-mlx-int8",
             "f5-tts",
             "cosyvoice-sft",
             "cosyvoice-zero-shot",

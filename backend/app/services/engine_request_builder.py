@@ -135,6 +135,50 @@ def build_cosyvoice_zero_shot_batch_common_kwargs(
     }
 
 
+def build_confucius4_mlx_single_kwargs(
+    req: GenerateRequest,
+    output_path: str,
+    *,
+    reference_audio: str | None,
+    model_dir: str,
+) -> dict[str, Any]:
+    return {
+        "text": req.text,
+        "reference_audio": reference_audio,
+        "output_path": output_path,
+        "model_dir": model_dir,
+        "language": req.language,
+        "temperature": req.temperature,
+        "top_p": req.top_p,
+        "top_k": req.top_k,
+        "repetition_penalty": req.repetition_penalty,
+        "diffusion_steps": req.diffusion_steps,
+        "cfg_rate": req.cfg_rate,
+        "seed": req.seed if req.seed is not None else 0,
+    }
+
+
+def build_confucius4_mlx_batch_common_kwargs(
+    values: dict[str, Any],
+    *,
+    reference_audio: str | None,
+    language: str,
+    model_dir: str,
+) -> dict[str, Any]:
+    return {
+        "reference_audio": reference_audio,
+        "model_dir": model_dir,
+        "language": values.get("language") or language,
+        "temperature": values.get("temperature"),
+        "top_p": values.get("top_p"),
+        "top_k": values.get("top_k"),
+        "repetition_penalty": values.get("repetition_penalty"),
+        "diffusion_steps": values.get("diffusion_steps"),
+        "cfg_rate": values.get("cfg_rate"),
+        "seed": values.get("seed") if values.get("seed") is not None else 0,
+    }
+
+
 def build_indextts_v2_single_kwargs(
     req: GenerateRequest,
     output_path: str,
@@ -246,6 +290,8 @@ def build_omnivoice_single_kwargs(
         "diffusion_steps": req.diffusion_steps or 16,
         "guidance_scale": req.guidance_scale,
         "duration": req.duration,
+        "audio_chunk_duration": req.audio_chunk_duration,
+        "audio_chunk_threshold": req.audio_chunk_threshold,
     }
 
 
@@ -277,6 +323,8 @@ def build_omnivoice_batch_common_kwargs(
         "diffusion_steps",
         "guidance_scale",
         "duration",
+        "audio_chunk_duration",
+        "audio_chunk_threshold",
         "cfg_rate",
         "emotion",
         "emo_alpha",

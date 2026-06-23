@@ -18,12 +18,12 @@ class EnginePlanPolicy:
 
 _POLICIES = {
     "omnivoice": EnginePlanPolicy(
-        threshold=80,
-        hard_threshold=150,
-        target_chars=50,
-        max_chars=65,
-        recommended_action="split_generate",
-        warning="OmniVoice 单句不宜过长，建议分段生成以获得更稳定的输出。",
+        threshold=150,
+        hard_threshold=300,
+        target_chars=65,
+        max_chars=90,
+        recommended_action="split_verify_merge",
+        warning="OmniVoice 官方已内置长文本切分；文本较长时建议使用可见分段，校对后再合并。",
     ),
     "indextts-v2": EnginePlanPolicy(
         threshold=300,
@@ -32,6 +32,30 @@ _POLICIES = {
         max_chars=220,
         recommended_action="split_verify_merge",
         warning="IndexTTS v2 支持长文本内部切段，但产品层建议分段生成、校对后再合并。",
+    ),
+    "confucius4-mlx-int8": EnginePlanPolicy(
+        threshold=24,
+        hard_threshold=48,
+        target_chars=18,
+        max_chars=24,
+        recommended_action="split_verify_merge",
+        warning="Confucius4-TTS 单次生成窗口较短，超过约 10 秒容易截断；较长文本建议分段生成并逐段校对音色和情绪。",
+    ),
+    "cosyvoice-sft": EnginePlanPolicy(
+        threshold=80,
+        hard_threshold=320,
+        target_chars=70,
+        max_chars=80,
+        recommended_action="split_verify_merge",
+        warning="CosyVoice 官方前端会按约 60-80 个中文字符自动切分；很长文本建议用可见分段校对后再合并。",
+    ),
+    "cosyvoice-zero-shot": EnginePlanPolicy(
+        threshold=80,
+        hard_threshold=240,
+        target_chars=70,
+        max_chars=80,
+        recommended_action="split_verify_merge",
+        warning="CosyVoice Zero-Shot 官方前端会自动切分目标文本；较长复刻文本仍建议分段校对，避免参考音色和节奏漂移。",
     ),
     "mimo-v2.5-tts-preset": EnginePlanPolicy(
         threshold=600,
@@ -67,6 +91,8 @@ _DEFAULT_POLICY = EnginePlanPolicy(
     recommended_action="split_verify_merge",
     warning="当前文本较长，建议分段生成并校对。",
 )
+
+STRICT_LONGFORM_ENGINES: set[str] = set()
 
 
 def plan_text(*, text: str, engine_id: str, planner_mode: str = "auto", target_format: str = "mp3") -> GeneratePlanResponse:
@@ -120,6 +146,13 @@ def plan_text(*, text: str, engine_id: str, planner_mode: str = "auto", target_f
         planner_reason=f"文本长度 {text_length} 已超过 {engine_id} 的建议阈值 {policy.threshold}。",
         segments=segments,
     )
+
+
+def requires_longform_generation(*, text: str, engine_id: str, target_format: str = "mp3") -> bool:
+    if engine_id not in STRICT_LONGFORM_ENGINES:
+        return False
+    plan = plan_text(text=text, engine_id=engine_id, planner_mode="rules", target_format=target_format)
+    return plan.mode == "longform_strongly_recommended"
 
 
 def _privacy_notice(planner_mode: str) -> str:

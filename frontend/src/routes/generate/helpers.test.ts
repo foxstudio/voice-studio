@@ -12,10 +12,11 @@ import {
 	longformResultLabel,
 	displayTitle,
 	requestFromTask,
+	taskParameterCopyText,
 	formatSeconds,
 	formatAudioDuration,
 } from './helpers';
-import type { GenerationTask } from '$lib/api/types';
+import type { EngineDetail, GenerationTask, ParameterSchema, VoiceAsset } from '$lib/api/types';
 
 function makeTask(overrides: Partial<GenerationTask> = {}): GenerationTask {
 	return {
@@ -28,6 +29,57 @@ function makeTask(overrides: Partial<GenerationTask> = {}): GenerationTask {
 		parameters: {},
 		...overrides,
 	} as GenerationTask;
+}
+
+function parameter(overrides: Partial<ParameterSchema> & Pick<ParameterSchema, 'key' | 'label'>): ParameterSchema {
+	return {
+		description: null,
+		type: 'number',
+		level: 'basic',
+		default: null,
+		min: null,
+		max: null,
+		step: null,
+		options: [],
+		required: false,
+		capability: null,
+		...overrides,
+	};
+}
+
+function engineDetail(engineId: string, parameterSchema: ParameterSchema[]): EngineDetail {
+	return {
+		manifest: {
+			engine_id: engineId,
+			display_name: engineId,
+			engine_type: engineId.startsWith('mimo-') ? 'cloud' : 'local',
+			provider: 'test',
+			version: 'test',
+			description: '',
+			supported_languages: [],
+			capabilities: [],
+			sample_rate: 22050,
+			max_tokens: null,
+			privacy_level: 'local_only',
+			default_use_case: '',
+			parameter_schema: parameterSchema,
+		},
+		state: {
+			engine_id: engineId,
+			status: 'stopped',
+			model_path: null,
+			error_message: null,
+			loaded_at: null,
+		},
+	};
+}
+
+function engineMap(entries: EngineDetail[]) {
+	return new Map(entries.map((entry) => [entry.manifest.engine_id, entry]));
+}
+
+function voiceMap(entries: VoiceAsset[] = []) {
+	return new Map(entries.map((entry) => [entry.voice_id, entry]));
 }
 
 describe('statusIsActive', () => {
@@ -159,6 +211,86 @@ describe('requestFromTask', () => {
 		expect(request.language).toBe('auto');
 		expect(request.emotion_mode).toBe('follow_reference');
 		expect(request.output_format).toBe('wav');
+	});
+});
+
+describe('taskParameterCopyText', () => {
+	it('lists all model schema parameters instead of a small hard-coded subset', () => {
+		const text = taskParameterCopyText(
+			makeTask({
+				engine_id: 'f5-tts',
+				parameters: {
+					engine_id: 'f5-tts',
+					speed: 1.05,
+					nfe_step: 32,
+					cfg_strength: 2,
+					target_rms: 0.1,
+					cross_fade_duration: 0.15,
+					sway_sampling_coef: -1,
+					fix_duration: 0,
+					remove_silence: false,
+					output_format: 'wav'
+				}
+			}),
+			engineMap([
+				engineDetail('f5-tts', [
+					parameter({ key: 'speed', label: '语速', type: 'slider' }),
+					parameter({ key: 'nfe_step', label: '采样步数 NFE', type: 'slider' }),
+					parameter({ key: 'cfg_strength', label: '引导强度 CFG', type: 'slider' }),
+					parameter({ key: 'target_rms', label: '响度目标 RMS', type: 'slider' }),
+					parameter({ key: 'cross_fade_duration', label: '分段交叉淡化', type: 'slider' }),
+					parameter({ key: 'sway_sampling_coef', label: '采样摆动 Sway', type: 'slider' }),
+					parameter({ key: 'fix_duration', label: '固定总时长 s', type: 'number' }),
+					parameter({ key: 'remove_silence', label: '移除静音', type: 'toggle' }),
+				])
+			]),
+			voiceMap()
+		);
+
+		expect(text).toContain('采样步数 NFE: 32');
+		expect(text).toContain('响度目标 RMS: 0.1');
+		expect(text).toContain('采样摆动 Sway: -1');
+		expect(text).toContain('移除静音: 否');
+		expect(text).toContain('格式: WAV');
+	});
+
+	it('unwraps longform export generate_request and includes merge parameters', () => {
+		const text = taskParameterCopyText(
+			makeTask({
+				task_type: 'export',
+				longform_task_id: 'lf1',
+				longform_segment_count: 2,
+				engine_id: 'cosyvoice-sft',
+				parameters: {
+					generate_request: {
+						engine_id: 'cosyvoice-sft',
+						speaker_id: '中文女',
+						speed: 1.3,
+						output_format: 'wav'
+					},
+					verify_enabled: true,
+					merge_enabled: true,
+					max_retries: 2,
+					asr_engine_id: 'qwen3-asr-mlx',
+					silence_ms: 300,
+					source_result_ids: ['r1', 'r2']
+				}
+			}),
+			engineMap([
+				engineDetail('cosyvoice-sft', [
+					parameter({ key: 'speaker_id', label: '预置音色', type: 'select', options: [{ label: '中文女声', value: '中文女' }] }),
+					parameter({ key: 'speed', label: '语速', type: 'slider' }),
+				])
+			]),
+			voiceMap()
+		);
+
+		expect(text).toContain('预置音色: 中文女声');
+		expect(text).toContain('语速: 1.3');
+		expect(text).toContain('长文本段数: 2');
+		expect(text).toContain('自动校对: 是');
+		expect(text).toContain('校对 ASR: qwen3-asr-mlx');
+		expect(text).toContain('来源结果数: 2');
 	});
 });
 

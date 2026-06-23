@@ -351,6 +351,8 @@ class GenerateRequest(BaseModel):
     cfg_rate: float = Field(default=0.7, ge=0.0, le=1.0)
     guidance_scale: float = Field(default=2.0, ge=0.0, le=10.0)
     duration: float = Field(default=0.0, ge=0.0, le=600.0)
+    audio_chunk_duration: float = Field(default=15.0, ge=1.0, le=120.0)
+    audio_chunk_threshold: float = Field(default=30.0, ge=1.0, le=600.0)
     output_format: Literal["wav", "mp3", "flac"] = "wav"
 
 

@@ -85,10 +85,26 @@ async def diagnose_audio(engine_id: str, data: EngineAudioDiagnosisRequest):
             "speed": 1.0,
             "seed": None,
         }
-        if engine_id == "indextts-v2" and not ref:
-            raise AppException(400, "REFERENCE_AUDIO_REQUIRED", "IndexTTS v2 diagnosis requires a reference audio")
+        if engine_id in {"indextts-v2", "confucius4-mlx-int8"} and not ref:
+            label = "Confucius4-TTS" if engine_id == "confucius4-mlx-int8" else "IndexTTS v2"
+            raise AppException(400, "REFERENCE_AUDIO_REQUIRED", f"{label} diagnosis requires a reference audio")
         if engine_id == "indextts-v2":
             kwargs.update({"max_mel_tokens": 1500, "diffusion_steps": 25, "cfg_rate": 0.7, "emotion": data.emotion, "emo_alpha": 0.6})
+        elif engine_id == "confucius4-mlx-int8":
+            kwargs = {
+                "text": data.text,
+                "reference_audio": ref,
+                "output_path": str(output_path),
+                "model_dir": str(settings_store.model_path(engine_id)),
+                "language": data.language if data.language != "auto" else "zh",
+                "temperature": 0.8,
+                "top_p": 0.8,
+                "top_k": 30,
+                "repetition_penalty": 10.0,
+                "diffusion_steps": 25,
+                "cfg_rate": 0.7,
+                "seed": 0,
+            }
         elif engine_id == "emotivoice":
             kwargs = {
                 "text": data.text,
@@ -145,7 +161,7 @@ async def diagnose_audio(engine_id: str, data: EngineAudioDiagnosisRequest):
             }
         else:
             kwargs.update({"language": data.language, "ref_text": None, "emotion": None, "emotion_text": data.emotion_text})
-        timeout = 900 if engine_id in {"cosyvoice-sft", "cosyvoice-zero-shot"} else 600 if engine_id in {"f5-tts", "emotivoice"} else 300
+        timeout = 900 if engine_id in {"cosyvoice-sft", "cosyvoice-zero-shot"} else 600 if engine_id in {"f5-tts", "emotivoice", "confucius4-mlx-int8"} else 300
         result = await asyncio.to_thread(engine_registry.run_isolated, engine_id, kwargs, timeout)
         final_path = Path(result["output_path"])
         quality = audio_tools.quality_metrics(final_path)

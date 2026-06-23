@@ -46,6 +46,7 @@ def test_presets_are_available_and_apply_to_main_engines(tmp_path: Path):
         "indextts-v2",
         "omnivoice",
         "emotivoice",
+        "confucius4-mlx-int8",
         "f5-tts",
         "cosyvoice-sft",
         "cosyvoice-zero-shot",
@@ -312,6 +313,7 @@ def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path):
         "indextts-v2",
         "omnivoice",
         "emotivoice",
+        "confucius4-mlx-int8",
         "f5-tts",
         "cosyvoice-sft",
         "cosyvoice-zero-shot",
@@ -328,6 +330,9 @@ def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path):
     assert "speech_recognition" in by_id["qwen3-asr-mlx"]["capabilities"]
     assert "vad" in by_id["faster-whisper-turbo"]["capabilities"]
     assert by_id["emotivoice"]["sample_rate"] == 16000
+    assert by_id["confucius4-mlx-int8"]["sample_rate"] == 22050
+    assert "emotion_transfer" in by_id["confucius4-mlx-int8"]["capabilities"]
+    assert any(param["key"] == "seed" for param in by_id["confucius4-mlx-int8"]["parameter_schema"])
     assert "preset_voice" in by_id["cosyvoice-sft"]["capabilities"]
     assert "voice_clone" in by_id["f5-tts"]["capabilities"]
     assert "voice_clone" in by_id["cosyvoice-zero-shot"]["capabilities"]

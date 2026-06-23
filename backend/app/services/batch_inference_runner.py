@@ -96,6 +96,7 @@ def run_omnivoice(payload: dict[str, Any]) -> list[dict[str, Any]]:
     import numpy as np
     import soundfile as sf
     from omnivoice import OmniVoice
+    from omnivoice.models.omnivoice import OmniVoiceGenerationConfig
 
     common = dict(payload["common"])
     model = OmniVoice.from_pretrained("k2-fsa/OmniVoice", device_map=common.pop("device", "mps"))
@@ -117,6 +118,21 @@ def run_omnivoice(payload: dict[str, Any]) -> list[dict[str, Any]]:
             gen_kwargs["instruct"] = kwargs.get("emotion_text") or kwargs.get("emotion")
         if kwargs.get("speed") and kwargs["speed"] != 1.0:
             gen_kwargs["speed"] = kwargs["speed"]
+        generation_config = OmniVoiceGenerationConfig.from_dict(
+            {
+                key: value
+                for key, value in {
+                    "num_step": kwargs.get("diffusion_steps"),
+                    "guidance_scale": kwargs.get("guidance_scale"),
+                    "audio_chunk_duration": kwargs.get("audio_chunk_duration"),
+                    "audio_chunk_threshold": kwargs.get("audio_chunk_threshold"),
+                }.items()
+                if value is not None
+            }
+        )
+        gen_kwargs["generation_config"] = generation_config
+        if kwargs.get("duration") and float(kwargs["duration"]) > 0:
+            gen_kwargs["duration"] = float(kwargs["duration"])
         try:
             result = model.generate(**gen_kwargs)
             if isinstance(result, (str, Path)):
@@ -195,6 +211,10 @@ def run_emotivoice(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return run_external_tts(payload, "run_emotivoice", 16000)
 
 
+def run_confucius4_mlx(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return run_external_tts(payload, "run_confucius4_mlx", 22050)
+
+
 def run_f5_tts(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return run_external_tts(payload, "run_f5_tts", 24000)
 
@@ -211,6 +231,7 @@ RUNNERS = {
     "indextts-v2": run_indextts_v2,
     "omnivoice": run_omnivoice,
     "emotivoice": run_emotivoice,
+    "confucius4-mlx-int8": run_confucius4_mlx,
     "f5-tts": run_f5_tts,
     "cosyvoice-sft": run_cosyvoice_sft,
     "cosyvoice-zero-shot": run_cosyvoice_zero_shot,
