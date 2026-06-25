@@ -17,7 +17,6 @@
 	let panelEl: HTMLSpanElement | undefined;
 	let panelStyle = $state('');
 	let placement = $state<'top' | 'bottom'>('top');
-	let arrowLeft = $state(14);
 	let copyTimer: ReturnType<typeof setTimeout> | undefined;
 	let hideTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -112,9 +111,7 @@
 			top = Math.max(pad, maxTop);
 		}
 
-		const triggerCenter = trigger.left + trigger.width / 2;
-		arrowLeft = Math.max(14, Math.min(panel.width - 18, triggerCenter - left));
-		panelStyle = `left:${Math.round(left)}px; top:${Math.round(top)}px; --arrow-left:${Math.round(arrowLeft)}px;`;
+		panelStyle = `left:${Math.round(left)}px; top:${Math.round(top)}px;`;
 	}
 
 	$effect(() => {
@@ -205,29 +202,6 @@
 		overflow-wrap: anywhere;
 		box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
 		transition: opacity 120ms ease, visibility 0s linear 120ms;
-	}
-
-	.hover-copy-panel::before {
-		content: '';
-		position: absolute;
-		left: var(--arrow-left, 14px);
-		width: 10px;
-		height: 10px;
-		border: inherit;
-		background: inherit;
-		transform: rotate(45deg);
-	}
-
-	.hover-copy-panel[data-placement='top']::before {
-		bottom: -6px;
-		border-left: 0;
-		border-top: 0;
-	}
-
-	.hover-copy-panel[data-placement='bottom']::before {
-		top: -6px;
-		border-right: 0;
-		border-bottom: 0;
 	}
 
 	.hover-copy-panel.open {
