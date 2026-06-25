@@ -7,12 +7,30 @@ from app.schemas.voice_studio import TTSVerificationResponse, TTSVerificationSeg
 
 _SENTENCE_RE = re.compile(r"(?<=[。！？!?；;…])\s*|\n+")
 _PUNCT_RE = re.compile(r"[\s`~!@#$%^&*()_\-+=\[\]{}\\|;:'\",<.>/?，。！？；：、“”‘’（）《》【】—…·]+")
+_VERIFICATION_CONTROL_TAG_RE = re.compile(
+    r"""
+    <\|(?:pause|break|silence)_\d+\|>
+    |<\s*/?\s*(?:pause|break|silence|laughter|laugh|cough|sigh|sniff)(?:[_-]\d+)?\s*>
+    |\[
+        (?:
+            pause|break|silence|cough|laughter|laugh|sigh|sniff
+            |confirmation-[a-z]+
+            |question-[a-z]+
+            |surprise-[a-z]+
+            |dissatisfaction-[a-z]+
+        )
+    \]
+    |\(\s*(?:pause|break|silence|cough|laughter|laugh|sigh|sniff)\s*\)
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 
 def verify_transcript(*, expected_text: str, transcript_text: str, result_id: str | None = None, transcription_id: str | None = None, asr_engine_id: str | None = None) -> TTSVerificationResponse:
     expected = expected_text.strip()
     transcript = transcript_text.strip()
-    normalized_expected = normalize_text(expected)
+    verification_expected = strip_verification_control_tags(expected)
+    normalized_expected = normalize_text(verification_expected)
     normalized_transcript = normalize_text(transcript)
 
     warnings: list[str] = []
@@ -41,8 +59,8 @@ def verify_transcript(*, expected_text: str, transcript_text: str, result_id: st
             transcript_text=transcript,
             normalized_expected=normalized_expected,
             normalized_transcript=normalized_transcript,
-            missing_segments=_segments_for_empty_transcript(expected),
-            segment_results=_segments_for_empty_transcript(expected),
+            missing_segments=_segments_for_empty_transcript(verification_expected),
+            segment_results=_segments_for_empty_transcript(verification_expected),
             warnings=["转录文本为空，无法确认音频是否包含目标内容。"],
             suggestions=["建议重试生成或更换 ASR 引擎后再校对。"],
             result_id=result_id,
@@ -50,7 +68,7 @@ def verify_transcript(*, expected_text: str, transcript_text: str, result_id: st
             asr_engine_id=asr_engine_id,
         )
 
-    segment_results = [_evaluate_segment(index, part, normalized_transcript) for index, part in enumerate(split_expected_text(expected), start=1)]
+    segment_results = [_evaluate_segment(index, part, normalized_transcript) for index, part in enumerate(split_expected_text(verification_expected), start=1)]
     missing = [item for item in segment_results if item.status == "failed"]
     coverage = _coverage(normalized_expected, normalized_transcript)
     similarity = difflib.SequenceMatcher(None, normalized_expected, normalized_transcript).ratio()
@@ -87,6 +105,10 @@ def verify_transcript(*, expected_text: str, transcript_text: str, result_id: st
 
 def normalize_text(text: str) -> str:
     return _PUNCT_RE.sub("", text).lower()
+
+
+def strip_verification_control_tags(text: str) -> str:
+    return _VERIFICATION_CONTROL_TAG_RE.sub(" ", text)
 
 
 def split_expected_text(text: str) -> list[str]:
