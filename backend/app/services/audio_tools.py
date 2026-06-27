@@ -71,6 +71,29 @@ def write_audio(path: str | Path, audio: np.ndarray, sr: int, fmt: str = "wav") 
     return path
 
 
+def time_stretch_file(path: str | Path, rate: float) -> dict:
+    """Apply speech-friendly time stretching in-place without changing pitch."""
+    if abs(rate - 1.0) < 1e-3:
+        return probe_audio(path)
+
+    from mlx_indextts.generate import time_stretch_wsola
+
+    path = Path(path)
+    audio, sr = sf.read(str(path), always_2d=False, dtype="float32")
+    if audio.ndim <= 1:
+        stretched = time_stretch_wsola(audio.astype(np.float32), rate=rate, sample_rate=sr)
+    else:
+        channels = [
+            time_stretch_wsola(audio[:, index].astype(np.float32), rate=rate, sample_rate=sr)
+            for index in range(audio.shape[1])
+        ]
+        target_len = min(len(channel) for channel in channels)
+        stretched = np.stack([channel[:target_len] for channel in channels], axis=1)
+
+    sf.write(str(path), np.clip(stretched, -1.0, 1.0), sr, subtype="PCM_16")
+    return probe_audio(path)
+
+
 def normalize(audio: np.ndarray, target_peak: float = 0.92) -> np.ndarray:
     peak = float(np.max(np.abs(audio))) if audio.size else 0.0
     if peak <= 0:

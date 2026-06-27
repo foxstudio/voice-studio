@@ -3,7 +3,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
+import soundfile as sf
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
@@ -11,7 +13,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.schemas.voice_studio import AppSettings, BatchSegmentInput, BatchGenerateRequest, GenerateRequest, VoiceAssetCreate, VoiceFile
-from app.services import batch_queue, database, inference_runner, task_queue, voice_store
+from app.services import audio_tools, batch_queue, database, inference_runner, task_queue, voice_store
 
 
 def _ref_file(tmp_path: Path) -> str:
@@ -166,6 +168,51 @@ def test_cosyvoice_zero_shot_single_batch_worker_contract(tmp_path, monkeypatch)
     assert batch_ref_audio == reference_audio_path
     assert batch_ref_text == "一句中文参考文本。"
     assert batch_speed == params["speed"]
+
+
+def test_omnivoice_speed_uses_postprocess_stretch_not_model_speed(tmp_path):
+    req = GenerateRequest(
+        text="OmniVoice speed should preserve full text coverage.",
+        engine_id="omnivoice",
+        speed=2.0,
+        duration=0.0,
+    )
+    single = task_queue._kwargs(req, str(tmp_path / "single.wav"))
+
+    _, output_path, _, gen_kwargs, postprocess_speed, target_duration = inference_runner._build_omnivoice_kwargs(**single)
+
+    assert output_path == str(tmp_path / "single.wav")
+    assert "speed" not in gen_kwargs
+    assert "duration" not in gen_kwargs
+    assert gen_kwargs["text"] == req.text
+    assert postprocess_speed == 2.0
+    assert target_duration is None
+
+
+def test_omnivoice_fixed_duration_overrides_postprocess_speed(tmp_path):
+    _, _, _, gen_kwargs, postprocess_speed, target_duration = inference_runner._build_omnivoice_kwargs(
+        output_path=str(tmp_path / "single.wav"),
+        text="Duration should be applied after full text generation.",
+        speed=2.0,
+        duration=4.0,
+    )
+
+    assert "duration" not in gen_kwargs
+    assert "speed" not in gen_kwargs
+    assert postprocess_speed == 1.0
+    assert target_duration == 4.0
+
+
+def test_audio_time_stretch_file_changes_duration_without_pitch_flag(tmp_path):
+    sr = 24000
+    path = tmp_path / "tone.wav"
+    timeline = np.linspace(0, 1, sr, endpoint=False, dtype=np.float32)
+    audio = 0.2 * np.sin(2 * np.pi * 440 * timeline)
+    sf.write(path, audio, sr, subtype="PCM_16")
+
+    meta = audio_tools.time_stretch_file(path, 2.0)
+
+    assert 450 <= meta["duration_ms"] <= 650
 
 
 def test_confucius4_single_batch_worker_payload_contract(tmp_path, monkeypatch):

@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
-from app.services import confucius4_paths
+from app.services import audio_tools, confucius4_paths
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -195,10 +195,6 @@ def _build_omnivoice_kwargs(**kwargs):
             gen_kwargs["ref_text"] = ref_text
     elif instruction:
         gen_kwargs["instruct"] = instruction
-    if speed != 1.0:
-        gen_kwargs["speed"] = speed
-    if duration is not None and float(duration) > 0:
-        gen_kwargs["duration"] = float(duration)
     generation_config: dict[str, float | int] = {}
     if diffusion_steps:
         generation_config["num_step"] = int(diffusion_steps)
@@ -211,10 +207,12 @@ def _build_omnivoice_kwargs(**kwargs):
     if generation_config:
         gen_kwargs["generation_config"] = generation_config
 
-    return engine_id, output_path, device, gen_kwargs
+    target_duration = float(duration) if duration is not None and float(duration) > 0 else None
+    postprocess_speed = 1.0 if target_duration else float(speed or 1.0)
+    return engine_id, output_path, device, gen_kwargs, postprocess_speed, target_duration
 
 def run_omnivoice(**kwargs):
-    engine_id, output_path, device, gen_kwargs = _build_omnivoice_kwargs(**kwargs)
+    engine_id, output_path, device, gen_kwargs, postprocess_speed, target_duration = _build_omnivoice_kwargs(**kwargs)
     start = time.perf_counter()
     with _model_cache_lock:
         model = _model_cache.get(engine_id)
@@ -241,6 +239,13 @@ def run_omnivoice(**kwargs):
 
         audio = np.concatenate([np.asarray(x).reshape(-1) for x in result]).astype(np.float32)
         sf.write(output_path, np.clip(audio, -1, 1), getattr(model, "sampling_rate", 24000), subtype="PCM_16")
+    if target_duration:
+        current = audio_tools.probe_audio(output_path)
+        current_seconds = (current.get("duration_ms") or 0) / 1000
+        if current_seconds > 0:
+            audio_tools.time_stretch_file(output_path, current_seconds / target_duration)
+    elif postprocess_speed != 1.0:
+        audio_tools.time_stretch_file(output_path, postprocess_speed)
     meta = _audio_meta(output_path, getattr(model, "sampling_rate", 24000))
     meta.update({"output_path": output_path, "generation_time_ms": int((time.perf_counter() - start) * 1000)})
     return meta

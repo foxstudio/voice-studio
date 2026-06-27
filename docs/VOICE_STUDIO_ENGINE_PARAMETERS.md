@@ -5,7 +5,7 @@
 ## 快速结论
 
 - IndexTTS v2 是本地声音克隆主力，支持语速、采样、分段、情绪和扩散类参数。
-- OmniVoice 是本地多语言/声音设计引擎，当前接入只消费语言、参考音频或声音描述、语速。
+- OmniVoice 是本地多语言/声音设计引擎，当前接入消费语言、参考音频或声音描述、语速、固定时长和官方生成采样参数；语速/固定时长在本项目里用生成后音频拉伸实现，优先保证文本完整覆盖。
 - EmotiVoice 是本地中文情感 TTS，当前接入使用官方开源预训练说话人和中文情绪提示。
 - Confucius4-TTS MLX int8 是网易有道子曰4 TTS 的 Apple Silicon MLX 量化版本，当前接入使用音色库或自定义参考音频，支持 14 种语言的跨语种声音克隆和情绪迁移。
 - F5-TTS 是本地参考音频 TTS，当前接入要求已授权参考音频和对应 `ref_text`，不会自动调用 Whisper 听写参考音频。
@@ -96,7 +96,7 @@ curl -X POST http://127.0.0.1:8000/api/generate \
 | 引擎 | 类型 | 有效参数 | 无效或不要传的重点 |
 | --- | --- | --- | --- |
 | `indextts-v2` | 本地 TTS | `voice_id`/`reference_audio_path`, `ref_text`, `language`, `emotion_mode`, `emotion`, `emo_alpha`, `speed`, `temperature`, `top_p`, `top_k`, `max_text_tokens_per_segment`, `interval_silence`, `diffusion_steps`, `cfg_rate`, `output_format` | MiMo 专属 `mimo_voice`, `style_instruction`, `voice_design_prompt`, `optimize_text_preview` |
-| `omnivoice` | 本地 TTS | `voice_id` 或 `emotion_text`, `ref_text`, `language`, `speed`, `output_format` | `temperature`, `top_p`, `top_k`, 分段参数、IndexTTS 情绪向量、MiMo 专属参数 |
+| `omnivoice` | 本地 TTS | `voice_id` 或 `emotion_text`, `ref_text`, `language`, `speed`, `duration`, `diffusion_steps`, `guidance_scale`, `audio_chunk_duration`, `audio_chunk_threshold`, `output_format` | `temperature`, `top_p`, `top_k`, IndexTTS 情绪向量、MiMo 专属参数 |
 | `emotivoice` | 本地 TTS | `speaker_id`, `prompt`, `output_format` | 本地 `voice_id`、F5 `nfe_step/cfg_strength`、MiMo 专属参数 |
 | `confucius4-mlx-int8` | 本地 TTS | `voice_id`/`reference_audio_path`, `language`, `temperature`, `top_p`, `top_k`, `repetition_penalty`, `diffusion_steps`, `cfg_rate`, `seed`, `output_format` | `ref_text` 不强制；`speed`、F5/CosyVoice speaker、MiMo 专属参数无效 |
 | `f5-tts` | 本地 TTS | `voice_id`/`reference_audio_path`, `ref_text`, `speed`, `nfe_step`, `cfg_strength`, `target_rms`, `cross_fade_duration`, `remove_silence`, `seed`, `output_format` | 没有参考文本时不要自动听写；MiMo 专属参数、IndexTTS 情绪向量无效 |
@@ -138,7 +138,7 @@ TTS 调用方可以选择系统音色库、调用方提供的参考声音，或�
 | 引擎 | 重置后的主要默认值 | 当前内置预设 |
 | --- | --- | --- |
 | `indextts-v2` | `speed=1.0`, `temperature=0.8`, `top_p=0.8`, `top_k=30`, `emotion=跟随参考音色`, `emo_alpha=0.6`, `max_text_tokens_per_segment=120`, `interval_silence=200`, `diffusion_steps=25`, `cfg_rate=0.7`, `max_mel_tokens=1500`, `repetition_penalty=10` | 贴近参考音色、轻微开心、强情绪短句、教程慢讲、信息流快讲、长文本剪辑 |
-| `omnivoice` | `language=auto`, `speed=1.0`, 声音描述为空 | OmniVoice 女青年设计 |
+| `omnivoice` | `language=auto`, `speed=1.0`, `duration=0`, 声音描述为空 | OmniVoice 女青年设计 |
 | `emotivoice` | `speaker_id=8051`, `prompt=开心` | 清晰女声开心、浑厚男声中立、活泼女声兴奋 |
 | `confucius4-mlx-int8` | `language=zh`, `temperature=0.8`, `top_p=0.8`, `top_k=30`, `repetition_penalty=10`, `diffusion_steps=25`, `cfg_rate=0.7`, `seed=0` | 中文情绪迁移、英文跨语种、日文跨语种、稳定低随机 |
 | `f5-tts` | `speed=1.0`, `nfe_step=32`, `cfg_strength=2.0`, `target_rms=0.1`, `cross_fade_duration=0.15`, `remove_silence=false` | 官方默认复刻、快速试听、短句去静音 |
@@ -337,7 +337,8 @@ agent 规则：
 - `emotion_text`：未选择参考音色时，作为声音设计/生成指令传给 OmniVoice。只使用支持词表里的组合，例如 `女，青年，中音调`、`女，青年，耳语`、`男，中年，低音调`；不要传 `自然口播`、`压低声音`、`谨慎` 等自由描述，后端会报 unsupported instruct items。
 - `ref_text`：参考音频台词，可提升克隆稳定性。
 - `language`：`auto` 或具体语言代码。
-- `speed`：语速倍率。
+- `speed`：语速倍率。本项目不会把该值传入 OmniVoice 内部时长估算，而是在完整生成后做无变调时间拉伸，避免高语速导致漏读。
+- `duration`：固定输出时长秒数，`0` 表示自动时长。本项目同样在完整生成后拉伸/压缩到目标时长；如果同时传 `duration` 和 `speed`，`duration` 优先。
 
 ### EmotiVoice
 

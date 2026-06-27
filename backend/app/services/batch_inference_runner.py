@@ -116,8 +116,8 @@ def run_omnivoice(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 gen_kwargs["ref_text"] = kwargs["ref_text"]
         elif kwargs.get("emotion_text") or kwargs.get("emotion"):
             gen_kwargs["instruct"] = kwargs.get("emotion_text") or kwargs.get("emotion")
-        if kwargs.get("speed") and kwargs["speed"] != 1.0:
-            gen_kwargs["speed"] = kwargs["speed"]
+        target_duration = float(kwargs["duration"]) if kwargs.get("duration") and float(kwargs["duration"]) > 0 else None
+        postprocess_speed = 1.0 if target_duration else float(kwargs.get("speed") or 1.0)
         generation_config = OmniVoiceGenerationConfig.from_dict(
             {
                 key: value
@@ -131,8 +131,6 @@ def run_omnivoice(payload: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
         gen_kwargs["generation_config"] = generation_config
-        if kwargs.get("duration") and float(kwargs["duration"]) > 0:
-            gen_kwargs["duration"] = float(kwargs["duration"])
         try:
             result = model.generate(**gen_kwargs)
             if isinstance(result, (str, Path)):
@@ -140,6 +138,17 @@ def run_omnivoice(payload: dict[str, Any]) -> list[dict[str, Any]]:
             else:
                 audio = np.concatenate([np.asarray(x).reshape(-1) for x in result]).astype(np.float32)
                 sf.write(wav_out, np.clip(audio, -1, 1), getattr(model, "sampling_rate", 24000), subtype="PCM_16")
+            if target_duration:
+                from app.services import audio_tools
+
+                current = audio_tools.probe_audio(wav_out)
+                current_seconds = (current.get("duration_ms") or 0) / 1000
+                if current_seconds > 0:
+                    audio_tools.time_stretch_file(wav_out, current_seconds / target_duration)
+            elif postprocess_speed != 1.0:
+                from app.services import audio_tools
+
+                audio_tools.time_stretch_file(wav_out, postprocess_speed)
             meta = _finalize_wav(wav_out, out, getattr(model, "sampling_rate", 24000))
             meta["generation_time_ms"] = int((time.perf_counter() - started) * 1000)
             results.append({"segment_id": segment["segment_id"], "status": "success", **meta})

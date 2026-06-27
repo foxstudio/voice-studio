@@ -140,10 +140,10 @@ ENGINES: dict[str, EngineDetail] = {
             parameter_schema=[
                 ParameterSchema(key="language", label="语言", type="select", default="auto", options=OMNIVOICE_LANGUAGES, description="语言提示。自动可混语，手动选择通常更稳。"),
                 ParameterSchema(key="emotion_text", label="声音描述/指令", type="textarea", default="", capability="voice_design", description="用文字描述想要的声音特征"),
-                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="控制说话速度"),
+                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="生成后无变调调整语速，优先保证文本完整覆盖"),
                 ParameterSchema(key="diffusion_steps", label="扩散步数 Num Step", type="slider", default=32, min=4, max=64, step=1, level="advanced", description="OmniVoice 生成步数。越高通常越细致但更慢。"),
                 ParameterSchema(key="guidance_scale", label="引导强度 Guidance", type="slider", default=2.0, min=0.1, max=5.0, step=0.1, level="advanced", description="控制生成结果贴合文本、音色或声音描述的力度。默认 2.0。"),
-                ParameterSchema(key="duration", label="固定时长 s", type="number", default=0, min=0, max=120, step=0.5, level="advanced", description="可选。0 表示自动估算；填秒数会强制目标音频时长。"),
+                ParameterSchema(key="duration", label="固定时长 s", type="number", default=0, min=0, max=120, step=0.5, level="advanced", description="可选。0 表示自动估算；填秒数会在完整生成后拉伸/压缩到目标时长。"),
                 ParameterSchema(key="audio_chunk_duration", label="长文本分段目标 s", type="number", default=15.0, min=1.0, max=120.0, step=1.0, level="advanced", description="OmniVoice 官方长文本切分目标时长。默认每段约 15 秒。"),
                 ParameterSchema(key="audio_chunk_threshold", label="长文本切分阈值 s", type="number", default=30.0, min=1.0, max=600.0, step=1.0, level="advanced", description="预计音频超过该时长时启用 OmniVoice 内置长文本切分。官方默认 30 秒。"),
             ],
