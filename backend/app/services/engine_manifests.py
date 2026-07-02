@@ -486,7 +486,19 @@ ENGINES: dict[str, EngineDetail] = {
                     description="选择与 seed-tts-2.0 资源匹配的官方音色",
                 ),
                 ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="映射到豆包 speech_rate，1.0 为正常语速"),
-                ParameterSchema(key="style_instruction", label="语音指令", type="textarea", default="", capability="natural_language_control", description="可选，支持中文。例：语速慢一点，语气更惊讶，句尾带一点感叹。"),
+                ParameterSchema(
+                    key="style_instruction",
+                    label="语音指令",
+                    type="textarea",
+                    default="",
+                    capability="natural_language_control",
+                    description=(
+                        "可选，支持中文或英文。会作为豆包 TTS 2.0 的 context_texts 发送，用来影响语气、情绪、节奏和停顿。\n"
+                        "示例：语速慢一点，语气更惊讶，句尾带一点感叹。\n"
+                        "官方还支持在正文句前写自由描述式语音标签，例如：[怒目圆睁，冲着你大声怒吼]。"
+                        "这不是 OmniVoice 那种固定标签按钮清单；未实测确认前不把它做成快捷按钮。"
+                    ),
+                ),
             ],
         ),
         state=EngineState(engine_id="doubao-tts-preset", status=EngineStatus.stopped),
