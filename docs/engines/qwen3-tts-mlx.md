@@ -52,7 +52,19 @@
 - 本地音色库或自定义音色一旦生效，`speaker_id`、`style_instruction` 和 `voice_design_prompt` 不再参与本次生成。
 - 当前不是主力稳定引擎，定位是“可选候选”和“社区新模型试验位”。
 
+## 内置合成预设
+
+| 预设 | 路线 | 关键参数 |
+|---|---|---|
+| Qwen3 官方基准 | CustomVoice 预置音色 | `speaker_id=Vivian`, `speed=1.0`, `temperature=0.7`, `top_p=1.0`, `top_k=30`, `repetition_penalty=1.15`, `max_tokens=512` |
+| Qwen3 课程慢讲 | CustomVoice 预置音色 | `speed=0.8`, `temperature=0.65`, `top_p=0.92`, `top_k=35`, `style_instruction=语气自然、吐字清晰...` |
+| Qwen3 声音设计 | VoiceDesign | `voice_design_prompt=温柔的中文女声...`, `temperature=0.65`, `top_p=0.92`, `top_k=35` |
+| Qwen3 复刻讲述 | Base 参考音色复刻 | 需要当前选择本地音色或自定义参考音色；不提交 `speaker_id` / `style_instruction` / `voice_design_prompt` |
+
+这些预设不是“官方最佳值”。官方 Hugging Face `generation_config.json` 更偏模型默认值，Apple Silicon PoC 主要给出三种语速，社区 voice clone 示例更常见 `temperature=0.7`, `top_p=1.0`, `top_k=30`, `repetition_penalty=1.15`, `max_new_tokens=512`。Voice Studio 预设选择了偏稳、适合短句试听的折中值。
+
 ## 参考链接
 
 - [Qwen3-TTS Apple Silicon PoC](https://github.com/kapi2800/qwen3-tts-apple-silicon)
 - [MLX Community Hugging Face](https://huggingface.co/mlx-community)
+- [Qwen3-TTS CustomVoice generation_config](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice/blob/main/generation_config.json)

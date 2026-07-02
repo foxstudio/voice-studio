@@ -54,11 +54,19 @@ def test_presets_are_available_and_apply_to_main_engines(tmp_path: Path):
     } <= {preset["engine_id"] for preset in presets}
     assert "f5_official_default_clone" in ids
     assert "cosy_zero_reference_default" in ids
+    assert "qwen3_tutorial_slow" in ids
+    assert "qwen3_voice_design_warm" in ids
     default = next(p for p in presets if p["preset_id"] == "idx2_default_narration")
     assert default["name"] == "贴近参考音色"
     assert default["parameters"]["emotion"] is None
     assert default["parameters"]["emo_alpha"] == 0.0
     assert default["parameters"]["temperature"] == 0.8
+    qwen3_design = next(p for p in presets if p["preset_id"] == "qwen3_voice_design_warm")
+    assert qwen3_design["recommended_voice_type"] == "voice_design"
+    assert qwen3_design["parameters"]["voice_design_prompt"].startswith("温柔的中文女声")
+    assert qwen3_design["parameters"]["temperature"] == 0.65
+    assert qwen3_design["parameters"]["repetition_penalty"] == 1.15
+    assert "speaker_id" not in qwen3_design["parameters"]
 
 
 def test_emotivoice_speaker_catalog_can_be_filtered(tmp_path: Path, monkeypatch):
