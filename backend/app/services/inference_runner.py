@@ -841,6 +841,7 @@ RUNNERS = {
     "mimo-v2.5-tts-voicedesign": run_mimo_tts,
     "mimo-v2.5-tts-voiceclone": run_mimo_tts,
     "doubao-tts-preset": run_doubao_tts,
+    "doubao-tts-voiceclone": run_doubao_tts,
 }
 
 

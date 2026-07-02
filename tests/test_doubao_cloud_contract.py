@@ -11,8 +11,9 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.main import app  # noqa: E402
-from app.schemas.voice_studio import AppSettings  # noqa: E402
-from app.services import database, doubao_client, settings_store  # noqa: E402
+from app.models.exceptions import AppException  # noqa: E402
+from app.schemas.voice_studio import AppSettings, GenerateRequest, VoiceAsset  # noqa: E402
+from app.services import database, doubao_client, engine_request_builder, settings_store  # noqa: E402
 
 
 def _client(tmp_path: Path, monkeypatch) -> TestClient:
@@ -214,6 +215,47 @@ def test_doubao_voice_clone_train_requires_confirmation_and_updates_binding(tmp_
     assert data["summary"]["has_demo_audio"] is True
 
 
+def test_doubao_voiceclone_generation_uses_external_speaker_and_rejects_raw_reference(tmp_path: Path, monkeypatch):
+    _client(tmp_path, monkeypatch)
+    settings_store.update(AppSettings(data_dir=str(tmp_path), cloud_enabled=True))
+    settings_store.update_doubao_api_key("test-doubao-key")
+    voice = VoiceAsset(
+        name="豆包云端音色",
+        external_provider="doubao",
+        external_voice_id="voice_studio_ready",
+        external_status="2",
+    )
+    req = GenerateRequest(
+        text="用训练好的豆包音色合成。",
+        engine_id="doubao-tts-voiceclone",
+        voice_id=voice.voice_id,
+        style_instruction="自然清晰。",
+        output_format="mp3",
+    )
+
+    kwargs = engine_request_builder.build_doubao_tts_single_kwargs(req, str(tmp_path / "out.mp3"), voice=voice)
+
+    assert kwargs["speaker"] == "voice_studio_ready"
+    assert kwargs["resource_id"] == "seed-icl-2.0"
+    assert kwargs["style_instruction"] == "自然清晰。"
+
+    raw_reference_req = req.model_copy(update={"reference_audio_path": str(tmp_path / "raw.wav")})
+    try:
+        engine_request_builder.build_doubao_tts_single_kwargs(raw_reference_req, str(tmp_path / "out.mp3"), voice=voice)
+    except AppException as exc:
+        assert exc.code == "DOUBAO_REFERENCE_AUDIO_NOT_SUPPORTED"
+    else:
+        raise AssertionError("raw reference audio must not be accepted for doubao voiceclone synthesis")
+
+    training_voice = voice.model_copy(update={"external_status": "training"})
+    try:
+        engine_request_builder.build_doubao_tts_single_kwargs(req, str(tmp_path / "out.mp3"), voice=training_voice)
+    except AppException as exc:
+        assert exc.code == "DOUBAO_VOICE_NOT_READY"
+    else:
+        raise AssertionError("non-ready doubao voice must not be accepted")
+
+
 def test_doubao_engine_manifest_is_registered(tmp_path: Path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     resp = client.get("/api/engines")
@@ -230,3 +272,9 @@ def test_doubao_engine_manifest_is_registered(tmp_path: Path, monkeypatch):
         "zh_female_vv_uranus_bigtts",
         "zh_female_xiaohe_uranus_bigtts",
     }
+
+    clone_manifest = by_id["doubao-tts-voiceclone"]
+    assert clone_manifest["engine_type"] == "cloud"
+    assert "voice_clone" in clone_manifest["capabilities"]
+    assert "natural_language_control" in clone_manifest["capabilities"]
+    assert not any(param["key"] == "speaker_id" for param in clone_manifest["parameter_schema"])

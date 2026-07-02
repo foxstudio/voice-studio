@@ -642,6 +642,13 @@ class ExternalVoiceBinding(BaseModel):
 
 - `doubao-tts-voiceclone`
 
+当前落地：
+
+- 已注册 `doubao-tts-voiceclone` 合成引擎，生成页会显示为“豆包语音 TTS 2.0 · 声音复刻”。
+- 生成页只让该引擎选择已训练可用的豆包云端音色；不展示自定义参考音频上传入口。
+- 后端合成时从音色资产读取 `external_voice_id` 作为豆包 `speaker`，默认使用 `doubao_default_icl_resource_id`。
+- 后端拒绝本地 `reference_audio_path` 直接走豆包复刻合成，避免用户误以为是即时克隆。
+
 后端：
 
 - 只允许选择 `Success` 或 `Active` 的豆包云端音色。

@@ -214,6 +214,7 @@ export const REFERENCE_VOICE_ENGINE_IDS = [
 	'confucius4-mlx-int8',
 	'qwen3-tts-mlx-0.6b',
 	'mimo-v2.5-tts-voiceclone',
+	'doubao-tts-voiceclone',
 	'f5-tts',
 	'cosyvoice-zero-shot'
 ] as const;

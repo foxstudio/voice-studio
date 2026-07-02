@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.schemas.voice_studio import BatchGenerateRequest, GenerateRequest
+from app.schemas.voice_studio import BatchGenerateRequest, GenerateRequest, VoiceAsset
 from app.models.exceptions import AppException
 from app.services import doubao_client, settings_store
 
 MIMO_DEFAULT_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
 MIMO_TTS_ENGINE_IDS = {"mimo-v2.5-tts", "mimo-v2.5-tts-preset", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"}
-DOUBAO_TTS_ENGINE_IDS = {"doubao-tts-preset"}
+DOUBAO_TTS_ENGINE_IDS = {"doubao-tts-preset", "doubao-tts-voiceclone"}
+DOUBAO_VOICE_READY_STATUSES = {"success", "active", "available", "passed", "2", "3"}
 
 
 def is_mimo_tts_request(engine_id: str) -> bool:
@@ -19,32 +20,69 @@ def is_doubao_tts_request(engine_id: str) -> bool:
     return engine_id in DOUBAO_TTS_ENGINE_IDS
 
 
-def build_doubao_tts_single_kwargs(req: GenerateRequest, output_path: str) -> dict[str, Any]:
+def build_doubao_tts_single_kwargs(req: GenerateRequest, output_path: str, *, voice: VoiceAsset | None = None) -> dict[str, Any]:
     settings, api_key = _doubao_auth()
+    speaker = _doubao_speaker_for_request(req, voice)
+    resource_id = (
+        settings.doubao_default_icl_resource_id
+        if req.engine_id == "doubao-tts-voiceclone"
+        else settings.doubao_default_tts_resource_id
+    )
     return {
         "text": req.text,
         "output_path": output_path,
         "base_url": settings.doubao_base_url or doubao_client.DEFAULT_BASE_URL,
         "api_key": api_key,
-        "resource_id": settings.doubao_default_tts_resource_id or doubao_client.DEFAULT_TTS_RESOURCE_ID,
-        "speaker": req.speaker_id or "zh_female_vv_uranus_bigtts",
+        "resource_id": resource_id or doubao_client.DEFAULT_TTS_RESOURCE_ID,
+        "speaker": speaker,
         "style_instruction": req.style_instruction,
         "speed": req.speed,
     }
 
 
-def build_doubao_tts_batch_common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
+def build_doubao_tts_batch_common_kwargs(req: BatchGenerateRequest, *, voice: VoiceAsset | None = None) -> dict[str, Any]:
     settings, api_key = _doubao_auth()
     values = GenerateRequest(text="placeholder", engine_id=req.engine_id, language=req.language).model_dump()
     values.update(req.parameters)
+    request = GenerateRequest(
+        text="placeholder",
+        engine_id=req.engine_id,
+        voice_id=req.voice_id,
+        reference_audio_path=req.reference_audio_path,
+        speaker_id=values.get("speaker_id"),
+        style_instruction=values.get("style_instruction"),
+        speed=values.get("speed") or 1.0,
+        language=req.language,
+    )
+    speaker = _doubao_speaker_for_request(request, voice)
+    resource_id = (
+        settings.doubao_default_icl_resource_id
+        if req.engine_id == "doubao-tts-voiceclone"
+        else settings.doubao_default_tts_resource_id
+    )
     return {
         "base_url": settings.doubao_base_url or doubao_client.DEFAULT_BASE_URL,
         "api_key": api_key,
-        "resource_id": settings.doubao_default_tts_resource_id or doubao_client.DEFAULT_TTS_RESOURCE_ID,
-        "speaker": values.get("speaker_id") or "zh_female_vv_uranus_bigtts",
+        "resource_id": resource_id or doubao_client.DEFAULT_TTS_RESOURCE_ID,
+        "speaker": speaker,
         "style_instruction": values.get("style_instruction"),
         "speed": values.get("speed"),
     }
+
+
+def _doubao_speaker_for_request(req: GenerateRequest, voice: VoiceAsset | None) -> str:
+    if req.engine_id == "doubao-tts-preset":
+        return req.speaker_id or "zh_female_vv_uranus_bigtts"
+    if req.engine_id != "doubao-tts-voiceclone":
+        return req.speaker_id or "zh_female_vv_uranus_bigtts"
+    if req.reference_audio_path:
+        raise AppException(400, "DOUBAO_REFERENCE_AUDIO_NOT_SUPPORTED", "豆包云端复刻合成只能使用已训练的 speaker_id，不支持直接上传本地参考音频")
+    if not voice or voice.external_provider != "doubao" or not voice.external_voice_id:
+        raise AppException(400, "DOUBAO_VOICE_NOT_BOUND", "请选择已训练成功的豆包云端音色")
+    status = str(voice.external_status or "").strip().lower()
+    if status not in DOUBAO_VOICE_READY_STATUSES:
+        raise AppException(400, "DOUBAO_VOICE_NOT_READY", f"豆包云端音色还不可用，当前状态：{voice.external_status or '未知'}")
+    return voice.external_voice_id
 
 
 def build_mimo_tts_single_kwargs(

@@ -81,9 +81,10 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	const isIndexTTS = $derived($store.engineId === 'indextts-v2'); const isOmniVoice = $derived($store.engineId === 'omnivoice');
 	const isMimoPreset = $derived($store.engineId === 'mimo-v2.5-tts-preset'); const isMimoDesign = $derived($store.engineId === 'mimo-v2.5-tts-voicedesign');
 	const isMimoClone = $derived($store.engineId === 'mimo-v2.5-tts-voiceclone'); const isMimo = $derived($store.engineId.startsWith('mimo-v2.5'));
+	const isDoubaoPreset = $derived($store.engineId === 'doubao-tts-preset'); const isDoubaoClone = $derived($store.engineId === 'doubao-tts-voiceclone'); const isDoubao = $derived(isDoubaoPreset || isDoubaoClone);
 	const isEmotiVoice = $derived($store.engineId === 'emotivoice'); const isF5 = $derived($store.engineId === 'f5-tts'); const isConfucius4 = $derived($store.engineId === 'confucius4-mlx-int8'); const isQwen3TTS = $derived($store.engineId === 'qwen3-tts-mlx-0.6b');
 	const isCosyVoice = $derived($store.engineId === 'cosyvoice-sft'); const isCosyVoiceZeroShot = $derived($store.engineId === 'cosyvoice-zero-shot');
-	const usesReferenceVoice = $derived(isIndexTTS || isOmniVoice || isConfucius4 || isQwen3TTS || isMimoClone || isF5 || isCosyVoiceZeroShot);
+	const usesReferenceVoice = $derived(isIndexTTS || isOmniVoice || isConfucius4 || isQwen3TTS || isMimoClone || isDoubaoClone || isF5 || isCosyVoiceZeroShot);
 	const qwen3ReferenceRoute = $derived(isQwen3TTS && ($store.voiceSource === 'reference_audio' || Boolean($store.voiceId)));
 	const qwen3VoiceDesignRoute = $derived(isQwen3TTS && !qwen3ReferenceRoute && Boolean($store.voiceDesignPrompt.trim()));
 	const qwen3PresetRoute = $derived(isQwen3TTS && !qwen3ReferenceRoute && !qwen3VoiceDesignRoute);
@@ -103,8 +104,9 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	const styleInstructionParam = $derived(selected?.manifest.parameter_schema.find(p => p.key === 'style_instruction'));
 	const styleInstructionLabel = $derived(styleInstructionParam?.label ?? '风格指令');
 	const styleInstructionTooltip = $derived(styleInstructionParam?.description ?? '');
-	const isDoubaoPreset = $derived($store.engineId === 'doubao-tts-preset');
-	const styleInstructionPlaceholder = $derived(isDoubaoPreset ? '例如：语速慢一点，语气更惊讶，句尾带一点感叹。' : (isQwen3TTS ? '例如：语气温柔，语速稍慢，像在讲解课程' : '例如：语速稍慢，语气温柔，像知识视频旁白。'));
+	const doubaoCloneVoices = $derived($store.voices.filter(v => v.engine_bindings.some(b => b.engine_id === 'doubao-tts-voiceclone' && b.available)));
+	const visibleVoiceOptions = $derived(isDoubaoClone ? doubaoCloneVoices : $store.voices);
+	const styleInstructionPlaceholder = $derived(isDoubao ? '例如：语速慢一点，语气更惊讶，句尾带一点感叹。' : (isQwen3TTS ? '例如：语气温柔，语速稍慢，像在讲解课程' : '例如：语速稍慢，语气温柔，像知识视频旁白。'));
 	const hasMoreParams = $derived(
 		activeParamKeys.has('speaker_id') ||
 		activeParamKeys.has('prompt') ||
@@ -451,6 +453,23 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		$store.busy = true;
 		try {
 			const usingCustomVoice = usesReferenceVoice && $store.voiceSource === 'reference_audio';
+			if (isDoubaoClone && usingCustomVoice) {
+				$store.error = '豆包声音复刻合成只使用已训练成功的云端音色，请切回“音色库”。';
+				return;
+			}
+			if (isDoubaoClone) {
+				if (!$store.voiceId || !selectedVoice) {
+					$store.error = doubaoCloneVoices.length ? '请选择已训练成功的豆包云端音色。' : '还没有可用于合成的豆包云端复刻音色，请先到声音库完成训练并刷新状态。';
+					return;
+				}
+				const doubaoBinding = selectedVoice.engine_bindings.find(b => b.engine_id === 'doubao-tts-voiceclone');
+				if (!doubaoBinding?.available) {
+					$store.error = doubaoBinding?.reason
+						? `当前音色不能用于豆包云端复刻：${doubaoBinding.reason}`
+						: '当前音色还没有可用的豆包云端 speaker_id。';
+					return;
+				}
+			}
 			if (usesReferenceVoice && usingCustomVoice && customVoiceSelectionDirty) {
 				$store.error = '选区已调整，请先点击“使用并识别”更新当前参考音频。';
 				return;
@@ -729,7 +748,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	$effect(() => { if ($store.engineId !== $store.lastEngineId) store.setEngine($store.engineId); });
 	$effect(() => { if (!hasMoreParams && $store.showMoreParams) $store.showMoreParams = false; });
 	$effect(() => { const eid = $store.engineId; const q = $store.speakerQuery.trim(); const g = $store.speakerGenderFilter; const key = `${eid}|${q}|${g}`; if (key === _speakerCatalogRequestKey) return; _speakerCatalogRequestKey = key; if (_speakerCatalogTimer) clearTimeout(_speakerCatalogTimer); _speakerCatalogTimer = setTimeout(() => { untrack(() => { void loadSpeakerCatalog(eid, q, g); }); }, 150); });
-	$effect(() => { if (!$store.initialized) return; if (!usesReferenceVoice) { if ($store.voiceId) untrack(() => { $store.voiceId = ''; }); if ($store.voiceSource !== 'voice_library') untrack(() => { $store.voiceSource = 'voice_library'; }); return; } if ($store.voiceSource === 'reference_audio' && $store.voiceId) untrack(() => { $store.voiceId = ''; }); if ($store.voiceSource === 'voice_library' && $store.voiceId && !$store.voices.some(v => v.voice_id === $store.voiceId)) untrack(() => { $store.voiceId = ''; }); });
+	$effect(() => { if (!$store.initialized) return; if (!usesReferenceVoice) { if ($store.voiceId) untrack(() => { $store.voiceId = ''; }); if ($store.voiceSource !== 'voice_library') untrack(() => { $store.voiceSource = 'voice_library'; }); return; } if (isDoubaoClone && $store.voiceSource !== 'voice_library') untrack(() => { $store.voiceSource = 'voice_library'; }); if ($store.voiceSource === 'reference_audio' && $store.voiceId) untrack(() => { $store.voiceId = ''; }); if ($store.voiceSource === 'voice_library' && $store.voiceId && !visibleVoiceOptions.some(v => v.voice_id === $store.voiceId)) untrack(() => { $store.voiceId = ''; }); });
 	let _lastPreviewVoiceId = $state('');
 	$effect(() => { const vid = `${$store.voiceSource}|${$store.voiceId}|${$store.customVoicePreviewUrl}`; if (vid !== _lastPreviewVoiceId) { _lastPreviewVoiceId = vid; untrack(() => stopVoicePreview()); } });
 	$effect(() => { if ($store.currentPage > pageCount) $store.currentPage = pageCount; });
@@ -753,7 +772,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		{#if $store.showPresetEditor}<div class="preset-editor"><div class="row gen-section-head"><div><h3>{$store.editingPresetId ? '编辑自定义预设' : '保存当前为预设'}</h3><p class="muted">绑定引擎：{selected?.manifest.display_name ?? $store.engineId}</p></div><button class="gen-icon-btn mini" type="button" aria-label="关闭预设编辑器" data-tooltip="关闭预设编辑器" onclick={() => ($store.showPresetEditor = false)}>X</button></div><div class="preset-editor-grid"><label class="field"><span>名称</span><input bind:value={$store.presetDraft.name} placeholder="例如：课程慢讲" /></label><label class="field"><span>场景</span><input bind:value={$store.presetDraft.scene} placeholder="例如：教程 / 长文旁白" /></label><label class="field wide"><span>描述</span><input bind:value={$store.presetDraft.description} placeholder="简短说明" /></label><label class="field"><span>标签</span><input bind:value={$store.presetDraft.tags} placeholder="慢讲，课程" /></label><label class="field wide"><span>示例文本</span><textarea bind:value={$store.presetDraft.sample_text} placeholder="可选"></textarea></label></div><div class="row wrap"><button class="btn primary compact" type="button" onclick={savePreset} disabled={$store.presetBusy || !$store.presetDraft.name.trim()}><Save size={14} /> {$store.presetBusy ? '保存中' : '保存预设'}</button><button class="btn compact" type="button" onclick={() => ($store.showPresetEditor = false)}>取消</button></div></div>{/if}
 		<div class="param-inline-row">
 			<label class="param-inline engine-param-inline"><span>引擎</span><EngineSelector engines={ttsEngines} bind:value={$store.engineId} /></label>
-			{#if usesReferenceVoice}<div class="param-inline voice-param-inline" class:library-source={$store.voiceSource === 'voice_library'} class:custom-source={$store.voiceSource === 'reference_audio'}><span>声音</span><div class="voice-source-control"><div class="gen-segmented voice-source-tabs" role="tablist" aria-label="声音来源"><button class:active={$store.voiceSource === 'voice_library'} type="button" onclick={() => setVoiceSource('voice_library')}>音色库</button><button class:active={$store.voiceSource === 'reference_audio'} type="button" onclick={() => setVoiceSource('reference_audio')}>自定义</button></div>{#if $store.voiceSource === 'voice_library'}<div class="voice-inline"><VoiceSelector voices={$store.voices} bind:value={$store.voiceId} /><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听音色' : '试听当前音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停当前音色试听' : '试听当前选择的音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{:else}<div class="custom-voice-inline"><span class="custom-voice-chip" class:ok={customVoiceMatched}>{#if customVoiceMatched}<CircleCheck size={13} />{:else}<FileAudio size={13} />{/if}{$store.customVoiceFileName || '未上传'}</span><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听自定义音色' : '试听自定义音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停自定义音色试听' : '试听当前自定义音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{/if}</div></div>{#if activeVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={activeVoicePreviewUrl} preload="none" ontimeupdate={handleVoicePreviewTimeUpdate} onended={stopVoicePreview} onpause={() => { if ($store.voicePreviewAudio?.ended || !$store.voicePreviewAudio?.currentTime) { customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; } }}></audio>{/if}{/if}
+			{#if usesReferenceVoice}<div class="param-inline voice-param-inline" class:library-source={$store.voiceSource === 'voice_library'} class:custom-source={$store.voiceSource === 'reference_audio'}><span>声音</span><div class="voice-source-control"><div class="gen-segmented voice-source-tabs" role="tablist" aria-label="声音来源"><button class:active={$store.voiceSource === 'voice_library'} type="button" onclick={() => setVoiceSource('voice_library')}>{isDoubaoClone ? '云端音色' : '音色库'}</button>{#if !isDoubaoClone}<button class:active={$store.voiceSource === 'reference_audio'} type="button" onclick={() => setVoiceSource('reference_audio')}>自定义</button>{/if}</div>{#if $store.voiceSource === 'voice_library'}<div class="voice-inline"><VoiceSelector voices={visibleVoiceOptions} bind:value={$store.voiceId} /><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听音色' : '试听当前音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停当前音色试听' : '试听当前选择的音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{:else}<div class="custom-voice-inline"><span class="custom-voice-chip" class:ok={customVoiceMatched}>{#if customVoiceMatched}<CircleCheck size={13} />{:else}<FileAudio size={13} />{/if}{$store.customVoiceFileName || '未上传'}</span><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听自定义音色' : '试听自定义音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停自定义音色试听' : '试听当前自定义音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{/if}</div></div>{#if activeVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={activeVoicePreviewUrl} preload="none" ontimeupdate={handleVoicePreviewTimeUpdate} onended={stopVoicePreview} onpause={() => { if ($store.voicePreviewAudio?.ended || !$store.voicePreviewAudio?.currentTime) { customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; } }}></audio>{/if}{/if}
 			{#if activeParamKeys.has('speed')}<label class="param-inline-range"><span>语速</span><input class="speed-number" type="number" min="0.5" max="2" step="0.05" value={$store.speed.toFixed(2)} oninput={(e) => setSpeedValue((e.currentTarget as HTMLInputElement).value)} onblur={(e) => ((e.currentTarget as HTMLInputElement).value = $store.speed.toFixed(2))} /><input type="range" min="0.5" max="2" step="0.05" value={$store.speed} oninput={(e) => setSpeedValue((e.currentTarget as HTMLInputElement).value)} /></label>{/if}
 			<label class="param-inline param-inline-format"><span>格式</span><select bind:value={$store.outputFormat}><option value="wav">WAV</option><option value="mp3">MP3</option><option value="flac">FLAC</option></select></label>
 			<div class="param-actions-inline">

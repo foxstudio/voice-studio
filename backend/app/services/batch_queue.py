@@ -234,7 +234,8 @@ def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
             reference_audio_path=_resolve_reference(req),
         )
     if engine_request_builder.is_doubao_tts_request(req.engine_id):
-        return engine_request_builder.build_doubao_tts_batch_common_kwargs(req)
+        voice = voice_store.get_voice(req.voice_id) if req.voice_id else None
+        return engine_request_builder.build_doubao_tts_batch_common_kwargs(req, voice=voice)
 
     ref = _resolve_reference(req)
     voice = voice_store.get_voice(req.voice_id) if req.voice_id else None

@@ -665,8 +665,11 @@ def _resolve_reference(req: GenerateRequest) -> str | None:
 
 
 def _kwargs(req: GenerateRequest, output_path: str) -> dict:
-    ref = _resolve_reference(req)
     voice = voice_store.get_voice(req.voice_id) if req.voice_id else None
+    if engine_request_builder.is_doubao_tts_request(req.engine_id):
+        return engine_request_builder.build_doubao_tts_single_kwargs(req, output_path, voice=voice)
+
+    ref = _resolve_reference(req)
     ref_text = req.ref_text or (voice.reference_text if voice else None)
     if req.engine_id == "omnivoice" and ref and ref_text is None:
         # Avoid OmniVoice's on-the-fly Whisper auto-transcription in isolated jobs.
@@ -687,8 +690,6 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
             reference_audio_path=ref,
             idempotency_marker=_mimo_idempotency_marker(req),
         )
-    if engine_request_builder.is_doubao_tts_request(req.engine_id):
-        return engine_request_builder.build_doubao_tts_single_kwargs(req, output_path)
     model_dir = str(settings_store.model_path(req.engine_id))
     if req.engine_id in {"emotivoice", "cosyvoice-sft"}:
         return engine_request_builder.build_preset_voice_single_kwargs(req, output_path)

@@ -8,7 +8,7 @@ _ALIASES = {"mimo-v2.5-tts": "mimo-v2.5-tts-preset"}
 
 MIMO_TTS_ENGINES = {"mimo-v2.5-tts", "mimo-v2.5-tts-preset", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"}
 MIMO_ENGINES = {*MIMO_TTS_ENGINES, "mimo-v2.5-asr"}
-DOUBAO_TTS_ENGINES = {"doubao-tts-preset"}
+DOUBAO_TTS_ENGINES = {"doubao-tts-preset", "doubao-tts-voiceclone"}
 DOUBAO_ENGINES = {*DOUBAO_TTS_ENGINES}
 EXTERNAL_WORKER_ENGINES = {"f5-tts", "cosyvoice-sft", "cosyvoice-zero-shot"}
 EXTERNAL_SUBPROCESS_ENGINES = {"emotivoice", "confucius4-mlx-int8", "qwen3-tts-mlx-0.6b", *EXTERNAL_WORKER_ENGINES}
@@ -29,6 +29,7 @@ _TIMEOUTS = {
     "mimo-v2.5-tts-voicedesign": 300,
     "mimo-v2.5-tts-voiceclone": 300,
     "doubao-tts-preset": 300,
+    "doubao-tts-voiceclone": 300,
 }
 
 

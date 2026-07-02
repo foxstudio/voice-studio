@@ -503,6 +503,37 @@ ENGINES: dict[str, EngineDetail] = {
         ),
         state=EngineState(engine_id="doubao-tts-preset", status=EngineStatus.stopped),
     ),
+    "doubao-tts-voiceclone": EngineDetail(
+        manifest=EngineManifest(
+            engine_id="doubao-tts-voiceclone",
+            display_name="豆包语音 TTS 2.0 · 声音复刻",
+            engine_type="cloud",
+            provider="Volcengine / Doubao",
+            version="seed-icl-2.0",
+            description="火山引擎豆包声音复刻 2.0，使用已训练成功的云端 speaker_id 合成新文本",
+            supported_languages=["zh"],
+            capabilities=["cloud_api", "voice_clone", "natural_language_control"],
+            sample_rate=24000,
+            default_use_case="使用音色库中已训练成功的豆包云端复刻音色做中文口播",
+            privacy_level="cloud_required",
+            parameter_schema=[
+                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="映射到豆包 speech_rate，1.0 为正常语速"),
+                ParameterSchema(
+                    key="style_instruction",
+                    label="语音指令",
+                    type="textarea",
+                    default="",
+                    capability="natural_language_control",
+                    description=(
+                        "可选，支持中文或英文。会作为豆包 TTS 2.0 的 context_texts 发送，用来影响语气、情绪、节奏和停顿。\n"
+                        "示例：语速慢一点，语气更惊讶，句尾带一点感叹。\n"
+                        "使用声音库里已训练成功的豆包云端 speaker_id；不会在合成时再次上传参考音频。"
+                    ),
+                ),
+            ],
+        ),
+        state=EngineState(engine_id="doubao-tts-voiceclone", status=EngineStatus.stopped),
+    ),
     "qwen3-asr-mlx": EngineDetail(
         manifest=EngineManifest(
             engine_id="qwen3-asr-mlx",
