@@ -2,7 +2,7 @@
 	import { Api } from '$lib/api';
 	import type { VoiceAsset } from '$lib/api/types';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
-	import { ArrowRight, Check, ClipboardCopy, Database, FileText, FileAudio, Heart, Pencil, Pause, Plus, Search, ShieldCheck, Trash2, Upload, Volume2, X } from 'lucide-svelte';
+	import { ArrowRight, Check, ClipboardCopy, CloudUpload, Database, FileText, FileAudio, Heart, Pencil, Pause, Plus, RefreshCw, Search, ShieldCheck, Trash2, Upload, Volume2, X } from 'lucide-svelte';
 	import { licenseLabel } from '$lib/labels';
 	import { onMount } from 'svelte';
 
@@ -35,6 +35,7 @@
 	let batchAsrProgress = $state({ active: false, current: 0, total: 0 });
 	let voiceAsrStatus = $state(new Map<string, 'idle' | 'generating' | 'done' | 'error'>());
 	let voiceSerStatus = $state(new Map<string, 'idle' | 'generating' | 'done' | 'error'>());
+	let doubaoCloneStatus = $state(new Map<string, 'idle' | 'training' | 'refreshing' | 'done' | 'error'>());
 	let batchSerProgress = $state({ active: false, current: 0, total: 0 });
 	let showVoiceModal = $state(false);
 	let copiedId = $state("");
@@ -168,6 +169,62 @@
 		}
 	}
 
+	function updateVoiceInList(updated: VoiceAsset) {
+		allVoices = allVoices.map((voice) => voice.voice_id === updated.voice_id ? updated : voice);
+		if (editingVoice?.voice_id === updated.voice_id) editingVoice = updated;
+	}
+
+	function voiceBinding(voice: VoiceAsset, engineId: string) {
+		return voice.engine_bindings?.find((binding) => binding.engine_id === engineId);
+	}
+
+	function doubaoCloudStatusLabel(voice: VoiceAsset) {
+		if (voice.external_provider !== 'doubao' || !voice.external_voice_id) return '';
+		const status = String(voice.external_status ?? 'submitted');
+		const normalized = status.toLowerCase();
+		if (['success', 'active', 'available', 'passed', '2', '3'].includes(normalized)) return '豆包云端可用';
+		if (['submitted', 'training', 'pending', '1'].includes(normalized)) return '豆包训练中';
+		if (['failed', 'error', '4'].includes(normalized)) return '豆包训练失败';
+		return `豆包状态 ${status}`;
+	}
+
+	async function trainDoubaoVoice(voice: VoiceAsset) {
+		const binding = voiceBinding(voice, 'doubao-voice-clone-train');
+		if (!binding?.available) {
+			uploadMessage = binding?.reason || '当前音色不能训练豆包云端音色';
+			return;
+		}
+		const ok = window.confirm(`豆包音色训练会把「${voice.name}」的参考音频上传到火山引擎云端。确认继续吗？`);
+		if (!ok) return;
+		doubaoCloneStatus = new Map([...doubaoCloneStatus, [voice.voice_id, 'training']]);
+		try {
+			const result = await Api.trainDoubaoVoiceClone(voice.voice_id, {
+				confirm_upload: true,
+				demo_text: voice.reference_text || '这是豆包云端音色训练试听。',
+				language: voice.default_language || 'zh',
+				enable_audio_denoise: true,
+				disable_volume_normalization: false
+			});
+			updateVoiceInList(result.voice);
+			doubaoCloneStatus = new Map([...doubaoCloneStatus, [voice.voice_id, 'done']]);
+		} catch (e: any) {
+			uploadMessage = e?.message || '豆包音色训练失败';
+			doubaoCloneStatus = new Map([...doubaoCloneStatus, [voice.voice_id, 'error']]);
+		}
+	}
+
+	async function refreshDoubaoVoice(voice: VoiceAsset) {
+		doubaoCloneStatus = new Map([...doubaoCloneStatus, [voice.voice_id, 'refreshing']]);
+		try {
+			const result = await Api.refreshDoubaoVoiceStatus(voice.voice_id);
+			updateVoiceInList(result.voice);
+			doubaoCloneStatus = new Map([...doubaoCloneStatus, [voice.voice_id, 'done']]);
+		} catch (e: any) {
+			uploadMessage = e?.message || '刷新豆包音色状态失败';
+			doubaoCloneStatus = new Map([...doubaoCloneStatus, [voice.voice_id, 'error']]);
+		}
+	}
+
 	async function batchGenerateSer() {
 		const candidates = allVoices.filter(v => v.reference_audio_ids?.length && (!v.emotion_tags || v.emotion_tags.length === 0));
 		if (!candidates.length) return;
@@ -276,13 +333,15 @@
 			'f5-tts': 'F5-TTS',
 			'cosyvoice-zero-shot': 'CosyVoice 复刻',
 			'mimo-v2.5-tts-preset': 'MiMo 预置',
-			'mimo-v2.5-tts-voiceclone': 'MiMo 复刻'
+			'mimo-v2.5-tts-voiceclone': 'MiMo 复刻',
+			'doubao-voice-clone-train': '豆包训练',
+			'doubao-tts-voiceclone': '豆包复刻'
 		}[engineId] ?? engineId;
 	}
 
 	function engineKind(engineId: string | null | undefined) {
 		if (!engineId) return 'local';
-		return engineId.startsWith('mimo-') ? 'cloud' : 'local';
+		return engineId.startsWith('mimo-') || engineId.startsWith('doubao-') ? 'cloud' : 'local';
 	}
 
 	function voiceCardKind(voice: VoiceAsset) {
@@ -464,6 +523,7 @@
 							<option value="indextts-v2">IndexTTS v2</option>
 							<option value="omnivoice">OmniVoice</option>
 							<option value="mimo-v2.5-tts-voiceclone">MiMo VoiceClone</option>
+							<option value="doubao-tts-voiceclone">豆包云端复刻</option>
 						</select>
 					</label>
 					<label class="field">
@@ -527,10 +587,21 @@
 
 		<section class="grid voice-grid">
 		{#each visibleVoices as voice}
+				{@const doubaoTrainBinding = voiceBinding(voice, 'doubao-voice-clone-train')}
+				{@const doubaoVoiceBinding = voiceBinding(voice, 'doubao-tts-voiceclone')}
 				<article class={`card stack voice-card engine-surface ${voiceCardKind(voice) === 'cloud' ? 'engine-cloud' : 'engine-local'} ${playingVoiceId === voice.voice_id ? 'playing' : ''}`}>
 					<div class="voice-card-head">
 						<h2 title={voice.name}>{voice.name}</h2>
 						<div class="card-head-actions">
+							{#if doubaoVoiceBinding?.external_voice_id}
+								<button class="icon-btn-sm cloud-card-btn" type="button" aria-label="刷新豆包音色状态" data-tooltip="查询这个豆包云端音色的训练状态" onclick={() => refreshDoubaoVoice(voice)} disabled={doubaoCloneStatus.get(voice.voice_id) === 'refreshing'}>
+									<RefreshCw size={13} />
+								</button>
+							{:else}
+								<button class="icon-btn-sm cloud-card-btn" type="button" aria-label="训练豆包云端音色" data-tooltip={doubaoTrainBinding?.available ? '上传参考音频，训练豆包云端 speaker_id' : (doubaoTrainBinding?.reason || '当前音色不能训练豆包云端音色')} onclick={() => trainDoubaoVoice(voice)} disabled={!doubaoTrainBinding?.available || doubaoCloneStatus.get(voice.voice_id) === 'training'}>
+									<CloudUpload size={13} />
+								</button>
+							{/if}
 							<button class="icon-btn-sm" type="button" aria-label="生成 ASR 台词" data-tooltip="为这个音色生成或刷新 ASR 台词" onclick={() => generateAsrForVoice(voice)} disabled={voiceAsrStatus.get(voice.voice_id) === 'generating'}>
 								<FileAudio size={13} />
 							</button>
@@ -572,6 +643,9 @@
 						{/if}
 						<button class="badge" type="button" title={`添加到搜索：${voiceCardKind(voice) === 'cloud' ? '云端' : '本地'}`} onclick={() => appendVoiceQueryTag(voiceCardKind(voice) === 'cloud' ? '云端' : '本地')}>{voiceCardKind(voice) === 'cloud' ? '云端' : '本地'}</button>
 						<button class="badge" type="button" title={`添加到搜索：${voice.recommended_engine_id ? bindingLabel(voice.recommended_engine_id) : '自动引擎'}`} onclick={() => appendVoiceQueryTag(voice.recommended_engine_id ? bindingLabel(voice.recommended_engine_id) : '自动引擎')}>{voice.recommended_engine_id ? bindingLabel(voice.recommended_engine_id) : '自动引擎'}</button>
+						{#if doubaoCloudStatusLabel(voice)}
+							<button class="badge cloud-binding-badge" type="button" title={`添加到搜索：${doubaoCloudStatusLabel(voice)}`} onclick={() => appendVoiceQueryTag(doubaoCloudStatusLabel(voice))}>{doubaoCloudStatusLabel(voice)}</button>
+						{/if}
 						<span class="text-pop text-chip" data-text={voiceLineText(voice.reference_text)}><FileText size={13} /> 台词</span>
 					</div>
 					<div class="card-actions">
@@ -623,7 +697,7 @@
 					<div class="field"><label for="voice-tags">标签</label><input id="voice-tags" bind:value={tags} placeholder="温柔, 女声" /></div>
 					<div class="field"><label for="voice-ref">参考文本</label><input id="voice-ref" bind:value={referenceText} /></div>
 					<div class="field"><label for="voice-license">授权</label><select id="voice-license" bind:value={license}><option value="unknown">未知</option><option value="self_voice">本人声音</option><option value="authorized">已授权</option><option value="本土化">本土化</option><option value="test_only">仅测试</option></select></div>
-					<div class="field"><label for="voice-engine">推荐引擎</label><select id="voice-engine" bind:value={engine}><option value="indextts-v2">IndexTTS v2</option><option value="omnivoice">OmniVoice</option><option value="mimo-v2.5-tts-voiceclone">MiMo V2.5 VoiceClone</option></select></div>
+					<div class="field"><label for="voice-engine">推荐引擎</label><select id="voice-engine" bind:value={engine}><option value="indextts-v2">IndexTTS v2</option><option value="omnivoice">OmniVoice</option><option value="mimo-v2.5-tts-voiceclone">MiMo V2.5 VoiceClone</option><option value="doubao-tts-voiceclone">豆包云端复刻</option></select></div>
 					<div class="field">
 						<label for="voice-file">{editingVoice ? '追加参考音频' : '参考音频'}</label>
 						<div class="file-row">
@@ -1104,6 +1178,12 @@
 		white-space: nowrap;
 	}
 
+	.asset-meta .cloud-binding-badge {
+		border-color: rgba(56, 189, 248, 0.35);
+		background: rgba(56, 189, 248, 0.1);
+		color: #9bdcff;
+	}
+
 
 		.voice-card {
 			position: relative;
@@ -1255,6 +1335,13 @@
 		.icon-btn-sm:hover {
 			background: rgba(255, 255, 255, 0.08);
 			color: var(--text);
+		}
+		.icon-btn-sm.cloud-card-btn {
+			color: #80c7ff;
+		}
+		.icon-btn-sm.cloud-card-btn:disabled {
+			color: #637083;
+			cursor: not-allowed;
 		}
 		.icon-btn-sm.danger:hover {
 			color: #ff6b6b;

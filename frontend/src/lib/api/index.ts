@@ -3,6 +3,7 @@ import type {
 	AppSettings,
 	BatchTask,
 	CommunityVoicePack,
+	DoubaoVoiceCloneResponse,
 	EngineDetail,
 	EngineSpeaker,
 	ExportRecord,
@@ -79,6 +80,9 @@ export const Api = {
 	createVoice: (voice: VoiceAssetCreate) => api.post<VoiceAsset>('/voices', voice),
 	updateVoice: (id: string, voice: VoiceAssetUpdate) => api.patch<VoiceAsset>(`/voices/${id}`, voice),
 	deleteVoice: (id: string) => api.delete<{ status: string }>(`/voices/${id}`),
+	trainDoubaoVoiceClone: (id: string, body: { confirm_upload: boolean; demo_text?: string | null; custom_speaker_id?: string | null; language?: string; enable_audio_denoise?: boolean; disable_volume_normalization?: boolean }) =>
+		api.post<DoubaoVoiceCloneResponse>(`/voices/${id}/doubao/clone-train`, body),
+	refreshDoubaoVoiceStatus: (id: string) => api.post<DoubaoVoiceCloneResponse>(`/voices/${id}/doubao/status`),
 	uploadVoice: (file: File) => api.upload<UploadResult>('/voices/upload', file),
 	generatePlan: (body: GeneratePlanRequest) => api.post<GeneratePlanResponse>('/generate/plan', body),
 	generate: (body: GenerateRequest) => api.post<GenerateResponse>('/generate', body),

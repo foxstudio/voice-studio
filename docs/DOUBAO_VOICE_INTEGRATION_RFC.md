@@ -601,6 +601,13 @@ class ExternalVoiceBinding(BaseModel):
 - `doubao_client.train_voice_clone(...)`
 - `doubao_client.get_voice(...)`
 
+当前落地：
+
+- 已在音色库单个音色上提供“训练豆包云端音色”和“刷新豆包状态”入口。
+- 已新增 `POST /api/voices/{voice_id}/doubao/clone-train` 和 `POST /api/voices/{voice_id}/doubao/status`。
+- 已把训练出的豆包 `speaker_id` 保存到音色资产的 `external_provider / external_voice_id / external_status / external_metadata`，并暴露 `doubao-tts-voiceclone` 绑定给 P4 使用。
+- 上传前确认由后端强制校验：开启 `doubao_upload_confirm` 时，未传 `confirm_upload=true` 会拒绝请求。
+
 后端：
 
 - 校验参考音频存在、格式、大小。
@@ -627,6 +634,7 @@ class ExternalVoiceBinding(BaseModel):
 - 能上传参考音频发起训练。
 - 能查询状态。
 - 成功后音色库出现豆包云端音色记录。
+- 合同测试覆盖 payload、上传确认、绑定写回和可用状态映射；真实账号 smoke test 需要在有训练额度时执行。
 
 ### P4：复刻音色合成
 

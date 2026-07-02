@@ -147,6 +147,10 @@ export interface VoiceAssetCreate {
 	recommended_engine_id: string | null;
 	reference_audio_ids: string[];
 	license_status: string;
+	external_provider?: string | null;
+	external_voice_id?: string | null;
+	external_status?: string | null;
+	external_metadata?: Record<string, unknown>;
 }
 
 export type VoiceAssetUpdate = Partial<VoiceAssetCreate> & {
@@ -175,6 +179,11 @@ export interface VoiceAsset extends VoiceAssetCreate {
 	updated_at: string;
 	last_used_at: string | null;
 	engine_bindings: VoiceEngineBinding[];
+}
+
+export interface DoubaoVoiceCloneResponse {
+	voice: VoiceAsset;
+	summary: Record<string, unknown>;
 }
 
 export interface UploadResult {

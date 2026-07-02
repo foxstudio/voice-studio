@@ -192,6 +192,16 @@ class DoubaoSecretUpdate(BaseModel):
     clear: bool = False
 
 
+class DoubaoVoiceCloneTrainRequest(BaseModel):
+    custom_speaker_id: str | None = None
+    speaker_id: str | None = None
+    demo_text: str | None = None
+    language: str = "zh"
+    enable_audio_denoise: bool = True
+    disable_volume_normalization: bool = False
+    confirm_upload: bool = False
+
+
 class VoiceAssetCreate(BaseModel):
     name: str
     voice_type: VoiceType = VoiceType.test_sample
@@ -202,6 +212,10 @@ class VoiceAssetCreate(BaseModel):
     recommended_engine_id: str | None = None
     reference_audio_ids: list[str] = Field(default_factory=list)
     license_status: LicenseStatus = LicenseStatus.unknown
+    external_provider: str | None = None
+    external_voice_id: str | None = None
+    external_status: str | None = None
+    external_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class VoiceAssetUpdate(BaseModel):
@@ -218,6 +232,10 @@ class VoiceAssetUpdate(BaseModel):
     quality_notes: str | None = None
     favorite: bool | None = None
     emotion_tags: list[str] | None = None
+    external_provider: str | None = None
+    external_voice_id: str | None = None
+    external_status: str | None = None
+    external_metadata: dict[str, Any] | None = None
 
 
 class VoiceEngineBinding(BaseModel):
@@ -239,6 +257,11 @@ class VoiceAsset(VoiceAssetCreate):
     updated_at: str = Field(default_factory=now_iso)
     last_used_at: str | None = None
     engine_bindings: list[VoiceEngineBinding] = Field(default_factory=list)
+
+
+class DoubaoVoiceCloneResponse(BaseModel):
+    voice: VoiceAsset
+    summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class VoiceFile(BaseModel):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from fastapi import UploadFile
 
@@ -45,6 +46,27 @@ def update_voice(voice_id: str, data: VoiceAssetUpdate) -> VoiceAsset | None:
     merged.update(data.model_dump(exclude_unset=True))
     merged["voice_id"] = voice_id
     return save_voice(VoiceAsset(**merged))
+
+
+def update_external_binding(
+    voice_id: str,
+    *,
+    provider: str,
+    external_voice_id: str,
+    status: str,
+    metadata: dict[str, Any] | None = None,
+    recommended_engine_id: str | None = None,
+) -> VoiceAsset | None:
+    old = get_voice(voice_id)
+    if not old:
+        return None
+    old.external_provider = provider
+    old.external_voice_id = external_voice_id
+    old.external_status = status
+    old.external_metadata = metadata or {}
+    if recommended_engine_id:
+        old.recommended_engine_id = recommended_engine_id
+    return save_voice(old)
 
 
 def delete_voice(voice_id: str) -> None:
@@ -119,6 +141,26 @@ def _engine_bindings(voice: VoiceAsset) -> list[VoiceEngineBinding]:
         clone_reason = "MiMo voiceclone 仅支持 wav/mp3"
     elif ref.size_bytes > 10 * 1024 * 1024:
         clone_reason = "参考音频超过 MiMo 10MB 限制"
+    doubao_train_reason = ""
+    if not has_ref:
+        doubao_train_reason = "缺少参考音频"
+    elif not cloud_allowed:
+        doubao_train_reason = "授权状态不允许上传豆包云端"
+    elif Path(ref.path).suffix.lower() not in [".wav", ".mp3", ".ogg", ".m4a", ".aac", ".pcm"]:
+        doubao_train_reason = "豆包音色训练支持 wav/mp3/ogg/m4a/aac/pcm"
+    elif ref.size_bytes > 10 * 1024 * 1024:
+        doubao_train_reason = "参考音频超过豆包 10MB 限制"
+    doubao_status = str(voice.external_status or "").strip().lower()
+    doubao_voice_ready = (
+        voice.external_provider == "doubao"
+        and bool(voice.external_voice_id)
+        and doubao_status in {"success", "active", "available", "passed", "2", "3"}
+    )
+    doubao_voice_reason = ""
+    if voice.external_provider == "doubao" and voice.external_voice_id and not doubao_voice_ready:
+        doubao_voice_reason = f"豆包云端音色状态：{voice.external_status or '未知'}"
+    elif not voice.external_voice_id:
+        doubao_voice_reason = "尚未训练豆包云端音色"
     local_clone_reason = ""
     if not has_ref:
         local_clone_reason = "缺少参考音频"
@@ -161,6 +203,20 @@ def _engine_bindings(voice: VoiceAsset) -> list[VoiceEngineBinding]:
             mode="voice_clone",
             available=has_ref and cloud_allowed and not clone_reason,
             reason=clone_reason,
+        ),
+        VoiceEngineBinding(
+            engine_id="doubao-voice-clone-train",
+            mode="voice_clone",
+            available=has_ref and cloud_allowed and not doubao_train_reason,
+            reason=doubao_train_reason,
+        ),
+        VoiceEngineBinding(
+            engine_id="doubao-tts-voiceclone",
+            mode="voice_clone",
+            available=doubao_voice_ready,
+            reason="" if doubao_voice_ready else doubao_voice_reason,
+            external_voice_id=voice.external_voice_id,
+            parameters=voice.external_metadata if voice.external_provider == "doubao" else {},
         ),
     ]
 

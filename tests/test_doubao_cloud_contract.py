@@ -127,6 +127,93 @@ def test_doubao_tts_payload_and_chunk_parser():
     assert frames == [{"data": "YQ=="}, {"code": 20000000, "message": "ok"}]
 
 
+def test_doubao_voice_clone_payload(tmp_path: Path):
+    audio = tmp_path / "ref.wav"
+    audio.write_bytes(b"voice-bytes")
+
+    payload = doubao_client.build_voice_clone_payload(
+        speaker_id="voice_studio_demo",
+        custom_speaker_id="voice_studio_demo",
+        audio_path=str(audio),
+        text="这是一段参考台词。",
+        language="zh",
+        demo_text="试听这段豆包复刻音色。",
+        enable_audio_denoise=True,
+        disable_volume_normalization=False,
+    )
+
+    assert payload == {
+        "speaker_id": "voice_studio_demo",
+        "custom_speaker_id": "voice_studio_demo",
+        "audio": {"data": "dm9pY2UtYnl0ZXM=", "format": "wav"},
+        "language": "zh",
+        "text": "这是一段参考台词。",
+        "extra_params": {
+            "demo_text": "试听这段豆包复刻音色。",
+            "enable_audio_denoise": True,
+            "disable_volume_normalization": False,
+        },
+    }
+
+
+def test_doubao_voice_clone_train_requires_confirmation_and_updates_binding(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    client.patch("/api/settings/doubao-secret", json={"api_key": "test-doubao-key"})
+    registered = client.post(
+        "/api/voices/register",
+        data={
+            "name": "豆包训练样本",
+            "reference_text": "这是一段参考台词。",
+            "license_status": "self_voice",
+            "tags": "豆包,云端",
+        },
+        files={"file": ("sample.wav", b"voice-bytes", "audio/wav")},
+    ).json()
+
+    blocked = client.post(f"/api/voices/{registered['voice_id']}/doubao/clone-train", json={"confirm_upload": False})
+    assert blocked.status_code == 400
+    assert blocked.json()["error"]["code"] == "DOUBAO_UPLOAD_CONFIRM_REQUIRED"
+
+    def fake_train_voice_clone(**kwargs):
+        assert kwargs["resource_id"] == "seed-icl-2.0"
+        assert kwargs["api_key"] == "test-doubao-key"
+        assert kwargs["text"] == "这是一段参考台词。"
+        assert Path(kwargs["audio_path"]).exists()
+        return doubao_client.DoubaoResponse(body={"status": "submitted"}, logid="train-log", request_id="train-request")
+
+    def fake_get_voice(**kwargs):
+        assert kwargs["speaker_id"].startswith("voice_studio_")
+        return doubao_client.DoubaoResponse(
+            body={
+                "status": 2,
+                "language": 0,
+                "available_training_times": 13,
+                "speaker_status": [{"model_type": 1, "demo_audio": "https://example.test/demo.wav"}],
+            },
+            logid="query-log",
+            request_id="query-request",
+        )
+
+    monkeypatch.setattr(doubao_client, "train_voice_clone", fake_train_voice_clone)
+    monkeypatch.setattr(doubao_client, "get_voice", fake_get_voice)
+
+    trained = client.post(
+        f"/api/voices/{registered['voice_id']}/doubao/clone-train",
+        json={"confirm_upload": True, "demo_text": "试听这段豆包复刻音色。"},
+    )
+    assert trained.status_code == 200
+    data = trained.json()
+    voice = data["voice"]
+    assert voice["external_provider"] == "doubao"
+    assert voice["external_voice_id"].startswith("voice_studio_")
+    assert voice["external_status"] == "2"
+    assert voice["recommended_engine_id"] == "doubao-tts-voiceclone"
+    doubao_binding = next(item for item in voice["engine_bindings"] if item["engine_id"] == "doubao-tts-voiceclone")
+    assert doubao_binding["available"] is True
+    assert doubao_binding["external_voice_id"] == voice["external_voice_id"]
+    assert data["summary"]["has_demo_audio"] is True
+
+
 def test_doubao_engine_manifest_is_registered(tmp_path: Path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     resp = client.get("/api/engines")

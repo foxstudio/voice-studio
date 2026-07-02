@@ -251,12 +251,88 @@ def generate_tts_unidirectional_http(
     return result.__dict__
 
 
+def build_voice_clone_payload(
+    *,
+    speaker_id: str,
+    audio_path: str,
+    custom_speaker_id: str | None = None,
+    text: str | None = None,
+    language: str = "zh",
+    demo_text: str | None = None,
+    enable_audio_denoise: bool | None = None,
+    disable_volume_normalization: bool | None = None,
+) -> dict[str, Any]:
+    path = Path(audio_path)
+    suffix = path.suffix.lower().lstrip(".") or "wav"
+    if suffix == "oga":
+        suffix = "ogg"
+    audio_data = base64.b64encode(path.read_bytes()).decode("ascii")
+    body: dict[str, Any] = {
+        "speaker_id": speaker_id,
+        "audio": {
+            "data": audio_data,
+            "format": suffix,
+        },
+        "language": language,
+    }
+    if custom_speaker_id:
+        body["custom_speaker_id"] = custom_speaker_id
+    if text and text.strip():
+        body["text"] = text.strip()
+    extra_params: dict[str, Any] = {}
+    if demo_text and demo_text.strip():
+        extra_params["demo_text"] = demo_text.strip()
+    if enable_audio_denoise is not None:
+        extra_params["enable_audio_denoise"] = bool(enable_audio_denoise)
+    if disable_volume_normalization is not None:
+        extra_params["disable_volume_normalization"] = bool(disable_volume_normalization)
+    if extra_params:
+        body["extra_params"] = extra_params
+    return body
+
+
+def train_voice_clone(
+    *,
+    base_url: str,
+    api_key: str,
+    speaker_id: str,
+    audio_path: str,
+    custom_speaker_id: str | None = None,
+    text: str | None = None,
+    language: str = "zh",
+    demo_text: str | None = None,
+    resource_id: str = DEFAULT_ICL_RESOURCE_ID,
+    enable_audio_denoise: bool | None = None,
+    disable_volume_normalization: bool | None = None,
+    timeout: int = 120,
+) -> DoubaoResponse:
+    body = build_voice_clone_payload(
+        speaker_id=speaker_id,
+        custom_speaker_id=custom_speaker_id,
+        audio_path=audio_path,
+        text=text,
+        language=language,
+        demo_text=demo_text,
+        enable_audio_denoise=enable_audio_denoise,
+        disable_volume_normalization=disable_volume_normalization,
+    )
+    return post_json(
+        base_url=base_url,
+        path="/api/v3/tts/voice_clone",
+        api_key=api_key,
+        resource_id=resource_id,
+        body=body,
+        timeout=timeout,
+    )
+
+
 def get_voice(
     *,
     base_url: str,
     api_key: str,
     speaker_id: str,
     custom_speaker_id: str | None = None,
+    resource_id: str | None = DEFAULT_ICL_RESOURCE_ID,
     timeout: int = 60,
 ) -> DoubaoResponse:
     body: dict[str, Any] = {"speaker_id": speaker_id}
@@ -266,6 +342,7 @@ def get_voice(
         base_url=base_url,
         path="/api/v3/tts/get_voice",
         api_key=api_key,
+        resource_id=resource_id,
         body=body,
         timeout=timeout,
     )
