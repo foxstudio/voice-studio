@@ -1466,6 +1466,14 @@
 		line-height: 1.45;
 	}
 
+	.label-with-tooltip {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		width: max-content;
+		max-width: 100%;
+	}
+
 	.field-muted .param-label,
 	.field-muted small {
 		color: #6f7d8e;
