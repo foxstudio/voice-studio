@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.schemas.voice_studio import EngineDetail, EngineManifest, EngineState, EngineStatus, ParameterSchema
-from app.services import mimo_client
+from app.services import doubao_client, mimo_client
 
 
 EMOTION_OPTIONS = [
@@ -75,6 +75,20 @@ CONFUCIUS4_LANGUAGES = [
     {"label": "俄语 ru", "value": "ru"},
     {"label": "马来语 ms", "value": "ms"},
     {"label": "越南语 vi", "value": "vi"},
+]
+
+QWEN3_TTS_SPEAKERS = [
+    {"label": "Vivian · 中文/英文女声", "value": "Vivian"},
+    {"label": "Serena · 中文/英文女声", "value": "Serena"},
+    {"label": "Uncle_Fu · 中文男声", "value": "Uncle_Fu"},
+    {"label": "Dylan · 中文男声", "value": "Dylan"},
+    {"label": "Eric · 中文男声", "value": "Eric"},
+    {"label": "Ryan · 英文男声", "value": "Ryan"},
+    {"label": "Aiden · 英文男声", "value": "Aiden"},
+    {"label": "Ethan · 英文男声", "value": "Ethan"},
+    {"label": "Chelsie · 英文女声", "value": "Chelsie"},
+    {"label": "Ono_Anna · 日文女声", "value": "Ono_Anna"},
+    {"label": "Sohee · 韩文女声", "value": "Sohee"},
 ]
 
 
@@ -216,6 +230,70 @@ ENGINES: dict[str, EngineDetail] = {
             ],
         ),
         state=EngineState(engine_id="confucius4-mlx-int8", status=EngineStatus.stopped),
+    ),
+    "qwen3-tts-mlx-0.6b": EngineDetail(
+        manifest=EngineManifest(
+            engine_id="qwen3-tts-mlx-0.6b",
+            display_name="Qwen3-TTS MLX 0.6B",
+            provider="Qwen / MLX Community",
+            version="0.6B 8-bit PoC",
+            description="千问 Qwen3-TTS 的 Apple Silicon MLX 量化实验引擎，支持预置声音、声音设计、自然语言风格指令和本地参考音色克隆",
+            supported_languages=["zh", "en", "ja", "ko"],
+            capabilities=["local_inference", "preset_voice", "voice_design", "voice_clone", "natural_language_control", "multilingual"],
+            sample_rate=24000,
+            max_tokens=1200,
+            default_use_case="本地短句口播、预置音色试听、声音设计和声音克隆 PoC",
+            privacy_level="local_only_research",
+            parameter_schema=[
+                ParameterSchema(
+                    key="language",
+                    label="目标语言",
+                    type="select",
+                    default="zh",
+                    options=[
+                        {"label": "中文 zh", "value": "zh"},
+                        {"label": "英文 en", "value": "en"},
+                        {"label": "日文 ja", "value": "ja"},
+                        {"label": "韩文 ko", "value": "ko"},
+                    ],
+                    description="目标文本语言。中文口播用 zh，英文用 en。",
+                ),
+                ParameterSchema(
+                    key="speaker_id",
+                    label="预置声音",
+                    type="select",
+                    default="Vivian",
+                    options=QWEN3_TTS_SPEAKERS,
+                    capability="preset_voice",
+                    description="未选择参考音色时使用的 Qwen3 预置声音。",
+                ),
+                ParameterSchema(
+                    key="style_instruction",
+                    label="情绪/风格指令",
+                    type="textarea",
+                    default="",
+                    capability="natural_language_control",
+                    description="官方 CustomVoice instruct 参数，控制预置声音的情绪、风格和语速倾向；支持中文或英文描述。例如：语气温柔，语速稍慢，像在讲解课程。留空时后端按官方示例使用 Normal tone。",
+                ),
+                ParameterSchema(
+                    key="voice_design_prompt",
+                    label="声音描述",
+                    type="textarea",
+                    default="",
+                    capability="voice_design",
+                    description="官方 VoiceDesign instruct 参数，用来描述声音本身；支持中文或英文描述。例如：年轻中文女声，声线温暖，吐字清晰。填写后使用 VoiceDesign 模型；为空时使用预置音色或参考音色。",
+                ),
+                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="官方 speed 参数。README 推荐 Normal 1.0、Fast 1.3、Slow 0.8。"),
+                ParameterSchema(key="temperature", label="随机性 Temperature", type="slider", default=0.7, min=0.1, max=2.0, step=0.05, level="advanced", description="官方 temperature 参数，较低更稳定，较高更有变化。"),
+                ParameterSchema(key="top_p", label="采样范围 Top-P", type="slider", default=0.9, min=0.01, max=1.0, step=0.01, level="advanced", description="mlx_audio 官方 top_p 参数，控制核采样范围。"),
+                ParameterSchema(key="top_k", label="候选数量 Top-K", type="number", default=50, min=1, max=200, step=1, level="advanced", description="mlx_audio 官方 top_k 参数，控制候选 token 数量。"),
+                ParameterSchema(key="repetition_penalty", label="重复惩罚", type="number", default=1.1, min=1.0, max=3.0, step=0.05, level="advanced", description="mlx_audio 官方 repetition_penalty 参数，抑制重复发音或重复片段。"),
+                ParameterSchema(key="max_tokens", label="最大 Token", type="number", default=1200, min=100, max=4096, step=50, level="advanced", description="官方 max_tokens 参数，限制单次生成 token 上限。"),
+                ParameterSchema(key="cfg_scale", label="CFG Scale", type="number", default=1.5, min=0.0, max=5.0, step=0.1, level="advanced", description="mlx_audio CLI 默认 1.5；官方帮助提示 1.0-1.5 通常更稳定。"),
+                ParameterSchema(key="ddpm_steps", label="DDPM Steps", type="number", default=None, min=1, max=100, step=1, level="advanced", description="官方 ddpm_steps 参数；留空则使用模型默认。官方帮助建议可尝试 30-50，数值越高越慢。"),
+            ],
+        ),
+        state=EngineState(engine_id="qwen3-tts-mlx-0.6b", status=EngineStatus.stopped),
     ),
     "f5-tts": EngineDetail(
         manifest=EngineManifest(
@@ -382,6 +460,36 @@ ENGINES: dict[str, EngineDetail] = {
             ],
         ),
         state=EngineState(engine_id="mimo-v2.5-asr", status=EngineStatus.stopped),
+    ),
+    "doubao-tts-preset": EngineDetail(
+        manifest=EngineManifest(
+            engine_id="doubao-tts-preset",
+            display_name="豆包语音 TTS 2.0",
+            engine_type="cloud",
+            provider="Volcengine / Doubao",
+            version="seed-tts-2.0",
+            description="火山引擎豆包语音合成模型 2.0，使用官方预置音色进行短文本云端合成",
+            supported_languages=["zh"],
+            capabilities=["cloud_api", "preset_voice", "natural_language_control"],
+            sample_rate=24000,
+            default_use_case="中文短句口播、视频旁白和官方预置音色试听",
+            privacy_level="cloud_required",
+            parameter_schema=[
+                ParameterSchema(
+                    key="speaker_id",
+                    label="豆包官方音色",
+                    type="select",
+                    default="zh_female_vv_uranus_bigtts",
+                    options=[{"label": item["label"], "value": item["voice_id"]} for item in doubao_client.DOUBAO_TTS_PRESET_SPEAKERS],
+                    required=True,
+                    capability="preset_voice",
+                    description="选择与 seed-tts-2.0 资源匹配的官方音色",
+                ),
+                ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="映射到豆包 speech_rate，1.0 为正常语速"),
+                ParameterSchema(key="style_instruction", label="语音指令", type="textarea", default="", capability="natural_language_control", description="可选，支持中文。例：语速慢一点，语气更惊讶，句尾带一点感叹。"),
+            ],
+        ),
+        state=EngineState(engine_id="doubao-tts-preset", status=EngineStatus.stopped),
     ),
     "qwen3-asr-mlx": EngineDetail(
         manifest=EngineManifest(

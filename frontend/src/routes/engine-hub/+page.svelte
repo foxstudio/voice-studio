@@ -55,6 +55,7 @@
 		'f5-tts': '非自回归架构，推理效率高，支持整本书连续生成。',
 		'cosyvoice-sft': 'CosyVoice-300M-SFT 模型，开箱即用的官方预训练音色。',
 		'cosyvoice-zero-shot': '提供参考音频 + 对应台词，即可跨语言复刻。',
+		'qwen3-tts-mlx-0.6b': '0.6B MLX 实验接入，支持预置音色和本地参考音色克隆。',
 		'mimo-v2.5-tts-preset': 'Token Plan 计费，支持唱歌标签和自然语言风格指令。',
 		'mimo-v2.5-tts-voicedesign': '用文字描述音色特征，如"温柔略带沙哑的女性"。',
 		'mimo-v2.5-tts-voiceclone': '云端零样本克隆，支持 wav/mp3 参考音频上传。',

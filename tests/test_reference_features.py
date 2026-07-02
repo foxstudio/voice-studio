@@ -47,6 +47,7 @@ def test_presets_are_available_and_apply_to_main_engines(tmp_path: Path):
         "omnivoice",
         "emotivoice",
         "confucius4-mlx-int8",
+        "qwen3-tts-mlx-0.6b",
         "f5-tts",
         "cosyvoice-sft",
         "cosyvoice-zero-shot",
@@ -314,6 +315,7 @@ def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path):
         "omnivoice",
         "emotivoice",
         "confucius4-mlx-int8",
+        "qwen3-tts-mlx-0.6b",
         "f5-tts",
         "cosyvoice-sft",
         "cosyvoice-zero-shot",
@@ -333,6 +335,19 @@ def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path):
     assert by_id["confucius4-mlx-int8"]["sample_rate"] == 22050
     assert "emotion_transfer" in by_id["confucius4-mlx-int8"]["capabilities"]
     assert any(param["key"] == "seed" for param in by_id["confucius4-mlx-int8"]["parameter_schema"])
+    assert by_id["qwen3-tts-mlx-0.6b"]["sample_rate"] == 24000
+    assert "preset_voice" in by_id["qwen3-tts-mlx-0.6b"]["capabilities"]
+    assert "voice_design" in by_id["qwen3-tts-mlx-0.6b"]["capabilities"]
+    assert "voice_clone" in by_id["qwen3-tts-mlx-0.6b"]["capabilities"]
+    assert any(param["key"] == "style_instruction" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
+    assert any(param["key"] == "voice_design_prompt" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
+    assert any(param["key"] == "speed" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
+    assert any(param["key"] == "top_p" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
+    assert any(param["key"] == "top_k" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
+    assert any(param["key"] == "repetition_penalty" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
+    assert any(param["key"] == "max_tokens" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
+    assert any(param["key"] == "cfg_scale" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
+    assert any(param["key"] == "ddpm_steps" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
     assert "preset_voice" in by_id["cosyvoice-sft"]["capabilities"]
     assert "voice_clone" in by_id["f5-tts"]["capabilities"]
     assert "voice_clone" in by_id["cosyvoice-zero-shot"]["capabilities"]

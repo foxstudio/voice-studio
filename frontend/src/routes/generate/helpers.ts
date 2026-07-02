@@ -64,14 +64,21 @@ export function voiceName(task: GenerationTask, voiceMap: Map<string, VoiceAsset
 	return voiceId ? voiceMap.get(voiceId)?.name ?? '' : '';
 }
 
-export function voiceBadgeLabel(task: GenerationTask, voiceMap: Map<string, VoiceAsset>) {
+function optionLabelForParam(task: GenerationTask, engineMap: Map<string, EngineDetail>, key: string, value: string) {
+	const param = engineMap.get(task.engine_id)?.manifest.parameter_schema.find((item) => item.key === key);
+	return param?.options.find((option) => option.value === value)?.label ?? value;
+}
+
+export function voiceBadgeLabel(task: GenerationTask, voiceMap: Map<string, VoiceAsset>, engineMap?: Map<string, EngineDetail>) {
 	const localVoice = voiceName(task, voiceMap);
 	if (localVoice) return localVoice;
 	const params = taskRequestParameters(task);
 	const mimoVoice = params.mimo_voice;
 	if (typeof mimoVoice === 'string' && mimoVoice.trim()) return mimoVoice.trim();
 	const speakerId = params.speaker_id;
-	if (typeof speakerId === 'string' && speakerId.trim()) return speakerId.trim();
+	if (typeof speakerId === 'string' && speakerId.trim()) {
+		return engineMap ? optionLabelForParam(task, engineMap, 'speaker_id', speakerId.trim()) : speakerId.trim();
+	}
 	if (typeof params.voice_design_prompt === 'string' && params.voice_design_prompt.trim()) return '声音设计';
 	return '未选音色';
 }

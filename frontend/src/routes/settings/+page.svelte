@@ -16,6 +16,8 @@
 	let openingBusy = $state('');
 	let mimoApiKey = $state('');
 	let clearMimoKey = $state(false);
+	let doubaoApiKey = $state('');
+	let clearDoubaoKey = $state(false);
 
 	const ttsEngines = $derived(engines.filter((engine) => !engine.manifest.capabilities.includes('speech_recognition')));
 	const cleanupLocations = $derived((storageAudit?.locations ?? []).filter((location) => location.cleanup_key));
@@ -44,6 +46,11 @@
 			settings = await Api.saveMimoSecret({ api_key: mimoApiKey.trim() || null, clear: clearMimoKey });
 			mimoApiKey = '';
 			clearMimoKey = false;
+		}
+		if (doubaoApiKey.trim() || clearDoubaoKey) {
+			settings = await Api.saveDoubaoSecret({ api_key: doubaoApiKey.trim() || null, clear: clearDoubaoKey });
+			doubaoApiKey = '';
+			clearDoubaoKey = false;
 		}
 		saved = '已保存';
 		setTimeout(() => (saved = ''), 1600);
@@ -119,6 +126,7 @@
 
 	const help = [
 		{ title: 'MiMo Token Plan 怎么用', body: '先开启云端引擎，再填写 Token Plan 专属 base URL 和 API Key。保存后，引擎中心会显示 MiMo 的预置音色、音色设计、音色复刻和 ASR；没有 key 时会提示不可用，不影响本地 IndexTTS 和 OmniVoice。' },
+		{ title: '豆包语音怎么用', body: '先开启云端引擎，再配置豆包 API Key。豆包首期规划拆成官方音色 TTS、云端复刻音色、音色训练/查询和 ASR，不把所有能力塞进一个入口。' },
 		{ title: '密钥安全', body: 'API Key 只保存在本地后端设置表里，前端只显示是否已配置，不会把 key 回填到输入框。需要换 key 时直接填新的；需要删除时勾选清除。' },
 		{ title: '目录设置', body: '声音目录保存参考音频，输出目录保存生成结果，导出目录保存合并/打包结果，缓存目录保存 ASR 源音频和对齐日志。' },
 		{ title: '缓存清理', body: '诊断音频、对齐缓存和日志可以从设置页清理；ASR 源音频属于历史转写的参考材料，清理前会二次确认。' }
@@ -215,6 +223,36 @@
 				</div>
 				<label class="check-row" for="mimo-clear"><input id="mimo-clear" type="checkbox" bind:checked={clearMimoKey} /> 清除已保存的 MiMo API Key</label>
 				<p class="muted">Token Plan 专属入口默认使用 https://token-plan-cn.xiaomimimo.com/v1。</p>
+			</section>
+
+			<section class="panel stack">
+				<div class="section-title">
+					<h2>豆包语音</h2>
+					<span class="badge" class:ok={settings.doubao_api_key_configured} class:warn={!settings.doubao_api_key_configured}>
+						{settings.doubao_api_key_configured ? 'Key 已配置' : 'Key 未配置'}
+					</span>
+				</div>
+				<div class="field">
+					<label for="doubao-base">Base URL</label>
+					<input id="doubao-base" bind:value={settings.doubao_base_url} />
+				</div>
+				<div class="field">
+					<label for="doubao-tts-resource">默认 TTS Resource ID</label>
+					<input id="doubao-tts-resource" bind:value={settings.doubao_default_tts_resource_id} />
+				</div>
+				<div class="field">
+					<label for="doubao-icl-resource">默认复刻 Resource ID</label>
+					<input id="doubao-icl-resource" bind:value={settings.doubao_default_icl_resource_id} />
+				</div>
+				<label class="check-row" for="doubao-upload-confirm">
+					<input id="doubao-upload-confirm" type="checkbox" bind:checked={settings.doubao_upload_confirm} /> 豆包音色训练/ASR 上传前提醒
+				</label>
+				<div class="field">
+					<label for="doubao-key">API Key（不会回显）</label>
+					<input id="doubao-key" type="password" bind:value={doubaoApiKey} placeholder={settings.doubao_api_key_configured ? '已配置；填写新 key 可覆盖' : '未配置'} />
+				</div>
+				<label class="check-row" for="doubao-clear"><input id="doubao-clear" type="checkbox" bind:checked={clearDoubaoKey} /> 清除已保存的豆包 API Key</label>
+				<p class="muted">默认入口为 https://openspeech.bytedance.com；环境变量 VOLCENGINE_API_KEY 也会被识别为已配置。</p>
 			</section>
 
 			<section class="panel stack directories-panel">

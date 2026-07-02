@@ -93,8 +93,20 @@ def test_cosyvoice_long_text_prefers_verified_split_merge():
     assert plan.recommended_action == "split_verify_merge"
     assert plan.threshold == 80
     assert plan.hard_threshold == 320
+
+
+def test_qwen3_tts_long_text_prefers_verified_split_merge():
+    sentence = "千问三语音实验引擎适合先用短句确认音色、节奏和内容完整性。"
+    text = sentence * 16
+
+    plan = text_planner.plan_text(text=text, engine_id="qwen3-tts-mlx-0.6b")
+
+    assert plan.mode == "longform_strongly_recommended"
+    assert plan.recommended_action == "split_verify_merge"
+    assert plan.threshold == 120
+    assert plan.hard_threshold == 360
     assert len(plan.segments) > 1
-    assert all(segment.char_count <= 80 for segment in plan.segments)
+    assert all(segment.char_count <= 120 for segment in plan.segments)
 
 
 def test_generate_plan_endpoint_returns_contract_shape():

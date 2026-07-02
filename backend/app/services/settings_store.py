@@ -26,14 +26,17 @@ def get() -> AppSettings:
         except json.JSONDecodeError:
             values[key] = value
     values.pop("mimo_api_key", None)
+    values.pop("doubao_api_key", None)
     settings = AppSettings(**values)
     settings.mimo_api_key_configured = bool(raw.get("mimo_api_key"))
+    settings.doubao_api_key_configured = bool(raw.get("doubao_api_key") or os.environ.get("VOLCENGINE_API_KEY"))
     return settings
 
 
 def update(settings: AppSettings) -> AppSettings:
     data = settings.model_dump()
     data.pop("mimo_api_key_configured", None)
+    data.pop("doubao_api_key_configured", None)
     for key, value in data.items():
         db.save_setting(key, json.dumps(value, ensure_ascii=False))
     ensure_directories(settings)
@@ -52,6 +55,20 @@ def update_mimo_api_key(api_key: str | None, clear: bool = False) -> AppSettings
 def mimo_api_key() -> str | None:
     value = db.get_settings_rows().get("mimo_api_key")
     return value or None
+
+
+def update_doubao_api_key(api_key: str | None, clear: bool = False) -> AppSettings:
+    if clear:
+        db.save_setting("doubao_api_key", "")
+    elif api_key is not None and api_key.strip():
+        db.save_setting("doubao_api_key", api_key.strip())
+        db.save_setting("cloud_enabled", json.dumps(True))
+    return get()
+
+
+def doubao_api_key() -> str | None:
+    value = db.get_settings_rows().get("doubao_api_key")
+    return value or os.environ.get("VOLCENGINE_API_KEY") or None
 
 
 def ensure_directories(settings: AppSettings | None = None) -> None:

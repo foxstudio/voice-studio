@@ -51,6 +51,18 @@ def _enable_mimo(monkeypatch) -> None:
         monkeypatch.setattr(module, "mimo_api_key", lambda: "test-mimo-token")
 
 
+def _enable_doubao(monkeypatch) -> None:
+    settings = AppSettings(
+        cloud_enabled=True,
+        doubao_api_key_configured=True,
+        doubao_base_url="https://openspeech.bytedance.com",
+        doubao_default_tts_resource_id="seed-tts-2.0",
+    )
+    for module in [task_queue.settings_store, batch_queue.settings_store]:
+        monkeypatch.setattr(module, "get", lambda: settings)
+        monkeypatch.setattr(module, "doubao_api_key", lambda: "test-doubao-token")
+
+
 def test_f5_single_batch_worker_payload_contract(tmp_path, monkeypatch):
     monkeypatch.setenv("VOICE_STUDIO_F5_TTS_ROOT", str(tmp_path / "F5-TTS"))
 
@@ -270,6 +282,104 @@ def test_confucius4_single_batch_worker_payload_contract(tmp_path, monkeypatch):
         assert seed == params["seed"]
 
 
+def test_qwen3_tts_single_batch_worker_payload_contract(tmp_path):
+    params = {
+        "language": "zh",
+        "speaker_id": "Vivian",
+        "style_instruction": "自然清晰",
+        "voice_design_prompt": "低沉、平静的旁白声线",
+        "speed": 1.1,
+        "temperature": 0.7,
+        "top_p": 0.88,
+        "top_k": 48,
+        "repetition_penalty": 1.15,
+        "max_tokens": 900,
+        "cfg_scale": 1.2,
+        "ddpm_steps": 12,
+    }
+    reference_audio_path = _ref_file(tmp_path)
+    req = GenerateRequest(
+        text="Qwen3 single test",
+        engine_id="qwen3-tts-mlx-0.6b",
+        reference_audio_path=reference_audio_path,
+        ref_text="参考台词。",
+        **params,
+    )
+    single = task_queue._kwargs(req, str(tmp_path / "single.wav"))
+
+    batch_req = BatchGenerateRequest(
+        engine_id="qwen3-tts-mlx-0.6b",
+        reference_audio_path=reference_audio_path,
+        ref_text="参考台词。",
+        language="zh",
+        parameters=params,
+        segments=[BatchSegmentInput(text="Qwen3 batch test")],
+    )
+    batch = _batch_payload(batch_req, tmp_path)
+
+    for payload, text in [(single, "Qwen3 single test"), (batch, "Qwen3 batch test")]:
+        assert payload["text"] == text
+        assert payload["reference_audio"] == reference_audio_path
+        assert payload["ref_text"] == "参考台词。"
+        assert payload["language"] == params["language"]
+        assert payload["speaker_id"] is None
+        assert payload["style_instruction"] is None
+        assert payload["voice_design_prompt"] is None
+        assert payload["speed"] == params["speed"]
+        assert payload["temperature"] == params["temperature"]
+        assert payload["top_p"] == params["top_p"]
+        assert payload["top_k"] == params["top_k"]
+        assert payload["repetition_penalty"] == params["repetition_penalty"]
+        assert payload["max_tokens"] == params["max_tokens"]
+        assert payload["cfg_scale"] == params["cfg_scale"]
+        assert payload["ddpm_steps"] == params["ddpm_steps"]
+
+        root, out, parsed_text, ref_audio, ref_text, language, speaker_id, instruction, voice_design_prompt, speed, temperature, top_p, top_k, repetition_penalty, max_tokens, cfg_scale, ddpm_steps = inference_runner._build_qwen3_tts_kwargs(**payload)
+        assert root == inference_runner.qwen3_tts_paths.DEFAULT_ROOT
+        assert out == payload["output_path"]
+        assert parsed_text == text
+        assert ref_audio == reference_audio_path
+        assert ref_text == "参考台词。"
+        assert language == params["language"]
+        assert speaker_id == "Vivian"
+        assert instruction == "Normal tone"
+        assert voice_design_prompt == ""
+        assert speed == params["speed"]
+        assert temperature == params["temperature"]
+        assert top_p == params["top_p"]
+        assert top_k == params["top_k"]
+        assert repetition_penalty == params["repetition_penalty"]
+        assert max_tokens == params["max_tokens"]
+        assert cfg_scale == params["cfg_scale"]
+        assert ddpm_steps == params["ddpm_steps"]
+
+    design_req = GenerateRequest(
+        text="Qwen3 design test",
+        engine_id="qwen3-tts-mlx-0.6b",
+        speaker_id="Vivian",
+        style_instruction="自然清晰",
+        voice_design_prompt="年轻中文女声，吐字清晰",
+    )
+    design = task_queue._kwargs(design_req, str(tmp_path / "design.wav"))
+    assert design["reference_audio"] is None
+    assert design["speaker_id"] is None
+    assert design["style_instruction"] is None
+    assert design["voice_design_prompt"] == "年轻中文女声，吐字清晰"
+
+    preset_req = GenerateRequest(
+        text="Qwen3 preset test",
+        engine_id="qwen3-tts-mlx-0.6b",
+        speaker_id="Vivian",
+        style_instruction="自然清晰",
+        voice_design_prompt=None,
+    )
+    preset = task_queue._kwargs(preset_req, str(tmp_path / "preset.wav"))
+    assert preset["reference_audio"] is None
+    assert preset["speaker_id"] == "Vivian"
+    assert preset["style_instruction"] == "自然清晰"
+    assert preset["voice_design_prompt"] is None
+
+
 def test_single_request_prefers_explicit_reference_audio_over_voice_id(tmp_path):
     original_db = database.DB_PATH
     database.set_db_path(tmp_path / "voice_studio.db")
@@ -351,6 +461,7 @@ def test_single_request_does_not_fallback_when_explicit_reference_is_missing(tmp
         ("indextts-v2", "reference_audio"),
         ("omnivoice", "reference_audio"),
         ("confucius4-mlx-int8", "reference_audio"),
+        ("qwen3-tts-mlx-0.6b", "reference_audio"),
         ("mimo-v2.5-tts-voiceclone", "reference_audio_path"),
         ("f5-tts", "reference_audio"),
         ("cosyvoice-zero-shot", "reference_audio"),
@@ -596,6 +707,37 @@ def test_mimo_profiles_preserve_independent_profiles(tmp_path, monkeypatch):
         assert batch_kwargs["model"] == expected_model
         assert single_kwargs["voice"] == shared_params["mimo_voice"]
         assert batch_kwargs["mimo_voice"] == shared_params["mimo_voice"]
+
+
+def test_doubao_preset_profile_is_normalized_between_single_and_batch(tmp_path, monkeypatch):
+    _enable_doubao(monkeypatch)
+    params = {
+        "speaker_id": "zh_female_xiaohe_uranus_bigtts",
+        "style_instruction": "自然、清晰，像课程旁白。",
+        "speed": 1.12,
+    }
+    single = GenerateRequest(
+        text="测试文本",
+        engine_id="doubao-tts-preset",
+        output_format="mp3",
+        **params,
+    )
+    single_kwargs = task_queue._kwargs(single, str(tmp_path / "doubao-single.mp3"))
+
+    batch_req = BatchGenerateRequest(
+        engine_id="doubao-tts-preset",
+        parameters=params,
+        segments=[BatchSegmentInput(text="测试文本")],
+    )
+    batch_kwargs = _batch_payload(batch_req, tmp_path)
+
+    for data in [single_kwargs, batch_kwargs]:
+        assert data["base_url"] == "https://openspeech.bytedance.com"
+        assert data["api_key"] == "test-doubao-token"
+        assert data["resource_id"] == "seed-tts-2.0"
+        assert data["speaker"] == "zh_female_xiaohe_uranus_bigtts"
+        assert data["style_instruction"] == params["style_instruction"]
+        assert data["speed"] == params["speed"]
 
 
 def test_mimo_top_level_style_instruction_is_normalized_between_single_and_batch(tmp_path, monkeypatch):

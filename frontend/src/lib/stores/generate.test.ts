@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createGenerateStore, REFERENCE_VOICE_ENGINE_IDS } from './generate';
-import type { EngineDetail, ParameterSchema } from '$lib/api/types';
+import type { EngineDetail, ParameterSchema, VoiceAsset } from '$lib/api/types';
 
 function parameter(partial: Partial<ParameterSchema> & Pick<ParameterSchema, 'key' | 'label' | 'type'>): ParameterSchema {
 	return {
@@ -42,6 +42,43 @@ function engineDetail(engineId: string, parameterSchema: EngineDetail['manifest'
 			loaded_at: null
 		}
 	};
+}
+
+function voiceAsset(partial: Partial<VoiceAsset> = {}): VoiceAsset {
+	return {
+		name: '本地参考音色',
+		voice_type: 'test_sample',
+		description: '',
+		default_language: 'zh',
+		tags: [],
+		reference_text: '这是一段库内参考台词。',
+		recommended_engine_id: 'qwen3-tts-mlx-0.6b',
+		reference_audio_ids: ['ref-audio-1'],
+		license_status: 'self_voice',
+		voice_id: 'voice-1',
+		quality_status: 'unchecked',
+		quality_notes: '',
+		favorite: false,
+		emotion_tags: [],
+		created_at: '',
+		updated_at: '',
+		last_used_at: null,
+		engine_bindings: [],
+		...partial
+	};
+}
+
+function qwen3Schema(): ParameterSchema[] {
+	return [
+		parameter({ key: 'speaker_id', label: '预置音色', type: 'select', default: 'Vivian', options: [{ label: 'Vivian', value: 'Vivian' }] }),
+		parameter({ key: 'voice_design_prompt', label: '声音描述', type: 'textarea', default: '' }),
+		parameter({ key: 'style_instruction', label: '风格指令', type: 'textarea', default: '' }),
+		parameter({ key: 'temperature', label: 'Temperature', type: 'slider', default: 0.7, level: 'advanced' }),
+		parameter({ key: 'top_p', label: 'Top-P', type: 'slider', default: 0.9, level: 'advanced' }),
+		parameter({ key: 'top_k', label: 'Top-K', type: 'number', default: 50, level: 'advanced' }),
+		parameter({ key: 'repetition_penalty', label: '重复惩罚', type: 'number', default: 1.1, level: 'advanced' }),
+		parameter({ key: 'cfg_scale', label: 'CFG Scale', type: 'number', default: 1.5, level: 'advanced' })
+	];
 }
 
 describe('generate store custom reference voice requests', () => {
@@ -112,6 +149,75 @@ describe('generate store custom reference voice requests', () => {
 		expect(request.diffusion_steps).toBe(25);
 		expect(request.cfg_rate).toBe(0.7);
 		expect(request.seed).toBe(0);
+	});
+
+	it('keeps Qwen3 preset, voice design, library, and custom voice routes mutually exclusive', () => {
+		const store = createGenerateStore();
+
+		store.update((state) => ({
+			...state,
+			engines: [engineDetail('qwen3-tts-mlx-0.6b', qwen3Schema())],
+			voices: [voiceAsset()],
+			engineId: 'qwen3-tts-mlx-0.6b',
+			text: '需要合成的文本'
+		}));
+		store.setEngine('qwen3-tts-mlx-0.6b');
+
+		store.update((state) => ({
+			...state,
+			voiceSource: 'voice_library',
+			voiceId: 'voice-1',
+			speakerId: 'Vivian',
+			voiceDesignPrompt: '温柔的中文女声',
+			styleInstruction: '语速稍慢'
+		}));
+		const libraryRequest = store.toRequest();
+		expect(libraryRequest.voice_id).toBe('voice-1');
+		expect(libraryRequest.ref_text).toBe('这是一段库内参考台词。');
+		expect(libraryRequest.reference_audio_path).toBeNull();
+		expect(libraryRequest.speaker_id).toBeNull();
+		expect(libraryRequest.voice_design_prompt).toBeNull();
+		expect(libraryRequest.style_instruction).toBeNull();
+
+		store.update((state) => ({
+			...state,
+			voiceSource: 'reference_audio',
+			voiceId: '',
+			customVoiceReferenceAudioPath: '/tmp/custom-reference.wav',
+			customVoiceTranscript: '自定义参考台词。',
+			speakerId: 'Vivian',
+			voiceDesignPrompt: '温柔的中文女声',
+			styleInstruction: '语速稍慢'
+		}));
+		const customRequest = store.toRequest();
+		expect(customRequest.voice_id).toBeNull();
+		expect(customRequest.reference_audio_path).toBe('/tmp/custom-reference.wav');
+		expect(customRequest.ref_text).toBe('自定义参考台词。');
+		expect(customRequest.speaker_id).toBeNull();
+		expect(customRequest.voice_design_prompt).toBeNull();
+		expect(customRequest.style_instruction).toBeNull();
+
+		store.update((state) => ({
+			...state,
+			voiceSource: 'voice_library',
+			voiceId: '',
+			customVoiceReferenceAudioPath: '',
+			customVoiceTranscript: '',
+			speakerId: 'Vivian',
+			voiceDesignPrompt: '',
+			styleInstruction: '语速稍慢'
+		}));
+		const presetRequest = store.toRequest();
+		expect(presetRequest.voice_id).toBeNull();
+		expect(presetRequest.reference_audio_path).toBeNull();
+		expect(presetRequest.speaker_id).toBe('Vivian');
+		expect(presetRequest.style_instruction).toBe('语速稍慢');
+
+		store.update((state) => ({ ...state, voiceDesignPrompt: '年轻中文女声，吐字清晰' }));
+		const designRequest = store.toRequest();
+		expect(designRequest.speaker_id).toBeNull();
+		expect(designRequest.voice_design_prompt).toBe('年轻中文女声，吐字清晰');
+		expect(designRequest.style_instruction).toBeNull();
 	});
 
 	it('preserves video localization context across request restore', () => {

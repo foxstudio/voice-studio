@@ -271,6 +271,8 @@
 		return {
 			'indextts-v2': 'IndexTTS',
 			omnivoice: 'OmniVoice',
+			'confucius4-mlx-int8': 'Confucius4',
+			'qwen3-tts-mlx-0.6b': 'Qwen3-TTS',
 			'f5-tts': 'F5-TTS',
 			'cosyvoice-zero-shot': 'CosyVoice 复刻',
 			'mimo-v2.5-tts-preset': 'MiMo 预置',

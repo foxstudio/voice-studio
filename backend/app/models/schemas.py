@@ -172,12 +172,22 @@ class AppSettings(BaseModel):
     mimo_api_key_configured: bool = False
     mimo_default_voice: str = "mimo_default"
     mimo_voiceclone_confirm_upload: bool = True
+    doubao_base_url: str = "https://openspeech.bytedance.com"
+    doubao_api_key_configured: bool = False
+    doubao_default_tts_resource_id: str = "seed-tts-2.0"
+    doubao_default_icl_resource_id: str = "seed-icl-2.0"
+    doubao_upload_confirm: bool = True
     default_emotion: str = "calm"
     default_emo_alpha: float = 0.6
     theme: Literal["system", "dark", "light"] = "system"
 
 
 class MimoSecretUpdate(BaseModel):
+    api_key: str | None = None
+    clear: bool = False
+
+
+class DoubaoSecretUpdate(BaseModel):
     api_key: str | None = None
     clear: bool = False
 
@@ -353,6 +363,9 @@ class GenerateRequest(BaseModel):
     duration: float = Field(default=0.0, ge=0.0, le=600.0)
     audio_chunk_duration: float = Field(default=15.0, ge=1.0, le=120.0)
     audio_chunk_threshold: float = Field(default=30.0, ge=1.0, le=600.0)
+    max_tokens: int = Field(default=1200, ge=100, le=4096)
+    cfg_scale: float | None = Field(default=None, ge=0.0, le=20.0)
+    ddpm_steps: int | None = Field(default=None, ge=1, le=200)
     output_format: Literal["wav", "mp3", "flac"] = "wav"
 
 

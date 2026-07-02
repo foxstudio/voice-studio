@@ -4,14 +4,47 @@ from typing import Any
 
 from app.schemas.voice_studio import BatchGenerateRequest, GenerateRequest
 from app.models.exceptions import AppException
-from app.services import settings_store
+from app.services import doubao_client, settings_store
 
 MIMO_DEFAULT_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
 MIMO_TTS_ENGINE_IDS = {"mimo-v2.5-tts", "mimo-v2.5-tts-preset", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"}
+DOUBAO_TTS_ENGINE_IDS = {"doubao-tts-preset"}
 
 
 def is_mimo_tts_request(engine_id: str) -> bool:
     return engine_id in MIMO_TTS_ENGINE_IDS
+
+
+def is_doubao_tts_request(engine_id: str) -> bool:
+    return engine_id in DOUBAO_TTS_ENGINE_IDS
+
+
+def build_doubao_tts_single_kwargs(req: GenerateRequest, output_path: str) -> dict[str, Any]:
+    settings, api_key = _doubao_auth()
+    return {
+        "text": req.text,
+        "output_path": output_path,
+        "base_url": settings.doubao_base_url or doubao_client.DEFAULT_BASE_URL,
+        "api_key": api_key,
+        "resource_id": settings.doubao_default_tts_resource_id or doubao_client.DEFAULT_TTS_RESOURCE_ID,
+        "speaker": req.speaker_id or "zh_female_vv_uranus_bigtts",
+        "style_instruction": req.style_instruction,
+        "speed": req.speed,
+    }
+
+
+def build_doubao_tts_batch_common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
+    settings, api_key = _doubao_auth()
+    values = GenerateRequest(text="placeholder", engine_id=req.engine_id, language=req.language).model_dump()
+    values.update(req.parameters)
+    return {
+        "base_url": settings.doubao_base_url or doubao_client.DEFAULT_BASE_URL,
+        "api_key": api_key,
+        "resource_id": settings.doubao_default_tts_resource_id or doubao_client.DEFAULT_TTS_RESOURCE_ID,
+        "speaker": values.get("speaker_id") or "zh_female_vv_uranus_bigtts",
+        "style_instruction": values.get("style_instruction"),
+        "speed": values.get("speed"),
+    }
 
 
 def build_mimo_tts_single_kwargs(
@@ -179,6 +212,62 @@ def build_confucius4_mlx_batch_common_kwargs(
     }
 
 
+def build_qwen3_tts_single_kwargs(
+    req: GenerateRequest,
+    output_path: str,
+    *,
+    reference_audio: str | None,
+    ref_text: str | None,
+) -> dict[str, Any]:
+    voice_design_prompt = req.voice_design_prompt if not reference_audio else None
+    preset_route = not reference_audio and not voice_design_prompt
+    return {
+        "text": req.text,
+        "reference_audio": reference_audio,
+        "ref_text": ref_text,
+        "output_path": output_path,
+        "language": req.language,
+        "speaker_id": req.speaker_id if preset_route else None,
+        "style_instruction": (req.style_instruction or req.prompt or req.emotion_text or req.emotion) if preset_route else None,
+        "voice_design_prompt": voice_design_prompt,
+        "speed": req.speed,
+        "temperature": req.temperature,
+        "top_p": req.top_p,
+        "top_k": req.top_k,
+        "repetition_penalty": req.repetition_penalty,
+        "max_tokens": req.max_tokens,
+        "cfg_scale": req.cfg_scale,
+        "ddpm_steps": req.ddpm_steps,
+    }
+
+
+def build_qwen3_tts_batch_common_kwargs(
+    values: dict[str, Any],
+    *,
+    reference_audio: str | None,
+    ref_text: str | None,
+    language: str,
+) -> dict[str, Any]:
+    voice_design_prompt = values.get("voice_design_prompt") if not reference_audio else None
+    preset_route = not reference_audio and not voice_design_prompt
+    return {
+        "reference_audio": reference_audio,
+        "ref_text": ref_text,
+        "language": values.get("language") or language,
+        "speaker_id": values.get("speaker_id") if preset_route else None,
+        "style_instruction": (values.get("style_instruction") or values.get("prompt") or values.get("emotion_text") or values.get("emotion")) if preset_route else None,
+        "voice_design_prompt": voice_design_prompt,
+        "speed": values.get("speed"),
+        "temperature": values.get("temperature"),
+        "top_p": values.get("top_p"),
+        "top_k": values.get("top_k"),
+        "repetition_penalty": values.get("repetition_penalty"),
+        "max_tokens": values.get("max_tokens"),
+        "cfg_scale": values.get("cfg_scale"),
+        "ddpm_steps": values.get("ddpm_steps"),
+    }
+
+
 def build_indextts_v2_single_kwargs(
     req: GenerateRequest,
     output_path: str,
@@ -341,6 +430,16 @@ def _mimo_auth():
         raise AppException(403, "MIMO_CLOUD_DISABLED", "MiMo 云端引擎未启用，请在设置中开启")
     if not api_key:
         raise AppException(403, "MIMO_API_KEY_MISSING", "缺少 MiMo API Key，请在设置中配置")
+    return settings, api_key
+
+
+def _doubao_auth():
+    settings = settings_store.get()
+    api_key = settings_store.doubao_api_key()
+    if not settings.cloud_enabled:
+        raise AppException(403, "DOUBAO_CLOUD_DISABLED", "豆包云端引擎未启用，请在设置中开启")
+    if not api_key:
+        raise AppException(403, "DOUBAO_API_KEY_MISSING", "缺少豆包 API Key，请在设置中配置")
     return settings, api_key
 
 

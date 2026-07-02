@@ -57,6 +57,14 @@ _POLICIES = {
         recommended_action="split_verify_merge",
         warning="CosyVoice Zero-Shot 官方前端会自动切分目标文本；较长复刻文本仍建议分段校对，避免参考音色和节奏漂移。",
     ),
+    "qwen3-tts-mlx-0.6b": EnginePlanPolicy(
+        threshold=120,
+        hard_threshold=360,
+        target_chars=90,
+        max_chars=120,
+        recommended_action="split_verify_merge",
+        warning="Qwen3-TTS MLX 当前按实验引擎接入；中长文本建议分段生成并校对，先保证完整性和稳定性。",
+    ),
     "mimo-v2.5-tts-preset": EnginePlanPolicy(
         threshold=600,
         hard_threshold=1200,

@@ -105,6 +105,9 @@ export type GenerateStoreState = {
 	duration: number;
 	audioChunkDuration: number;
 	audioChunkThreshold: number;
+	maxTokens: number;
+	cfgScale: number | null;
+	ddpmSteps: number | null;
 	maxMelTokens: number;
 	repetitionPenalty: number;
 	seed: number | null;
@@ -171,6 +174,12 @@ const OMNIVOICE_DEFAULTS = {
 	audioChunkThreshold: 30
 };
 
+const QWEN3_DEFAULTS = {
+	maxTokens: 1200,
+	cfgScale: 1.5 as number | null,
+	ddpmSteps: null as number | null
+};
+
 const F5_DEFAULTS = {
 	nfeStep: 32,
 	cfgStrength: 2.0,
@@ -203,6 +212,7 @@ export const REFERENCE_VOICE_ENGINE_IDS = [
 	'indextts-v2',
 	'omnivoice',
 	'confucius4-mlx-int8',
+	'qwen3-tts-mlx-0.6b',
 	'mimo-v2.5-tts-voiceclone',
 	'f5-tts',
 	'cosyvoice-zero-shot'
@@ -287,6 +297,9 @@ function createInitialState(): GenerateStoreState {
 		duration: OMNIVOICE_DEFAULTS.duration,
 		audioChunkDuration: OMNIVOICE_DEFAULTS.audioChunkDuration,
 		audioChunkThreshold: OMNIVOICE_DEFAULTS.audioChunkThreshold,
+		maxTokens: QWEN3_DEFAULTS.maxTokens,
+		cfgScale: QWEN3_DEFAULTS.cfgScale,
+		ddpmSteps: QWEN3_DEFAULTS.ddpmSteps,
 		maxMelTokens: INDEX_TTS_DEFAULTS.maxMelTokens,
 		repetitionPenalty: INDEX_TTS_DEFAULTS.repetitionPenalty,
 		seed: null,
@@ -341,9 +354,15 @@ function getEngineDefaults(state: GenerateStoreState, engineId: string) {
 	const selectedEngine = getSelectedEngine(state, engineId);
 	const speakerParam = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'speaker_id');
 	const promptParam = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'prompt');
+	const styleParam = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'style_instruction');
+	const voiceDesignParam = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'voice_design_prompt');
 	const languageParam = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'language');
 	const parameterDefault = (key: string, fallback: unknown) =>
 		selectedEngine?.manifest.parameter_schema.find((param) => param.key === key)?.default ?? fallback;
+	const nullableNumberDefault = (key: string, fallback: number | null) => {
+		const value = parameterDefault(key, fallback);
+		return value === null || value === undefined || value === '' ? null : Number(value);
+	};
 	const seedDefault = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'seed')?.default;
 
 	return {
@@ -364,6 +383,9 @@ function getEngineDefaults(state: GenerateStoreState, engineId: string) {
 		guidanceScale: OMNIVOICE_DEFAULTS.guidanceScale,
 		duration: OMNIVOICE_DEFAULTS.duration,
 		outputFormat: INDEX_TTS_DEFAULTS.outputFormat,
+		maxTokens: Number(parameterDefault('max_tokens', QWEN3_DEFAULTS.maxTokens)),
+		cfgScale: nullableNumberDefault('cfg_scale', QWEN3_DEFAULTS.cfgScale),
+		ddpmSteps: nullableNumberDefault('ddpm_steps', QWEN3_DEFAULTS.ddpmSteps),
 		nfeStep: F5_DEFAULTS.nfeStep,
 		cfgStrength: F5_DEFAULTS.cfgStrength,
 		targetRms: F5_DEFAULTS.targetRms,
@@ -372,6 +394,8 @@ function getEngineDefaults(state: GenerateStoreState, engineId: string) {
 		repetitionPenalty: Number(parameterDefault('repetition_penalty', CONFUCIUS4_DEFAULTS.repetitionPenalty)),
 		seed: seedDefault === undefined || seedDefault === null ? null : Number(seedDefault),
 		speakerId: String(speakerParam?.default ?? speakerParam?.options?.[0]?.value ?? ''),
+		styleInstruction: String(styleParam?.default ?? ''),
+		voiceDesignPrompt: String(voiceDesignParam?.default || (engineId === 'mimo-v2.5-tts-voicedesign' ? DEFAULT_VOICE_DESIGN_PROMPT : '')),
 		voicePrompt: String(promptParam?.default ?? promptParam?.options?.[0]?.value ?? '')
 	};
 }
@@ -384,9 +408,14 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 	const supportsEmotion = activeParamKeys.has('emotion');
 	const isOmniVoice = state.engineId === 'omnivoice';
 	const isMimoPreset = state.engineId === 'mimo-v2.5-tts-preset';
-	const isMimoDesign = state.engineId === 'mimo-v2.5-tts-voicedesign';
-	const isMimo = isMimoEngine(state.engineId);
 	const useCustomReference = usesReferenceVoice && state.voiceSource === 'reference_audio';
+	const useLibraryReference =
+		usesReferenceVoice && state.voiceSource === 'voice_library' && Boolean(state.voiceId);
+	const isQwen3TTS = state.engineId === 'qwen3-tts-mlx-0.6b';
+	const qwen3ReferenceRoute = isQwen3TTS && (useCustomReference || useLibraryReference);
+	const qwen3VoiceDesignRoute =
+		isQwen3TTS && !qwen3ReferenceRoute && Boolean(state.voiceDesignPrompt.trim());
+	const qwen3PresetRoute = isQwen3TTS && !qwen3ReferenceRoute && !qwen3VoiceDesignRoute;
 
 	return {
 		text: state.text,
@@ -394,7 +423,7 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 		source: state.requestSource || null,
 		project_id: state.requestProjectId || null,
 		segment_id: state.requestSegmentId || null,
-		voice_id: usesReferenceVoice && !useCustomReference ? state.voiceId || null : null,
+		voice_id: useLibraryReference ? state.voiceId || null : null,
 		voice_source: usesReferenceVoice ? state.voiceSource : undefined,
 		reference_audio_path: useCustomReference ? state.customVoiceReferenceAudioPath || null : null,
 		reference_audio_license_status: useCustomReference ? 'self_voice' : null,
@@ -402,9 +431,9 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 		ref_text:
 			useCustomReference && state.customVoiceTranscript.trim()
 				? state.customVoiceTranscript.trim()
-				: usesReferenceVoice && selectedVoice?.reference_text.trim()
-				? selectedVoice.reference_text.trim()
-				: null,
+			: useLibraryReference && selectedVoice?.reference_text.trim()
+			? selectedVoice.reference_text.trim()
+			: null,
 		custom_reference_source_audio_path: useCustomReference ? state.customVoiceSourceAudioPath || null : null,
 		custom_reference_source_duration_ms: useCustomReference ? state.customVoiceSourceDurationMs : null,
 		custom_reference_trim_start_ms: useCustomReference ? state.customVoiceTrimStartMs : null,
@@ -413,11 +442,20 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 		emotion_mode: supportsEmotion && Boolean(state.emotion) ? 'emotion_vector' : 'follow_reference',
 		emotion: supportsEmotion && Boolean(state.emotion) ? state.emotion : null,
 		emotion_text: isOmniVoice && !state.voiceId && !useCustomReference ? state.voiceDesign : null,
-		style_instruction: isMimo ? state.styleInstruction || null : null,
-		voice_design_prompt: isMimoDesign ? state.voiceDesignPrompt : null,
-		optimize_text_preview: isMimoDesign ? state.optimizeTextPreview : false,
+		style_instruction:
+			activeParamKeys.has('style_instruction') && !(isQwen3TTS && !qwen3PresetRoute)
+				? state.styleInstruction || null
+				: null,
+		voice_design_prompt:
+			activeParamKeys.has('voice_design_prompt') && !(isQwen3TTS && qwen3ReferenceRoute)
+				? state.voiceDesignPrompt || null
+				: null,
+		optimize_text_preview: activeParamKeys.has('optimize_text_preview') ? state.optimizeTextPreview : false,
 		mimo_voice: isMimoPreset ? state.mimoVoice : null,
-		speaker_id: activeParamKeys.has('speaker_id') ? state.speakerId || null : null,
+		speaker_id:
+			activeParamKeys.has('speaker_id') && !(isQwen3TTS && !qwen3PresetRoute)
+				? state.speakerId || null
+				: null,
 		prompt: activeParamKeys.has('prompt') ? state.voicePrompt || null : null,
 		nfe_step: state.nfeStep,
 		cfg_strength: state.cfgStrength,
@@ -443,6 +481,9 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 		duration: state.duration,
 		audio_chunk_duration: state.audioChunkDuration,
 		audio_chunk_threshold: state.audioChunkThreshold,
+		max_tokens: state.maxTokens,
+		cfg_scale: state.cfgScale,
+		ddpm_steps: state.ddpmSteps,
 		output_format: state.outputFormat
 	};
 }
@@ -484,7 +525,7 @@ function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<
 			req.emotion_mode === 'emotion_text' && typeof req.emotion_text === 'string'
 				? req.emotion_text
 				: DEFAULT_VOICE_DESIGN,
-		voiceDesignPrompt: req.voice_design_prompt || DEFAULT_VOICE_DESIGN_PROMPT,
+		voiceDesignPrompt: req.voice_design_prompt ?? engineDefaults.voiceDesignPrompt,
 		optimizeTextPreview: req.optimize_text_preview ?? false,
 		styleInstruction: req.style_instruction || '',
 		mimoVoice: req.mimo_voice || 'mimo_default',
@@ -501,7 +542,7 @@ function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<
 		speed: req.speed ?? INDEX_TTS_DEFAULTS.speed,
 		temperature: req.temperature ?? engineDefaults.temperature,
 		topP: req.top_p ?? engineDefaults.topP,
-		topK: req.top_k ?? INDEX_TTS_DEFAULTS.topK,
+		topK: req.top_k ?? engineDefaults.topK,
 		maxTextTokensPerSegment:
 			req.max_text_tokens_per_segment ?? INDEX_TTS_DEFAULTS.maxTextTokensPerSegment,
 		intervalSilence: req.interval_silence ?? INDEX_TTS_DEFAULTS.intervalSilence,
@@ -511,8 +552,11 @@ function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<
 		duration: req.duration ?? OMNIVOICE_DEFAULTS.duration,
 		audioChunkDuration: req.audio_chunk_duration ?? OMNIVOICE_DEFAULTS.audioChunkDuration,
 		audioChunkThreshold: req.audio_chunk_threshold ?? OMNIVOICE_DEFAULTS.audioChunkThreshold,
+		maxTokens: req.max_tokens ?? engineDefaults.maxTokens,
+		cfgScale: req.cfg_scale ?? engineDefaults.cfgScale,
+		ddpmSteps: req.ddpm_steps ?? engineDefaults.ddpmSteps,
 		maxMelTokens: req.max_mel_tokens ?? INDEX_TTS_DEFAULTS.maxMelTokens,
-		repetitionPenalty: req.repetition_penalty ?? INDEX_TTS_DEFAULTS.repetitionPenalty,
+		repetitionPenalty: req.repetition_penalty ?? engineDefaults.repetitionPenalty,
 		seed: req.seed ?? engineDefaults.seed ?? null,
 		outputFormat: req.output_format ?? INDEX_TTS_DEFAULTS.outputFormat,
 		showAdvanced: req.engine_id === 'f5-tts'

@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
-from app.services import audio_tools, confucius4_paths
+from app.services import audio_tools, confucius4_paths, qwen3_tts_paths
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -31,6 +31,7 @@ DEFAULT_EXTERNAL_ROOTS = {
     "f5-tts": Path("/Users/foxmacstudio/Projects/tts-engine-lab/F5-TTS"),
     "cosyvoice-sft": Path("/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice"),
     "cosyvoice-zero-shot": Path("/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice"),
+    "qwen3-tts-mlx-0.6b": qwen3_tts_paths.DEFAULT_ROOT,
 }
 
 
@@ -57,6 +58,7 @@ def _external_root(engine_id: str) -> Path:
         "f5-tts": "VOICE_STUDIO_F5_TTS_ROOT",
         "cosyvoice-sft": "VOICE_STUDIO_COSYVOICE_ROOT",
         "cosyvoice-zero-shot": "VOICE_STUDIO_COSYVOICE_ROOT",
+        "qwen3-tts-mlx-0.6b": "VOICE_STUDIO_QWEN3_TTS_ROOT",
     }
     env_value = os.environ.get(env_names[engine_id])
     if env_value:
@@ -283,6 +285,40 @@ def run_mimo_tts(**kwargs):
 
 
 
+def _build_doubao_kwargs(**kwargs):
+    output_path = kwargs.pop("output_path")
+    fmt = Path(output_path).suffix.lstrip(".") or "mp3"
+    return {
+        "output_path": output_path,
+        "audio_format": fmt,
+        "base_url": kwargs.get("base_url", ""),
+        "api_key": kwargs.get("api_key", ""),
+        "text": kwargs["text"],
+        "speaker": kwargs.get("speaker") or "zh_female_vv_uranus_bigtts",
+        "resource_id": kwargs.get("resource_id") or "seed-tts-2.0",
+        "style_instruction": kwargs.get("style_instruction"),
+        "speed": kwargs.get("speed"),
+    }
+
+
+def run_doubao_tts(**kwargs):
+    from app.services import doubao_client
+
+    params = _build_doubao_kwargs(**kwargs)
+    start = time.perf_counter()
+    result = doubao_client.generate_tts_unidirectional_http(**params)
+    meta = _audio_meta(params["output_path"], 24000)
+    meta.update(
+        {
+            "output_path": result["output_path"],
+            "generation_time_ms": int((time.perf_counter() - start) * 1000),
+            "provider_request_id": result.get("request_id"),
+            "provider_logid": result.get("logid"),
+        }
+    )
+    return meta
+
+
 def _build_emotivoice_kwargs(**kwargs):
     root = _external_root("emotivoice")
     output_path = kwargs.pop("output_path")
@@ -467,6 +503,117 @@ def run_confucius4_mlx(**kwargs):
         audio = np.concatenate(audio_parts) if audio_parts else np.zeros(0, dtype=np.float32)
         sf.write(out, np.clip(audio, -1, 1), sample_rate, subtype="PCM_16")
     meta = _audio_meta(output_path, 22050)
+    meta.update({"output_path": output_path, "generation_time_ms": int((time.perf_counter() - start) * 1000)})
+    return meta
+
+
+def _build_qwen3_tts_kwargs(**kwargs):
+    root = _external_root(qwen3_tts_paths.ENGINE_ID)
+    output_path = kwargs.pop("output_path")
+    text = kwargs.pop("text").strip()
+    ref_audio = kwargs.pop("reference_audio", None)
+    ref_text = (kwargs.pop("ref_text", None) or "").strip()
+    language = str(kwargs.pop("language", "zh") or "zh")
+    speaker_id = str(kwargs.pop("speaker_id", "") or "Vivian")
+    instruction = str(kwargs.pop("style_instruction", "") or "Normal tone")
+    voice_design_prompt = str(kwargs.pop("voice_design_prompt", "") or "").strip()
+    speed = float(kwargs.pop("speed", 1.0) or 1.0)
+    temperature = float(kwargs.pop("temperature", 0.7) or 0.7)
+    top_p = float(kwargs.pop("top_p", 0.9) or 0.9)
+    top_k = int(kwargs.pop("top_k", 50) or 50)
+    repetition_penalty = float(kwargs.pop("repetition_penalty", 1.1) or 1.1)
+    max_tokens = int(kwargs.pop("max_tokens", 1200) or 1200)
+    cfg_scale = kwargs.pop("cfg_scale", None)
+    ddpm_steps = kwargs.pop("ddpm_steps", None)
+    return root, output_path, text, ref_audio, ref_text, language, speaker_id, instruction, voice_design_prompt, speed, temperature, top_p, top_k, repetition_penalty, max_tokens, cfg_scale, ddpm_steps
+
+
+def run_qwen3_tts(**kwargs):
+    root, output_path, text, ref_audio, ref_text, language, speaker_id, instruction, voice_design_prompt, speed, temperature, top_p, top_k, repetition_penalty, max_tokens, cfg_scale, ddpm_steps = _build_qwen3_tts_kwargs(**kwargs)
+    if not text:
+        raise RuntimeError("Text is empty")
+    python = _external_python(root)
+    model_kind = "base" if ref_audio else "design" if voice_design_prompt else "custom"
+    model_dir = qwen3_tts_paths.model_dir(model_kind)
+    if not model_dir.exists():
+        raise RuntimeError(f"Qwen3-TTS model not found: {model_dir}")
+    if ref_audio and not Path(ref_audio).exists():
+        raise RuntimeError("REFERENCE_AUDIO_NOT_FOUND")
+    if ref_audio and not ref_text:
+        ref_text = "."
+    payload = {
+        "text": text,
+        "reference_audio": ref_audio,
+        "ref_text": ref_text,
+        "language": language,
+        "speaker_id": speaker_id,
+        "instruction": instruction,
+        "voice_design_prompt": voice_design_prompt,
+        "speed": speed,
+        "temperature": temperature,
+        "top_p": top_p,
+        "top_k": top_k,
+        "repetition_penalty": repetition_penalty,
+        "max_tokens": max_tokens,
+        "cfg_scale": cfg_scale,
+        "ddpm_steps": ddpm_steps,
+        "model_dir": str(model_dir),
+        "output_path": output_path,
+    }
+    script = r"""
+import json
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+from mlx_audio.tts.utils import load_model
+from mlx_audio.tts.generate import generate_audio
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+model = load_model(Path(payload["model_dir"]))
+with tempfile.TemporaryDirectory(prefix="voice-studio-qwen3-") as tmp:
+    kwargs = {
+        "model": model,
+        "text": payload["text"],
+        "lang_code": payload["language"],
+        "speed": payload["speed"],
+        "temperature": payload["temperature"],
+        "top_p": payload["top_p"],
+        "top_k": payload["top_k"],
+        "repetition_penalty": payload["repetition_penalty"],
+        "max_tokens": payload["max_tokens"],
+        "output_path": tmp,
+        "file_prefix": "qwen3",
+        "play": False,
+        "verbose": False,
+    }
+    if payload.get("cfg_scale") is not None:
+        kwargs["cfg_scale"] = payload["cfg_scale"]
+    if payload.get("ddpm_steps") is not None:
+        kwargs["ddpm_steps"] = payload["ddpm_steps"]
+    if payload.get("reference_audio"):
+        kwargs["ref_audio"] = payload["reference_audio"]
+        kwargs["ref_text"] = payload.get("ref_text") or "."
+    elif payload.get("voice_design_prompt"):
+        kwargs["instruct"] = payload["voice_design_prompt"]
+    else:
+        kwargs["voice"] = payload.get("speaker_id") or "Vivian"
+        kwargs["instruct"] = payload.get("instruction") or ""
+    generate_audio(**kwargs)
+    candidates = sorted(Path(tmp).glob("*.wav"))
+    if not candidates:
+        raise RuntimeError("Qwen3-TTS returned no wav output")
+    out = Path(payload["output_path"])
+    out.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(candidates[0], out)
+"""
+    start = time.perf_counter()
+    with _file_lock(root / ".voice_studio" / "qwen3-tts.lock"), tempfile.TemporaryDirectory(prefix="voice-studio-qwen3-payload-") as tmp:
+        payload_path = Path(tmp) / "payload.json"
+        payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        _run_external([python, "-c", script, str(payload_path)], root)
+    meta = _audio_meta(output_path, 24000)
     meta.update({"output_path": output_path, "generation_time_ms": int((time.perf_counter() - start) * 1000)})
     return meta
 
@@ -685,6 +832,7 @@ RUNNERS = {
     "omnivoice": run_omnivoice,
     "emotivoice": run_emotivoice,
     "confucius4-mlx-int8": run_confucius4_mlx,
+    "qwen3-tts-mlx-0.6b": run_qwen3_tts,
     "f5-tts": run_f5_tts,
     "cosyvoice-sft": run_cosyvoice_sft,
     "cosyvoice-zero-shot": run_cosyvoice_zero_shot,
@@ -692,6 +840,7 @@ RUNNERS = {
     "mimo-v2.5-tts-preset": run_mimo_tts,
     "mimo-v2.5-tts-voicedesign": run_mimo_tts,
     "mimo-v2.5-tts-voiceclone": run_mimo_tts,
+    "doubao-tts-preset": run_doubao_tts,
 }
 
 

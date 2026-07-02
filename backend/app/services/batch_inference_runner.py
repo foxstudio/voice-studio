@@ -191,6 +191,36 @@ def run_mimo_tts(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return results
 
 
+def run_doubao_tts(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    from app.services import doubao_client
+
+    common = dict(payload["common"])
+    results = []
+    for segment in payload["segments"]:
+        started = time.perf_counter()
+        out = _target_path(segment["output_path"])
+        kwargs = dict(common)
+        kwargs.update({k: v for k, v in segment.get("parameters", {}).items() if v is not None})
+        try:
+            doubao_client.generate_tts_unidirectional_http(
+                base_url=kwargs["base_url"],
+                api_key=kwargs["api_key"],
+                text=segment["text"],
+                output_path=str(out),
+                speaker=kwargs.get("speaker") or kwargs.get("speaker_id") or "zh_female_vv_uranus_bigtts",
+                resource_id=kwargs.get("resource_id") or "seed-tts-2.0",
+                style_instruction=kwargs.get("style_instruction"),
+                speed=kwargs.get("speed"),
+                audio_format=out.suffix.lstrip(".") or "mp3",
+            )
+            meta = _audio_meta(str(out), 24000)
+            meta.update({"output_path": str(out), "generation_time_ms": int((time.perf_counter() - started) * 1000)})
+            results.append({"segment_id": segment["segment_id"], "status": "success", **meta})
+        except Exception as exc:
+            results.append({"segment_id": segment["segment_id"], "status": "failed", "error_message": str(exc)})
+    return results
+
+
 def run_external_tts(payload: dict[str, Any], runner_name: str, sample_rate: int) -> list[dict[str, Any]]:
     from app.services import inference_runner
 
@@ -224,6 +254,10 @@ def run_confucius4_mlx(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return run_external_tts(payload, "run_confucius4_mlx", 22050)
 
 
+def run_qwen3_tts(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return run_external_tts(payload, "run_qwen3_tts", 24000)
+
+
 def run_f5_tts(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return run_external_tts(payload, "run_f5_tts", 24000)
 
@@ -241,6 +275,7 @@ RUNNERS = {
     "omnivoice": run_omnivoice,
     "emotivoice": run_emotivoice,
     "confucius4-mlx-int8": run_confucius4_mlx,
+    "qwen3-tts-mlx-0.6b": run_qwen3_tts,
     "f5-tts": run_f5_tts,
     "cosyvoice-sft": run_cosyvoice_sft,
     "cosyvoice-zero-shot": run_cosyvoice_zero_shot,
@@ -248,6 +283,7 @@ RUNNERS = {
     "mimo-v2.5-tts-preset": run_mimo_tts,
     "mimo-v2.5-tts-voicedesign": run_mimo_tts,
     "mimo-v2.5-tts-voiceclone": run_mimo_tts,
+    "doubao-tts-preset": run_doubao_tts,
 }
 
 

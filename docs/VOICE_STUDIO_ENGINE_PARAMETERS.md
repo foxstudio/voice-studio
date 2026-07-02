@@ -11,6 +11,7 @@
 - F5-TTS 是本地参考音频 TTS，当前接入要求已授权参考音频和对应 `ref_text`，不会自动调用 Whisper 听写参考音频。
 - CosyVoice SFT 是本地官方预训练音色 TTS，当前接入使用官方 SFT 预置 speaker。
 - CosyVoice Zero-Shot 是本地参考音频复刻 TTS，使用音色库参考音频和对应 `ref_text`；不要和 SFT 预置音色混用。
+- Qwen3-TTS MLX 0.6B 是实验接入的本地千问 TTS：不选参考音色时用 CustomVoice 预置 speaker，选择本地音色时用 Base 模型做声音复刻。
 - F5-TTS 和 CosyVoice 默认使用外部持久 worker 复用已加载模型；排查问题时可分别设置 `VOICE_STUDIO_F5_PERSISTENT_WORKER=0` 或 `VOICE_STUDIO_COSYVOICE_PERSISTENT_WORKER=0` 回退一次性子进程。
 - MiMo V2.5 TTS 是云端 OpenAI 兼容接口，已拆成 preset、voicedesign、voiceclone 三个引擎；官方 TTS 超参是 `temperature` 和 `top_p`。
 - MiMo voiceclone 没有独立的数值 `speed` API 参数。需要调语速时，把“语速稍慢/语速偏快”等写进 `style_instruction`，或在合成文本里使用官方音频标签。
@@ -26,6 +27,8 @@
 - Confucius4 MLX runtime PR：https://github.com/Hert4/mlx-audio/pull/88
 - F5-TTS README / CLI 参数：https://github.com/SWivid/F5-TTS
 - CosyVoice README / inference API：https://github.com/FunAudioLLM/CosyVoice
+- Qwen3-TTS Apple Silicon PoC：https://github.com/kapi2800/qwen3-tts-apple-silicon
+- Qwen3-TTS MLX 8-bit models：https://huggingface.co/mlx-community
 
 ## 官方音色库和本地音色库
 
@@ -41,6 +44,7 @@
 - F5-TTS 没有固定官方 speaker 库；它主要使用 `ref_audio + ref_text` 做参考音色生成。
 - Confucius4-TTS 没有固定官方 speaker 库；它使用 `reference_audio_path` 或音色库 `voice_id` 的参考音频做声音克隆和情绪迁移，不强制 `ref_text`。
 - CosyVoice Zero-Shot 没有固定本地 speaker 选择；它使用音色库里的参考音频和对应台词。
+- Qwen3-TTS CustomVoice 有模型预置 speaker；Base 模式使用音色库里的参考音频做本地声音复刻。
 - MiMo preset 是云端官方预置音色目录；MiMo voiceclone 才使用本地参考音频并上传云端。
 
 ## 服务入口
@@ -102,6 +106,7 @@ curl -X POST http://127.0.0.1:8000/api/generate \
 | `f5-tts` | 本地 TTS | `voice_id`/`reference_audio_path`, `ref_text`, `speed`, `nfe_step`, `cfg_strength`, `target_rms`, `cross_fade_duration`, `remove_silence`, `seed`, `output_format` | 没有参考文本时不要自动听写；MiMo 专属参数、IndexTTS 情绪向量无效 |
 | `cosyvoice-sft` | 本地 TTS | `speaker_id`, `speed`, `output_format` | 本地 `voice_id`、参考文本、IndexTTS 情绪向量、MiMo 专属参数 |
 | `cosyvoice-zero-shot` | 本地 TTS | `voice_id`/`reference_audio_path`, `ref_text`, `speed`, `output_format` | `speaker_id`、F5 采样参数、IndexTTS 情绪向量、MiMo 专属参数 |
+| `qwen3-tts-mlx-0.6b` | 本地 TTS | `speaker_id`, `voice_id`/`reference_audio_path`, `ref_text`, `language`, `style_instruction`, `voice_design_prompt`, `speed`, `temperature`, `top_p`, `top_k`, `repetition_penalty`, `max_tokens`, `cfg_scale`, `ddpm_steps`, `output_format` | `mimo_voice`、IndexTTS 情绪向量、F5 采样参数无效；预置音色、声音设计、参考音色复刻三条路线互斥 |
 | `mimo-v2.5-tts-preset` | 云端 TTS | `mimo_voice`, `style_instruction`, `temperature`, `top_p`, `output_format` | 本地 `voice_id`、`speed`、`top_k`、分段参数、扩散参数 |
 | `mimo-v2.5-tts-voicedesign` | 云端 TTS | `voice_design_prompt`, `optimize_text_preview`, `temperature`, `top_p`, `output_format` | 本地 `voice_id`、`speed`、`top_k`、分段参数、扩散参数 |
 | `mimo-v2.5-tts-voiceclone` | 云端 TTS | `voice_id` 或 `reference_audio_path`, `style_instruction`, `temperature`, `top_p`, `output_format` | `speed`、`top_k`、分段参数、扩散参数、`mimo_voice` |
@@ -144,6 +149,7 @@ TTS 调用方可以选择系统音色库、调用方提供的参考声音，或�
 | `f5-tts` | `speed=1.0`, `nfe_step=32`, `cfg_strength=2.0`, `target_rms=0.1`, `cross_fade_duration=0.15`, `remove_silence=false` | 官方默认复刻、快速试听、短句去静音 |
 | `cosyvoice-sft` | `speaker_id=中文女`, `speed=1.0` | 中文女声、中文男声、粤语女声 |
 | `cosyvoice-zero-shot` | `speed=1.0` | 参考音色复刻、慢速清晰 |
+| `qwen3-tts-mlx-0.6b` | `speaker_id=Vivian`, `style_instruction=''`, `speed=1.0`, `temperature=0.7`, `top_p=0.9`, `top_k=50`, `repetition_penalty=1.1`, `max_tokens=1200`, `cfg_scale=1.5`, `ddpm_steps=空` | Qwen3 Vivian 口播、Qwen3 声音设计、Qwen3 复刻讲述 |
 | `mimo-v2.5-tts-preset` | `mimo_voice=mimo_default`, `style_instruction=''`, `temperature=0.6`, `top_p=0.95` | MiMo 稳定口播、MiMo 温柔女声 |
 | `mimo-v2.5-tts-voicedesign` | `voice_design_prompt=中年男性，声线沉稳偏正式，吐字工整，语速适中。`, `optimize_text_preview=false`, `temperature=0.6`, `top_p=0.95` | MiMo 角色试音 |
 | `mimo-v2.5-tts-voiceclone` | `style_instruction=''`, `temperature=0.6`, `top_p=0.95` | MiMo 复刻讲述 |
@@ -188,6 +194,7 @@ curl -X POST http://127.0.0.1:8000/api/presets \
 - F5-TTS：正文放 `text`，参考音色用 `voice_id` 或 `reference_audio_path`，必须提供准确 `ref_text`。`ref_text` 为空时官方会自动 ASR；本项目会拦截为 `REFERENCE_TEXT_REQUIRED`，避免后台 agent 触发额外下载和慢等待。
 - CosyVoice SFT：正文放 `text`，官方预置音色放 `speaker_id`。它不使用本地 `voice_id`。
 - CosyVoice Zero-Shot：正文放 `text`，参考音色用 `voice_id` 或 `reference_audio_path`，必须提供准确 `ref_text`。目标文本明显短于参考文本时，官方实现会提示效果可能下降。
+- Qwen3-TTS：正文放 `text`。三条声音路线互斥：未选择本地/自定义参考音色且 `voice_design_prompt` 为空时，使用 `speaker_id` 走 CustomVoice 预置音色；填写 `voice_design_prompt` 时走 VoiceDesign 声音设计；选择 `voice_id` 或 `reference_audio_path` 时走 Base 参考音色复刻，建议提供 `ref_text`。`style_instruction` 只用于 CustomVoice 预置音色路线；留空时后端按官方示例使用 `Normal tone`。`voice_design_prompt` 和 `style_instruction` 支持中文或英文描述，但中文自由提示建议先试听确认。官方 `speed` 参数支持语速调整，README 推荐 Normal `1.0`、Fast `1.3`、Slow `0.8`。
 - MiMo preset：正文放 `text`，官方预置音色放 `mimo_voice`，整体风格、语速、情绪写到 `style_instruction`。
 - MiMo VoiceDesign：正文放 `text`，音色描述写到 `voice_design_prompt`，需要官方润色播报文本时打开 `optimize_text_preview`。
 - MiMo VoiceClone：正文放 `text`，参考音色用 `voice_id` 或 `reference_audio_path`，语速和表演方式写到 `style_instruction`；没有独立数值 `speed`。
@@ -216,6 +223,7 @@ MiMo 支持自然语言控制和音频标签，但这些标签只应写进 MiMo 
 | `confucius4-mlx-int8` | 24 字 | 48 字 | `split_verify_merge` |
 | `cosyvoice-sft` | 80 字 | 320 字 | `split_verify_merge` |
 | `cosyvoice-zero-shot` | 80 字 | 240 字 | `split_verify_merge` |
+| `qwen3-tts-mlx-0.6b` | 120 字 | 360 字 | `split_verify_merge` |
 | `mimo-v2.5-tts-preset` | 600 字 | 1200 字 | `split_verify_merge` |
 | `mimo-v2.5-tts-voiceclone` | 400 字 | 800 字 | `split_verify_merge` |
 | `mimo-v2.5-tts-voicedesign` | 400 字 | 800 字 | `split_generate` |

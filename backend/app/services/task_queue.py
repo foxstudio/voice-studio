@@ -68,6 +68,10 @@ def _is_mimo_tts(engine_id: str) -> bool:
     return engine_policy.is_mimo_tts(engine_id)
 
 
+def _is_doubao_tts(engine_id: str) -> bool:
+    return engine_policy.is_doubao_tts(engine_id)
+
+
 def _mimo_idempotency_marker(req: GenerateRequest) -> str:
     if req.idempotency_marker:
         return req.idempotency_marker
@@ -683,6 +687,8 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
             reference_audio_path=ref,
             idempotency_marker=_mimo_idempotency_marker(req),
         )
+    if engine_request_builder.is_doubao_tts_request(req.engine_id):
+        return engine_request_builder.build_doubao_tts_single_kwargs(req, output_path)
     model_dir = str(settings_store.model_path(req.engine_id))
     if req.engine_id in {"emotivoice", "cosyvoice-sft"}:
         return engine_request_builder.build_preset_voice_single_kwargs(req, output_path)
@@ -706,6 +712,13 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
             output_path,
             reference_audio=ref,
             model_dir=model_dir,
+        )
+    if req.engine_id == "qwen3-tts-mlx-0.6b":
+        return engine_request_builder.build_qwen3_tts_single_kwargs(
+            req,
+            output_path,
+            reference_audio=ref,
+            ref_text=ref_text,
         )
     if req.engine_id == "indextts-v2":
         return engine_request_builder.build_indextts_v2_single_kwargs(
@@ -834,6 +847,7 @@ _RAMP_SECONDS = {
     "mimo-v2.5-tts-preset": 120.0,
     "mimo-v2.5-tts-voicedesign": 120.0,
     "mimo-v2.5-tts-voiceclone": 120.0,
+    "doubao-tts-preset": 120.0,
 }
 
 

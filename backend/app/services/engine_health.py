@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from app.services import confucius4_paths, engine_manifests, engine_policy, faster_whisper_asr, qwen_mlx_asr, settings_store
+from app.services import confucius4_paths, engine_manifests, engine_policy, faster_whisper_asr, qwen3_tts_paths, qwen_mlx_asr, settings_store
 
 
 DEFAULT_EXTERNAL_ROOTS = {
@@ -45,13 +45,15 @@ def health_check(engine_id: str) -> dict[str, Any]:
     if engine_id.startswith("indextts"):
         return _health_indextts(engine_id)
     if engine_policy.is_cloud_engine(engine_id):
-        return _health_cloud_engine()
+        return _health_cloud_engine(engine_id)
     if engine_id == "qwen3-asr-mlx":
         return _health_qwen_asr(engine_id)
     if engine_id == "faster-whisper-turbo":
         return _health_faster_whisper_asr(engine_id)
     if engine_id == confucius4_paths.ENGINE_ID:
         return _health_confucius4_mlx()
+    if engine_id == qwen3_tts_paths.ENGINE_ID:
+        return _health_qwen3_tts()
     if engine_id in engine_policy.EXTERNAL_SUBPROCESS_ENGINES:
         return _health_external_engine(engine_id)
     return _health_omnivoice()
@@ -69,10 +71,14 @@ def _health_indextts(engine_id: str) -> dict[str, Any]:
     }
 
 
-def _health_cloud_engine() -> dict[str, Any]:
+def _health_cloud_engine(engine_id: str) -> dict[str, Any]:
     settings = settings_store.get()
     if not settings.cloud_enabled:
         return {"healthy": False, "status": "cloud_disabled", "detail": "云端引擎未启用"}
+    if engine_policy.is_doubao_tts(engine_id):
+        if not settings.doubao_api_key_configured:
+            return {"healthy": False, "status": "api_key_missing", "detail": "豆包 API Key 未配置"}
+        return {"healthy": True, "status": "configured", "base_url": settings.doubao_base_url}
     if not settings.mimo_api_key_configured:
         return {"healthy": False, "status": "api_key_missing", "detail": "MiMo Token Plan API Key 未配置"}
     return {"healthy": True, "status": "configured", "base_url": settings.mimo_base_url}
@@ -106,6 +112,21 @@ def _health_confucius4_mlx() -> dict[str, Any]:
         "model_path": str(model_path),
         "runtime_path": str(runtime_root),
         "missing": missing,
+    }
+
+
+def _health_qwen3_tts() -> dict[str, Any]:
+    root = qwen3_tts_paths.root()
+    missing = qwen3_tts_paths.missing_required_files()
+    optional_missing = qwen3_tts_paths.missing_optional_files()
+    return {
+        "healthy": not missing,
+        "status": "ok" if not missing else "external_runtime_missing",
+        "model_path": str(root),
+        "python": str(root / ".venv" / "bin" / "python"),
+        "missing": missing,
+        "optional_missing": optional_missing,
+        "voice_design_available": not optional_missing,
     }
 
 

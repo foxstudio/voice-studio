@@ -26,10 +26,12 @@ def test_mimo_tts_requires_idempotency_marker():
 
 def test_runner_kind_keeps_current_execution_families():
     assert engine_policy.runner_kind_for("mimo-v2.5-tts") == "cloud"
+    assert engine_policy.runner_kind_for("doubao-tts-preset") == "cloud"
     assert engine_policy.runner_kind_for("f5-tts") == "persistent_worker"
     assert engine_policy.runner_kind_for("cosyvoice-zero-shot") == "persistent_worker"
     assert engine_policy.runner_kind_for("emotivoice") == "external_subprocess"
     assert engine_policy.runner_kind_for("confucius4-mlx-int8") == "external_subprocess"
+    assert engine_policy.runner_kind_for("qwen3-tts-mlx-0.6b") == "external_subprocess"
     assert engine_policy.runner_kind_for("qwen3-asr-mlx") == "asr_local"
     assert engine_policy.runner_kind_for("faster-whisper-turbo") == "asr_local"
     assert engine_policy.runner_kind_for("indextts-v2") == "local"
@@ -39,6 +41,8 @@ def test_timeout_policy_matches_current_task_queue_defaults():
     assert engine_policy.timeout_seconds_for("omnivoice") == 600
     assert engine_policy.timeout_seconds_for("indextts-v2") == 420
     assert engine_policy.timeout_seconds_for("confucius4-mlx-int8") == 600
+    assert engine_policy.timeout_seconds_for("qwen3-tts-mlx-0.6b") == 600
     assert engine_policy.timeout_seconds_for("f5-tts") == 600
     assert engine_policy.timeout_seconds_for("cosyvoice-zero-shot") == 900
+    assert engine_policy.timeout_seconds_for("doubao-tts-preset") == 300
     assert engine_policy.timeout_seconds_for("unknown") == 300

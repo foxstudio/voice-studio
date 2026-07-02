@@ -159,6 +159,22 @@ async def diagnose_audio(engine_id: str, data: EngineAudioDiagnosisRequest):
                 "top_p": 0.8,
                 "audio_format": "wav",
             }
+        elif engine_id == "doubao-tts-preset":
+            settings = settings_store.get()
+            api_key = settings_store.doubao_api_key()
+            if not api_key:
+                raise AppException(400, "DOUBAO_API_KEY_REQUIRED", "请先在设置中配置豆包 API Key")
+            kwargs = {
+                "text": data.text,
+                "output_path": str(output_path),
+                "base_url": settings.doubao_base_url,
+                "api_key": api_key,
+                "resource_id": settings.doubao_default_tts_resource_id,
+                "speaker": "zh_female_vv_uranus_bigtts",
+                "style_instruction": None,
+                "speed": 1.0,
+                "audio_format": "wav",
+            }
         else:
             kwargs.update({"language": data.language, "ref_text": None, "emotion": None, "emotion_text": data.emotion_text})
         timeout = 900 if engine_id in {"cosyvoice-sft", "cosyvoice-zero-shot"} else 600 if engine_id in {"f5-tts", "emotivoice", "confucius4-mlx-int8"} else 300

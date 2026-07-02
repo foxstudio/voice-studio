@@ -52,6 +52,7 @@ export const Api = {
 	settings: () => api.get<AppSettings>('/settings'),
 	saveSettings: (settings: AppSettings) => api.patch<AppSettings>('/settings', settings),
 	saveMimoSecret: (body: { api_key?: string | null; clear?: boolean }) => api.patch<AppSettings>('/settings/mimo-secret', body),
+	saveDoubaoSecret: (body: { api_key?: string | null; clear?: boolean }) => api.patch<AppSettings>('/settings/doubao-secret', body),
 	settingsStorage: () => api.get<StorageAudit>('/settings/storage'),
 	cleanupSettingsStorage: (targets: string[]) => api.post<StorageCleanupResponse>('/settings/storage/cleanup', { targets }),
 	openSettingsStorageLocation: (key: string) => api.post<StorageOpenResponse>('/settings/storage/open', { key }),

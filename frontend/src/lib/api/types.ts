@@ -80,6 +80,11 @@ export interface AppSettings {
 	mimo_api_key_configured: boolean;
 	mimo_default_voice: string;
 	mimo_voiceclone_confirm_upload: boolean;
+	doubao_base_url: string;
+	doubao_api_key_configured: boolean;
+	doubao_default_tts_resource_id: string;
+	doubao_default_icl_resource_id: string;
+	doubao_upload_confirm: boolean;
 	default_emotion: string;
 	default_emo_alpha: number;
 	theme: 'system' | 'dark' | 'light';
@@ -463,6 +468,9 @@ export interface GenerateRequest {
 	duration: number;
 	audio_chunk_duration?: number;
 	audio_chunk_threshold?: number;
+	max_tokens?: number;
+	cfg_scale?: number | null;
+	ddpm_steps?: number | null;
 	output_format: OutputFormat;
 }
 

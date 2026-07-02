@@ -233,6 +233,8 @@ def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
             req,
             reference_audio_path=_resolve_reference(req),
         )
+    if engine_request_builder.is_doubao_tts_request(req.engine_id):
+        return engine_request_builder.build_doubao_tts_batch_common_kwargs(req)
 
     ref = _resolve_reference(req)
     voice = voice_store.get_voice(req.voice_id) if req.voice_id else None
@@ -281,6 +283,13 @@ def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
             language=req.language,
             model_dir=str(settings_store.model_path(req.engine_id)),
         )
+    if req.engine_id == "qwen3-tts-mlx-0.6b":
+        return engine_request_builder.build_qwen3_tts_batch_common_kwargs(
+            values,
+            reference_audio=ref,
+            ref_text=ref_text,
+            language=req.language,
+        )
     if req.engine_id == "omnivoice":
         return engine_request_builder.build_omnivoice_batch_common_kwargs(
             values,
@@ -315,6 +324,12 @@ def _runner_segments(req: BatchGenerateRequest, batch: BatchTask, output_dir: Pa
             "target_rms": segment.parameters.get("target_rms"),
             "cross_fade_duration": segment.parameters.get("cross_fade_duration"),
             "remove_silence": segment.parameters.get("remove_silence"),
+            "top_p": segment.parameters.get("top_p"),
+            "top_k": segment.parameters.get("top_k"),
+            "repetition_penalty": segment.parameters.get("repetition_penalty"),
+            "max_tokens": segment.parameters.get("max_tokens"),
+            "cfg_scale": segment.parameters.get("cfg_scale"),
+            "ddpm_steps": segment.parameters.get("ddpm_steps"),
         }
         params.update({key: value for key, value in explicit_params.items() if value is not None})
         runner_segments.append(

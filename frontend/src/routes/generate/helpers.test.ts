@@ -13,6 +13,7 @@ import {
 	displayTitle,
 	requestFromTask,
 	taskParameterCopyText,
+	voiceBadgeLabel,
 	formatSeconds,
 	formatAudioDuration,
 } from './helpers';
@@ -252,6 +253,31 @@ describe('taskParameterCopyText', () => {
 		expect(text).toContain('采样摆动 Sway: -1');
 		expect(text).toContain('移除静音: 否');
 		expect(text).toContain('格式: WAV');
+	});
+
+	it('maps cloud speaker id to the official option label in result badges', () => {
+		const task = makeTask({
+			engine_id: 'doubao-tts-preset',
+			parameters: {
+				speaker_id: 'zh_female_peiqi_uranus_bigtts'
+			}
+		});
+		const label = voiceBadgeLabel(
+			task,
+			voiceMap(),
+			engineMap([
+				engineDetail('doubao-tts-preset', [
+					parameter({
+						key: 'speaker_id',
+						label: '豆包官方音色',
+						type: 'select',
+						options: [{ label: '佩奇猪 2.0 · 角色音', value: 'zh_female_peiqi_uranus_bigtts' }]
+					})
+				])
+			])
+		);
+
+		expect(label).toBe('佩奇猪 2.0 · 角色音');
 	});
 
 	it('unwraps longform export generate_request and includes merge parameters', () => {

@@ -82,6 +82,7 @@ docs/MIMO_V2_5_CLOUD_API_RFC.md
 docs/VOICE_STUDIO_TODO.md
 
 # Frontend
+node_modules/
 frontend/node_modules/
 frontend/.svelte-kit/
 frontend/build/
