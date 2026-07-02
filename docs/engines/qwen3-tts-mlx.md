@@ -25,7 +25,7 @@
 
 ### 声音设计
 
-填写 `voice_design_prompt` 时，Voice Studio 使用 VoiceDesign 模型，把这段描述作为官方 `instruct` 参数。它会接管预置音色和风格指令；当前本机默认只安装了 CustomVoice 和 Base，如果 VoiceDesign 模型目录不存在，生成会明确提示缺少模型。
+只有本机存在 `models/Qwen3-TTS-12Hz-0.6B-VoiceDesign-8bit` 时，Voice Studio 才展示 `voice_design_prompt` 和“Qwen3 声音设计”预设。填写 `voice_design_prompt` 时，Voice Studio 使用 VoiceDesign 模型，把这段描述作为官方 `instruct` 参数；它会接管预置音色和风格指令。
 
 ## 当前参数
 
@@ -34,7 +34,7 @@
 | `speaker_id` | `Vivian` | CustomVoice 预置音色。 |
 | `language` | `zh` | 目标语言提示，可用中文、英文、日文、韩文。 |
 | `style_instruction` | 空 | CustomVoice 情绪/风格指令；留空时后端按官方示例使用 `Normal tone`。支持中文或英文，例如“语气温柔，语速稍慢，像在讲解课程”。 |
-| `voice_design_prompt` | 空 | VoiceDesign 声音描述。填写后使用 VoiceDesign 模型。支持中文或英文，例如“年轻中文女声，声线温暖，吐字清晰”。 |
+| `voice_design_prompt` | 空 | VoiceDesign 声音描述。仅在本机安装 VoiceDesign 模型后展示；填写后使用 VoiceDesign 模型。支持中文或英文，例如“年轻中文女声，声线温暖，吐字清晰”。 |
 | `speed` | `1.0` | 官方 speed 参数。README 推荐 Normal `1.0`、Fast `1.3`、Slow `0.8`。 |
 | `temperature` | `0.7` | 采样随机度，默认偏稳定。 |
 | `top_p` | `0.9` | 官方 top_p 参数，控制核采样范围。 |
@@ -58,7 +58,7 @@
 |---|---|---|
 | Qwen3 官方基准 | CustomVoice 预置音色 | `speaker_id=Vivian`, `speed=1.0`, `temperature=0.7`, `top_p=1.0`, `top_k=30`, `repetition_penalty=1.15`, `max_tokens=512` |
 | Qwen3 课程慢讲 | CustomVoice 预置音色 | `speed=0.8`, `temperature=0.65`, `top_p=0.92`, `top_k=35`, `style_instruction=语气自然、吐字清晰...` |
-| Qwen3 声音设计 | VoiceDesign | `voice_design_prompt=温柔的中文女声...`, `temperature=0.65`, `top_p=0.92`, `top_k=35` |
+| Qwen3 声音设计 | VoiceDesign | 仅安装 `Qwen3-TTS-12Hz-0.6B-VoiceDesign-8bit` 后显示；`voice_design_prompt=温柔的中文女声...`, `temperature=0.65`, `top_p=0.92`, `top_k=35` |
 | Qwen3 复刻讲述 | Base 参考音色复刻 | 需要当前选择本地音色或自定义参考音色；不提交 `speaker_id` / `style_instruction` / `voice_design_prompt` |
 
 这些预设不是“官方最佳值”。官方 Hugging Face `generation_config.json` 更偏模型默认值，Apple Silicon PoC 主要给出三种语速，社区 voice clone 示例更常见 `temperature=0.7`, `top_p=1.0`, `top_k=30`, `repetition_penalty=1.15`, `max_new_tokens=512`。Voice Studio 预设选择了偏稳、适合短句试听的折中值。

@@ -54,3 +54,7 @@ def missing_required_files() -> list[str]:
 def missing_optional_files() -> list[str]:
     model = model_dir("design")
     return [f"models/{VOICE_DESIGN_MODEL_DIR}/{item}" for item in REQUIRED_MODEL_FILES if not (model / item).exists()]
+
+
+def voice_design_available() -> bool:
+    return not missing_optional_files()

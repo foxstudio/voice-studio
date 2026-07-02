@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.schemas.voice_studio import PresetTemplate, PresetTemplateUpsert, new_id, now_iso
-from app.services import database
+from app.services import database, qwen3_tts_paths
 
 
 _COMMON = {
@@ -375,13 +375,23 @@ BUILTIN_PRESETS: list[PresetTemplate] = [
 ]
 
 
+def available_builtin_presets() -> list[PresetTemplate]:
+    if qwen3_tts_paths.voice_design_available():
+        return BUILTIN_PRESETS
+    return [
+        preset
+        for preset in BUILTIN_PRESETS
+        if not (preset.engine_id == qwen3_tts_paths.ENGINE_ID and preset.recommended_voice_type == "voice_design")
+    ]
+
+
 def list_presets() -> list[PresetTemplate]:
     custom = [PresetTemplate(**row) for row in database.list_all("presets", "updated_at")]
-    return BUILTIN_PRESETS + custom
+    return available_builtin_presets() + custom
 
 
 def get_preset(preset_id: str) -> PresetTemplate | None:
-    builtin = next((preset for preset in BUILTIN_PRESETS if preset.preset_id == preset_id), None)
+    builtin = next((preset for preset in available_builtin_presets() if preset.preset_id == preset_id), None)
     if builtin:
         return builtin
     row = database.get_one("presets", "preset_id", preset_id)

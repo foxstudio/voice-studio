@@ -14,7 +14,7 @@ if str(BACKEND) not in sys.path:
 
 from app.main import app  # noqa: E402
 from app.schemas.voice_studio import AppSettings, EngineAudioDiagnosisRequest, GenerateRequest, HistoryItem, Project, Role, ScriptSegment  # noqa: E402
-from app.services import audio_tools, batch_queue, community_voice_pack_store, database, engine_registry, history_store, ser_service, settings_store, task_queue, voice_aliases, voice_store  # noqa: E402
+from app.services import audio_tools, batch_queue, community_voice_pack_store, database, engine_registry, history_store, qwen3_tts_paths, ser_service, settings_store, task_queue, voice_aliases, voice_store  # noqa: E402
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -33,7 +33,8 @@ def _client(tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
-def test_presets_are_available_and_apply_to_main_engines(tmp_path: Path):
+def test_presets_are_available_and_apply_to_main_engines(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(qwen3_tts_paths, "voice_design_available", lambda: True)
     client = _client(tmp_path)
     resp = client.get("/api/presets")
     assert resp.status_code == 200
@@ -67,6 +68,21 @@ def test_presets_are_available_and_apply_to_main_engines(tmp_path: Path):
     assert qwen3_design["parameters"]["temperature"] == 0.65
     assert qwen3_design["parameters"]["repetition_penalty"] == 1.15
     assert "speaker_id" not in qwen3_design["parameters"]
+
+
+def test_qwen3_voice_design_is_hidden_when_optional_model_is_missing(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(qwen3_tts_paths, "voice_design_available", lambda: False)
+    client = _client(tmp_path)
+
+    presets = client.get("/api/presets").json()
+    ids = {preset["preset_id"] for preset in presets}
+    assert "qwen3_voice_design_warm" not in ids
+    assert client.get("/api/presets/qwen3_voice_design_warm").status_code == 404
+
+    engines = client.get("/api/engines").json()
+    qwen3 = next(item["manifest"] for item in engines if item["manifest"]["engine_id"] == qwen3_tts_paths.ENGINE_ID)
+    assert "voice_design" not in qwen3["capabilities"]
+    assert not any(param["key"] == "voice_design_prompt" for param in qwen3["parameter_schema"])
 
 
 def test_emotivoice_speaker_catalog_can_be_filtered(tmp_path: Path, monkeypatch):
@@ -313,7 +329,8 @@ def test_seed_voice_name_normalization_keeps_user_names():
     )
 
 
-def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path):
+def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(qwen3_tts_paths, "voice_design_available", lambda: True)
     client = _client(tmp_path)
     resp = client.get("/api/engines")
     assert resp.status_code == 200
@@ -331,6 +348,7 @@ def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path):
         "mimo-v2.5-tts-voicedesign",
         "mimo-v2.5-tts-voiceclone",
         "mimo-v2.5-asr",
+        "doubao-tts-preset",
         "qwen3-asr-mlx",
         "faster-whisper-turbo",
     }

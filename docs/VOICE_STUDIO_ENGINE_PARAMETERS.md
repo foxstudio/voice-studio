@@ -149,7 +149,7 @@ TTS 调用方可以选择系统音色库、调用方提供的参考声音，或�
 | `f5-tts` | `speed=1.0`, `nfe_step=32`, `cfg_strength=2.0`, `target_rms=0.1`, `cross_fade_duration=0.15`, `remove_silence=false` | 官方默认复刻、快速试听、短句去静音 |
 | `cosyvoice-sft` | `speaker_id=中文女`, `speed=1.0` | 中文女声、中文男声、粤语女声 |
 | `cosyvoice-zero-shot` | `speed=1.0` | 参考音色复刻、慢速清晰 |
-| `qwen3-tts-mlx-0.6b` | `speaker_id=Vivian`, `style_instruction=''`, `speed=1.0`, `temperature=0.7`, `top_p=0.9`, `top_k=50`, `repetition_penalty=1.1`, `max_tokens=1200`, `cfg_scale=1.5`, `ddpm_steps=空` | Qwen3 官方基准、Qwen3 课程慢讲、Qwen3 声音设计、Qwen3 复刻讲述 |
+| `qwen3-tts-mlx-0.6b` | `speaker_id=Vivian`, `style_instruction=''`, `speed=1.0`, `temperature=0.7`, `top_p=0.9`, `top_k=50`, `repetition_penalty=1.1`, `max_tokens=1200`, `cfg_scale=1.5`, `ddpm_steps=空` | Qwen3 官方基准、Qwen3 课程慢讲、Qwen3 复刻讲述；安装 VoiceDesign 模型后显示 Qwen3 声音设计 |
 | `mimo-v2.5-tts-preset` | `mimo_voice=mimo_default`, `style_instruction=''`, `temperature=0.6`, `top_p=0.95` | MiMo 稳定口播、MiMo 温柔女声 |
 | `mimo-v2.5-tts-voicedesign` | `voice_design_prompt=中年男性，声线沉稳偏正式，吐字工整，语速适中。`, `optimize_text_preview=false`, `temperature=0.6`, `top_p=0.95` | MiMo 角色试音 |
 | `mimo-v2.5-tts-voiceclone` | `style_instruction=''`, `temperature=0.6`, `top_p=0.95` | MiMo 复刻讲述 |
@@ -181,7 +181,7 @@ Qwen3-TTS 内置预设来源口径：
 
 - 官方基准：保留 Qwen3 Apple Silicon PoC 的 CustomVoice 路线、Vivian 预置音色、Normal `speed=1.0`；采样参数采用社区常见的 `temperature=0.7`, `top_p=1.0`, `top_k=30`, `repetition_penalty=1.15`, `max_tokens=512`，比 Hugging Face 模型默认 `temperature=0.9` 更稳。
 - 课程慢讲：使用官方 PoC README 的 Slow `speed=0.8` 建议，并降低随机性到 `temperature=0.65`, `top_p=0.92`, `top_k=35`，适合解释型中文短句。
-- 声音设计：只填 `voice_design_prompt`，不混用 `speaker_id` 或参考音色，避免 VoiceDesign、CustomVoice、Base 三条路线互相覆盖。
+- 声音设计：只在本机存在 `models/Qwen3-TTS-12Hz-0.6B-VoiceDesign-8bit` 时展示；只填 `voice_design_prompt`，不混用 `speaker_id` 或参考音色，避免 VoiceDesign、CustomVoice、Base 三条路线互相覆盖。
 - 复刻讲述：需要当前已选择本地音色库或自定义参考音色；Qwen3 Base 复刻路线不消费 `style_instruction`。
 
 ## 合成文本和提示词

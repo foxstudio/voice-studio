@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.schemas.voice_studio import EngineDetail, EngineManifest
-from app.services import engine_health, engine_manifests, engine_policy
+from app.services import engine_health, engine_manifests, engine_policy, qwen3_tts_paths
 
 
 @dataclass(frozen=True)
@@ -12,7 +12,15 @@ class EngineProvider:
 
     @property
     def detail(self) -> EngineDetail:
-        return engine_manifests.ENGINES[self.engine_id]
+        detail = engine_manifests.ENGINES[self.engine_id]
+        if self.engine_id != qwen3_tts_paths.ENGINE_ID or qwen3_tts_paths.voice_design_available():
+            return detail
+        patched = detail.model_copy(deep=True)
+        patched.manifest.capabilities = [item for item in patched.manifest.capabilities if item != "voice_design"]
+        patched.manifest.parameter_schema = [param for param in patched.manifest.parameter_schema if param.key != "voice_design_prompt"]
+        patched.manifest.description = patched.manifest.description.replace("、声音设计", "")
+        patched.manifest.default_use_case = patched.manifest.default_use_case.replace("、声音设计", "")
+        return patched
 
     @property
     def manifest(self) -> EngineManifest:
