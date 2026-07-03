@@ -69,6 +69,21 @@ def update_external_binding(
     return save_voice(old)
 
 
+def clear_external_binding(voice_id: str, *, provider: str | None = None) -> VoiceAsset | None:
+    old = get_voice(voice_id)
+    if not old:
+        return None
+    if provider and old.external_provider != provider:
+        return old
+    old.external_provider = None
+    old.external_voice_id = None
+    old.external_status = None
+    old.external_metadata = {}
+    if old.recommended_engine_id == "doubao-tts-voiceclone":
+        old.recommended_engine_id = None
+    return save_voice(old)
+
+
 def delete_voice(voice_id: str) -> None:
     voice = get_voice(voice_id)
     if voice:

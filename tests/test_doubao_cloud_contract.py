@@ -147,7 +147,7 @@ def test_doubao_voice_clone_payload(tmp_path: Path):
         "speaker_id": "voice_studio_demo",
         "custom_speaker_id": "voice_studio_demo",
         "audio": {"data": "dm9pY2UtYnl0ZXM=", "format": "wav"},
-        "language": "zh",
+        "language": 0,
         "text": "这是一段参考台词。",
         "extra_params": {
             "demo_text": "试听这段豆包复刻音色。",
@@ -155,6 +155,20 @@ def test_doubao_voice_clone_payload(tmp_path: Path):
             "disable_volume_normalization": False,
         },
     }
+
+
+def test_doubao_voice_clone_language_mapping(tmp_path: Path):
+    audio = tmp_path / "ref.wav"
+    audio.write_bytes(b"voice-bytes")
+
+    assert doubao_client.voice_clone_language_code("zh") == 0
+    assert doubao_client.voice_clone_language_code("en") == 1
+    assert doubao_client.voice_clone_language_code(8) == 8
+    assert doubao_client.build_voice_clone_payload(
+        speaker_id="voice_studio_demo",
+        audio_path=str(audio),
+        language="ko",
+    )["language"] == 8
 
 
 def test_doubao_voice_clone_train_requires_confirmation_and_updates_binding(tmp_path: Path, monkeypatch):
@@ -213,6 +227,59 @@ def test_doubao_voice_clone_train_requires_confirmation_and_updates_binding(tmp_
     assert doubao_binding["available"] is True
     assert doubao_binding["external_voice_id"] == voice["external_voice_id"]
     assert data["summary"]["has_demo_audio"] is True
+
+
+def test_doubao_cloud_list_refresh_and_unbind(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    client.patch("/api/settings/doubao-secret", json={"api_key": "test-doubao-key"})
+    registered = client.post(
+        "/api/voices/register",
+        data={
+            "name": "豆包云端样本",
+            "reference_text": "这是一段参考台词。",
+            "license_status": "self_voice",
+            "tags": "豆包,云端",
+        },
+        files={"file": ("sample.wav", b"voice-bytes", "audio/wav")},
+    ).json()
+
+    from app.services import voice_store  # noqa: E402
+
+    bound = voice_store.update_external_binding(
+        registered["voice_id"],
+        provider="doubao",
+        external_voice_id="voice_studio_ready",
+        status="submitted",
+        metadata={"custom_speaker_id": "voice_studio_ready"},
+        recommended_engine_id="doubao-tts-voiceclone",
+    )
+    assert bound is not None
+
+    cloud = client.get("/api/voices/doubao/cloud")
+    assert cloud.status_code == 200
+    assert cloud.json()["count"] == 1
+    assert cloud.json()["management"]["cloud_delete_supported"] is False
+
+    def fake_get_voice(**kwargs):
+        assert kwargs["speaker_id"] == "voice_studio_ready"
+        assert kwargs["custom_speaker_id"] == "voice_studio_ready"
+        return doubao_client.DoubaoResponse(
+            body={"status": 2, "language": 0, "speaker_status": [{"model_type": 1}]},
+            logid="query-log",
+            request_id="query-request",
+        )
+
+    monkeypatch.setattr(doubao_client, "get_voice", fake_get_voice)
+    refreshed = client.post("/api/voices/doubao/cloud/refresh")
+    assert refreshed.status_code == 200
+    assert refreshed.json()["count"] == 1
+    assert refreshed.json()["voices"][0]["external_status"] == "2"
+
+    unbound = client.delete(f"/api/voices/{registered['voice_id']}/doubao/binding")
+    assert unbound.status_code == 200
+    assert unbound.json()["external_provider"] is None
+    assert unbound.json()["external_voice_id"] is None
+    assert unbound.json()["recommended_engine_id"] is None
 
 
 def test_doubao_voiceclone_generation_uses_external_speaker_and_rejects_raw_reference(tmp_path: Path, monkeypatch):

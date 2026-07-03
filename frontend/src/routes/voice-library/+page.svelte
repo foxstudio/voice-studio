@@ -36,6 +36,8 @@
 	let voiceAsrStatus = $state(new Map<string, 'idle' | 'generating' | 'done' | 'error'>());
 	let voiceSerStatus = $state(new Map<string, 'idle' | 'generating' | 'done' | 'error'>());
 	let doubaoCloneStatus = $state(new Map<string, 'idle' | 'training' | 'refreshing' | 'done' | 'error'>());
+	let doubaoCloudRefreshing = $state(false);
+	let doubaoCloudMessage = $state('');
 	let batchSerProgress = $state({ active: false, current: 0, total: 0 });
 	let showVoiceModal = $state(false);
 	let copiedId = $state("");
@@ -222,6 +224,34 @@
 		} catch (e: any) {
 			uploadMessage = e?.message || '刷新豆包音色状态失败';
 			doubaoCloneStatus = new Map([...doubaoCloneStatus, [voice.voice_id, 'error']]);
+		}
+	}
+
+	async function refreshAllDoubaoCloudVoices() {
+		doubaoCloudRefreshing = true;
+		doubaoCloudMessage = '';
+		try {
+			const result = await Api.refreshDoubaoCloudVoices();
+			for (const voice of result.voices) updateVoiceInList(voice);
+			doubaoCloudMessage = result.failed.length
+				? `已刷新 ${result.count} 个，${result.failed.length} 个失败`
+				: `已刷新 ${result.count} 个`;
+		} catch (e: any) {
+			doubaoCloudMessage = e?.message || '刷新豆包云端音色失败';
+		} finally {
+			doubaoCloudRefreshing = false;
+		}
+	}
+
+	async function unbindDoubaoVoice(voice: VoiceAsset) {
+		const ok = window.confirm(`解除「${voice.name}」的豆包云端绑定？这只会清掉本地记录，不会删除火山引擎云端 SpeakerID。`);
+		if (!ok) return;
+		try {
+			const updated = await Api.unbindDoubaoVoice(voice.voice_id);
+			updateVoiceInList(updated);
+			doubaoCloudMessage = '已解除本地绑定';
+		} catch (e: any) {
+			doubaoCloudMessage = e?.message || '解除豆包绑定失败';
 		}
 	}
 
@@ -450,6 +480,10 @@
 
 	const visibleVoices = $derived(filteredVoices.slice(0, displayedCount));
 
+	const doubaoCloudVoices = $derived(
+		allVoices.filter((voice) => voice.external_provider === 'doubao' && Boolean(voice.external_voice_id))
+	);
+
 	const selfOrAuthorizedCount = $derived(
 		allVoices.filter((voice) => ['self_voice', 'authorized', 'company_authorized'].includes(voice.license_status)).length
 	);
@@ -460,6 +494,7 @@
 		{ title: '音色库怎么用', body: '音色库里的声音主要作为声音克隆参考。IndexTTS v2 通常需要选择一个参考声音；F5-TTS 和 CosyVoice Zero-Shot 需要参考音频和准确参考台词；OmniVoice 可以选择参考声音，也可以不选，改用声音设计标签。' },
 		{ title: '参考文本', body: '参考文本是参考音频里大概说了什么。克隆或多语言模型有时会用它理解发音和音色；卡片里的文本按钮可以快速查看，不会撑大卡片。' },
 		{ title: '编辑声音', body: '卡片上的“编辑”会把名称、描述、标签、参考文本和推荐引擎载入右侧表单。这里保存的是同一个声音名称，生成页下拉菜单会同步显示。' },
+		{ title: '豆包云端音色', body: '豆包训练会上传参考音频并把返回的 speaker_id 绑定到本地音色。页面可以刷新状态或解除本地绑定；真正删除云端 SpeakerID、续费或订单管理，需要到火山引擎控制台相关接口处理。' },
 	];
 </script>
 
@@ -547,6 +582,44 @@
 					</label>
 				</div>
 					<span class="toolbar-count muted">{visibleVoices.length} / {filteredVoices.length} / {allVoices.length} 条结果</span>
+			</section>
+
+			<section class="doubao-cloud-panel">
+				<div class="doubao-cloud-head">
+					<div>
+						<span class="section-kicker">豆包云端音色</span>
+						<strong>{doubaoCloudVoices.length} 个已绑定</strong>
+					</div>
+					<div class="doubao-cloud-actions">
+						<button class="btn icon-text" type="button" data-tooltip="批量调用豆包 get_voice 查询本地已绑定 speaker_id 的状态" onclick={refreshAllDoubaoCloudVoices} disabled={!doubaoCloudVoices.length || doubaoCloudRefreshing}>
+							<RefreshCw size={14} /> {doubaoCloudRefreshing ? '刷新中' : '批量刷新'}
+						</button>
+						<a class="btn icon-text" href="https://www.volcengine.com/docs/6561/1801953?lang=zh" target="_blank" rel="noreferrer">官方管理</a>
+					</div>
+				</div>
+				{#if doubaoCloudVoices.length}
+					<div class="doubao-cloud-list">
+						{#each doubaoCloudVoices.slice(0, 8) as voice}
+							<div class="doubao-cloud-row">
+								<span class="cloud-name">{voice.name}</span>
+								<span class="cloud-speaker">{voice.external_voice_id}</span>
+								<span class="badge cloud-binding-badge">{doubaoCloudStatusLabel(voice)}</span>
+								<button class="icon-btn-sm" type="button" aria-label="刷新豆包音色状态" data-tooltip="刷新这个 speaker_id 的训练状态" onclick={() => refreshDoubaoVoice(voice)} disabled={doubaoCloneStatus.get(voice.voice_id) === 'refreshing'}>
+									<RefreshCw size={13} />
+								</button>
+								<button class="icon-btn-sm danger" type="button" aria-label="解除本地豆包绑定" data-tooltip="只解除本地绑定，不删除云端 SpeakerID" onclick={() => unbindDoubaoVoice(voice)}>
+									<Trash2 size={13} />
+								</button>
+							</div>
+						{/each}
+					</div>
+					{#if doubaoCloudVoices.length > 8}
+						<p class="muted cloud-more">还有 {doubaoCloudVoices.length - 8} 个，可用筛选查看。</p>
+					{/if}
+				{:else}
+					<p class="muted cloud-empty">暂无豆包云端绑定。</p>
+				{/if}
+				{#if doubaoCloudMessage}<p class="muted cloud-message">{doubaoCloudMessage}</p>{/if}
 			</section>
 
 			{#if Object.keys(tagsByCategory).length > 0}
@@ -903,6 +976,87 @@
 
 	.library-toolbar {
 		padding-bottom: 12px;
+	}
+
+	.doubao-cloud-panel {
+		border: 1px solid rgba(56, 189, 248, 0.18);
+		border-radius: 8px;
+		background: rgba(56, 189, 248, 0.035);
+		padding: 10px 12px;
+		display: grid;
+		gap: 8px;
+	}
+
+	.doubao-cloud-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 12px;
+	}
+
+	.doubao-cloud-head > div:first-child {
+		display: grid;
+		gap: 2px;
+	}
+
+	.section-kicker {
+		font-size: 11px;
+		color: var(--muted);
+	}
+
+	.doubao-cloud-head strong {
+		font-size: 13px;
+		color: var(--text);
+	}
+
+	.doubao-cloud-actions {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.doubao-cloud-list {
+		display: grid;
+		gap: 5px;
+	}
+
+	.doubao-cloud-row {
+		display: grid;
+		grid-template-columns: minmax(120px, 1fr) minmax(120px, 1.2fr) auto auto auto;
+		align-items: center;
+		gap: 6px;
+		min-height: 30px;
+		border-top: 1px solid rgba(255, 255, 255, 0.05);
+		padding-top: 5px;
+	}
+
+	.cloud-name,
+	.cloud-speaker {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 12px;
+	}
+
+	.cloud-speaker {
+		color: var(--muted);
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+		font-size: 11px;
+	}
+
+	.doubao-cloud-row .cloud-binding-badge {
+		border-color: rgba(56, 189, 248, 0.35);
+		background: rgba(56, 189, 248, 0.1);
+		color: #9bdcff;
+		white-space: nowrap;
+	}
+
+	.cloud-empty,
+	.cloud-more,
+	.cloud-message {
+		margin: 0;
+		font-size: 12px;
 	}
 
 	.voice-toolbar {
@@ -1299,6 +1453,15 @@
 		.voice-toolbar {
 			grid-template-columns: 1fr 1fr;
 		}
+
+		.doubao-cloud-row {
+			grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) auto auto;
+		}
+
+		.doubao-cloud-row .cloud-binding-badge {
+			grid-column: 1 / -1;
+			width: max-content;
+		}
 	}
 
 	@media (max-width: 720px) {
@@ -1306,6 +1469,20 @@
 		.toolbar-grid,
 		.voice-toolbar {
 			grid-template-columns: 1fr;
+		}
+
+		.doubao-cloud-head {
+			align-items: flex-start;
+			flex-direction: column;
+		}
+
+		.doubao-cloud-row {
+			grid-template-columns: 1fr auto auto;
+		}
+
+		.cloud-speaker,
+		.doubao-cloud-row .cloud-binding-badge {
+			grid-column: 1 / -1;
 		}
 	}
 

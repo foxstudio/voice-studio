@@ -13,6 +13,35 @@ from typing import Any
 DEFAULT_BASE_URL = "https://openspeech.bytedance.com"
 DEFAULT_TTS_RESOURCE_ID = "seed-tts-2.0"
 DEFAULT_ICL_RESOURCE_ID = "seed-icl-2.0"
+DOUBAO_VOICE_CLONE_LANGUAGE_CODES = {
+    "zh": 0,
+    "zh-cn": 0,
+    "cn": 0,
+    "chinese": 0,
+    "中文": 0,
+    "en": 1,
+    "en-us": 1,
+    "english": 1,
+    "英文": 1,
+    "ja": 2,
+    "jp": 2,
+    "japanese": 2,
+    "日文": 2,
+    "es": 3,
+    "spanish": 3,
+    "id": 4,
+    "indonesian": 4,
+    "pt": 5,
+    "portuguese": 5,
+    "de": 6,
+    "german": 6,
+    "fr": 7,
+    "french": 7,
+    "ko": 8,
+    "kr": 8,
+    "korean": 8,
+    "韩文": 8,
+}
 DOUBAO_TTS_PRESET_SPEAKERS = [
     {"voice_id": "zh_female_xiaohe_uranus_bigtts", "label": "小何 2.0 · 女声", "language": "zh", "gender": "female"},
     {"voice_id": "zh_female_vv_uranus_bigtts", "label": "Vivi 2.0 · 女声", "language": "zh", "gender": "female"},
@@ -55,6 +84,21 @@ def masked_identifier(value: str | None) -> str:
     if len(value) <= 6:
         return value[:1] + "***"
     return f"{value[:3]}***{value[-3:]}"
+
+
+def voice_clone_language_code(language: str | int | None) -> int:
+    if language is None:
+        return 0
+    if isinstance(language, int):
+        return language
+    value = str(language).strip().lower()
+    if not value:
+        return 0
+    if value.isdigit():
+        return int(value)
+    if value in DOUBAO_VOICE_CLONE_LANGUAGE_CODES:
+        return DOUBAO_VOICE_CLONE_LANGUAGE_CODES[value]
+    raise DoubaoAPIError(f"豆包声音复刻不支持语种：{language}")
 
 
 def build_headers(
@@ -257,7 +301,7 @@ def build_voice_clone_payload(
     audio_path: str,
     custom_speaker_id: str | None = None,
     text: str | None = None,
-    language: str = "zh",
+    language: str | int = "zh",
     demo_text: str | None = None,
     enable_audio_denoise: bool | None = None,
     disable_volume_normalization: bool | None = None,
@@ -273,7 +317,7 @@ def build_voice_clone_payload(
             "data": audio_data,
             "format": suffix,
         },
-        "language": language,
+        "language": voice_clone_language_code(language),
     }
     if custom_speaker_id:
         body["custom_speaker_id"] = custom_speaker_id

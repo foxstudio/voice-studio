@@ -54,6 +54,20 @@ def _doubao_metadata(summary: dict, *, custom_speaker_id: str | None = None) -> 
     return metadata
 
 
+def _doubao_error_message(exc: doubao_client.DoubaoAPIError) -> str:
+    message = f"{exc} logid={exc.logid or '-'}"
+    if exc.body:
+        message += f" body={exc.body}"
+    return message
+
+
+def _doubao_custom_speaker_id(voice: VoiceAsset) -> str | None:
+    if isinstance(voice.external_metadata, dict):
+        raw_custom = voice.external_metadata.get("custom_speaker_id")
+        return str(raw_custom) if raw_custom else None
+    return None
+
+
 @router.get("", response_model=list[VoiceAsset])
 async def list_voices(offset: int = Query(0, ge=0), limit: int = Query(100, ge=1)):
     return voice_store.list_voices(offset=offset, limit=limit)
@@ -67,6 +81,65 @@ async def create_voice(data: VoiceAssetCreate):
 @router.post("/upload")
 async def upload_reference_audio(file: UploadFile = File(...)):
     return await voice_store.upload_audio(file)
+
+
+@router.get("/doubao/cloud")
+async def list_doubao_cloud_voices():
+    voices = [
+        voice
+        for voice in voice_store.list_voices(offset=0, limit=10000)
+        if voice.external_provider == "doubao" and voice.external_voice_id
+    ]
+    return {
+        "voices": voices,
+        "count": len(voices),
+        "management": {
+            "local_unbind_supported": True,
+            "cloud_delete_supported": False,
+            "cloud_delete_note": "Voice Studio 只能删除本地音色或解除本地绑定；云端 SpeakerID 删除/续费/订单管理请使用火山引擎控制台相关接口。",
+            "official_docs": [
+                "https://www.volcengine.com/docs/6561/1801953",
+                "https://www.volcengine.com/docs/6561/2235883",
+            ],
+        },
+    }
+
+
+@router.post("/doubao/cloud/refresh")
+async def refresh_doubao_cloud_voices():
+    settings = settings_store.get()
+    api_key = settings_store.doubao_api_key()
+    if not api_key:
+        raise AppException(400, "DOUBAO_API_KEY_REQUIRED", "请先在设置中配置豆包 API Key")
+    voices = [
+        voice
+        for voice in voice_store.list_voices(offset=0, limit=10000)
+        if voice.external_provider == "doubao" and voice.external_voice_id
+    ]
+    refreshed: list[VoiceAsset] = []
+    failed: list[dict] = []
+    for voice in voices:
+        try:
+            response = doubao_client.get_voice(
+                base_url=settings.doubao_base_url,
+                api_key=api_key,
+                resource_id=settings.doubao_default_icl_resource_id,
+                speaker_id=voice.external_voice_id or "",
+                custom_speaker_id=_doubao_custom_speaker_id(voice),
+            )
+            summary = doubao_client.summarize_voice_status(response, speaker_id=voice.external_voice_id or "")
+            updated = voice_store.update_external_binding(
+                voice.voice_id,
+                provider="doubao",
+                external_voice_id=voice.external_voice_id or "",
+                status=_doubao_status_from_summary(summary),
+                metadata=_doubao_metadata(summary, custom_speaker_id=_doubao_custom_speaker_id(voice)),
+            )
+            if updated:
+                refreshed.append(updated)
+        except doubao_client.DoubaoAPIError as exc:
+            failed.append({"voice_id": voice.voice_id, "voice_name": voice.name, "message": _doubao_error_message(exc)})
+    return {"voices": refreshed, "failed": failed, "count": len(refreshed)}
 
 
 @router.post("/register", response_model=VoiceAsset)
@@ -181,7 +254,7 @@ async def train_doubao_voice_clone(voice_id: str, data: DoubaoVoiceCloneTrainReq
             recommended_engine_id="doubao-tts-voiceclone",
         )
     except doubao_client.DoubaoAPIError as exc:
-        raise AppException(502, "DOUBAO_VOICE_CLONE_FAILED", f"{exc} logid={exc.logid or '-'}") from exc
+        raise AppException(502, "DOUBAO_VOICE_CLONE_FAILED", _doubao_error_message(exc)) from exc
     if not updated:
         raise AppException(404, "VOICE_NOT_FOUND", "Voice not found")
     return DoubaoVoiceCloneResponse(voice=updated, summary=summary)
@@ -198,10 +271,7 @@ async def refresh_doubao_voice_status(voice_id: str):
     api_key = settings_store.doubao_api_key()
     if not api_key:
         raise AppException(400, "DOUBAO_API_KEY_REQUIRED", "请先在设置中配置豆包 API Key")
-    custom_speaker_id = None
-    if isinstance(voice.external_metadata, dict):
-        raw_custom = voice.external_metadata.get("custom_speaker_id")
-        custom_speaker_id = str(raw_custom) if raw_custom else None
+    custom_speaker_id = _doubao_custom_speaker_id(voice)
     try:
         response = doubao_client.get_voice(
             base_url=settings.doubao_base_url,
@@ -212,7 +282,7 @@ async def refresh_doubao_voice_status(voice_id: str):
         )
         summary = doubao_client.summarize_voice_status(response, speaker_id=voice.external_voice_id)
     except doubao_client.DoubaoAPIError as exc:
-        raise AppException(502, "DOUBAO_VOICE_STATUS_FAILED", f"{exc} logid={exc.logid or '-'}") from exc
+        raise AppException(502, "DOUBAO_VOICE_STATUS_FAILED", _doubao_error_message(exc)) from exc
     updated = voice_store.update_external_binding(
         voice_id,
         provider="doubao",
@@ -223,6 +293,17 @@ async def refresh_doubao_voice_status(voice_id: str):
     if not updated:
         raise AppException(404, "VOICE_NOT_FOUND", "Voice not found")
     return DoubaoVoiceCloneResponse(voice=updated, summary=summary)
+
+
+@router.delete("/{voice_id}/doubao/binding", response_model=VoiceAsset)
+async def unbind_doubao_voice(voice_id: str):
+    voice = voice_store.get_voice(voice_id)
+    if not voice:
+        raise AppException(404, "VOICE_NOT_FOUND", "Voice not found")
+    updated = voice_store.clear_external_binding(voice_id, provider="doubao")
+    if not updated:
+        raise AppException(404, "VOICE_NOT_FOUND", "Voice not found")
+    return updated
 
 
 @router.delete("/{voice_id}")

@@ -605,8 +605,11 @@ class ExternalVoiceBinding(BaseModel):
 
 - 已在音色库单个音色上提供“训练豆包云端音色”和“刷新豆包状态”入口。
 - 已新增 `POST /api/voices/{voice_id}/doubao/clone-train` 和 `POST /api/voices/{voice_id}/doubao/status`。
+- 已新增 `GET /api/voices/doubao/cloud`、`POST /api/voices/doubao/cloud/refresh` 和 `DELETE /api/voices/{voice_id}/doubao/binding`，用于查看本地已绑定的豆包云端音色、批量刷新状态和解除本地绑定。
 - 已把训练出的豆包 `speaker_id` 保存到音色资产的 `external_provider / external_voice_id / external_status / external_metadata`，并暴露 `doubao-tts-voiceclone` 绑定给 P4 使用。
 - 上传前确认由后端强制校验：开启 `doubao_upload_confirm` 时，未传 `confirm_upload=true` 会拒绝请求。
+- 训练 payload 中的 `language` 按官方枚举发送；前端和本地音色仍可使用 `zh/en/...` 这类易读值，由 `doubao_client` 统一映射。
+- 当前只支持 Voice Studio 本地绑定管理。云端 SpeakerID 删除、续费、订单和资源包管理属于火山控制台相关接口，不能用合成/复刻 API Key 假装完成删除。
 
 后端：
 
@@ -614,11 +617,14 @@ class ExternalVoiceBinding(BaseModel):
 - 支持 `speaker_id` 与 `custom_speaker_id` 两种模式。
 - 保存训练结果到音色库。
 - 支持刷新训练状态。
+- 支持列出和批量刷新本地已绑定的豆包云端音色。
+- 支持解除本地绑定；解除绑定不会删除火山云端 SpeakerID。
 - `demo_audio` 有效期短，查询成功后可选择下载到本地缓存。
 
 前端：
 
 - 音色库增加“训练豆包云端音色”动作。
+- 音色库增加“豆包云端音色”管理区，可集中查看已绑定 speaker、批量刷新状态、单个刷新、解除本地绑定，并提供官方管理入口。
 - 云端音色显示状态：训练中、可用、失败、已激活。
 - 显示剩余训练次数。
 
@@ -628,12 +634,15 @@ class ExternalVoiceBinding(BaseModel):
 - 训练 payload。
 - 查询状态映射。
 - 音色库保存 external binding。
+- 云端音色列表、批量刷新、解除绑定契约测试。
 
 验收：
 
 - 能上传参考音频发起训练。
 - 能查询状态。
 - 成功后音色库出现豆包云端音色记录。
+- 可在音色管理页查看本地已绑定的豆包云端音色；可刷新状态；可解除本地绑定。
+- 真正删除云端 SpeakerID 前，必须确认并接入官方控制台相关接口或在火山控制台处理。
 - 合同测试覆盖 payload、上传确认、绑定写回和可用状态映射；真实账号 smoke test 需要在有训练额度时执行。
 
 ### P4：复刻音色合成
@@ -788,6 +797,7 @@ class ExternalVoiceBinding(BaseModel):
 
 - 首期只做 `X-Api-Key` 体系。
 - AK/SK 音色管理后续单独实现。
+- 页面上的“官方管理”只作为控制台相关接口入口，不把云端删除误实现成本地删除。
 
 ### 云端上传合规
 

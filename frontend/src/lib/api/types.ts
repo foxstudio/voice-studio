@@ -186,6 +186,23 @@ export interface DoubaoVoiceCloneResponse {
 	summary: Record<string, unknown>;
 }
 
+export interface DoubaoCloudVoiceListResponse {
+	voices: VoiceAsset[];
+	count: number;
+	management: {
+		local_unbind_supported: boolean;
+		cloud_delete_supported: boolean;
+		cloud_delete_note: string;
+		official_docs: string[];
+	};
+}
+
+export interface DoubaoCloudRefreshResponse {
+	voices: VoiceAsset[];
+	failed: { voice_id: string; voice_name: string; message: string }[];
+	count: number;
+}
+
 export interface UploadResult {
 	file_id: string;
 	filename: string;
