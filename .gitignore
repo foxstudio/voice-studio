@@ -67,6 +67,12 @@ uploads/
 *.flac
 *.aac
 *.ogg
+*.pcm
+*.mp4
+*.mov
+*.m4v
+*.webm
+*.mkv
 *.sqlite
 *.sqlite3
 *.db
