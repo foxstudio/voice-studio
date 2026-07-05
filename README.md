@@ -1,122 +1,214 @@
 # Voice Studio
 
-Apple Silicon 多引擎 TTS 平台。通过 WebUI 和 REST API 运行本地声音克隆（IndexTTS v2）、多语言合成（OmniVoice、F5-TTS、CosyVoice）、情感 TTS（EmotiVoice）和云端合成（小米 MiMo V2.5）。
+Voice Studio 是面向 Apple Silicon 的多引擎语音工作台。它把本地 TTS、声音克隆、声音设计、云端合成、长文本分段、批量生成、ASR 校对和视频本土化流程放在同一个 WebUI 和 REST API 里。
 
-基于 [MLX](https://github.com/ml-explore/mlx) 实现 Apple Silicon 原生性能。
+> 重要说明：仓库只包含代码、文档和测试；不包含模型权重、音色库音频、生成结果、本地数据库或 API Key。模型和音色需要使用者自行下载、转换、上传或配置。
 
-## 功能
+![Voice Studio WebUI](docs/assets/voice-studio-webui.png)
 
-- **WebUI** — SvelteKit 仪表盘（`localhost:5173`），包含引擎中心、音色库、批量生成、历史记录和设置
-- **REST API** — FastAPI 后端（`localhost:8000`），17 个路由组（生成、长文本、批量、任务、音色、引擎、ASR 等）
-- **6 个本地引擎** — IndexTTS v2（声音克隆 + 情感）、OmniVoice（多语言）、EmotiVoice（中文情感 TTS）、F5-TTS、CosyVoice SFT/Zero-Shot
-- **云端引擎** — 小米 MiMo V2.5 预置音色 / 音色设计 / 声音复刻
-- **长文本编排** — 自动分段、逐段生成 + ASR 校对 + 合并
-- **批量处理** — JSON 驱动的批量合成，输出结果清单
+早期功能介绍视频：[Bilibili：Voice Studio 早期 WebUI 介绍](https://www.bilibili.com/video/BV1cdLd6TEUA/?vd_source=f22054ec178d3f44a7b40b7e95c2b6f0#reply303763215441)
 
-## 架构
+## 核心能力
 
+- **WebUI 工作台**：引擎管理、音色管理、语音合成、视频本土化、脚本与批量、参数参考、语音转写和设置。
+- **REST API**：FastAPI 后端提供生成、长文本、批量、任务、音色、引擎、ASR、历史记录等接口。
+- **本地引擎**：IndexTTS v2、OmniVoice、EmotiVoice、F5-TTS、CosyVoice、Qwen3-TTS MLX、Confucius4 MLX 等。
+- **云端引擎**：小米 MiMo V2.5、豆包 / 火山引擎 TTS 与声音复刻相关流程。
+- **音色来源灵活**：可以使用音色库里的参考音频，也可以临时传入参考音频，还可以使用模型预置音色或声音设计。
+- **声音设计**：部分引擎支持用文字描述音色，例如“温暖、清晰、适合知识视频旁白的中文女声”，不一定要先准备真人参考音频。
+- **长文本与批量**：支持自动分段、逐段生成、失败重试、ASR 校对、合并输出和 JSON 批处理。
+- **视频本土化**：围绕视频源、参考片段、TTS 结果和多段草稿进行本土化配音工作流编排。
+
+## 目录结构
+
+```text
+backend/app/        FastAPI 后端、任务队列、引擎路由、音色库、设置与数据库访问
+frontend/src/       SvelteKit WebUI
+mlx_indextts/       MLX IndexTTS 推理核心与模型结构
+scripts/            音色导入、批量处理、质量校验和迁移辅助脚本
+docs/               引擎参数、批量生成、架构说明和 RFC
+tests/              自动化测试，给开发者和 CI 验证项目是否被改坏
 ```
-mlx_indextts/       MLX 推理核心（IndexTTS v2、模型加载、分词器）
-backend/app/        FastAPI 服务端（API 路由、业务逻辑、任务队列）
-frontend/src/       SvelteKit 前端（10 个页面、侧边栏导航）
-scripts/            音色导入、批量处理、质量校验
-```
+
+运行时数据默认放在 `~/VoiceStudio`。项目根目录的 `models/` 用于本地模型权重，但已被 `.gitignore` 忽略，不会提交到仓库。
 
 ## 快速开始
 
 ### 前置要求
 
-- macOS Apple Silicon（M1/M2/M3/M4）
+- macOS Apple Silicon，推荐 M1/M2/M3/M4
 - Python 3.10+
-- [uv](https://docs.astral.sh/uv/) 包管理器
-- [pnpm](https://pnpm.io/)（前端）
+- [uv](https://docs.astral.sh/uv/)
+- Node.js / pnpm
+- 可选：`ffmpeg`，用于音频转码、视频抽音频和部分本土化流程
 
-### 安装
+### 安装依赖
 
 ```bash
 git clone https://github.com/foxstudio/voice-studio.git
 cd voice-studio
 
-# 安装 Python 依赖
+# Python 基础依赖
 uv sync
 
-# 模型转换支持
-uv sync --extra convert
-
-# 本地 ASR（Qwen3-ASR MLX）
-uv sync --extra asr
-
-# 服务端依赖
+# Web API 服务端
 uv sync --extra server
 
-# 安装前端
-cd frontend && pnpm install && cd ..
-```
-
-### 模型获取
-
-本项目**不包含模型权重**（文件过大，不适合放 Git）。需要自行下载并转换：
-
-```bash
-# 安装转换依赖
+# 模型转换工具
 uv sync --extra convert
 
-# 从 HuggingFace 下载 PyTorch 模型，然后转换为 MLX 格式
-# 1. 下载原始模型到本地（示例）
-git lfs install
-git clone https://huggingface.co/IndexTeam/IndexTTS2 models/IndexTTS2-pt
+# 本地 ASR 能力
+uv sync --extra asr
 
-# 2. 转换为 MLX 格式
-uv run voice-studio convert \
-  --model-dir models/IndexTTS2-pt \
-  --output models/mlx-indexTTS-2.0
+# 前端依赖
+cd frontend
+pnpm install
+cd ..
 ```
 
-转换完成后，`models/mlx-indexTTS-2.0/` 约 4 GB。
-
-## 音色库
-
-声音克隆引擎（IndexTTS v2、F5-TTS、CosyVoice Zero-Shot）需要参考音频。通过 WebUI 的**音色库**页面上传管理：
-
-1. 启动服务后打开 http://localhost:5173
-2. 进入「音色库」页面
-3. 上传 wav/mp3 参考音频，填写名称和台词文本
-4. 生成时选择对应音色即可
-
-CLI 也可指定参考音频路径：`-r reference.wav`
-
-## 云端引擎配置
-
-MiMo V2.5 云端引擎需要 API key：
-
-1. 前往 [小米 MiMo 平台](https://platform.xiaomimimo.com) 注册并获取 API key
-2. 在 WebUI「设置」页面填入 key，或设置环境变量 `MIMO_API_KEY`
-
-## 启动
+### 启动服务
 
 ```bash
 ./start.sh
 ```
 
-启动后端（uvicorn :8000）和前端（vite :5173）。打开 http://localhost:5173。
+启动成功后打开：
+
+- WebUI: http://localhost:5173
+- API: http://localhost:8000
+- 健康检查: http://localhost:8000/api/health
+
+如果端口被旧的 Voice Studio 服务占用，可以强制重启：
 
 ```bash
-# 强制重启
 ./start.sh --force
 ```
 
-### 语音合成（API）
+## 模型准备
+
+本仓库不提供模型权重。你需要根据要使用的引擎自行下载模型，并放到对应目录或通过环境变量指定路径。
+
+### IndexTTS v2
+
+默认查找目录：
+
+```text
+models/mlx-indexTTS-2.0/
+```
+
+示例流程：
 
 ```bash
-# 健康检查
+uv sync --extra convert
+
+# 下载原始模型到本地，例如：
+git lfs install
+git clone https://huggingface.co/IndexTeam/IndexTTS2 models/IndexTTS2-pt
+
+# 转换为 MLX 格式
+uv run voice-studio convert \
+  --model-dir models/IndexTTS2-pt \
+  --output models/mlx-indexTTS-2.0
+```
+
+转换后的模型目录通常较大，不应提交到 Git。
+
+### 其他本地引擎
+
+不同引擎的模型来源和目录不同，建议先看对应文档：
+
+- [IndexTTS v2](docs/engines/indextts-v2.md)
+- [OmniVoice](docs/engines/omnivoice.md)
+- [EmotiVoice](docs/engines/emotivoice.md)
+- [F5-TTS](docs/engines/f5-tts.md)
+- [CosyVoice](docs/engines/cosyvoice.md)
+- [Qwen3-TTS MLX](docs/engines/qwen3-tts-mlx.md)
+- [Qwen3-ASR MLX](docs/engines/qwen3-asr-mlx.md)
+- [Confucius4 MLX INT8](docs/engines/confucius4-mlx-int8.md)
+
+通用原则：
+
+- 本地权重建议放在 `models/` 或 `~/VoiceStudio/models/`。
+- 外部引擎仓库可以用环境变量指定，例如 `VOICE_STUDIO_COSYVOICE_ROOT`、`VOICE_STUDIO_F5_TTS_ROOT`、`VOICE_STUDIO_QWEN3_TTS_ROOT`。
+- 缺少模型时，WebUI 会尽量隐藏或禁用相关入口，并在引擎管理页显示状态。
+
+## 音色库与声音设计
+
+仓库不包含音色库。音色库是每个使用者自己的本地数据，默认位于：
+
+```text
+~/VoiceStudio/voices/
+```
+
+本地数据库默认位于：
+
+```text
+~/VoiceStudio/config/voice_studio.db
+```
+
+这些文件不会随 Git 仓库上传。
+
+### 使用音色库
+
+适合有参考音频的声音克隆场景：
+
+1. 启动服务并打开 http://localhost:5173
+2. 进入「音色管理」
+3. 上传 `wav` / `mp3` 等参考音频
+4. 填写音色名称、参考台词、授权状态和标签
+5. 在「语音合成」页面选择该音色
+
+IndexTTS v2、F5-TTS、CosyVoice Zero-Shot、OmniVoice、MiMo voiceclone、豆包声音复刻等流程会按各自能力使用参考音频。
+
+### 使用临时参考音频
+
+如果不想把声音保存进音色库，可以在 API 或部分工作流里直接传入 `reference_audio_path`。这种方式适合一次性任务、外部 Agent 调用或项目级配音。
+
+### 使用模型预置音色
+
+部分引擎自带官方预置音色，例如 CosyVoice SFT、EmotiVoice、Qwen3-TTS 或云端 TTS 的官方 speaker。此时不一定需要本地音色库。
+
+### 使用声音设计
+
+如果没有参考音频，可以优先尝试支持声音设计的引擎。声音设计通过文字描述目标声音，例如：
+
+```text
+温暖、清晰、语速适中，适合知识视频旁白的中文女声。
+```
+
+是否可用取决于具体引擎和本地模型是否已安装。WebUI 会根据引擎能力展示对应参数。
+
+## 云端引擎
+
+云端能力不会把 API Key 写进仓库。你可以在 WebUI「设置」页面保存，或使用环境变量。
+
+### 小米 MiMo
+
+MiMo V2.5 支持预置音色、声音设计和声音复刻。配置方式：
+
+```bash
+export MIMO_API_KEY="your-api-key"
+```
+
+### 豆包 / 火山引擎
+
+豆包相关能力包括 TTS 预置音色、声音复刻训练和复刻音色合成。配置方式：
+
+```bash
+export VOLCENGINE_API_KEY="your-api-key"
+```
+
+云端声音复刻通常会上传参考音频到服务商。Voice Studio 在相关流程里保留确认开关，请确保你拥有音频授权。
+
+## API 示例
+
+```bash
 curl http://localhost:8000/api/health
 
-# 查看可用引擎
 curl http://localhost:8000/api/engines
 
-# 生成语音
 curl -X POST http://localhost:8000/api/generate \
-  -H 'Content-Type: application/json' \
+  -H "Content-Type: application/json" \
   -d '{
     "text": "你好，这是一个语音合成测试。",
     "engine_id": "indextts-v2",
@@ -125,50 +217,35 @@ curl -X POST http://localhost:8000/api/generate \
   }'
 ```
 
-## 引擎一览
+更多参数说明：
 
-| 引擎 | 类型 | 核心能力 |
-|------|------|----------|
-| `indextts-v2` | 本地 | 声音克隆、8 种情感、分段控制、扩散参数 |
-| `omnivoice` | 本地 | 多语言、声音描述、语速控制 |
-| `emotivoice` | 本地 | 中文情感 TTS、预置说话人 |
-| `f5-tts` | 本地 | 参考音频 TTS，需提供 `ref_text` |
-| `cosyvoice-sft` | 本地 | 官方 SFT 预置音色 |
-| `cosyvoice-zero-shot` | 本地 | 参考音频声音复刻 |
-| `mimo-v2.5-tts-preset` | 云端 | 小米官方预置音色 |
-| `mimo-v2.5-tts-voicedesign` | 云端 | 文本描述音色设计 |
-| `mimo-v2.5-tts-voiceclone` | 云端 | 云端参考音频声音复刻 |
+- [引擎参数手册](docs/VOICE_STUDIO_ENGINE_PARAMETERS.md)
+- [批量合成指南](docs/VOICE_STUDIO_BATCH_AGENT.md)
+- [豆包集成 RFC](docs/DOUBAO_VOICE_INTEGRATION_RFC.md)
 
-引擎参数详解：[docs/VOICE_STUDIO_ENGINE_PARAMETERS.md](docs/VOICE_STUDIO_ENGINE_PARAMETERS.md)
-
-批量合成指南：[docs/VOICE_STUDIO_BATCH_AGENT.md](docs/VOICE_STUDIO_BATCH_AGENT.md)
-
-## CLI 使用
+## CLI 示例
 
 ```bash
-# 基本生成
 uv run voice-studio generate \
   -m models/mlx-indexTTS-2.0 \
   -r reference.wav \
   -t "你好，世界！" \
   -o output.wav
+```
 
-# 情感控制
+情感控制：
+
+```bash
 uv run voice-studio generate \
   -m models/mlx-indexTTS-2.0 \
   -r reference.wav \
   -t "今天真是太开心了！" \
   -o output.wav \
-  --emotion happy --emo-alpha 0.6
-
-# 预计算 speaker embedding（加速加载）
-uv run voice-studio speaker \
-  -m models/mlx-indexTTS-2.0 \
-  -r reference.wav \
-  -o speaker.npz
+  --emotion happy \
+  --emo-alpha 0.6
 ```
 
-### Python API
+Python 调用：
 
 ```python
 from mlx_indextts.generate_v2 import IndexTTSv2
@@ -183,28 +260,59 @@ audio = tts.generate(
 )
 ```
 
-## 性能
+## 开发与验证
 
-| 指标 | IndexTTS v2 |
-|------|-------------|
-| RTF（M2 Max） | ~1.3 |
-| 加载时间（.wav） | ~9s |
-| 加载时间（.npz） | ~1.5s |
+`tests/` 是开发验证目录，保留在远端仓库里是有用的。它不会参与普通运行，但可以帮助开发者确认改动没有破坏功能。
 
-## 支持的情感（IndexTTS v2）
+```bash
+uv run pytest tests/ -q
+uv run ruff check
+pnpm --dir frontend run check
+```
 
-| 英文 | 中文 |
-|------|------|
-| happy | 高兴 |
-| angry | 愤怒 |
-| sad | 悲伤 |
-| afraid | 恐惧 |
-| disgusted | 反感 |
-| melancholic | 低落 |
-| surprised | 惊讶 |
-| calm | 自然 |
+GitHub Actions 也会运行测试：
 
-混合情感：`--emotion "happy:0.6,sad:0.4"`
+```text
+.github/workflows/test.yml
+```
+
+## 本仓库不会提交的内容
+
+这些内容默认属于本机数据或大文件资产，不应进入 Git：
+
+- `models/` 模型权重
+- `~/VoiceStudio/voices/` 音色库音频
+- `~/VoiceStudio/outputs/` 生成结果
+- `~/VoiceStudio/config/voice_studio.db` 本地数据库
+- `.env`、API Key、私钥、token
+- 临时视频、音频、日志、缓存和前端构建产物
+
+如果你 fork 或二次开发，提交前建议检查：
+
+```bash
+git status --short --ignored
+git ls-files -o --exclude-standard
+git ls-files -ci --exclude-standard
+```
+
+## 反馈问题
+
+如果遇到问题，建议优先提交 GitHub Issue：
+
+[https://github.com/foxstudio/voice-studio/issues](https://github.com/foxstudio/voice-studio/issues)
+
+反馈时请尽量带上：
+
+- macOS 版本和芯片型号
+- Python、uv、Node、pnpm 版本
+- 使用的引擎名称
+- 模型目录是否存在，以及是否能在「引擎管理」里看到状态
+- WebUI 或 API 的报错文本
+- 后端日志：默认 `/tmp/voice-studio-backend.log`
+- 前端日志：默认 `/tmp/voice-studio-frontend.log`
+- 最小复现步骤
+
+如果问题和云端引擎有关，请不要公开粘贴 API Key、完整鉴权头或私人音频。可以只提供错误码、request id、logid 和脱敏后的请求参数。
 
 ## 许可证
 
@@ -212,9 +320,9 @@ MIT License
 
 ## 致谢
 
-- [IndexTTS](https://github.com/index-tts/index-tts) — 原始 PyTorch 实现
-- [MLX](https://github.com/ml-explore/mlx) — Apple 机器学习框架
-- [OmniVoice](https://github.com/user/omnivoice) — 多语言 TTS 引擎
-- [EmotiVoice](https://github.com/netease-youdao/EmotiVoice) — 中文情感 TTS
-- [F5-TTS](https://github.com/SWivid/F5-TTS) — 参考音频 TTS
-- [CosyVoice](https://github.com/FunAudioLLM/CosyVoice) — 多风格 TTS
+- [IndexTTS](https://github.com/index-tts/index-tts)
+- [MLX](https://github.com/ml-explore/mlx)
+- [OmniVoice](https://github.com/k2-fsa/OmniVoice)
+- [EmotiVoice](https://github.com/netease-youdao/EmotiVoice)
+- [F5-TTS](https://github.com/SWivid/F5-TTS)
+- [CosyVoice](https://github.com/FunAudioLLM/CosyVoice)
