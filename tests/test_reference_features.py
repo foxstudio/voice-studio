@@ -349,6 +349,7 @@ def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path, monke
         "mimo-v2.5-tts-voiceclone",
         "mimo-v2.5-asr",
         "doubao-tts-preset",
+        "doubao-tts-voiceclone",
         "qwen3-asr-mlx",
         "faster-whisper-turbo",
     }

@@ -98,6 +98,7 @@ class TestEngineRegistryAPI:
             "omnivoice",
             "emotivoice",
             "confucius4-mlx-int8",
+            "qwen3-tts-mlx-0.6b",
             "f5-tts",
             "cosyvoice-sft",
             "cosyvoice-zero-shot",
@@ -105,6 +106,8 @@ class TestEngineRegistryAPI:
             "mimo-v2.5-tts-voicedesign",
             "mimo-v2.5-tts-voiceclone",
             "mimo-v2.5-asr",
+            "doubao-tts-preset",
+            "doubao-tts-voiceclone",
             "qwen3-asr-mlx",
             "faster-whisper-turbo",
         ]

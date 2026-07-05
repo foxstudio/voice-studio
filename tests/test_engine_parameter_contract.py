@@ -282,7 +282,9 @@ def test_confucius4_single_batch_worker_payload_contract(tmp_path, monkeypatch):
         assert seed == params["seed"]
 
 
-def test_qwen3_tts_single_batch_worker_payload_contract(tmp_path):
+def test_qwen3_tts_single_batch_worker_payload_contract(tmp_path, monkeypatch):
+    monkeypatch.setenv("VOICE_STUDIO_QWEN3_TTS_ROOT", str(inference_runner.qwen3_tts_paths.DEFAULT_ROOT))
+
     params = {
         "language": "zh",
         "speaker_id": "Vivian",
