@@ -25,6 +25,13 @@ wheels/
 venv/
 ENV/
 
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.test
+
 # IDE
 .idea/
 .vscode/
@@ -37,15 +44,34 @@ Thumbs.db
 
 # Project specific
 /models/
+checkpoints/
+weights/
 ref_audios/
 *.safetensors
+*.ckpt
+*.onnx
+*.gguf
+*.bin
 *.pth
 *.pt
 *.npz
+*.npy
 /output*.wav
 /tmp/
 output/
+outputs/
+uploads/
+*.wav
 *.mp3
+*.m4a
+*.flac
+*.aac
+*.ogg
+*.sqlite
+*.sqlite3
+*.db
+*.log
+logs/
 
 # Second venv (Qwen forced aligner)
 .venv-qwen-align/
@@ -59,6 +85,8 @@ test_outputs/
 benchmark_outputs/
 test_benchmark/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 .coverage
 htmlcov/
 
