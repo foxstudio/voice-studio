@@ -27,6 +27,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	let recordsBottomPagerEl: HTMLElement | undefined = $state();
 	let resultAudioPendingTaskId = $state('');
 	let resultAudioCurrentTime = $state(0);
+	let resultAudioFrame: number | null = null;
 	let customVoiceDragActive = $state(false);
 	let voiceRegisterOpen = $state(false);
 	let voiceRegisterBusy = $state(false);
@@ -612,16 +613,31 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	async function verifyTask(t: GenerationTask) { if (!t.result_id) return; $store.verificationBusyTaskId = t.task_id; $store.verificationErrors = { ...$store.verificationErrors, [t.task_id]: '' }; try { const report = await Api.verifyTTSOutput({ result_id: t.result_id, expected_text: t.input_text, asr_engine_id: 'qwen3-asr-mlx', language: (t.parameters['language'] === 'en' || t.parameters['language'] === 'auto' ? t.parameters['language'] : 'zh') as 'auto' | 'zh' | 'en' }); $store.verificationReports = { ...$store.verificationReports, [t.task_id]: report }; $store.tasks = $store.tasks.map(i => i.task_id === t.task_id ? { ...i, verification: report, verification_error: null } : i); } catch (e) { $store.verificationErrors = { ...$store.verificationErrors, [t.task_id]: (e as Error).message || '校对失败' }; } finally { $store.verificationBusyTaskId = ''; } }
 	function resultAudioUrl(t: GenerationTask) { return t.result_id ? `/api/history/${t.result_id}/audio` : ''; }
 	function resultDownloadUrl(t: GenerationTask) { return t.result_id ? `/api/history/${t.result_id}/audio?download=1` : ''; }
-	function resetResultPlayback() { resultAudioPendingTaskId = ''; resultAudioCurrentTime = 0; $store.playingResultTaskId = ''; $store.resultAudioPlaying = false; }
+	function syncResultAudioCurrentTime() {
+		const audio = $store.resultPreviewAudio;
+		resultAudioCurrentTime = audio ? audio.currentTime : 0;
+	}
+	function stopResultAudioFrameLoop() {
+		if (resultAudioFrame !== null) cancelAnimationFrame(resultAudioFrame);
+		resultAudioFrame = null;
+	}
+	function startResultAudioFrameLoop() {
+		if (resultAudioFrame !== null) return;
+		const step = () => {
+			resultAudioFrame = null;
+			if (!$store.resultAudioPlaying || !$store.resultPreviewAudio) return;
+			syncResultAudioCurrentTime();
+			resultAudioFrame = requestAnimationFrame(step);
+		};
+		resultAudioFrame = requestAnimationFrame(step);
+	}
+	function resetResultPlayback() { stopResultAudioFrameLoop(); resultAudioPendingTaskId = ''; resultAudioCurrentTime = 0; $store.playingResultTaskId = ''; $store.resultAudioPlaying = false; }
 	function resultPlaybackErrorMessage(e?: unknown) { const message = e instanceof Error ? e.message : ''; return `历史记录音频无法播放，请确认结果文件仍存在且可访问${message ? `：${message}` : ''}`; }
 	function isInterruptedResultPlayError(e: unknown) {
 		return e instanceof Error && /interrupted by a call to pause|AbortError/i.test(e.message || '');
 	}
 	function handleResultAudioError() { if (!$store.playingResultTaskId) return; resetResultPlayback(); $store.error = resultPlaybackErrorMessage($store.resultPreviewAudio?.error?.message ? new Error($store.resultPreviewAudio.error.message) : undefined); }
-	function handleResultAudioTimeUpdate() {
-		const audio = $store.resultPreviewAudio;
-		resultAudioCurrentTime = audio ? audio.currentTime : 0;
-	}
+	function handleResultAudioTimeUpdate() { syncResultAudioCurrentTime(); }
 	async function playResultPlayback(t: GenerationTask, startTime = 0) {
 		const url = resultAudioUrl(t);
 		const audio = $store.resultPreviewAudio;
@@ -644,6 +660,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 			await audio.play();
 			if ($store.playingResultTaskId !== t.task_id) return;
 			$store.resultAudioPlaying = true;
+			startResultAudioFrameLoop();
 		} catch (e) {
 			if (!isInterruptedResultPlayError(e)) {
 				resetResultPlayback();
@@ -759,6 +776,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		window.addEventListener('keydown', handleCustomVoiceTrimKeydown);
 		_autoResizeRO = new ResizeObserver(or);
 		return () => {
+			stopResultAudioFrameLoop();
 			clearInterval(id);
 			clearInterval(slowId);
 			window.removeEventListener('resize', or);

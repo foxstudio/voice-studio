@@ -1,3 +1,54 @@
+<script module lang="ts">
+	type WaveformLoadJob = {
+		isCancelled: () => boolean;
+		onStart: () => void;
+		run: () => Promise<void>;
+		onFinish: () => void;
+	};
+
+	const waveformLoadQueue: WaveformLoadJob[] = [];
+	let waveformLoadActive = false;
+
+	function enqueueWaveformLoad(job: WaveformLoadJob) {
+		waveformLoadQueue.push(job);
+		void drainWaveformLoadQueue();
+	}
+
+	async function drainWaveformLoadQueue() {
+		if (waveformLoadActive) return;
+		waveformLoadActive = true;
+		try {
+			while (waveformLoadQueue.length) {
+				const job = waveformLoadQueue.shift();
+				if (!job) continue;
+				if (job.isCancelled()) {
+					job.onFinish();
+					continue;
+				}
+				job.onStart();
+				try {
+					await job.run();
+				} finally {
+					job.onFinish();
+				}
+				await nextPaint();
+			}
+		} finally {
+			waveformLoadActive = false;
+		}
+	}
+
+	function nextPaint() {
+		return new Promise<void>((resolve) => {
+			if (typeof requestAnimationFrame === 'function') {
+				requestAnimationFrame(() => resolve());
+			} else {
+				setTimeout(resolve, 0);
+			}
+		});
+	}
+</script>
+
 <script lang="ts">
 	import type { GenerationTask } from '$lib/api/types';
 	import { Download, Loader2, Play, Square } from 'lucide-svelte';
@@ -38,35 +89,49 @@
 	let waveSurfer: WaveSurfer | null = null;
 	let observer: IntersectionObserver | null = null;
 	let loading = $state(false);
+	let loadQueued = $state(false);
 	let ready = $state(false);
 	let loadError = $state('');
 	let lastLoadedUrl = '';
 	let lastSyncedTime = -1;
+	let loadToken = 0;
+	let destroyed = false;
 
 	const durationSeconds = $derived(Math.max(0, (task.result_duration_ms ?? 0) / 1000));
 	const timeLabel = $derived(formatClock(isPlaying || currentTime > 0 ? currentTime : 0));
-	const statusLabel = $derived(loadError ? '波形不可用' : loading ? '读取波形' : durationLabel || '播放结果');
+	const statusLabel = $derived(loadError ? '波形不可用' : loadQueued ? '排队读取' : loading ? '读取波形' : durationLabel || '播放结果');
+	const progressPercent = $derived.by(() => {
+		const duration = durationSeconds || 0;
+		if (!duration || (!isPlaying && currentTime <= 0)) return 0;
+		return Math.max(0, Math.min(100, (currentTime / duration) * 100));
+	});
 
 	$effect(() => {
 		if (!waveSurfer || !ready || !isPlaying) return;
-		if (!Number.isFinite(currentTime) || Math.abs(currentTime - lastSyncedTime) < 0.18) return;
+		if (!Number.isFinite(currentTime) || Math.abs(currentTime - lastSyncedTime) < 0.035) return;
 		lastSyncedTime = currentTime;
-		waveSurfer.setTime(Math.max(0, currentTime));
+		syncWaveformProgress(currentTime);
 	});
 
 	$effect(() => {
 		if (!waveSurfer || !ready || isPlaying || currentTime !== 0 || lastSyncedTime === 0) return;
 		lastSyncedTime = 0;
-		waveSurfer.setTime(0);
+		syncWaveformProgress(0);
 	});
 
 	$effect(() => {
 		if (!waveSurfer || !audioUrl || audioUrl === lastLoadedUrl) return;
-		void loadWaveform(audioUrl);
+		queueWaveformLoad(audioUrl);
 	});
 
 	onMount(() => {
 		if (!shellEl) return;
+		const fallbackTimer = window.setTimeout(() => {
+			if (waveSurfer) return;
+			observer?.disconnect();
+			observer = null;
+			void mountWaveform();
+		}, 180);
 		observer = new IntersectionObserver((entries) => {
 			if (entries.some((entry) => entry.isIntersecting)) {
 				observer?.disconnect();
@@ -77,6 +142,9 @@
 		observer.observe(shellEl);
 
 		return () => {
+			window.clearTimeout(fallbackTimer);
+			destroyed = true;
+			loadToken += 1;
 			observer?.disconnect();
 			waveSurfer?.destroy();
 			waveSurfer = null;
@@ -86,6 +154,7 @@
 	async function mountWaveform() {
 		if (waveSurfer || !waveformEl || !audioUrl) return;
 		loading = true;
+		loadQueued = false;
 		loadError = '';
 		try {
 			const [{ default: WaveSurfer }, { default: HoverPlugin }] = await Promise.all([
@@ -95,8 +164,8 @@
 			waveSurfer = WaveSurfer.create({
 				container: waveformEl,
 				height: 28,
-				waveColor: '#253241',
-				progressColor: '#6ee7f8',
+				waveColor: 'rgba(75, 94, 116, 0.48)',
+				progressColor: '#67e8f9',
 				cursorColor: 'transparent',
 				cursorWidth: 0,
 				barWidth: 2,
@@ -105,7 +174,6 @@
 				barHeight: 0.82,
 				barMinHeight: 2,
 				normalize: true,
-				backend: 'MediaElement',
 				hideScrollbar: true,
 				autoCenter: false,
 				autoScroll: false,
@@ -124,30 +192,68 @@
 			waveSurfer.on('ready', () => {
 				ready = true;
 				loading = false;
+				loadQueued = false;
+				paintWaveformProgress(0);
 			});
 			waveSurfer.on('error', () => {
 				loadError = '波形加载失败';
 				loading = false;
+				loadQueued = false;
 				ready = false;
 			});
 			waveSurfer.on('interaction', (time) => {
 				lastSyncedTime = time;
+				paintWaveformProgress(time);
 				onSeek(task, time);
 			});
-			await loadWaveform(audioUrl);
+			queueWaveformLoad(audioUrl);
 		} catch (error) {
 			loadError = error instanceof Error ? error.message : '波形加载失败';
 			loading = false;
+			loadQueued = false;
 		}
 	}
 
-	async function loadWaveform(url: string) {
+	function queueWaveformLoad(url: string) {
 		if (!waveSurfer || !url) return;
-		loading = true;
+		const surfer = waveSurfer;
+		const token = ++loadToken;
+		loading = false;
+		loadQueued = true;
 		ready = false;
 		loadError = '';
 		lastLoadedUrl = url;
-		await waveSurfer.load(url, undefined, durationSeconds || undefined);
+
+		const isCurrent = () => !destroyed && token === loadToken && waveSurfer === surfer;
+		enqueueWaveformLoad({
+			isCancelled: () => !isCurrent(),
+			onStart: () => {
+				if (!isCurrent()) return;
+				loadQueued = false;
+				loading = true;
+			},
+			run: async () => {
+				if (!isCurrent()) return;
+				try {
+					await surfer.load(url, undefined, durationSeconds || undefined);
+					if (!isCurrent()) return;
+					ready = true;
+					loading = false;
+					loadQueued = false;
+				} catch (error) {
+					if (!isCurrent()) return;
+					loadError = error instanceof Error ? error.message : '波形加载失败';
+					loading = false;
+					loadQueued = false;
+					ready = false;
+				}
+			},
+			onFinish: () => {
+				if (!isCurrent() || loadError) return;
+				loading = false;
+				loadQueued = false;
+			}
+		});
 	}
 
 	function togglePlayback() {
@@ -172,8 +278,23 @@
 		const duration = waveSurfer.getDuration() || durationSeconds || 0;
 		const nextTime = Math.max(0, Math.min(duration, baseTime + direction * 2));
 		lastSyncedTime = nextTime;
-		waveSurfer.setTime(nextTime);
+		syncWaveformProgress(nextTime);
 		onSeek(task, nextTime);
+	}
+
+	function syncWaveformProgress(timeSeconds: number) {
+		if (!waveSurfer) return;
+		const safeTime = Math.max(0, Number.isFinite(timeSeconds) ? timeSeconds : 0);
+		paintWaveformProgress(safeTime);
+	}
+
+	function paintWaveformProgress(timeSeconds: number) {
+		const duration = waveSurfer?.getDuration() || durationSeconds || 0;
+		const host = waveformEl?.querySelector<HTMLElement>(':scope > div:not(.waveform-progress-overlay):not(.waveform-skeleton)');
+		const progress = host?.shadowRoot?.querySelector<HTMLElement>('[part="progress"]');
+		if (!progress) return;
+		const ratio = duration > 0 ? Math.max(0, Math.min(1, timeSeconds / duration)) : 0;
+		progress.style.width = `${ratio * 100}%`;
 	}
 
 	function formatClock(seconds: number) {
@@ -230,6 +351,7 @@
 					{/each}
 				</div>
 			{/if}
+			<div class="waveform-progress-overlay" style={`width:${progressPercent}%`}></div>
 			<span class="waveform-inline-label">{isPlaying ? timeLabel : statusLabel}</span>
 		</div>
 	</div>
@@ -316,9 +438,13 @@
 		outline-offset: 2px;
 	}
 
-	.waveform-canvas :global(wave) {
+	.waveform-canvas > :global(div:not(.waveform-progress-overlay):not(.waveform-skeleton)) {
 		overflow: hidden !important;
 		border-radius: 5px;
+	}
+
+	.waveform-canvas > :global(div:not(.waveform-progress-overlay):not(.waveform-skeleton))::part(progress) {
+		filter: drop-shadow(0 0 5px rgba(103, 232, 249, 0.32));
 	}
 
 	.waveform-skeleton {
@@ -336,6 +462,18 @@
 		min-width: 2px;
 		border-radius: 2px;
 		background: rgba(127, 145, 166, 0.24);
+	}
+
+	.waveform-progress-overlay {
+		position: absolute;
+		inset: 0 auto 0 0;
+		z-index: 3;
+		width: 0;
+		border-radius: 5px 0 0 5px;
+		background: linear-gradient(90deg, rgba(103, 232, 249, 0.16), rgba(103, 232, 249, 0.08));
+		box-shadow: inset 0 0 12px rgba(103, 232, 249, 0.14);
+		mix-blend-mode: screen;
+		pointer-events: none;
 	}
 
 	.waveform-inline-label {
