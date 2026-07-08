@@ -16,6 +16,7 @@ import {
 	voiceBadgeLabel,
 	formatSeconds,
 	formatAudioDuration,
+	resultDownloadNameForScope,
 } from './helpers';
 import type { EngineDetail, GenerationTask, ParameterSchema, VoiceAsset } from '$lib/api/types';
 
@@ -334,5 +335,48 @@ describe('formatAudioDuration', () => {
 		expect(formatAudioDuration(0)).toBe('');
 		expect(formatAudioDuration(1500)).toBe('1.5s');
 		expect(formatAudioDuration(60000)).toBe('60.0s');
+	});
+});
+
+describe('resultDownloadNameForScope', () => {
+	it('uses a per-day sequence and readable prompt title', () => {
+		const first = makeTask({
+			task_id: 'a',
+			result_id: 'r-a',
+			input_text: '第一条文本',
+			created_at: '2026-07-08T01:00:00+08:00',
+			completed_at: '2026-07-08T01:01:00+08:00',
+			parameters: { output_format: 'wav' }
+		});
+		const second = makeTask({
+			task_id: 'b',
+			result_id: 'r-b',
+			input_text: '说每天雷打不动训练至少三四小时',
+			created_at: '2026-07-08T02:00:00+08:00',
+			completed_at: '2026-07-08T02:01:00+08:00',
+			parameters: { output_format: 'mp3' }
+		});
+		const nextDay = makeTask({
+			task_id: 'c',
+			result_id: 'r-c',
+			input_text: '第二天文本',
+			created_at: '2026-07-09T01:00:00+08:00',
+			parameters: { output_format: 'wav' }
+		});
+
+		expect(resultDownloadNameForScope(second, [nextDay, second, first])).toBe('002-说每天雷打不动训练至少三四小时.mp3');
+		expect(resultDownloadNameForScope(nextDay, [nextDay, second, first])).toBe('001-第二天文本.wav');
+	});
+
+	it('sanitizes punctuation and limits long prompts', () => {
+		const task = makeTask({
+			task_id: 'a',
+			result_id: 'r-a',
+			input_text: '那 AI 应该怎么办？比如隐私/效率:成本，需要非常非常非常非常长的标题',
+			created_at: '2026-07-08T01:00:00+08:00',
+			parameters: { output_format: 'WAV' }
+		});
+
+		expect(resultDownloadNameForScope(task, [task])).toBe('001-那-AI-应该怎么办-比如隐私-效率-成本-需要非常非常非常非常.wav');
 	});
 });

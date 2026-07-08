@@ -350,9 +350,57 @@ export function knownErrorMessage(message: string | null | undefined) {
 }
 
 export function resultDownloadName(task: GenerationTask) {
-	const safeTitle = displayTitle(task).replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40) || 'tts';
-	const format = typeof task.parameters.output_format === 'string' ? task.parameters.output_format : 'wav';
-	return `${safeTitle}_${task.task_id.slice(0, 8)}.${format}`;
+	return resultDownloadNameForScope(task, [task]);
+}
+
+export function resultDownloadNameForScope(task: GenerationTask, scope: GenerationTask[]) {
+	const sequence = taskDownloadSequence(task, scope).toString().padStart(3, '0');
+	const title = sanitizeDownloadTitle(displayTitle(task));
+	const format = sanitizeDownloadFormat(task.parameters.output_format);
+	return `${sequence}-${title}.${format}`;
+}
+
+function taskDownloadSequence(task: GenerationTask, scope: GenerationTask[]) {
+	const dateKey = taskDownloadDateKey(task);
+	const seen = new Map<string, GenerationTask>();
+	for (const item of [...scope, task]) {
+		if (!item.task_id || taskDownloadDateKey(item) !== dateKey) continue;
+		if (item.result_id || item.task_id === task.task_id) seen.set(item.task_id, item);
+	}
+	const ordered = [...seen.values()].sort((a, b) => {
+		const timeDiff = taskDownloadTime(a) - taskDownloadTime(b);
+		return timeDiff || a.task_id.localeCompare(b.task_id);
+	});
+	const index = ordered.findIndex((item) => item.task_id === task.task_id);
+	return index >= 0 ? index + 1 : ordered.length + 1;
+}
+
+function taskDownloadDateKey(task: GenerationTask) {
+	const date = new Date(task.completed_at ?? task.created_at);
+	if (!Number.isFinite(date.getTime())) return 'unknown-date';
+	const year = date.getFullYear();
+	const month = String(date.getMonth() + 1).padStart(2, '0');
+	const day = String(date.getDate()).padStart(2, '0');
+	return `${year}${month}${day}`;
+}
+
+function taskDownloadTime(task: GenerationTask) {
+	const time = new Date(task.completed_at ?? task.created_at).getTime();
+	return Number.isFinite(time) ? time : 0;
+}
+
+function sanitizeDownloadTitle(title: string) {
+	const cleaned = title
+		.normalize('NFKC')
+		.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ')
+		.replace(/[，,。.!！?？；;：:、]+/g, ' ')
+		.replace(/\s+/g, '-')
+		.replace(/^-+|-+$/g, '');
+	return Array.from(cleaned || 'tts').slice(0, 32).join('') || 'tts';
+}
+
+function sanitizeDownloadFormat(format: unknown) {
+	return typeof format === 'string' && /^[a-z0-9]{2,8}$/i.test(format) ? format.toLowerCase() : 'wav';
 }
 
 export function longformTitle(task: LongformTask) { return task.input_text.trim() || '长文本任务'; }
