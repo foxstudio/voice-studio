@@ -2682,6 +2682,10 @@
 		width: 100%;
 		max-width: none;
 	}
+	.more-params-panel .emotion-intensity-field {
+		grid-column: span 3;
+		min-width: 220px;
+	}
 	.more-params-panel .param-field.span-full,
 	.more-params-panel .param-slider.span-full,
 	.more-params-panel .param-field.span-wide,
@@ -2694,6 +2698,10 @@
 	}
 	.more-params-panel .value {
 		text-align: left;
+	}
+	.emotion-intensity-control :global(.slider) {
+		grid-template-columns: minmax(126px, 1fr) 42px;
+		gap: 6px;
 	}
 	.more-params-panel .field-label {
 		min-height: 18px;
