@@ -97,8 +97,8 @@
 				height: 28,
 				waveColor: '#253241',
 				progressColor: '#6ee7f8',
-				cursorColor: '#f59e0b',
-				cursorWidth: 2,
+				cursorColor: 'transparent',
+				cursorWidth: 0,
 				barWidth: 2,
 				barGap: 2,
 				barRadius: 2,
@@ -112,7 +112,7 @@
 				dragToSeek: { debounceTime: 50 },
 				plugins: [
 					HoverPlugin.create({
-						lineColor: '#f59e0b',
+						lineColor: 'rgba(110, 231, 248, 0.42)',
 						lineWidth: 1,
 						labelColor: '#07121f',
 						labelBackground: '#f8fafc',
@@ -238,10 +238,10 @@
 <style>
 	.result-waveform-player {
 		display: grid;
-		grid-template-columns: 28px 28px minmax(92px, 1fr);
+		grid-template-columns: 28px 28px minmax(0, 1fr);
 		align-items: center;
 		gap: 6px;
-		width: min(100%, 300px);
+		width: 100%;
 		min-width: 0;
 		padding: 4px 5px;
 		border: 1px solid rgba(95, 111, 130, 0.46);
