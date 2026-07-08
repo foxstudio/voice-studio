@@ -28,6 +28,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	let resultAudioPendingTaskId = $state('');
 	let resultAudioCurrentTime = $state(0);
 	let resultAudioFrame: number | null = null;
+	let customVoicePreviewFrame: number | null = null;
 	let customVoiceDragActive = $state(false);
 	let voiceRegisterOpen = $state(false);
 	let voiceRegisterBusy = $state(false);
@@ -191,7 +192,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	function setCustomVoicePreviewUrl(url: string) { if ($store.customVoicePreviewUrl && $store.customVoicePreviewUrl !== url && $store.customVoicePreviewUrl !== customVoiceSourcePreviewUrl) revokeObjectUrlIfNeeded($store.customVoicePreviewUrl); $store.customVoicePreviewUrl = url; }
 	function invalidateCustomVoiceTrim() { if (!customVoiceOriginalFile) return; if ($store.customVoiceReferenceAudioPath || $store.customVoiceTranscriptionId) customVoiceSelectionDirty = true; clearCustomVoiceProcessedState(); setCustomVoicePreviewUrl(customVoiceSourcePreviewUrl); if (!customVoiceLoopPreview) stopVoicePreview(); customVoicePlaybackPosition = customVoiceTrimStart; }
 	function clampCustomVoicePlaybackTime(value: number) { const duration = (customVoiceSourceDurationMs ?? 0) / 1000; return Math.max(0, Math.min(duration || value, value)); }
-	function setCustomVoicePlaybackPosition(value: string | number) { const n = Number(value); if (!Number.isFinite(n)) return; customVoicePlaybackPosition = Math.round(clampCustomVoicePlaybackTime(n) * 10) / 10; if (customVoiceLoopPreview && $store.voicePreviewAudio) $store.voicePreviewAudio.currentTime = customVoicePlaybackPosition; }
+	function setCustomVoicePlaybackPosition(value: string | number) { const n = Number(value); if (!Number.isFinite(n)) return; customVoicePlaybackPosition = clampCustomVoicePlaybackTime(n); if (customVoiceLoopPreview && $store.voicePreviewAudio) $store.voicePreviewAudio.currentTime = customVoicePlaybackPosition; }
 	function setCustomVoiceTrimStart(value: string | number) { const max = customVoiceTrimEnd || (customVoiceSourceDurationMs ?? 0) / 1000; const n = Number(value); if (!Number.isFinite(n)) return; customVoiceTrimStart = Math.max(0, Math.min(n, Math.max(0, max - 0.1))); if (customVoicePlaybackPosition < customVoiceTrimStart) customVoicePlaybackPosition = customVoiceTrimStart; if (customVoiceLoopPreview && $store.voicePreviewAudio) $store.voicePreviewAudio.currentTime = customVoiceTrimStart; syncCustomVoiceTrimMetadata(); invalidateCustomVoiceTrim(); }
 	function setCustomVoiceTrimEnd(value: string | number) { const duration = (customVoiceSourceDurationMs ?? 0) / 1000; const n = Number(value); if (!Number.isFinite(n)) return; customVoiceTrimEnd = Math.max(customVoiceTrimStart + 0.1, Math.min(duration || n, n)); if (customVoicePlaybackPosition > customVoiceTrimEnd) customVoicePlaybackPosition = customVoiceTrimEnd; syncCustomVoiceTrimMetadata(); invalidateCustomVoiceTrim(); }
 	function setCustomVoiceTrimStartAtPlayhead() { setCustomVoiceTrimStart(customVoicePlaybackPosition); }
@@ -397,13 +398,16 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		$store.voicePreviewPlaying = true;
 		try {
 			await audio.play();
+			startCustomVoicePreviewFrameLoop();
 		} catch (e) {
+			stopCustomVoicePreviewFrameLoop();
 			customVoiceLoopPreview = false;
 			$store.voicePreviewPlaying = false;
 			$store.error = `选区试听失败：${(e as Error).message || '请确认音频文件可播放'}`;
 		}
 	}
 	function stopCustomVoiceSelectionPreview() {
+		stopCustomVoicePreviewFrameLoop();
 		const audio = $store.voicePreviewAudio;
 		const { start } = selectedTrimRange();
 		if (audio) {
@@ -414,9 +418,39 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		customVoiceLoopPreview = false;
 		$store.voicePreviewPlaying = false;
 	}
-	async function previewSelectedVoice() { if (!$store.voicePreviewAudio || !activeVoicePreviewUrl) return; const audio = $store.voicePreviewAudio; if ($store.voicePreviewPlaying && !audio.paused) { audio.pause(); customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; return; } customVoiceLoopPreview = false; const absoluteUrl = new URL(activeVoicePreviewUrl, window.location.href).href; if (audio.src !== absoluteUrl) { audio.src = activeVoicePreviewUrl; audio.currentTime = 0; } $store.error = ''; $store.voicePreviewPlaying = true; try { await audio.play(); } catch (e) { $store.voicePreviewPlaying = false; $store.error = `音色预览播放失败：${(e as Error).message || '请确认参考音频文件可访问'}`; } }
-	function handleVoicePreviewTimeUpdate() { const audio = $store.voicePreviewAudio; if (!audio || !customVoiceLoopPreview) return; const { start, end } = selectedTrimRange(); customVoicePlaybackPosition = Math.max(start, Math.min(end, audio.currentTime)); if (audio.currentTime >= end || audio.currentTime < start) { if (customVoiceLoopEnabled) { audio.currentTime = start; customVoicePlaybackPosition = start; void audio.play().catch(() => { customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; }); } else stopCustomVoiceSelectionPreview(); } }
-	function stopVoicePreview() { if ($store.voicePreviewAudio && $store.voicePreviewPlaying) { $store.voicePreviewAudio.pause(); } customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; }
+	async function previewSelectedVoice() { if (!$store.voicePreviewAudio || !activeVoicePreviewUrl) return; const audio = $store.voicePreviewAudio; if ($store.voicePreviewPlaying && !audio.paused) { stopCustomVoicePreviewFrameLoop(); audio.pause(); customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; return; } stopCustomVoicePreviewFrameLoop(); customVoiceLoopPreview = false; const absoluteUrl = new URL(activeVoicePreviewUrl, window.location.href).href; if (audio.src !== absoluteUrl) { audio.src = activeVoicePreviewUrl; audio.currentTime = 0; } $store.error = ''; $store.voicePreviewPlaying = true; try { await audio.play(); } catch (e) { $store.voicePreviewPlaying = false; $store.error = `音色预览播放失败：${(e as Error).message || '请确认参考音频文件可访问'}`; } }
+	function syncCustomVoicePreviewPlayback() {
+		const audio = $store.voicePreviewAudio;
+		if (!audio || !customVoiceLoopPreview) return;
+		const { start, end } = selectedTrimRange();
+		customVoicePlaybackPosition = Math.max(start, Math.min(end, audio.currentTime));
+		if (audio.currentTime >= end || audio.currentTime < start) {
+			if (customVoiceLoopEnabled) {
+				audio.currentTime = start;
+				customVoicePlaybackPosition = start;
+				void audio.play().catch(() => {
+					stopCustomVoicePreviewFrameLoop();
+					customVoiceLoopPreview = false;
+					$store.voicePreviewPlaying = false;
+				});
+			} else stopCustomVoiceSelectionPreview();
+		}
+	}
+	function stopCustomVoicePreviewFrameLoop() { if (customVoicePreviewFrame !== null) cancelAnimationFrame(customVoicePreviewFrame); customVoicePreviewFrame = null; }
+	function startCustomVoicePreviewFrameLoop() {
+		if (customVoicePreviewFrame !== null) return;
+		const step = () => {
+			customVoicePreviewFrame = null;
+			const audio = $store.voicePreviewAudio;
+			if (!audio || !customVoiceLoopPreview || !$store.voicePreviewPlaying) return;
+			syncCustomVoicePreviewPlayback();
+			if (customVoiceLoopPreview && $store.voicePreviewPlaying && !audio.paused) customVoicePreviewFrame = requestAnimationFrame(step);
+		};
+		customVoicePreviewFrame = requestAnimationFrame(step);
+	}
+	function handleVoicePreviewTimeUpdate() { syncCustomVoicePreviewPlayback(); }
+	function handleVoicePreviewPause() { stopCustomVoicePreviewFrameLoop(); if ($store.voicePreviewAudio?.ended || !$store.voicePreviewAudio?.currentTime) { customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; } }
+	function stopVoicePreview() { stopCustomVoicePreviewFrameLoop(); if ($store.voicePreviewAudio && $store.voicePreviewPlaying) { $store.voicePreviewAudio.pause(); } customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; }
 	function upsertTask(t: GenerationTask) { $store.tasks = [t, ...$store.tasks.filter(i => i.task_id !== t.task_id)]; }
 	async function poll(taskId: string) { for (let i = 0; i < 900; i++) { const t = await Api.task(taskId); upsertTask(t); if (['success', 'failed', 'cancelled'].includes(t.status)) return; await new Promise(r => setTimeout(r, 1000)); } }
 	async function refreshPageData() {
@@ -776,6 +810,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		window.addEventListener('keydown', handleCustomVoiceTrimKeydown);
 		_autoResizeRO = new ResizeObserver(or);
 		return () => {
+			stopCustomVoicePreviewFrameLoop();
 			stopResultAudioFrameLoop();
 			clearInterval(id);
 			clearInterval(slowId);
@@ -813,7 +848,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		{#if $store.showPresetEditor}<div class="preset-editor"><div class="row gen-section-head"><div><h3>{$store.editingPresetId ? '编辑自定义预设' : '保存当前为预设'}</h3><p class="muted">绑定引擎：{selected?.manifest.display_name ?? $store.engineId}</p></div><button class="gen-icon-btn mini" type="button" aria-label="关闭预设编辑器" data-tooltip="关闭预设编辑器" onclick={() => ($store.showPresetEditor = false)}>X</button></div><div class="preset-editor-grid"><label class="field"><span>名称</span><input bind:value={$store.presetDraft.name} placeholder="例如：课程慢讲" /></label><label class="field"><span>场景</span><input bind:value={$store.presetDraft.scene} placeholder="例如：教程 / 长文旁白" /></label><label class="field wide"><span>描述</span><input bind:value={$store.presetDraft.description} placeholder="简短说明" /></label><label class="field"><span>标签</span><input bind:value={$store.presetDraft.tags} placeholder="慢讲，课程" /></label><label class="field wide"><span>示例文本</span><textarea bind:value={$store.presetDraft.sample_text} placeholder="可选"></textarea></label></div><div class="row wrap"><button class="btn primary compact" type="button" onclick={savePreset} disabled={$store.presetBusy || !$store.presetDraft.name.trim()}><Save size={14} /> {$store.presetBusy ? '保存中' : '保存预设'}</button><button class="btn compact" type="button" onclick={() => ($store.showPresetEditor = false)}>取消</button></div></div>{/if}
 		<div class="param-inline-row">
 			<label class="param-inline engine-param-inline"><span>引擎</span><EngineSelector engines={ttsEngines} bind:value={$store.engineId} /></label>
-			{#if usesReferenceVoice}<div class="param-inline voice-param-inline" class:library-source={$store.voiceSource === 'voice_library'} class:custom-source={$store.voiceSource === 'reference_audio'}><span>声音</span><div class="voice-source-control"><div class="gen-segmented voice-source-tabs" role="tablist" aria-label="声音来源"><button class:active={$store.voiceSource === 'voice_library'} type="button" onclick={() => setVoiceSource('voice_library')}>{isDoubaoClone ? '云端音色' : '音色库'}</button>{#if !isDoubaoClone}<button class:active={$store.voiceSource === 'reference_audio'} type="button" onclick={() => setVoiceSource('reference_audio')}>自定义</button>{/if}</div>{#if $store.voiceSource === 'voice_library'}<div class="voice-inline"><VoiceSelector voices={visibleVoiceOptions} bind:value={$store.voiceId} /><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听音色' : '试听当前音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停当前音色试听' : '试听当前选择的音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{:else}<div class="custom-voice-inline"><span class="custom-voice-chip" class:ok={customVoiceMatched}>{#if customVoiceMatched}<CircleCheck size={13} />{:else}<FileAudio size={13} />{/if}{$store.customVoiceFileName || '未上传'}</span><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听自定义音色' : '试听自定义音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停自定义音色试听' : '试听当前自定义音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{/if}</div></div>{#if activeVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={activeVoicePreviewUrl} preload="none" ontimeupdate={handleVoicePreviewTimeUpdate} onended={stopVoicePreview} onpause={() => { if ($store.voicePreviewAudio?.ended || !$store.voicePreviewAudio?.currentTime) { customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; } }}></audio>{/if}{/if}
+			{#if usesReferenceVoice}<div class="param-inline voice-param-inline" class:library-source={$store.voiceSource === 'voice_library'} class:custom-source={$store.voiceSource === 'reference_audio'}><span>声音</span><div class="voice-source-control"><div class="gen-segmented voice-source-tabs" role="tablist" aria-label="声音来源"><button class:active={$store.voiceSource === 'voice_library'} type="button" onclick={() => setVoiceSource('voice_library')}>{isDoubaoClone ? '云端音色' : '音色库'}</button>{#if !isDoubaoClone}<button class:active={$store.voiceSource === 'reference_audio'} type="button" onclick={() => setVoiceSource('reference_audio')}>自定义</button>{/if}</div>{#if $store.voiceSource === 'voice_library'}<div class="voice-inline"><VoiceSelector voices={visibleVoiceOptions} bind:value={$store.voiceId} /><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听音色' : '试听当前音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停当前音色试听' : '试听当前选择的音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{:else}<div class="custom-voice-inline"><span class="custom-voice-chip" class:ok={customVoiceMatched}>{#if customVoiceMatched}<CircleCheck size={13} />{:else}<FileAudio size={13} />{/if}{$store.customVoiceFileName || '未上传'}</span><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听自定义音色' : '试听自定义音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停自定义音色试听' : '试听当前自定义音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{/if}</div></div>{#if activeVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={activeVoicePreviewUrl} preload="none" ontimeupdate={handleVoicePreviewTimeUpdate} onended={stopVoicePreview} onpause={handleVoicePreviewPause}></audio>{/if}{/if}
 			{#if activeParamKeys.has('speed')}<label class="param-inline-range"><span>语速</span><input class="speed-number" type="number" min="0.5" max="2" step="0.05" value={$store.speed.toFixed(2)} oninput={(e) => setSpeedValue((e.currentTarget as HTMLInputElement).value)} onblur={(e) => ((e.currentTarget as HTMLInputElement).value = $store.speed.toFixed(2))} /><input type="range" min="0.5" max="2" step="0.05" value={$store.speed} oninput={(e) => setSpeedValue((e.currentTarget as HTMLInputElement).value)} /></label>{/if}
 			<label class="param-inline param-inline-format"><span>格式</span><select bind:value={$store.outputFormat}><option value="wav">WAV</option><option value="mp3">MP3</option><option value="flac">FLAC</option></select></label>
 			<div class="param-actions-inline">
