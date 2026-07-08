@@ -1248,21 +1248,20 @@
 	}
 
 	.result-footer {
-		display: grid;
-		grid-template-columns: 1fr auto;
+		display: flex;
 		align-items: center;
-		gap: 6px 10px;
+		justify-content: space-between;
+		gap: 8px;
 		align-self: stretch;
 		width: 100%;
 		min-width: 0;
 	}
 
-	.result-footer.without-audio {
-		grid-template-columns: 1fr auto;
-	}
-
-	.result-footer.without-audio .result-card-actions {
-		grid-column: 2;
+	.result-footer-status {
+		display: flex;
+		align-items: center;
+		min-width: 0;
+		flex: 1 1 auto;
 	}
 
 	.result-card-actions {
@@ -1298,6 +1297,15 @@
 		background: rgba(37, 99, 235, 0.1);
 		font-size: 12px;
 		line-height: 1.5;
+	}
+
+	.result-footer-status .verification-pending-line,
+	.result-footer-status .error-line {
+		padding: 0;
+		border: 0;
+		background: transparent;
+		font-size: 12px;
+		line-height: 1;
 	}
 
 	.verification-line {
