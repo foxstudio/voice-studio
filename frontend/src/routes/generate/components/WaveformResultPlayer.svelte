@@ -94,7 +94,7 @@
 			]);
 			waveSurfer = WaveSurfer.create({
 				container: waveformEl,
-				height: 38,
+				height: 28,
 				waveColor: '#253241',
 				progressColor: '#6ee7f8',
 				cursorColor: '#f59e0b',
@@ -202,6 +202,15 @@
 			<Play size={15} />
 		{/if}
 	</button>
+	<a
+		class="waveform-download-button"
+		href={downloadUrl}
+		download={downloadName}
+		aria-label="下载音频"
+		data-tooltip="直接下载这条记录生成的音频文件"
+	>
+		<Download size={14} />
+	</a>
 	<div class="waveform-main">
 		<div
 			bind:this={waveformEl}
@@ -221,34 +230,20 @@
 					{/each}
 				</div>
 			{/if}
-		</div>
-		<div class="waveform-meta">
-			<span>{isPlaying ? timeLabel : statusLabel}</span>
-			{#if isPlaying && durationLabel}
-				<span>{durationLabel}</span>
-			{/if}
+			<span class="waveform-inline-label">{isPlaying ? timeLabel : statusLabel}</span>
 		</div>
 	</div>
-	<a
-		class="waveform-download-button"
-		href={downloadUrl}
-		download={downloadName}
-		aria-label="下载音频"
-		data-tooltip="直接下载这条记录生成的音频文件"
-	>
-		<Download size={15} />
-	</a>
 </div>
 
 <style>
 	.result-waveform-player {
 		display: grid;
-		grid-template-columns: 30px minmax(116px, 1fr) 30px;
+		grid-template-columns: 28px 28px minmax(92px, 1fr);
 		align-items: center;
-		gap: 8px;
-		width: min(100%, 340px);
+		gap: 6px;
+		width: min(100%, 300px);
 		min-width: 0;
-		padding: 5px 6px;
+		padding: 4px 5px;
 		border: 1px solid rgba(95, 111, 130, 0.46);
 		border-radius: 8px;
 		background:
@@ -269,8 +264,8 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		width: 30px;
-		height: 30px;
+		width: 28px;
+		height: 28px;
 		border: 1px solid var(--line);
 		border-radius: 7px;
 		background: rgba(255, 255, 255, 0.025);
@@ -304,15 +299,13 @@
 	}
 
 	.waveform-main {
-		display: grid;
-		gap: 2px;
 		min-width: 0;
 	}
 
 	.waveform-canvas {
 		position: relative;
 		min-width: 0;
-		height: 38px;
+		height: 28px;
 		overflow: hidden;
 		border-radius: 5px;
 		cursor: pointer;
@@ -345,21 +338,22 @@
 		background: rgba(127, 145, 166, 0.24);
 	}
 
-	.waveform-meta {
-		display: flex;
-		justify-content: space-between;
-		gap: 8px;
-		min-width: 0;
+	.waveform-inline-label {
+		position: absolute;
+		left: 5px;
+		bottom: 1px;
+		z-index: 4;
+		max-width: calc(100% - 10px);
+		padding: 1px 4px;
+		border-radius: 999px;
+		background: rgba(7, 13, 20, 0.72);
 		color: var(--muted);
-		font-size: 10.5px;
-		line-height: 1.1;
-	}
-
-	.waveform-meta span {
-		min-width: 0;
+		font-size: 10px;
+		line-height: 1.05;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		pointer-events: none;
 	}
 
 	@keyframes waveform-spin {
@@ -371,7 +365,7 @@
 	@media (max-width: 720px) {
 		.result-waveform-player {
 			width: 100%;
-			grid-template-columns: 30px minmax(92px, 1fr) 30px;
+			grid-template-columns: 28px 28px minmax(72px, 1fr);
 		}
 	}
 </style>
