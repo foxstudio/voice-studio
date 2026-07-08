@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import UploadFile
 
+from app.errors import AppException
 from app.schemas.voice_studio import LicenseStatus, VoiceAsset, VoiceAssetCreate, VoiceAssetUpdate, VoiceEngineBinding, VoiceFile, now_iso
 from app.services import audio_tools, database as db, settings_store, voice_aliases
 
@@ -107,6 +108,13 @@ def get_file(file_id: str) -> VoiceFile | None:
     return VoiceFile(**data) if data else None
 
 
+def delete_file(file_id: str, *, unlink: bool = True) -> None:
+    vf = get_file(file_id)
+    if vf and unlink and vf.path:
+        Path(vf.path).unlink(missing_ok=True)
+    db.delete_one("voice_files", "file_id", file_id)
+
+
 async def upload_audio(file: UploadFile) -> dict:
     settings_store.ensure_directories()
     suffix = Path(file.filename or "voice.wav").suffix or ".wav"
@@ -117,20 +125,57 @@ async def upload_audio(file: UploadFile) -> dict:
     vf.path = str(path)
     vf.mime_type = file.content_type or "audio/wav"
     vf.size_bytes = len(content)
-    quality = {"passed": True, "warnings": []}
     try:
         meta = audio_tools.probe_audio(path)
         vf.duration_ms = meta["duration_ms"]
         vf.sample_rate = meta["sample_rate"]
-        if vf.duration_ms < 2000:
-            quality["passed"] = False
-            quality["warnings"].append("参考音频短于 2 秒")
-        if vf.duration_ms > 30000:
-            quality["warnings"].append("参考音频超过 30 秒，可能影响推理速度")
+        quality = _quality_for_voice_file(vf.duration_ms)
     except Exception as exc:
         quality = {"passed": False, "warnings": [f"无法读取音频: {exc}"]}
     db.upsert("voice_files", vf.file_id, vf.model_dump())
     return {"file_id": vf.file_id, "filename": vf.original_name, "path": vf.path, "quality": quality}
+
+
+def create_audio_clip(file_id: str, start_ms: int, end_ms: int) -> dict:
+    settings_store.ensure_directories()
+    source = get_file(file_id)
+    if not source or not source.path or not Path(source.path).exists():
+        raise AppException(404, "AUDIO_NOT_FOUND", "Audio not found")
+    if start_ms < 0 or end_ms <= start_ms:
+        raise AppException(400, "INVALID_CLIP_RANGE", "裁切出点必须大于入点")
+
+    source_path = Path(source.path)
+    try:
+        source_meta = audio_tools.probe_audio(source_path)
+    except Exception as exc:
+        raise AppException(400, "SOURCE_AUDIO_UNREADABLE", f"无法读取原始音频: {exc}") from exc
+
+    duration_ms = int(source_meta.get("duration_ms") or 0)
+    if duration_ms <= 0:
+        raise AppException(400, "SOURCE_AUDIO_UNREADABLE", "原始音频时长无效")
+    start_ms = min(start_ms, max(0, duration_ms - 1))
+    end_ms = min(end_ms, duration_ms)
+    if end_ms - start_ms < 100:
+        raise AppException(400, "CLIP_TOO_SHORT", "裁切选区不能短于 0.1 秒")
+
+    stem = Path(source.original_name or source_path.name).stem or "reference"
+    vf = VoiceFile(original_name=f"{stem}_clip_{start_ms}-{end_ms}ms.wav", path="")
+    path = settings_store.voice_dir() / f"{vf.file_id}.wav"
+    try:
+        audio_tools.crop_file(source_path, path, start_ms, end_ms, "wav")
+        meta = audio_tools.probe_audio(path)
+    except Exception as exc:
+        path.unlink(missing_ok=True)
+        raise AppException(400, "AUDIO_CLIP_FAILED", f"音频裁切失败: {exc}") from exc
+
+    vf.path = str(path)
+    vf.mime_type = "audio/wav"
+    vf.size_bytes = meta["size_bytes"]
+    vf.duration_ms = meta["duration_ms"]
+    vf.sample_rate = meta["sample_rate"]
+    quality = _quality_for_voice_file(vf.duration_ms)
+    db.upsert("voice_files", vf.file_id, vf.model_dump())
+    return {"file_id": vf.file_id, "filename": vf.original_name, "path": vf.path, "quality": quality, "voice_file": vf}
 
 
 def reference_path(voice_id: str | None) -> str | None:
@@ -141,6 +186,18 @@ def reference_path(voice_id: str | None) -> str | None:
         return None
     vf = get_file(voice.reference_audio_ids[0])
     return vf.path if vf else None
+
+
+def _quality_for_voice_file(duration_ms: int | None) -> dict:
+    quality = {"passed": True, "warnings": []}
+    if duration_ms is None:
+        return quality
+    if duration_ms < 2000:
+        quality["passed"] = False
+        quality["warnings"].append("参考音频短于 2 秒")
+    if duration_ms > 30000:
+        quality["warnings"].append("参考音频超过 30 秒，可能影响推理速度")
+    return quality
 
 
 def _engine_bindings(voice: VoiceAsset) -> list[VoiceEngineBinding]:

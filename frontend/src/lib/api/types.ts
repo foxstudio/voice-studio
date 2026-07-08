@@ -210,6 +210,17 @@ export interface UploadResult {
 	quality: { passed: boolean; warnings: string[] };
 }
 
+export interface VoiceFile {
+	file_id: string;
+	original_name: string;
+	path: string;
+	mime_type: string;
+	duration_ms: number | null;
+	sample_rate: number | null;
+	size_bytes: number;
+	created_at: string;
+}
+
 export interface TranscriptionSegment {
 	start_ms: number;
 	end_ms: number;
@@ -232,6 +243,11 @@ export interface TranscriptionRecord {
 	usage_seconds: number | null;
 	provider_response_id: string | null;
 	created_at: string;
+}
+
+export interface VoiceClipTranscribeResponse extends UploadResult {
+	voice_file: VoiceFile;
+	transcription: TranscriptionRecord;
 }
 
 export interface TranscriptionTask {
@@ -433,6 +449,11 @@ export interface VideoLocalizationDraft {
 	quality_gate: VideoLocalizationQualityGate;
 	exports: VideoLocalizationExportState;
 	operations: VideoLocalizationOperation[];
+	ui_state: Record<string, unknown>;
+	project_voice_samples: Record<string, unknown>[];
+	voice_recipes: Record<string, unknown>[];
+	generated_candidates: Record<string, unknown>[];
+	timeline_clips: Record<string, unknown>[];
 	updated_at: string | null;
 }
 

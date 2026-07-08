@@ -8,8 +8,19 @@ from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from app.errors import AppException
-from app.schemas.voice_studio import DoubaoVoiceCloneResponse, DoubaoVoiceCloneTrainRequest, LicenseStatus, VoiceAsset, VoiceAssetCreate, VoiceAssetUpdate, VoiceType
-from app.services import doubao_client, settings_store, voice_store
+from app.schemas.voice_studio import (
+    DoubaoVoiceCloneResponse,
+    DoubaoVoiceCloneTrainRequest,
+    LicenseStatus,
+    TranscriptionRecord,
+    VoiceAsset,
+    VoiceAssetCreate,
+    VoiceAssetUpdate,
+    VoiceClipTranscribeRequest,
+    VoiceClipTranscribeResponse,
+    VoiceType,
+)
+from app.services import asr_service, audio_tools, database as db, doubao_client, settings_store, voice_store
 
 router = APIRouter()
 
@@ -66,6 +77,42 @@ def _doubao_custom_speaker_id(voice: VoiceAsset) -> str | None:
         raw_custom = voice.external_metadata.get("custom_speaker_id")
         return str(raw_custom) if raw_custom else None
     return None
+
+
+def _transcribe_existing_audio(*, path: str, filename: str, language: str, engine_id: str) -> TranscriptionRecord:
+    suffix = Path(filename or path).suffix.lower() or ".wav"
+    asr_service.validate_request(engine_id, language, suffix)
+    audio_path = Path(path)
+    if not audio_path.exists():
+        raise AppException(404, "AUDIO_NOT_FOUND", "Audio not found")
+
+    duration_ms = None
+    try:
+        duration_ms = audio_tools.probe_audio(audio_path).get("duration_ms")
+    except Exception:
+        duration_ms = None
+
+    result = asr_service.transcribe(engine_id=engine_id, audio_path=str(audio_path), language=language)
+    record = TranscriptionRecord(
+        engine_id=engine_id,
+        filename=filename or audio_path.name,
+        language=language,
+        text=result["text"],
+        segments=asr_service.normalize_segments(result.get("segments")),
+        duration_ms=duration_ms,
+        size_bytes=audio_path.stat().st_size,
+        usage_seconds=result.get("usage_seconds"),
+        provider_response_id=result.get("provider_response_id"),
+    )
+    for key, value in asr_service.timestamp_metadata_for(record.engine_id, record.segments).items():
+        setattr(record, key, value)
+    db.upsert(
+        "transcriptions",
+        record.transcription_id,
+        {**record.model_dump(), "source_audio_path": str(audio_path)},
+        "created_at",
+    )
+    return record
 
 
 @router.get("", response_model=list[VoiceAsset])
@@ -175,6 +222,22 @@ async def get_voice_file_audio(file_id: str):
     if not vf or not vf.path or not Path(vf.path).exists():
         raise AppException(404, "AUDIO_NOT_FOUND", "Audio not found")
     return FileResponse(vf.path)
+
+
+@router.post("/files/{file_id}/clip-transcribe", response_model=VoiceClipTranscribeResponse)
+async def clip_and_transcribe_voice_file(file_id: str, data: VoiceClipTranscribeRequest):
+    clip = voice_store.create_audio_clip(file_id, data.start_ms, data.end_ms)
+    try:
+        transcription = _transcribe_existing_audio(
+            path=clip["path"],
+            filename=clip["filename"],
+            language=data.language,
+            engine_id=data.engine_id,
+        )
+    except Exception:
+        voice_store.delete_file(clip["file_id"])
+        raise
+    return {**clip, "transcription": transcription}
 
 
 @router.get("/{voice_id}", response_model=VoiceAsset)

@@ -42,6 +42,7 @@ import type {
 	VideoLocalizationReferenceClipUpdate,
 	VoiceAsset,
 	VoiceAssetCreate,
+	VoiceClipTranscribeResponse,
 	SEREmotionResult,
 	VoiceAssetUpdate,
 	VoiceSeed
@@ -89,6 +90,8 @@ export const Api = {
 	refreshDoubaoCloudVoices: () => api.post<DoubaoCloudRefreshResponse>('/voices/doubao/cloud/refresh'),
 	unbindDoubaoVoice: (id: string) => api.delete<VoiceAsset>(`/voices/${id}/doubao/binding`),
 	uploadVoice: (file: File) => api.upload<UploadResult>('/voices/upload', file),
+	clipTranscribeVoice: (fileId: string, body: { start_ms: number; end_ms: number; language?: 'auto' | 'zh' | 'en'; engine_id?: string }) =>
+		api.post<VoiceClipTranscribeResponse>(`/voices/files/${encodeURIComponent(fileId)}/clip-transcribe`, body),
 	generatePlan: (body: GeneratePlanRequest) => api.post<GeneratePlanResponse>('/generate/plan', body),
 	generate: (body: GenerateRequest) => api.post<GenerateResponse>('/generate', body),
 	generateLongform: (body: LongformGenerateRequest) => api.post<LongformTask>('/longform/generate', body),

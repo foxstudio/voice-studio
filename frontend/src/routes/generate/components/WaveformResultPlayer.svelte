@@ -95,19 +95,27 @@
 	let lastLoadedUrl = '';
 	let loadToken = 0;
 	let destroyed = false;
+	let progressUrl = '';
+	let displayedProgressPercent = $state(0);
 
 	const durationSeconds = $derived(Math.max(0, (task.result_duration_ms ?? 0) / 1000));
 	const timeLabel = $derived(formatClock(isPlaying || currentTime > 0 ? currentTime : 0));
 	const statusLabel = $derived(loadError ? '波形不可用' : loadQueued ? '排队读取' : loading ? '读取波形' : durationLabel || '播放结果');
-	const progressPercent = $derived.by(() => {
-		const duration = durationSeconds || 0;
-		if (!duration || (!isPlaying && currentTime <= 0)) return 0;
-		return Math.max(0, Math.min(100, (currentTime / duration) * 100));
-	});
 
 	$effect(() => {
 		if (!waveSurfer || !audioUrl || audioUrl === lastLoadedUrl) return;
 		queueWaveformLoad(audioUrl);
+	});
+
+	$effect(() => {
+		if (audioUrl === progressUrl) return;
+		progressUrl = audioUrl;
+		displayedProgressPercent = 0;
+	});
+
+	$effect(() => {
+		if (!durationSeconds || (!isPlaying && !isPending && currentTime <= 0)) return;
+		updateDisplayedProgress(currentTime);
 	});
 
 	onMount(() => {
@@ -187,6 +195,7 @@
 				ready = false;
 			});
 			waveSurfer.on('interaction', (time) => {
+				updateDisplayedProgress(time);
 				onSeek(task, time);
 			});
 			queueWaveformLoad(audioUrl);
@@ -260,7 +269,14 @@
 		const baseTime = isPlaying ? currentTime : waveSurfer.getCurrentTime();
 		const duration = waveSurfer.getDuration() || durationSeconds || 0;
 		const nextTime = Math.max(0, Math.min(duration, baseTime + direction * 2));
+		updateDisplayedProgress(nextTime);
 		onSeek(task, nextTime);
+	}
+
+	function updateDisplayedProgress(timeSeconds: number) {
+		const duration = durationSeconds || waveSurfer?.getDuration() || 0;
+		if (!duration) return;
+		displayedProgressPercent = Math.max(0, Math.min(100, (timeSeconds / duration) * 100));
 	}
 
 	function formatClock(seconds: number) {
@@ -295,7 +311,7 @@
 			class="waveform-canvas"
 			role="slider"
 			tabindex="0"
-			style={`--waveform-progress:${progressPercent}%`}
+			style={`--waveform-progress:${displayedProgressPercent}%`}
 			aria-label="生成结果波形，可点击或用左右方向键定位"
 			aria-valuemin="0"
 			aria-valuemax={Math.round(durationSeconds)}

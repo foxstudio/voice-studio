@@ -299,6 +299,22 @@ class TranscriptionRecord(BaseModel):
     created_at: str = Field(default_factory=now_iso)
 
 
+class VoiceClipTranscribeRequest(BaseModel):
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(gt=0)
+    language: Literal["auto", "zh", "en"] = "auto"
+    engine_id: str = "qwen3-asr-mlx"
+
+
+class VoiceClipTranscribeResponse(BaseModel):
+    file_id: str
+    filename: str
+    path: str
+    quality: dict[str, Any] = Field(default_factory=dict)
+    voice_file: VoiceFile
+    transcription: TranscriptionRecord
+
+
 class TranscriptionTask(BaseModel):
     task_id: str = Field(default_factory=new_id)
     engine_id: str = "mimo-v2.5-asr"
@@ -893,6 +909,11 @@ class VideoLocalizationDraft(BaseModel):
     quality_gate: VideoLocalizationQualityGate = Field(default_factory=VideoLocalizationQualityGate)
     exports: VideoLocalizationExportState = Field(default_factory=VideoLocalizationExportState)
     operations: list[VideoLocalizationOperation] = Field(default_factory=list)
+    ui_state: dict[str, Any] = Field(default_factory=dict)
+    project_voice_samples: list[dict[str, Any]] = Field(default_factory=list)
+    voice_recipes: list[dict[str, Any]] = Field(default_factory=list)
+    generated_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    timeline_clips: list[dict[str, Any]] = Field(default_factory=list)
     updated_at: str | None = None
 
 

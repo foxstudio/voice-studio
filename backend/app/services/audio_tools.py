@@ -120,6 +120,15 @@ def convert_file(src: str | Path, dest: str | Path, fmt: str = "wav", do_normali
     return write_audio(dest, audio, sr, fmt)
 
 
+def crop_file(src: str | Path, dest: str | Path, start_ms: int, end_ms: int, fmt: str = "wav") -> Path:
+    if end_ms <= start_ms:
+        raise ValueError("end_ms must be greater than start_ms")
+    audio, sr = read_audio(src)
+    start_frame = max(0, int(sr * start_ms / 1000))
+    end_frame = min(len(audio), max(start_frame + 1, int(sr * end_ms / 1000)))
+    return write_audio(dest, audio[start_frame:end_frame], sr, fmt)
+
+
 def merge_files(paths: list[str | Path], dest: str | Path, fmt: str = "wav", silence_ms: int = 300, do_normalize: bool = False) -> Path:
     if not paths:
         raise ValueError("No audio files to merge")
