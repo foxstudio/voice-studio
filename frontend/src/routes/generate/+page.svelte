@@ -632,6 +632,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		resultAudioFrame = requestAnimationFrame(step);
 	}
 	function resetResultPlayback() { stopResultAudioFrameLoop(); resultAudioPendingTaskId = ''; resultAudioCurrentTime = 0; $store.playingResultTaskId = ''; $store.resultAudioPlaying = false; }
+	function pauseResultPlayback() { stopResultAudioFrameLoop(); syncResultAudioCurrentTime(); resultAudioPendingTaskId = ''; $store.resultAudioPlaying = false; }
 	function resultPlaybackErrorMessage(e?: unknown) { const message = e instanceof Error ? e.message : ''; return `历史记录音频无法播放，请确认结果文件仍存在且可访问${message ? `：${message}` : ''}`; }
 	function isInterruptedResultPlayError(e: unknown) {
 		return e instanceof Error && /interrupted by a call to pause|AbortError/i.test(e.message || '');
@@ -675,12 +676,11 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		const isSameTask = $store.playingResultTaskId === t.task_id;
 		if (resultAudioPendingTaskId === t.task_id) return;
 		if (isSameTask && ($store.resultAudioPlaying || resultAudioPendingTaskId)) {
-			resetResultPlayback();
+			pauseResultPlayback();
 			audio?.pause();
-			if (audio) audio.currentTime = 0;
 			return;
 		}
-		await playResultPlayback(t, 0);
+		await playResultPlayback(t, isSameTask ? resultAudioCurrentTime : 0);
 	}
 	async function seekResultPlayback(t: GenerationTask, timeSeconds: number) {
 		const audio = $store.resultPreviewAudio;

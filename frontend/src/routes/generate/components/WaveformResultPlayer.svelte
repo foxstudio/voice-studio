@@ -318,7 +318,7 @@
 					{/each}
 				</div>
 			{/if}
-			<span class="waveform-inline-label">{isPlaying ? timeLabel : statusLabel}</span>
+			<span class="waveform-inline-label">{isPlaying || currentTime > 0 ? timeLabel : statusLabel}</span>
 		</div>
 	</div>
 </div>
