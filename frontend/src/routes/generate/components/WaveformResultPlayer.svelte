@@ -331,20 +331,14 @@
 		gap: 6px;
 		width: 100%;
 		min-width: 0;
-		padding: 4px 5px;
-		border: 1px solid rgba(95, 111, 130, 0.46);
-		border-radius: 8px;
-		background:
-			linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
-			rgba(7, 13, 20, 0.42);
-		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+		padding: 0;
+		border: 0;
+		background: transparent;
+		box-shadow: none;
 	}
 
 	.result-waveform-player.playing {
-		border-color: rgba(110, 231, 248, 0.52);
-		background:
-			linear-gradient(180deg, rgba(32, 52, 66, 0.82), rgba(9, 18, 29, 0.62)),
-			rgba(7, 13, 20, 0.52);
+		background: transparent;
 	}
 
 	.waveform-play-button,
