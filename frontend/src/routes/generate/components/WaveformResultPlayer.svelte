@@ -289,15 +289,6 @@
 			<Play size={15} />
 		{/if}
 	</button>
-	<a
-		class="waveform-download-button"
-		href={downloadUrl}
-		download={downloadName}
-		aria-label="下载音频"
-		data-tooltip="直接下载这条记录生成的音频文件"
-	>
-		<Download size={14} />
-	</a>
 	<div class="waveform-main">
 		<div
 			bind:this={waveformEl}
@@ -321,12 +312,21 @@
 			<span class="waveform-inline-label">{isPlaying || currentTime > 0 ? timeLabel : statusLabel}</span>
 		</div>
 	</div>
+	<a
+		class="waveform-download-button"
+		href={downloadUrl}
+		download={downloadName}
+		aria-label="下载音频"
+		data-tooltip="直接下载这条记录生成的音频文件"
+	>
+		<Download size={14} />
+	</a>
 </div>
 
 <style>
 	.result-waveform-player {
 		display: grid;
-		grid-template-columns: 28px 28px minmax(0, 1fr);
+		grid-template-columns: 28px minmax(0, 1fr) 28px;
 		align-items: center;
 		gap: 6px;
 		width: 100%;
@@ -452,7 +452,7 @@
 	@media (max-width: 720px) {
 		.result-waveform-player {
 			width: 100%;
-			grid-template-columns: 28px 28px minmax(72px, 1fr);
+			grid-template-columns: 28px minmax(72px, 1fr) 28px;
 		}
 	}
 </style>
