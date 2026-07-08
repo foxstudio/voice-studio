@@ -93,7 +93,6 @@
 	let ready = $state(false);
 	let loadError = $state('');
 	let lastLoadedUrl = '';
-	let lastSyncedTime = -1;
 	let loadToken = 0;
 	let destroyed = false;
 
@@ -104,19 +103,6 @@
 		const duration = durationSeconds || 0;
 		if (!duration || (!isPlaying && currentTime <= 0)) return 0;
 		return Math.max(0, Math.min(100, (currentTime / duration) * 100));
-	});
-
-	$effect(() => {
-		if (!waveSurfer || !ready || !isPlaying) return;
-		if (!Number.isFinite(currentTime) || Math.abs(currentTime - lastSyncedTime) < 0.035) return;
-		lastSyncedTime = currentTime;
-		syncWaveformProgress(currentTime);
-	});
-
-	$effect(() => {
-		if (!waveSurfer || !ready || isPlaying || currentTime !== 0 || lastSyncedTime === 0) return;
-		lastSyncedTime = 0;
-		syncWaveformProgress(0);
 	});
 
 	$effect(() => {
@@ -193,7 +179,6 @@
 				ready = true;
 				loading = false;
 				loadQueued = false;
-				paintWaveformProgress(0);
 			});
 			waveSurfer.on('error', () => {
 				loadError = '波形加载失败';
@@ -202,8 +187,6 @@
 				ready = false;
 			});
 			waveSurfer.on('interaction', (time) => {
-				lastSyncedTime = time;
-				paintWaveformProgress(time);
 				onSeek(task, time);
 			});
 			queueWaveformLoad(audioUrl);
@@ -277,24 +260,7 @@
 		const baseTime = isPlaying ? currentTime : waveSurfer.getCurrentTime();
 		const duration = waveSurfer.getDuration() || durationSeconds || 0;
 		const nextTime = Math.max(0, Math.min(duration, baseTime + direction * 2));
-		lastSyncedTime = nextTime;
-		syncWaveformProgress(nextTime);
 		onSeek(task, nextTime);
-	}
-
-	function syncWaveformProgress(timeSeconds: number) {
-		if (!waveSurfer) return;
-		const safeTime = Math.max(0, Number.isFinite(timeSeconds) ? timeSeconds : 0);
-		paintWaveformProgress(safeTime);
-	}
-
-	function paintWaveformProgress(timeSeconds: number) {
-		const duration = waveSurfer?.getDuration() || durationSeconds || 0;
-		const host = waveformEl?.querySelector<HTMLElement>(':scope > div:not(.waveform-progress-overlay):not(.waveform-skeleton)');
-		const progress = host?.shadowRoot?.querySelector<HTMLElement>('[part="progress"]');
-		if (!progress) return;
-		const ratio = duration > 0 ? Math.max(0, Math.min(1, timeSeconds / duration)) : 0;
-		progress.style.width = `${ratio * 100}%`;
 	}
 
 	function formatClock(seconds: number) {
@@ -338,6 +304,7 @@
 			class="waveform-canvas"
 			role="slider"
 			tabindex="0"
+			style={`--waveform-progress:${progressPercent}%`}
 			aria-label="生成结果波形，可点击或用左右方向键定位"
 			aria-valuemin="0"
 			aria-valuemax={Math.round(durationSeconds)}
@@ -351,7 +318,6 @@
 					{/each}
 				</div>
 			{/if}
-			<div class="waveform-progress-overlay" style={`width:${progressPercent}%`}></div>
 			<span class="waveform-inline-label">{isPlaying ? timeLabel : statusLabel}</span>
 		</div>
 	</div>
@@ -438,12 +404,13 @@
 		outline-offset: 2px;
 	}
 
-	.waveform-canvas > :global(div:not(.waveform-progress-overlay):not(.waveform-skeleton)) {
+	.waveform-canvas > :global(div:not(.waveform-skeleton)) {
 		overflow: hidden !important;
 		border-radius: 5px;
 	}
 
-	.waveform-canvas > :global(div:not(.waveform-progress-overlay):not(.waveform-skeleton))::part(progress) {
+	.waveform-canvas > :global(div:not(.waveform-skeleton))::part(progress) {
+		width: var(--waveform-progress, 0%) !important;
 		filter: drop-shadow(0 0 5px rgba(103, 232, 249, 0.32));
 	}
 
@@ -462,18 +429,6 @@
 		min-width: 2px;
 		border-radius: 2px;
 		background: rgba(127, 145, 166, 0.24);
-	}
-
-	.waveform-progress-overlay {
-		position: absolute;
-		inset: 0 auto 0 0;
-		z-index: 3;
-		width: 0;
-		border-radius: 5px 0 0 5px;
-		background: linear-gradient(90deg, rgba(103, 232, 249, 0.16), rgba(103, 232, 249, 0.08));
-		box-shadow: inset 0 0 12px rgba(103, 232, 249, 0.14);
-		mix-blend-mode: screen;
-		pointer-events: none;
 	}
 
 	.waveform-inline-label {
