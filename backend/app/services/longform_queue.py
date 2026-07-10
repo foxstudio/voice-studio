@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import threading
 from contextlib import suppress
@@ -44,8 +45,19 @@ def get_task(longform_task_id: str) -> LongformTask | None:
     return _ensure_result_records(LongformTask(**data)) if data else None
 
 
-def list_tasks() -> list[LongformTask]:
-    return [_ensure_result_records(LongformTask(**item)) for item in db.list_all("longform_tasks", "created_at")]
+def list_tasks(*, include_completed: bool = True, limit: int = 100) -> list[LongformTask]:
+    with db.conn() as connection:
+        if include_completed:
+            rows = connection.execute(
+                "SELECT data FROM longform_tasks ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT data FROM longform_tasks WHERE status != ? ORDER BY created_at DESC LIMIT ?",
+                (TaskStatus.success.value, limit),
+            ).fetchall()
+    return [_ensure_result_records(LongformTask(**json.loads(row["data"]))) for row in rows]
 
 
 def start_worker() -> None:

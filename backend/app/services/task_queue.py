@@ -178,6 +178,157 @@ def list_tasks() -> list[GenerationTask]:
     return [_reconcile_stale_task(row) for row in db.list_all("tasks", "created_at", limit=-1)]
 
 
+def task_summary() -> dict[str, int]:
+    _reconcile_active_tasks()
+    active_values = tuple(status.value for status in _RECOVERABLE_STATUSES)
+    processing_values = tuple(
+        status.value for status in _RECOVERABLE_STATUSES if status not in {TaskStatus.pending, TaskStatus.queued}
+    )
+    waiting_values = (TaskStatus.pending.value, TaskStatus.queued.value)
+    placeholders = ", ".join("?" for _ in active_values)
+    processing_placeholders = ", ".join("?" for _ in processing_values)
+    waiting_placeholders = ", ".join("?" for _ in waiting_values)
+    with db.conn() as connection:
+        row = connection.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN status IN ({placeholders}) THEN 1 ELSE 0 END) AS active,
+                SUM(CASE WHEN status IN ({processing_placeholders}) THEN 1 ELSE 0 END) AS processing,
+                SUM(CASE WHEN status IN ({waiting_placeholders}) THEN 1 ELSE 0 END) AS waiting,
+                SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS success,
+                SUM(CASE WHEN status IN (?, ?) THEN 1 ELSE 0 END) AS failed
+            FROM tasks
+            """,
+            (
+                *active_values,
+                *processing_values,
+                *waiting_values,
+                TaskStatus.success.value,
+                TaskStatus.failed.value,
+                TaskStatus.cancelled.value,
+            ),
+        ).fetchone()
+    return {
+        "all": int(row["total"] or 0),
+        "active": int(row["active"] or 0),
+        "processing": int(row["processing"] or 0),
+        "waiting": int(row["waiting"] or 0),
+        "success": int(row["success"] or 0),
+        "failed": int(row["failed"] or 0),
+    }
+
+
+def list_tasks_page(
+    *,
+    offset: int = 0,
+    limit: int = 12,
+    status_filter: str = "all",
+    engine_ids: list[str] | None = None,
+    voice_ids: list[str] | None = None,
+    query: str = "",
+    created_after: str | None = None,
+    sort_by: str = "latest",
+) -> tuple[list[GenerationTask], int]:
+    _reconcile_active_tasks()
+    where: list[str] = []
+    params: list[Any] = []
+
+    if status_filter == "active":
+        values = [status.value for status in _RECOVERABLE_STATUSES]
+        where.append(f"status IN ({', '.join('?' for _ in values)})")
+        params.extend(values)
+    elif status_filter == "success":
+        where.append("status = ?")
+        params.append(TaskStatus.success.value)
+    elif status_filter == "failed":
+        where.append("status IN (?, ?)")
+        params.extend([TaskStatus.failed.value, TaskStatus.cancelled.value])
+
+    if engine_ids:
+        where.append(f"json_extract(data, '$.engine_id') IN ({', '.join('?' for _ in engine_ids)})")
+        params.extend(engine_ids)
+    if created_after:
+        where.append("created_at >= ?")
+        params.append(created_after)
+
+    normalized_query = query.strip().lower()
+    if normalized_query:
+        like = f"%{normalized_query}%"
+        query_parts = [
+            "lower(json_extract(data, '$.input_text')) LIKE ?",
+            "lower(json_extract(data, '$.engine_id')) LIKE ?",
+            "lower(status) LIKE ?",
+        ]
+        query_params: list[Any] = [like, like, like]
+        if voice_ids:
+            query_parts.append(f"json_extract(data, '$.voice_id') IN ({', '.join('?' for _ in voice_ids)})")
+            query_params.extend(voice_ids)
+        where.append(f"({' OR '.join(query_parts)})")
+        params.extend(query_params)
+
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    active_values = [status.value for status in _RECOVERABLE_STATUSES]
+    waiting_values = [TaskStatus.pending.value, TaskStatus.queued.value]
+    processing_values = [status.value for status in _RECOVERABLE_STATUSES if status not in {TaskStatus.pending, TaskStatus.queued}]
+    rank_sql = (
+        f"CASE WHEN status IN ({', '.join('?' for _ in processing_values)}) THEN 0 "
+        f"WHEN status IN ({', '.join('?' for _ in waiting_values)}) THEN 1 ELSE 2 END"
+    )
+    order_params: list[Any] = [*processing_values, *waiting_values]
+    if sort_by == "oldest":
+        order_sql = f"{rank_sql}, created_at ASC, task_id ASC"
+    elif sort_by == "duration_desc":
+        order_sql = f"{rank_sql}, COALESCE(CAST(json_extract(data, '$.result_duration_ms') AS INTEGER), 0) DESC, created_at DESC"
+    else:
+        order_sql = f"{rank_sql}, created_at DESC, task_id DESC"
+
+    with db.conn() as connection:
+        count_row = connection.execute(f"SELECT COUNT(*) AS total FROM tasks {where_sql}", params).fetchone()
+        rows = connection.execute(
+            f"SELECT data FROM tasks {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?",
+            (*params, *order_params, limit, offset),
+        ).fetchall()
+    return ([_reconcile_stale_task(json.loads(row["data"])) for row in rows], int(count_row["total"] or 0))
+
+
+def task_download_sequences(tasks: list[GenerationTask]) -> dict[str, int]:
+    targets = [task for task in tasks if task.result_id]
+    if not targets:
+        return {}
+    sequences: dict[str, int] = {}
+    timestamp_sql = "COALESCE(json_extract(data, '$.completed_at'), created_at)"
+    with db.conn() as connection:
+        for task in targets:
+            timestamp = task.completed_at or task.created_at
+            row = connection.execute(
+                f"""
+                SELECT COUNT(*) AS sequence
+                FROM tasks
+                WHERE json_extract(data, '$.result_id') IS NOT NULL
+                  AND date({timestamp_sql}, 'localtime') = date(?, 'localtime')
+                  AND (
+                    {timestamp_sql} < ?
+                    OR ({timestamp_sql} = ? AND task_id <= ?)
+                  )
+                """,
+                (timestamp, timestamp, timestamp, task.task_id),
+            ).fetchone()
+            sequences[task.task_id] = max(1, int(row["sequence"] or 0))
+    return sequences
+
+
+def _reconcile_active_tasks() -> None:
+    values = [status.value for status in _RECOVERABLE_STATUSES]
+    with db.conn() as connection:
+        rows = connection.execute(
+            f"SELECT data FROM tasks WHERE status IN ({', '.join('?' for _ in values)})",
+            values,
+        ).fetchall()
+    for row in rows:
+        _reconcile_stale_task(json.loads(row["data"]))
+
+
 def get_task(task_id: str) -> GenerationTask | None:
     data = db.get_one("tasks", "task_id", task_id)
     return _reconcile_stale_task(data) if data else None

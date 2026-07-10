@@ -32,6 +32,8 @@ import type {
 	StorageOpenResponse,
 	TTSVerificationRequest,
 	TTSVerificationResponse,
+	TaskPageParams,
+	TaskPageResponse,
 	UploadResult,
 	VideoLocalizationSpeakerCreate,
 	VideoLocalizationSpeakerUpdate,
@@ -95,13 +97,32 @@ export const Api = {
 	generatePlan: (body: GeneratePlanRequest) => api.post<GeneratePlanResponse>('/generate/plan', body),
 	generate: (body: GenerateRequest) => api.post<GenerateResponse>('/generate', body),
 	generateLongform: (body: LongformGenerateRequest) => api.post<LongformTask>('/longform/generate', body),
-	longformTasks: () => api.get<LongformTask[]>('/longform'),
+	longformTasks: (params: { includeCompleted?: boolean; limit?: number } = {}) => {
+		const search = new URLSearchParams();
+		if (params.includeCompleted !== undefined) search.set('include_completed', String(params.includeCompleted));
+		if (params.limit !== undefined) search.set('limit', String(params.limit));
+		const suffix = search.toString() ? `?${search}` : '';
+		return api.get<LongformTask[]>(`/longform${suffix}`);
+	},
 	longformTask: (id: string) => api.get<LongformTask>(`/longform/${id}`),
 	retryLongformFailed: (id: string) => api.post<LongformTask>(`/longform/${id}/retry-failed`),
 	generateBatch: (body: unknown) => api.post<BatchTask>('/batches/generate', body),
 	batches: () => api.get<BatchTask[]>('/batches'),
 	batch: (id: string) => api.get<BatchTask>(`/batches/${id}`),
 	tasks: () => api.get<GenerationTask[]>('/tasks'),
+	taskPage: (params: TaskPageParams = {}) => {
+		const search = new URLSearchParams();
+		if (params.offset !== undefined) search.set('offset', String(params.offset));
+		if (params.limit !== undefined) search.set('limit', String(params.limit));
+		if (params.status) search.set('status', params.status);
+		if (params.engine_ids?.length) search.set('engine_ids', params.engine_ids.join(','));
+		if (params.voice_ids?.length) search.set('voice_ids', params.voice_ids.join(','));
+		if (params.q) search.set('q', params.q);
+		if (params.created_after) search.set('created_after', params.created_after);
+		if (params.sort) search.set('sort', params.sort);
+		const suffix = search.toString() ? `?${search}` : '';
+		return api.get<TaskPageResponse>(`/tasks/page${suffix}`);
+	},
 	task: (id: string) => api.get<GenerationTask>(`/tasks/${id}`),
 	cancelTask: (id: string) => api.post<{ status: string }>(`/tasks/${id}/cancel`),
 	cancelLongform: (id: string) => api.post<{ longform_task_id: string; status: string }>(`/longform/${id}/cancel`),

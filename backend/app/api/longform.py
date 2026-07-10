@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse
 
 from app.errors import AppException
@@ -11,8 +11,11 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[LongformTask])
-async def list_longform_tasks():
-    return longform_queue.list_tasks()
+async def list_longform_tasks(
+    include_completed: bool = True,
+    limit: int = Query(100, ge=1, le=100),
+):
+    return longform_queue.list_tasks(include_completed=include_completed, limit=limit)
 
 
 @router.post("/generate", response_model=LongformTask)

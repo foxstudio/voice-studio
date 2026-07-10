@@ -87,8 +87,14 @@ CREATE TABLE IF NOT EXISTS presets (
 
 INDEX_DDL = """
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_engine ON tasks(json_extract(data, '$.engine_id'));
+CREATE INDEX IF NOT EXISTS idx_tasks_voice ON tasks(json_extract(data, '$.voice_id'));
+CREATE INDEX IF NOT EXISTS idx_tasks_duration ON tasks(json_extract(data, '$.result_duration_ms'));
 CREATE INDEX IF NOT EXISTS idx_tasks_longform ON tasks(json_extract(data, '$.longform_task_id'));
 CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(json_extract(data, '$.task_type'));
+CREATE INDEX IF NOT EXISTS idx_longform_tasks_status ON longform_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_longform_tasks_created_at ON longform_tasks(created_at DESC);
 """
 
 

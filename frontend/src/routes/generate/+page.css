@@ -959,15 +959,15 @@
 		align-items: center;
 		justify-content: flex-start;
 		gap: 5px;
-		min-height: 30px;
+		min-height: 32px;
 	}
 
 	.gen-icon-btn {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		width: 30px;
-		height: 30px;
+		width: 32px;
+		height: 32px;
 		border: 1px solid var(--line);
 		border-radius: 7px;
 		background: #12161c;
@@ -976,8 +976,8 @@
 	}
 
 	.gen-icon-btn.mini {
-		width: 26px;
-		height: 26px;
+		width: 28px;
+		height: 28px;
 		border-radius: 6px;
 	}
 
@@ -2131,7 +2131,7 @@
 		display: grid;
 		place-items: center;
 		gap: 8px;
-		min-height: 138px;
+		min-height: 76px;
 		border: 1px dashed rgba(148, 163, 184, 0.22);
 		border-radius: 8px;
 		background: rgba(9, 14, 20, 0.46);
@@ -2678,8 +2678,8 @@
 	}
 	.trim-icon-btn {
 		display: inline-grid;
-		width: 28px;
-		height: 28px;
+		width: 32px;
+		height: 32px;
 		place-items: center;
 		border: 1px solid rgba(148, 163, 184, 0.24);
 		border-radius: 999px;
@@ -2688,8 +2688,8 @@
 		cursor: pointer;
 	}
 	.trim-icon-btn.play {
-		width: 30px;
-		height: 30px;
+		width: 34px;
+		height: 34px;
 		border-color: rgba(79, 156, 249, 0.54);
 		background: #16345a;
 		color: #e9f3ff;
@@ -2710,7 +2710,7 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 5px;
-		height: 28px;
+		height: 32px;
 		padding: 0 8px;
 		border: 1px solid rgba(148, 163, 184, 0.22);
 		border-radius: 999px;
@@ -2725,9 +2725,9 @@
 	.trim-inline-action.trim-icon-only {
 		display: inline-grid;
 		place-items: center;
-		width: 28px;
-		min-width: 28px;
-		height: 28px;
+		width: 32px;
+		min-width: 32px;
+		height: 32px;
 		padding: 0;
 	}
 	.trim-loop-btn.active {
@@ -2980,6 +2980,17 @@
 	}
 
 	/* ── 响应式 ── */
+	@media (prefers-reduced-motion: reduce) {
+		.generate-page *,
+		.generate-page *::before,
+		.generate-page *::after {
+			scroll-behavior: auto !important;
+			transition-duration: 0.01ms !important;
+			animation-duration: 0.01ms !important;
+			animation-iteration-count: 1 !important;
+		}
+	}
+
 	@media (max-width: 1180px) {
 		.param-inline-row {
 			flex-wrap: wrap;

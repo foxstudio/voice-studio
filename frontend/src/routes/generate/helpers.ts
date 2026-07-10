@@ -353,8 +353,8 @@ export function resultDownloadName(task: GenerationTask) {
 	return resultDownloadNameForScope(task, [task]);
 }
 
-export function resultDownloadNameForScope(task: GenerationTask, scope: GenerationTask[]) {
-	const sequence = taskDownloadSequence(task, scope).toString().padStart(3, '0');
+export function resultDownloadNameForScope(task: GenerationTask, scope: GenerationTask[], knownSequence?: number) {
+	const sequence = (knownSequence && knownSequence > 0 ? knownSequence : taskDownloadSequence(task, scope)).toString().padStart(3, '0');
 	const title = sanitizeDownloadTitle(displayTitle(task));
 	const format = sanitizeDownloadFormat(task.parameters.output_format);
 	return `${sequence}-${title}.${format}`;

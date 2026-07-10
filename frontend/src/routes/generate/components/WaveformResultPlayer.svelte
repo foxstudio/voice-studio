@@ -59,6 +59,7 @@
 	type Props = {
 		task: GenerationTask;
 		audioUrl: string;
+		peaksUrl: string;
 		downloadUrl: string;
 		downloadName: string;
 		durationLabel: string;
@@ -73,6 +74,7 @@
 	let {
 		task,
 		audioUrl,
+		peaksUrl,
 		downloadUrl,
 		downloadName,
 		durationLabel,
@@ -96,25 +98,30 @@
 	let loadToken = 0;
 	let destroyed = false;
 	let progressUrl = '';
+	let decodedDuration = $state(0);
 	let displayedProgressPercent = $state(0);
+	let lastSurferSyncTime = -1;
 
-	const durationSeconds = $derived(Math.max(0, (task.result_duration_ms ?? 0) / 1000));
+	const durationSeconds = $derived(Math.max(0, (task.result_duration_ms ?? 0) / 1000 || decodedDuration));
 	const timeLabel = $derived(formatClock(isPlaying || currentTime > 0 ? currentTime : 0));
 	const statusLabel = $derived(loadError ? '波形不可用' : loadQueued ? '排队读取' : loading ? '读取波形' : durationLabel || '播放结果');
 
 	$effect(() => {
-		if (!waveSurfer || !audioUrl || audioUrl === lastLoadedUrl) return;
-		queueWaveformLoad(audioUrl);
+		const loadKey = `${audioUrl}|${peaksUrl}`;
+		if (!waveSurfer || !audioUrl || loadKey === lastLoadedUrl) return;
+		queueWaveformLoad(audioUrl, peaksUrl);
 	});
 
 	$effect(() => {
 		if (audioUrl === progressUrl) return;
 		progressUrl = audioUrl;
+		decodedDuration = 0;
 		displayedProgressPercent = 0;
+		lastSurferSyncTime = -1;
 	});
 
 	$effect(() => {
-		if (!durationSeconds || (!isPlaying && !isPending && currentTime <= 0)) return;
+		if (!isPlaying && !isPending && currentTime <= 0) return;
 		updateDisplayedProgress(currentTime);
 	});
 
@@ -187,6 +194,7 @@
 				ready = true;
 				loading = false;
 				loadQueued = false;
+				updateDisplayedProgress(currentTime, true);
 			});
 			waveSurfer.on('error', () => {
 				loadError = '波形加载失败';
@@ -198,7 +206,7 @@
 				updateDisplayedProgress(time);
 				onSeek(task, time);
 			});
-			queueWaveformLoad(audioUrl);
+			queueWaveformLoad(audioUrl, peaksUrl);
 		} catch (error) {
 			loadError = error instanceof Error ? error.message : '波形加载失败';
 			loading = false;
@@ -206,7 +214,7 @@
 		}
 	}
 
-	function queueWaveformLoad(url: string) {
+	function queueWaveformLoad(url: string, waveformUrl: string) {
 		if (!waveSurfer || !url) return;
 		const surfer = waveSurfer;
 		const token = ++loadToken;
@@ -214,7 +222,7 @@
 		loadQueued = true;
 		ready = false;
 		loadError = '';
-		lastLoadedUrl = url;
+		lastLoadedUrl = `${url}|${waveformUrl}`;
 
 		const isCurrent = () => !destroyed && token === loadToken && waveSurfer === surfer;
 		enqueueWaveformLoad({
@@ -227,11 +235,16 @@
 			run: async () => {
 				if (!isCurrent()) return;
 				try {
-					await surfer.load(url, undefined, durationSeconds || undefined);
+					const response = await fetch(waveformUrl);
+					if (!response.ok) throw new Error('波形峰值读取失败');
+					const waveform = await response.json() as { peaks: number[]; duration: number };
+					decodedDuration = Math.max(0, Number(waveform.duration) || 0);
+					await surfer.load(url, [waveform.peaks], waveform.duration || durationSeconds || undefined);
 					if (!isCurrent()) return;
 					ready = true;
 					loading = false;
 					loadQueued = false;
+					updateDisplayedProgress(currentTime, true);
 				} catch (error) {
 					if (!isCurrent()) return;
 					loadError = error instanceof Error ? error.message : '波形加载失败';
@@ -273,10 +286,18 @@
 		onSeek(task, nextTime);
 	}
 
-	function updateDisplayedProgress(timeSeconds: number) {
+	function updateDisplayedProgress(timeSeconds: number, forceSurferSync = false) {
 		const duration = durationSeconds || waveSurfer?.getDuration() || 0;
-		if (!duration) return;
-		displayedProgressPercent = Math.max(0, Math.min(100, (timeSeconds / duration) * 100));
+		const safeTime = Number.isFinite(timeSeconds) ? Math.max(0, timeSeconds) : 0;
+		if (!duration || !Number.isFinite(duration)) return;
+		const boundedTime = Math.min(duration, safeTime);
+		displayedProgressPercent = Math.max(0, Math.min(100, (boundedTime / duration) * 100));
+		if (!waveSurfer || !ready) return;
+		const surferTime = waveSurfer.getCurrentTime();
+		if (forceSurferSync || !Number.isFinite(surferTime) || Math.abs(boundedTime - lastSurferSyncTime) >= 0.1) {
+			waveSurfer.setTime(boundedTime);
+			lastSurferSyncTime = boundedTime;
+		}
 	}
 
 	function formatClock(seconds: number) {
@@ -342,7 +363,7 @@
 <style>
 	.result-waveform-player {
 		display: grid;
-		grid-template-columns: 28px minmax(0, 1fr) 28px;
+		grid-template-columns: 32px minmax(0, 1fr) 32px;
 		align-items: center;
 		gap: 6px;
 		width: 100%;
@@ -362,8 +383,8 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		width: 28px;
-		height: 28px;
+		width: 32px;
+		height: 32px;
 		border: 1px solid var(--line);
 		border-radius: 7px;
 		background: rgba(255, 255, 255, 0.025);
@@ -465,10 +486,21 @@
 		}
 	}
 
+	@media (prefers-reduced-motion: reduce) {
+		.waveform-play-button,
+		.waveform-download-button {
+			transition: none;
+		}
+
+		.result-waveform-player.pending .waveform-play-button :global(svg) {
+			animation: none;
+		}
+	}
+
 	@media (max-width: 720px) {
 		.result-waveform-player {
 			width: 100%;
-			grid-template-columns: 28px minmax(72px, 1fr) 28px;
+			grid-template-columns: 32px minmax(72px, 1fr) 32px;
 		}
 	}
 </style>

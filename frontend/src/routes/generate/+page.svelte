@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Api } from '$lib/api';
-	import type { AppSettings, EngineDetail, EngineSpeaker, GenerationTask, GeneratePlanResponse, GenerateRequest, LongformTask, PlannedTextSegment, PresetTemplate, TranscriptionRecord, TranscriptionSegment, TTSVerificationResponse, UploadResult, VoiceAsset, VoiceAssetCreate, VoiceClipTranscribeResponse } from '$lib/api/types';
+	import type { AppSettings, EngineDetail, EngineSpeaker, GenerationTask, GeneratePlanResponse, GenerateRequest, LongformTask, PlannedTextSegment, PresetTemplate, TaskPageParams, TaskSummary, TranscriptionRecord, TranscriptionSegment, TTSVerificationResponse, UploadResult, VoiceAsset, VoiceAssetCreate, VoiceClipTranscribeResponse } from '$lib/api/types';
 	import { taskStatusLabel } from '$lib/labels';
 	import { Captions, CheckSquare, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleCheck, CloudUpload, FileAudio, FileText, Info, Mic, Cpu, Pencil, Play, Plus, Repeat, RotateCcw, Save, Search, Settings, SlidersHorizontal, Square, Trash2, X } from 'lucide-svelte';
 	import { onMount, tick, untrack } from 'svelte';
@@ -16,7 +16,8 @@
 	import { generateStore } from '$lib/stores/generate';
 	import * as H from './helpers';
 	import type { LongformStrategy, PresetDraft } from '$lib/stores/generate';
-import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from './helpers';
+	import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from './helpers';
+	import { taskDateStartIso, taskServerQuery } from './records-query';
 
 	const store = generateStore;
 	type VideoLocalizationHandoffMeta = {
@@ -32,12 +33,22 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	let _autoResizeRO: ResizeObserver | undefined = $state();
 	let _speakerCatalogRequestKey = '';
 	let _speakerCatalogTimer: ReturnType<typeof setTimeout> | undefined;
-	let refreshPageDataPromise: Promise<void> | null = null;
+	let composerDataPromise: Promise<void> | null = null;
+	let recordsDataPromise: Promise<void> | null = null;
+	let taskPageTimer: ReturnType<typeof setTimeout> | null = null;
+	let taskSocketReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	let taskSocket: WebSocket | null = null;
+	let taskSocketClosed = false;
 	let recordsViewportEl: HTMLElement | undefined = $state();
 	let recordsBottomPagerEl: HTMLElement | undefined = $state();
 	let taskCardStreamTimer: ReturnType<typeof setTimeout> | null = null;
 	let taskCardRenderLimit = $state(0);
 	let recordsRefreshing = $state(false);
+	let recordsInitialized = $state(false);
+	let taskTotal = $state(0);
+	let taskSummary: TaskSummary = $state({ all: 0, active: 0, processing: 0, waiting: 0, success: 0, failed: 0 });
+	let taskDownloadSequences: Record<string, number> = $state({});
+	let recordsLastSyncedAt = $state('');
 	let presetStripOpen = $state(false);
 	let resultAudioPendingTaskId = $state('');
 	let resultAudioCurrentTime = $state(0);
@@ -109,11 +120,11 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	const qwen3PresetDisabledText = $derived($store.voiceSource === 'reference_audio' ? '自定义音色已接管，预置音色不参与本次生成。' : '本地音色库已接管，预置音色不参与本次生成。');
 	const followsReferenceEmotion = $derived(isIndexTTS && !$store.emotion);
 	const enginePresets = $derived($store.presets.filter(p => p.engine_id === $store.engineId));
-	const hasRunningTasks = $derived($store.tasks.some(t => H.taskIsActive(t) || taskVerificationPending(t)) || $store.longformTasks.some(t => H.statusIsActive(t.status)));
+	const hasRunningTasks = $derived(taskSummary.active > 0 || $store.longformTasks.some(t => H.statusIsActive(t.status)));
 	const visibleLongformTasks = $derived($store.longformTasks.filter(t => t.status !== 'success'));
 	const queueOrderedTasks = $derived.by(() => $store.tasks.filter(t => H.taskIsActive(t)).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.task_id.localeCompare(b.task_id)));
-	const queueCounts = $derived.by(() => ({ processing: $store.tasks.filter(t => H.taskIsProcessing(t)).length, waiting: $store.tasks.filter(t => H.taskIsWaiting(t)).length }));
-	const taskEngineOptions = $derived(['all', ...new Set($store.tasks.map(t => t.engine_id))]);
+	const queueCounts = $derived.by(() => ({ processing: taskSummary.processing, waiting: taskSummary.waiting }));
+	const taskEngineOptions = $derived(['all', ...new Set($store.engines.map(e => e.manifest.engine_id))]);
 	const speakerChoices = $derived(isEmotiVoice && $store.speakerCatalog.length ? $store.speakerCatalog.map(s => ({ label: s.label, value: s.speaker_id })) : selected?.manifest.parameter_schema.find(p => p.key === 'speaker_id')?.options ?? []);
 	const promptOptions = $derived(selected?.manifest.parameter_schema.find(p => p.key === 'prompt')?.options ?? []);
 	const mimoVoiceOptions = $derived(selected?.manifest.parameter_schema.find(p => p.key === 'mimo_voice')?.options ?? []);
@@ -137,14 +148,33 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		(isOmniVoice && !$store.voiceId) ||
 		advancedParameterSchema.length > 0
 	);
-	const filteredTasks = $derived.by(() => { const q = $store.taskQuery.trim().toLowerCase(); const now = Date.now(); let f = $store.tasks.filter(t => { if ($store.taskStatusTab === 'active' && !H.taskIsActive(t)) return false; if ($store.taskStatusTab === 'success' && !H.taskIsSuccess(t)) return false; if ($store.taskStatusTab === 'failed' && !H.taskIsFailed(t)) return false; if ($store.taskEngineFilter !== 'all' && t.engine_id !== $store.taskEngineFilter) return false; if ($store.taskSourceFilter !== 'all' && H.engineKind(t.engine_id, engineMap) !== $store.taskSourceFilter) return false; if ($store.taskDateFilter !== 'all') { const ct = new Date(t.created_at).getTime(); if (!Number.isFinite(ct)) return false; const cutoff = $store.taskDateFilter === 'today' ? 86400000 : $store.taskDateFilter === '7d' ? 604800000 : 2592000000; if (now - ct > cutoff) return false; } if (!q) return true; const vn = H.voiceName(t, voiceMap); return H.displayTitle(t).toLowerCase().includes(q) || t.engine_id.toLowerCase().includes(q) || vn.toLowerCase().includes(q) || taskStatusLabel(t.status).toLowerCase().includes(q); }); return f.sort((a, b) => { const ar = (t: GenerationTask) => H.taskIsProcessing(t) ? 0 : H.taskIsWaiting(t) ? 1 : 2; const d = ar(a) - ar(b); if (d !== 0) return d; if (H.taskIsActive(a) && H.taskIsActive(b)) return a.created_at.localeCompare(b.created_at) || a.task_id.localeCompare(b.task_id); if ($store.taskSortBy === 'latest' || $store.taskSortBy === 'oldest') { const ld = H.compareLongformGroupOrder(a, b, f, $store.taskSortBy); if (ld !== null) return ld; } if ($store.taskSortBy === 'oldest') return a.created_at.localeCompare(b.created_at); if ($store.taskSortBy === 'duration_desc') return (b.result_duration_ms ?? 0) - (a.result_duration_ms ?? 0); return b.created_at.localeCompare(a.created_at); }); });
-	const pageCount = $derived(Math.max(1, Math.ceil(filteredTasks.length / $store.pageSize)));
-	const pagedTasks = $derived.by(() => filteredTasks.slice(($store.currentPage - 1) * $store.pageSize, $store.currentPage * $store.pageSize));
+	const taskFilterEngineIds = $derived.by(() => {
+		if ($store.taskEngineFilter !== 'all') return [$store.taskEngineFilter];
+		if ($store.taskSourceFilter === 'all') return undefined;
+		return $store.engines.filter(e => e.manifest.engine_type === $store.taskSourceFilter).map(e => e.manifest.engine_id);
+	});
+	const taskFilterVoiceIds = $derived.by(() => {
+		const query = $store.taskQuery.trim().toLowerCase();
+		if (!query) return undefined;
+		return $store.voices.filter(v => v.name.toLowerCase().includes(query)).map(v => v.voice_id);
+	});
+	const taskPageParams = $derived.by((): TaskPageParams => ({
+		offset: ($store.currentPage - 1) * $store.pageSize,
+		limit: $store.pageSize,
+		status: $store.taskStatusTab,
+		engine_ids: taskFilterEngineIds,
+		voice_ids: taskFilterVoiceIds,
+		q: taskServerQuery($store.taskQuery),
+		created_after: taskDateStartIso($store.taskDateFilter),
+		sort: $store.taskSortBy
+	}));
+	const pageCount = $derived(Math.max(1, Math.ceil(taskTotal / $store.pageSize)));
+	const pagedTasks = $derived($store.tasks);
 	const renderedPagedTasks = $derived(pagedTasks.slice(0, Math.min(taskCardRenderLimit, pagedTasks.length)));
-	const taskCardsStreaming = $derived($store.initialized && taskCardRenderLimit < pagedTasks.length);
+	const taskCardsStreaming = $derived(recordsInitialized && taskCardRenderLimit < pagedTasks.length);
 	const visibleSelectableTasks = $derived(pagedTasks.filter(t => H.taskCanDelete(t)));
 	const allVisibleSelected = $derived(visibleSelectableTasks.length > 0 && visibleSelectableTasks.every(t => $store.selectedTaskIds.includes(t.task_id)));
-	const statusCounts = $derived.by(() => ({ all: $store.tasks.length, active: $store.tasks.filter(t => H.taskIsActive(t)).length, success: $store.tasks.filter(t => H.taskIsSuccess(t)).length, failed: $store.tasks.filter(t => H.taskIsFailed(t)).length }));
+	const statusCounts = $derived(taskSummary);
 	const resultPageSizePresets = [8, 10, 12, 14, 16, 18, 20, 24, 28, 32];
 	const hasActiveFilters = $derived(Boolean($store.taskQuery.trim()) || $store.taskStatusTab !== 'all' || $store.taskEngineFilter !== 'all' || $store.taskSourceFilter !== 'all' || $store.taskDateFilter !== 'all' || $store.taskSortBy !== 'latest');
 
@@ -584,12 +614,11 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	function stopVoicePreview() { stopCustomVoicePreviewFrameLoop(); if ($store.voicePreviewAudio && $store.voicePreviewPlaying) { $store.voicePreviewAudio.pause(); } customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; }
 	function upsertTask(t: GenerationTask) { $store.tasks = [t, ...$store.tasks.filter(i => i.task_id !== t.task_id)]; }
 	async function poll(taskId: string) { for (let i = 0; i < 900; i++) { const t = await Api.task(taskId); upsertTask(t); if (['success', 'failed', 'cancelled'].includes(t.status)) return; await new Promise(r => setTimeout(r, 1000)); } }
-	async function refreshPageData() {
-		if (refreshPageDataPromise) return refreshPageDataPromise;
-		recordsRefreshing = true;
-		refreshPageDataPromise = (async () => {
-			const [e, v, t, lf, p, st] = await Promise.all([Api.engines(), Api.voices({ offset: 0, limit: 2000 }), Api.tasks(), Api.longformTasks(), Api.presets(), Api.settings()]);
-			$store.engines = e; $store.voices = v; $store.tasks = t; $store.longformTasks = lf; $store.presets = p; $store.settings = st;
+	async function refreshComposerData() {
+		if (composerDataPromise) return composerDataPromise;
+		composerDataPromise = (async () => {
+			const [e, v, p, st] = await Promise.all([Api.engines(), Api.voices({ offset: 0, limit: 2000 }), Api.presets(), Api.settings()]);
+			$store.engines = e; $store.voices = v; $store.presets = p; $store.settings = st;
 			const params = new URLSearchParams(location.search); const vId = params.get('voice');
 			const reuseRaw = sessionStorage.getItem('voice-studio-history-reuse');
 			const handoffRaw = sessionStorage.getItem('voice-studio-video-localization-handoff');
@@ -613,15 +642,65 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 				}
 			}
 		})().finally(() => {
-			recordsRefreshing = false;
-			refreshPageDataPromise = null;
+			composerDataPromise = null;
 		});
-		return refreshPageDataPromise;
+		return composerDataPromise;
 	}
-	function backgroundRefreshPageData() {
-		void refreshPageData().catch(() => {
-			// Keep retrying from the timer when the backend is restarting or busy.
+	let taskPageRequestId = 0;
+	async function loadTaskPage(params: TaskPageParams = taskPageParams) {
+		const requestId = ++taskPageRequestId;
+		recordsRefreshing = true;
+		try {
+			const response = await Api.taskPage({ ...params });
+			if (requestId !== taskPageRequestId) return;
+			$store.tasks = response.items;
+			taskTotal = response.total;
+			taskSummary = response.summary;
+			taskDownloadSequences = response.download_sequences;
+			recordsInitialized = true;
+			recordsLastSyncedAt = new Date().toISOString();
+		} finally {
+			if (requestId === taskPageRequestId) recordsRefreshing = false;
+		}
+	}
+	async function loadLongformTasks() {
+		$store.longformTasks = await Api.longformTasks({ includeCompleted: false, limit: 20 });
+	}
+	async function refreshRecordsData() {
+		if (recordsDataPromise) return recordsDataPromise;
+		recordsDataPromise = Promise.all([loadTaskPage(), loadLongformTasks()]).then(() => undefined).finally(() => {
+			recordsDataPromise = null;
 		});
+		return recordsDataPromise;
+	}
+	function scheduleTaskPageRefresh(delay = 120) {
+		if (taskPageTimer) clearTimeout(taskPageTimer);
+		taskPageTimer = setTimeout(() => {
+			taskPageTimer = null;
+			void loadTaskPage().catch(() => undefined);
+		}, delay);
+	}
+	function connectTaskSocket() {
+		if (taskSocketClosed || taskSocket?.readyState === WebSocket.OPEN || taskSocket?.readyState === WebSocket.CONNECTING) return;
+		const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+		taskSocket = new WebSocket(`${protocol}//${location.host}/api/tasks/ws`);
+		taskSocket.onmessage = (event) => {
+			try {
+				const task = JSON.parse(String(event.data)) as GenerationTask;
+				if ($store.tasks.some(item => item.task_id === task.task_id)) upsertTask(task);
+				scheduleTaskPageRefresh();
+				if (task.longform_task_id) void loadLongformTasks().catch(() => undefined);
+			} catch {
+				// Ignore malformed event payloads and let the fallback refresh recover.
+			}
+		};
+		taskSocket.onclose = () => {
+			taskSocket = null;
+			if (taskSocketClosed) return;
+			if (taskSocketReconnectTimer) clearTimeout(taskSocketReconnectTimer);
+			taskSocketReconnectTimer = setTimeout(connectTaskSocket, 1500);
+		};
+		taskSocket.onerror = () => taskSocket?.close();
 	}
 	async function loadSpeakerCatalog(engine: string, query: string, gender: 'all' | 'F' | 'M') { if (engine !== 'emotivoice') { $store.speakerCatalog = []; return; } const key = `${engine}|${query}|${gender}`; $store.speakerCatalogKey = key; $store.speakerCatalogLoading = true; try { const items = await Api.engineSpeakers(engine, { q: query, gender, limit: query ? 120 : 40 }); if ($store.speakerCatalogKey !== key) return; $store.speakerCatalog = items; if (!$store.speakerId && items[0]) $store.speakerId = items[0].speaker_id; } catch { $store.speakerCatalog = []; } finally { if ($store.speakerCatalogKey === key) $store.speakerCatalogLoading = false; } }
 	function prepareLongformPlan(plan: GeneratePlanResponse) { $store.lastGeneratePlan = plan; $store.textSegments = plan.segments.map(s => s.text); $store.showSplitPreview = plan.segments.length > 1; $store.splitPreviewCollapsed = false; }
@@ -725,7 +804,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		$store.actionBusyTaskId = t.task_id;
 		try {
 			resetResultPlayback();
-			await refreshPageData();
+			await refreshRecordsData();
 			const latest = await Api.task(t.task_id).catch(() => t);
 			const request = H.requestFromTask(latest);
 			await restoreRequest(request);
@@ -753,15 +832,15 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 			} else {
 				await Api.cancelTask(t.task_id);
 			}
-			await refreshPageData();
+			await refreshRecordsData();
 		} catch (e) {
 			$store.error = (e as Error).message || '取消任务失败';
 		} finally {
 			$store.actionBusyTaskId = '';
 		}
 	}
-	async function retryTask(t: GenerationTask) { $store.actionBusyTaskId = t.task_id; try { const res = await Api.retryTask(t.task_id); $store.currentPage = 1; await poll(res.task_id); await refreshPageData(); } finally { $store.actionBusyTaskId = ''; } }
-	async function deleteTaskRecord(t: GenerationTask) { if (!window.confirm(t.result_id ? '删除这条记录和本地音频？' : '删除这条任务记录？')) return; $store.actionBusyTaskId = t.task_id; try { await Api.deleteTask(t.task_id); $store.selectedTaskIds = $store.selectedTaskIds.filter(id => id !== t.task_id); await refreshPageData(); } finally { $store.actionBusyTaskId = ''; } }
+	async function retryTask(t: GenerationTask) { $store.actionBusyTaskId = t.task_id; try { const res = await Api.retryTask(t.task_id); $store.currentPage = 1; await poll(res.task_id); await refreshRecordsData(); } finally { $store.actionBusyTaskId = ''; } }
+	async function deleteTaskRecord(t: GenerationTask) { if (!window.confirm(t.result_id ? '删除这条记录和本地音频？' : '删除这条任务记录？')) return; $store.actionBusyTaskId = t.task_id; try { await Api.deleteTask(t.task_id); $store.selectedTaskIds = $store.selectedTaskIds.filter(id => id !== t.task_id); await refreshRecordsData(); } finally { $store.actionBusyTaskId = ''; } }
 	async function retryLongformTask(t: LongformTask) { $store.actionBusyTaskId = t.longform_task_id; try { const n = await Api.retryLongformFailed(t.longform_task_id); $store.longformTasks = [n, ...$store.longformTasks.filter(i => i.longform_task_id !== n.longform_task_id)]; } finally { $store.actionBusyTaskId = ''; } }
 	function longformTaskActionLabel(t: LongformTask) { return H.statusIsActive(t.status) ? '停止长文本队列' : '删除长文本任务'; }
 	function longformTaskActionTooltip(t: LongformTask) { return H.statusIsActive(t.status) ? '停止这条长文本分段队列' : '删除这条长文本任务记录'; }
@@ -777,7 +856,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		try {
 			if (isActive) {
 				await Api.cancelLongform(t.longform_task_id);
-				await refreshPageData();
+				await refreshRecordsData();
 				return;
 			}
 			await Api.dismissLongform(t.longform_task_id);
@@ -796,7 +875,8 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	function resultDownloadUrl(t: GenerationTask, filename = '') { return t.result_id ? `/api/history/${t.result_id}/audio?download=1${filename ? `&filename=${encodeURIComponent(filename)}` : ''}` : ''; }
 	function syncResultAudioCurrentTime() {
 		const audio = $store.resultPreviewAudio;
-		resultAudioCurrentTime = audio ? audio.currentTime : 0;
+		const time = audio?.currentTime ?? 0;
+		resultAudioCurrentTime = Number.isFinite(time) ? Math.max(0, time) : 0;
 	}
 	function stopResultAudioFrameLoop() {
 		if (resultAudioFrame !== null) cancelAnimationFrame(resultAudioFrame);
@@ -820,6 +900,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	}
 	function handleResultAudioError() { if (!$store.playingResultTaskId) return; resetResultPlayback(); $store.error = resultPlaybackErrorMessage($store.resultPreviewAudio?.error?.message ? new Error($store.resultPreviewAudio.error.message) : undefined); }
 	function handleResultAudioTimeUpdate() { syncResultAudioCurrentTime(); }
+	function handleResultAudioPlaying() { if (!$store.playingResultTaskId) return; resultAudioPendingTaskId = ''; $store.resultAudioPlaying = true; syncResultAudioCurrentTime(); startResultAudioFrameLoop(); }
 	async function playResultPlayback(t: GenerationTask, startTime = 0) {
 		const url = resultAudioUrl(t);
 		const audio = $store.resultPreviewAudio;
@@ -879,7 +960,7 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	}
 	function toggleTaskSelection(tId: string, c: boolean) { $store.selectedTaskIds = c ? [...$store.selectedTaskIds, tId] : $store.selectedTaskIds.filter(i => i !== tId); }
 	function toggleVisibleSelection() { if (allVisibleSelected) { $store.selectedTaskIds = $store.selectedTaskIds.filter(id => !visibleSelectableTasks.some(t => t.task_id === id)); } else { $store.selectedTaskIds = Array.from(new Set([...$store.selectedTaskIds, ...visibleSelectableTasks.map(t => t.task_id)])); } }
-	async function deleteSelectedTasks() { if (!$store.selectedTaskIds.length) return; if (!window.confirm(`批量删除 ${$store.selectedTaskIds.length} 条记录和本地音频？`)) return; await Promise.all($store.selectedTaskIds.map(id => Api.deleteTask(id))); $store.selectedTaskIds = []; await refreshPageData(); }
+	async function deleteSelectedTasks() { if (!$store.selectedTaskIds.length) return; if (!window.confirm(`批量删除 ${$store.selectedTaskIds.length} 条记录和本地音频？`)) return; await Promise.all($store.selectedTaskIds.map(id => Api.deleteTask(id))); $store.selectedTaskIds = []; await refreshRecordsData(); }
 	function clearTaskFilters() { $store.taskQuery = ''; $store.taskStatusTab = 'all'; $store.taskEngineFilter = 'all'; $store.taskSourceFilter = 'all'; $store.taskDateFilter = 'all'; $store.taskSortBy = 'latest'; $store.currentPage = 1; }
 	function taskPageJump(d: number) { $store.currentPage = Math.min(pageCount, Math.max(1, $store.currentPage + d)); }
 	function taskPageGoTo(p: number) { $store.currentPage = Math.min(pageCount, Math.max(1, p)); }
@@ -916,7 +997,6 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		if (!$store.pageSizeAuto || !$store.resultGridEl) return;
 
 		const grid = $store.resultGridEl;
-		const firstCard = grid.querySelector('.result-card') as HTMLElement | null;
 		const gridRect = grid.getBoundingClientRect();
 		const gridStyle = window.getComputedStyle(grid);
 		const resolvedColumns = gridStyle.gridTemplateColumns
@@ -924,21 +1004,50 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 			.map((token) => token.trim())
 			.filter(Boolean);
 		const columnCount = Math.max(1, resolvedColumns.length || Math.floor(gridRect.width / 260));
-		const rowGap = Number.parseFloat(gridStyle.rowGap || gridStyle.gap || '12') || 12;
-		const cardHeight = Math.max(206, (firstCard?.getBoundingClientRect().height ?? 0));
-		const pagerHeight = recordsBottomPagerEl?.getBoundingClientRect().height ?? 0;
-		const viewportPadding = recordsViewportEl ? Number.parseFloat(window.getComputedStyle(recordsViewportEl).paddingBottom || '0') || 0 : 0;
-		const reserveBottom = Math.max(16, viewportPadding) + (pagerHeight > 0 ? pagerHeight + 12 : 0);
-		const availableHeight = Math.max(cardHeight, window.innerHeight - gridRect.top - reserveBottom);
-		const rowCount = Math.max(1, Math.floor((availableHeight + rowGap) / (cardHeight + rowGap)));
-		const ideal = Math.max(columnCount, rowCount * columnCount);
+		const ideal = Math.max(4, columnCount * 2);
 
 		if (ideal !== $store.pageSize) {
 			$store.pageSize = ideal;
-			if ($store.currentPage > Math.max(1, Math.ceil(filteredTasks.length / $store.pageSize))) $store.currentPage = 1;
+			$store.currentPage = 1;
 		}
 	}
 	function checkOverflow(node: HTMLElement, _text: string) { let frame = 0; const check = () => { frame = 0; node.classList.toggle('fade-overflow', node.scrollHeight > node.offsetHeight); }; const schedule = () => { if (frame) cancelAnimationFrame(frame); frame = requestAnimationFrame(check); }; schedule(); return { update(_nextText: string) { schedule(); }, destroy() { if (frame) cancelAnimationFrame(frame); } }; }
+	function trapDialogFocus(node: HTMLElement, closeDialog: () => void) {
+		const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		let close = closeDialog;
+		const frame = requestAnimationFrame(() => {
+			const first = node.querySelector<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]');
+			(first ?? node).focus();
+		});
+		function handleKeydown(event: KeyboardEvent) {
+			if (event.key === 'Escape') {
+				event.preventDefault();
+				close();
+				return;
+			}
+			if (event.key !== 'Tab') return;
+			const focusable = [...node.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]')];
+			if (!focusable.length) return;
+			const first = focusable[0];
+			const last = focusable[focusable.length - 1];
+			if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+			else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+		}
+		node.addEventListener('keydown', handleKeydown);
+		return {
+			update(next: () => void) { close = next; },
+			destroy() {
+				cancelAnimationFrame(frame);
+				node.removeEventListener('keydown', handleKeydown);
+				previousFocus?.focus();
+			}
+		};
+	}
+	function handleDialogEscape(event: KeyboardEvent) {
+		if (event.key !== 'Escape') return;
+		if (voiceRegisterOpen) resetVoiceRegisterDialog();
+		else if ($store.showLongformDialog) closeLongformDialog(null);
+	}
 	async function syncResultBadgeTitles() {
 		await tick();
 		for (const badge of document.querySelectorAll<HTMLElement>('.result-meta-primary .badge:first-child, .result-meta-secondary .engine')) {
@@ -948,36 +1057,45 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	}
 
 	onMount(() => {
-		async function initLoad() {
+		async function retryLoad(load: () => Promise<void>) {
 			for (let i = 0; i < 10; i++) {
 				try {
-					await refreshPageData();
+					await load();
 					return;
 				} catch {
 					await new Promise(r => setTimeout(r, 2000));
 				}
 			}
 		}
-		initLoad();
-		const id = setInterval(() => {
+		void retryLoad(refreshComposerData);
+		void retryLoad(refreshRecordsData);
+		connectTaskSocket();
+		const longformId = setInterval(() => {
 			if ($store.resultAudioPlaying || resultAudioPendingTaskId) return;
-			if (hasRunningTasks || !$store.initialized) backgroundRefreshPageData();
-		}, 2000);
-		const slowId = setInterval(() => {
+			if ($store.longformTasks.some(task => H.statusIsActive(task.status))) void loadLongformTasks().catch(() => undefined);
+		}, 3000);
+		const fallbackId = setInterval(() => {
 			if ($store.resultAudioPlaying || resultAudioPendingTaskId) return;
-			if (!hasRunningTasks && $store.initialized) backgroundRefreshPageData();
-		}, 15000);
+			void refreshRecordsData().catch(() => undefined);
+		}, 60000);
 		const or = () => recalcAutoPageSize();
 		window.addEventListener('resize', or);
 		window.addEventListener('keydown', handleCustomVoiceTrimKeydown);
+		window.addEventListener('keydown', handleDialogEscape);
 		_autoResizeRO = new ResizeObserver(or);
 		return () => {
+			taskSocketClosed = true;
+			taskSocket?.close();
+			taskSocket = null;
+			if (taskSocketReconnectTimer) clearTimeout(taskSocketReconnectTimer);
+			if (taskPageTimer) clearTimeout(taskPageTimer);
 			stopCustomVoicePreviewFrameLoop();
 			stopResultAudioFrameLoop();
-			clearInterval(id);
-			clearInterval(slowId);
+			clearInterval(longformId);
+			clearInterval(fallbackId);
 			window.removeEventListener('resize', or);
 			window.removeEventListener('keydown', handleCustomVoiceTrimKeydown);
+			window.removeEventListener('keydown', handleDialogEscape);
 			_autoResizeRO?.disconnect();
 			if (_speakerCatalogTimer) clearTimeout(_speakerCatalogTimer);
 			stopTaskCardStream();
@@ -992,6 +1110,19 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 	$effect(() => { const vid = `${$store.voiceSource}|${$store.voiceId}|${$store.customVoicePreviewUrl}`; if (vid !== _lastPreviewVoiceId) { _lastPreviewVoiceId = vid; untrack(() => stopVoicePreview()); } });
 	$effect(() => { if ($store.currentPage > pageCount) $store.currentPage = pageCount; });
 	$effect(() => { if ($store.pageSizeAuto && $store.resultGridEl) recalcAutoPageSize(); });
+	let _lastTaskPageRequestKey = $state('');
+	$effect(() => {
+		if (!$store.initialized) return;
+		const params = taskPageParams;
+		const key = JSON.stringify(params);
+		if (key === _lastTaskPageRequestKey) return;
+		_lastTaskPageRequestKey = key;
+		if (taskPageTimer) clearTimeout(taskPageTimer);
+		taskPageTimer = setTimeout(() => {
+			taskPageTimer = null;
+			untrack(() => void loadTaskPage(params).catch(() => undefined));
+		}, 160);
+	});
 	let _lastPagedTaskKey = $state('');
 	$effect(() => {
 		const key = pagedTasks.map(t => `${t.task_id}:${t.status}:${t.result_id ?? ''}`).join('|');
@@ -1147,14 +1278,14 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 		</div>{/if}
 		<TextInput bind:text={$store.text} engineId={$store.engineId} ontexttool={(mode: 'clean' | 'numbers' | 'split') => runTextTool(mode)} textToolBusy={$store.textToolBusy} onGenerate={generate} generateBusy={$store.busy} />
 		{#if $store.error}<div class="badge fail">{$store.error}</div>{/if}
-			<audio class="result-shared-audio" bind:this={$store.resultPreviewAudio} preload="none" ontimeupdate={handleResultAudioTimeUpdate} onended={resetResultPlayback} onerror={handleResultAudioError}></audio>
+			<audio class="result-shared-audio" bind:this={$store.resultPreviewAudio} preload="none" onplaying={handleResultAudioPlaying} ontimeupdate={handleResultAudioTimeUpdate} onended={resetResultPlayback} onerror={handleResultAudioError}></audio>
 			{#if $store.showLongformDialog && $store.pendingLongformPlan}<div class="gen-modal-backdrop"><div class="longform-dialog" role="dialog" aria-modal="true"><div class="dialog-head"><div><h3>长文本生成策略</h3><p class="muted">预计 {$store.pendingLongformPlan.segments.length} 段。{$store.pendingLongformPlan.planner_reason}</p></div><button class="gen-icon-btn" type="button" aria-label="关闭长文本策略弹窗" data-tooltip="关闭长文本策略弹窗" onclick={() => closeLongformDialog(null)}>×</button></div>{#if $store.pendingLongformPlan.warnings.length}<p class="dialog-warning">{$store.pendingLongformPlan.warnings[0]}</p>{/if}<div class="strategy-grid"><button class:active={$store.longformStrategy === 'split_merge'} type="button" onclick={() => { $store.longformStrategy = 'split_merge'; $store.longformMergeEnabled = true; $store.longformVerifyEnabled = true; }}><strong>分段生成并合并</strong><span>逐段生成，校对后自动合并。</span></button><button class:active={$store.longformStrategy === 'split_only'} type="button" onclick={() => { $store.longformStrategy = 'split_only'; $store.longformMergeEnabled = false; $store.longformVerifyEnabled = false; }}><strong>只分段生成</strong><span>保留每段结果，先人工复听。</span></button><button class:active={$store.longformStrategy === 'single'} type="button" disabled={longformSingleDisabled($store.pendingLongformPlan)} onclick={() => { $store.longformStrategy = 'single'; $store.longformMergeEnabled = false; $store.longformVerifyEnabled = false; }}><strong>{longformSingleDisabled($store.pendingLongformPlan) ? '单条生成已关闭' : '仍然单条生成'}</strong><span>{longformSingleDisabled($store.pendingLongformPlan) ? '文本超过当前引擎安全窗口，请分段生成。' : '最快开始，但容易超时或截断。'}</span></button></div><div class="dialog-options"><label class="check-row"><input type="checkbox" bind:checked={$store.longformVerifyEnabled} disabled={$store.longformStrategy === 'single'} /><span>生成后自动 ASR 校对</span></label><label class="field compact-field"><span>失败重试</span><input type="number" min="0" max="5" bind:value={$store.longformMaxRetries} disabled={$store.longformStrategy === 'single'} /></label></div><div class="dialog-preview">{#each $store.pendingLongformPlan.segments.slice(0, 4) as seg}<p><strong>{seg.index}</strong> {seg.text}</p>{/each}{#if $store.pendingLongformPlan.segments.length > 4}<p class="muted">还有 {$store.pendingLongformPlan.segments.length - 4} 段...</p>{/if}</div><div class="dialog-actions"><button class="btn" type="button" onclick={() => closeLongformDialog(null)}>取消</button><button class="btn primary" type="button" onclick={() => closeLongformDialog($store.longformStrategy)}>确认</button></div></div></div>{/if}
 			{#if voiceRegisterOpen}
 				<div class="gen-modal-backdrop">
-					<div class="voice-register-dialog" role="dialog" aria-modal="true">
+					<div class="voice-register-dialog" role="dialog" aria-modal="true" aria-labelledby="voice-register-dialog-title" tabindex="-1" use:trapDialogFocus={resetVoiceRegisterDialog}>
 						<div class="dialog-head">
 							<div>
-								<h3><Plus size={16} /> 注册到音色库</h3>
+								<h3 id="voice-register-dialog-title"><Plus size={16} /> 注册到音色库</h3>
 								<p class="muted">ASR 台词和情绪标签已根据当前音频预填。</p>
 							</div>
 							<button class="gen-icon-btn" type="button" aria-label="关闭音色注册弹窗" data-tooltip="关闭音色注册弹窗" onclick={resetVoiceRegisterDialog}><X size={15} /></button>
@@ -1182,19 +1313,19 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 			<section bind:this={recordsViewportEl} class="records-stack">
 			<div class="row gen-section-head result-headline">
 				<h2>生成记录</h2>
-				<div class="gen-segmented compact-tabs records-status-tabs" role="tablist">
-					<button class:active={$store.taskStatusTab === 'all'} type="button" onclick={() => { $store.taskStatusTab = 'all'; $store.currentPage = 1; }}>全部<span>{statusCounts.all}</span></button>
-					<button class:active={$store.taskStatusTab === 'active'} type="button" onclick={() => { $store.taskStatusTab = 'active'; $store.currentPage = 1; }}>队列<span>{statusCounts.active}</span></button>
-					<button class:active={$store.taskStatusTab === 'success'} type="button" onclick={() => { $store.taskStatusTab = 'success'; $store.currentPage = 1; }}>成功<span>{statusCounts.success}</span></button>
-					<button class:active={$store.taskStatusTab === 'failed'} type="button" onclick={() => { $store.taskStatusTab = 'failed'; $store.currentPage = 1; }}>异常<span>{statusCounts.failed}</span></button>
+				<div class="gen-segmented compact-tabs records-status-tabs" role="tablist" aria-label="按任务状态筛选">
+					<button role="tab" aria-selected={$store.taskStatusTab === 'all'} class:active={$store.taskStatusTab === 'all'} type="button" onclick={() => { $store.taskStatusTab = 'all'; $store.currentPage = 1; }}>全部<span>{statusCounts.all}</span></button>
+					<button role="tab" aria-selected={$store.taskStatusTab === 'active'} class:active={$store.taskStatusTab === 'active'} type="button" onclick={() => { $store.taskStatusTab = 'active'; $store.currentPage = 1; }}>队列<span>{statusCounts.active}</span></button>
+					<button role="tab" aria-selected={$store.taskStatusTab === 'success'} class:active={$store.taskStatusTab === 'success'} type="button" onclick={() => { $store.taskStatusTab = 'success'; $store.currentPage = 1; }}>成功<span>{statusCounts.success}</span></button>
+					<button role="tab" aria-selected={$store.taskStatusTab === 'failed'} class:active={$store.taskStatusTab === 'failed'} type="button" onclick={() => { $store.taskStatusTab = 'failed'; $store.currentPage = 1; }}>异常<span>{statusCounts.failed}</span></button>
 				</div>
 				<div class="records-head-right">
-					<div class="records-row-summary">{#if recordsRefreshing}<span class="badge">加载中</span>{/if}{#if taskCardsStreaming}<span class="badge">显示中 {renderedPagedTasks.length}/{pagedTasks.length}</span>{/if}{#if statusCounts.active}<span class="badge">生成中 {queueCounts.processing}</span><span class="badge">等待 {queueCounts.waiting}</span>{/if}{#if $store.selectedTaskIds.length}<span class="badge ok">已选 {$store.selectedTaskIds.length}</span>{/if}</div>
-					<div class="gen-segmented compact-tabs time-tabs" aria-label="按生成时间筛选">
-						<button class:active={$store.taskDateFilter === 'all'} type="button" onclick={() => setTaskDateFilter('all')}>全部时间</button>
-						<button class:active={$store.taskDateFilter === 'today'} type="button" onclick={() => setTaskDateFilter('today')}>今天</button>
-						<button class:active={$store.taskDateFilter === '7d'} type="button" onclick={() => setTaskDateFilter('7d')}>7 天</button>
-						<button class:active={$store.taskDateFilter === '30d'} type="button" onclick={() => setTaskDateFilter('30d')}>30 天</button>
+					<div class="records-row-summary" role="status" aria-live="polite">{#if recordsRefreshing}<span class="badge">加载中</span>{/if}{#if taskCardsStreaming}<span class="badge">显示中 {renderedPagedTasks.length}/{pagedTasks.length}</span>{/if}{#if statusCounts.active}<span class="badge">生成中 {queueCounts.processing}</span><span class="badge">等待 {queueCounts.waiting}</span>{/if}{#if $store.selectedTaskIds.length}<span class="badge ok">已选 {$store.selectedTaskIds.length}</span>{/if}</div>
+					<div class="gen-segmented compact-tabs time-tabs" role="tablist" aria-label="按生成时间筛选">
+						<button role="tab" aria-selected={$store.taskDateFilter === 'all'} class:active={$store.taskDateFilter === 'all'} type="button" onclick={() => setTaskDateFilter('all')}>全部时间</button>
+						<button role="tab" aria-selected={$store.taskDateFilter === 'today'} class:active={$store.taskDateFilter === 'today'} type="button" onclick={() => setTaskDateFilter('today')}>今天</button>
+						<button role="tab" aria-selected={$store.taskDateFilter === '7d'} class:active={$store.taskDateFilter === '7d'} type="button" onclick={() => setTaskDateFilter('7d')}>7 天</button>
+						<button role="tab" aria-selected={$store.taskDateFilter === '30d'} class:active={$store.taskDateFilter === '30d'} type="button" onclick={() => setTaskDateFilter('30d')}>30 天</button>
 					</div>
 				</div>
 			</div>
@@ -1202,9 +1333,9 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 				<div class="toolbar-control-row">
 					<div class="records-filter-inline">
 						<div class="gen-search-field compact"><Search size={13} /><input bind:value={$store.taskQuery} placeholder="搜索台词、模型、音色、状态" /></div>
-						<select class="compact-filter engine-filter" bind:value={$store.taskEngineFilter}>{#each taskEngineOptions as o}<option value={o}>{o === 'all' ? '全部模型' : o}</option>{/each}</select>
-						<select class="compact-filter source-filter" bind:value={$store.taskSourceFilter}><option value="all">全部来源</option><option value="local">本地</option><option value="cloud">云端</option></select>
-						<select class="compact-filter sort-filter" bind:value={$store.taskSortBy}><option value="latest">最新</option><option value="oldest">最旧</option><option value="duration_desc">时长↓</option></select>
+						<select class="compact-filter engine-filter" bind:value={$store.taskEngineFilter} onchange={() => ($store.currentPage = 1)}>{#each taskEngineOptions as o}<option value={o}>{o === 'all' ? '全部模型' : o}</option>{/each}</select>
+						<select class="compact-filter source-filter" bind:value={$store.taskSourceFilter} onchange={() => ($store.currentPage = 1)}><option value="all">全部来源</option><option value="local">本地</option><option value="cloud">云端</option></select>
+						<select class="compact-filter sort-filter" bind:value={$store.taskSortBy} onchange={() => ($store.currentPage = 1)}><option value="latest">最新</option><option value="oldest">最旧</option><option value="duration_desc">时长↓</option></select>
 						<select class="compact-filter page-size-filter" aria-label="每页显示记录数量" value={$store.pageSizeAuto ? 'auto' : String($store.pageSize)} onchange={(e) => setTaskPageSizePreset((e.currentTarget as HTMLSelectElement).value)}>
 							<option value="auto">自动条数</option>
 							{#each resultPageSizePresets as count}<option value={String(count)}>{count} 条</option>{/each}
@@ -1224,14 +1355,14 @@ import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from
 							<button class="gen-icon-btn" type="button" aria-label={allVisibleSelected ? '取消选择当前页' : '选择当前页'} data-tooltip={allVisibleSelected ? '取消选择当前页可删除的记录' : '选择当前页可删除的记录'} onclick={toggleVisibleSelection} disabled={!visibleSelectableTasks.length}>{#if allVisibleSelected}<CheckSquare size={15} />{:else}<Square size={15} />{/if}</button>
 							<button class="gen-icon-btn danger" type="button" aria-label="删除已选记录" data-tooltip="删除当前已选中的任务记录" onclick={deleteSelectedTasks} disabled={!$store.selectedTaskIds.length}><Trash2 size={15} /></button>
 							{#if hasActiveFilters}<button class="gen-icon-btn" type="button" aria-label="清除筛选" data-tooltip="清除搜索、模型、来源和时间筛选" onclick={clearTaskFilters}><X size={15} /></button>{/if}
-							<button class="gen-icon-btn" type="button" aria-label="刷新列表" data-tooltip="重新加载任务记录和队列状态" onclick={refreshPageData} disabled={$store.busy}><RotateCcw size={15} /></button>
+							<button class="gen-icon-btn" type="button" aria-label="刷新列表" data-tooltip={recordsLastSyncedAt ? `重新加载任务记录，上次同步 ${H.formatTime(recordsLastSyncedAt)}` : '重新加载任务记录和队列状态'} onclick={refreshRecordsData} disabled={recordsRefreshing}><RotateCcw size={15} /></button>
 						</div>
 					</div>
 				</div>
 			</div>
 			{#if H.queueSummaryText(queueCounts, queueOrderedTasks, engineMap)}<div class="queue-insight"><Info size={14} /><span>{H.queueSummaryText(queueCounts, queueOrderedTasks, engineMap)}</span></div>{/if}
 			{#if visibleLongformTasks.length}<section class="longform-list"><div class="row section-subhead"><div><h3>长文本任务</h3><p class="muted">进行中的分段生成、校对、重试和合并父任务。</p></div></div>{#each visibleLongformTasks.slice(0, 6) as t}<article class={`longform-card ${t.status}`}><div class="longform-card-head"><div><strong>{H.longformTitle(t)}</strong><p class="muted">{H.longformStatusText(t)}</p></div><div class="row wrap longform-actions"><span class="badge">{Math.round(t.progress * 100)}%</span>{#if t.export_id}<a class="btn" href={H.longformDownloadUrl(t)}>下载合并音频</a>{/if}{#if t.status === 'failed'}<button class="btn" type="button" onclick={() => retryLongformTask(t)} disabled={$store.actionBusyTaskId === t.longform_task_id}><RotateCcw size={15} /> 重试失败段</button>{/if}<button class="gen-icon-btn mini" type="button" aria-label={longformTaskActionLabel(t)} data-tooltip={longformTaskActionTooltip(t)} onclick={() => handleLongformTaskAction(t)} disabled={$store.actionBusyTaskId === t.longform_task_id}>{#if H.statusIsActive(t.status)}<X size={14} />{:else}<Trash2 size={14} />{/if}</button></div></div><div class="progress-track"><div class="progress-fill" style={`width:${Math.max(3, Math.round(t.progress * 100))}%`}></div></div><div class="longform-segments">{#each t.segments as seg}<div class={`longform-segment ${seg.status}`}><span class="badge">{seg.index}</span><p>{seg.text}</p><span class="badge">{taskStatusLabel(seg.status)}</span>{#if seg.verification}<span class={`badge verify-${seg.verification.status}`}>{H.verificationStatusLabel(seg.verification.status)}</span>{/if}{#if seg.error_message}<span class="muted">{seg.error_message}</span>{/if}</div>{/each}</div>{#if t.error_message}<p class="muted error-line task-error-scroll" use:checkOverflow={t.error_message}>{t.error_message}</p>{/if}</article>{/each}</section>{/if}
-			{#if pagedTasks.length}<section class="result-records-block" class:has-longform-above={visibleLongformTasks.length > 0}><div class="result-grid" bind:this={$store.resultGridEl}>{#each renderedPagedTasks as t (t.task_id)}<article class={`card stack result-card engine-surface ${H.engineKind(t.engine_id, engineMap) === 'cloud' ? 'engine-cloud' : 'engine-local'}${$store.playingResultTaskId === t.task_id && ($store.resultAudioPlaying || resultAudioPendingTaskId === t.task_id) ? ' playing' : ''}`}><div class="result-head"><div class="title-row"><input type="checkbox" checked={$store.selectedTaskIds.includes(t.task_id)} disabled={!H.taskCanDelete(t)} onchange={(e) => toggleTaskSelection(t.task_id, (e.currentTarget as HTMLInputElement).checked)} /><strong class="result-title" title={H.displayTitle(t)}>{H.displayTitle(t)}</strong></div><span class="badge result-status" class:ok={t.status === 'success'} class:fail={t.status === 'failed'} class:warn={t.status === 'cancelled' || H.taskIsActive(t)}>{H.taskStatusPillLabel(t, queueCounts, queueOrderedTasks)}</span></div><div class="result-meta result-meta-primary"><span class="badge"><Mic size={11} /> {H.voiceBadgeLabel(t, voiceMap, engineMap)}</span><HoverCopyPopover label="台词" title="台词内容" copyText={H.displayTitle(t)}><button type="button" class="badge result-script-chip" aria-label="查看台词内容"><FileText size={13} /> 台词</button></HoverCopyPopover>{#if H.longformResultLabel(t)}<span class="badge longform-result-badge" class:merged={H.taskIsLongformExport(t)} title={H.longformResultTitle(t)}>{H.longformResultLabel(t)}</span>{/if}</div><div class="result-meta result-meta-secondary"><span class="badge engine"><Cpu size={11} /> {engineMap.get(t.engine_id)?.manifest.display_name ?? t.engine_id}</span><span class="badge badge-kind">{H.engineTypeLabel(t.engine_id, engineMap)}</span>{#if t.created_at}<span class="badge meta-pop" data-text={`生成时间：${H.formatTime(t.created_at)}`}>{H.formatTime(t.created_at)}</span>{/if}</div><div class="row result-info"><p class="muted result-subline">{H.taskTimingLine(t)}</p><div class="row wrap result-info-right">{#if t.result_duration_ms}<span class="badge meta-pop" data-text={`音频时长：${H.formatAudioDuration(t.result_duration_ms)}`}>{H.formatAudioDuration(t.result_duration_ms)}</span>{/if}{#if H.taskIsActive(t)}<button class="gen-icon-btn danger" aria-label="取消任务" data-tooltip={taskCancelTooltip(t)} onclick={() => cancelTask(t)} disabled={$store.actionBusyTaskId === t.task_id}><X size={14} /></button>{/if}<HoverCopyPopover label="参数" title="生成参数" copyText={H.taskParameterCopyText(t, engineMap, voiceMap)}><button type="button" class="param-pop compact" aria-label="查看生成参数"><SlidersHorizontal size={13} /></button></HoverCopyPopover></div></div>{#if H.taskIsActive(t)}<div class="progress-block"><div class="row progress-head"><span class="muted">{H.taskStageLabel(t, queueOrderedTasks)}</span><span class="badge">{H.progressLabel(t, queueOrderedTasks)}</span></div><div class="progress-track" class:waiting-track={H.taskIsWaiting(t)}><div class="progress-fill" class:waiting-fill={H.taskIsWaiting(t)} style={`width:${H.taskProgressWidth(t)}%`}></div></div><div class="row wrap progress-foot"><span class="muted">{#if H.taskIsWaiting(t)}已等待 {H.formatSeconds(H.waitingSeconds(t))}{:else}已运行 {H.elapsedLabel(t)}{/if}</span>{#if H.taskEtaLabel(t)}<span class="muted">{H.taskEtaLabel(t)}</span>{/if}</div>{#if H.taskRuntimeHint(t, queueCounts, queueOrderedTasks)}<p class="progress-hint">{H.taskRuntimeHint(t, queueCounts, queueOrderedTasks)}</p>{/if}</div>{/if}{#if t.result_id}<div class="result-audio-row"><WaveformResultPlayer task={t} audioUrl={resultAudioUrl(t)} downloadUrl={resultDownloadUrl(t, H.resultDownloadNameForScope(t, $store.tasks))} downloadName={H.resultDownloadNameForScope(t, $store.tasks)} durationLabel={t.result_duration_ms ? H.formatAudioDuration(t.result_duration_ms) : '播放结果'} isPlaying={$store.playingResultTaskId === t.task_id && $store.resultAudioPlaying} isPending={resultAudioPendingTaskId === t.task_id} currentTime={$store.playingResultTaskId === t.task_id ? resultAudioCurrentTime : 0} onPlay={() => toggleResultPlayback(t)} onStop={() => toggleResultPlayback(t)} onSeek={(task, timeSeconds) => seekResultPlayback(task, timeSeconds)} /></div>{/if}{#if t.error_message}<p class="muted error-line task-error-scroll" use:checkOverflow={H.knownErrorMessage(t.error_message)}>{H.knownErrorMessage(t.error_message)}</p>{/if}<div class="result-footer" class:without-audio={!t.result_id}><div class="result-footer-status">{#if taskVerificationReport(t)}{@const r = taskVerificationReport(t)}<div class="verification-line {r.status}"><span class="dot"></span>{H.verificationStatusLabel(r.status)}<span class="coverage">覆盖率 {Math.round(r.coverage * 100)}%</span></div>{:else if taskVerificationPending(t)}<p class="muted verification-pending-line">自动校对中…</p>{:else if taskVerificationError(t)}<p class="muted error-line">{H.knownErrorMessage(taskVerificationError(t))}</p>{/if}</div><div class="row wrap result-card-actions">{#if t.status === 'failed'}<button class="gen-icon-btn" aria-label="重试任务" data-tooltip="使用原参数重新尝试生成" onclick={() => retryTask(t)} disabled={$store.actionBusyTaskId === t.task_id}><RotateCcw size={15} /></button>{/if}{#if H.taskCanDelete(t)}<button class="gen-icon-btn" aria-label="复用参数" data-tooltip="把这条记录的文本和参数带回上方生成区" onclick={() => reuse(t)} disabled={$store.actionBusyTaskId === t.task_id}><Repeat size={15} /></button>{/if}{#if !H.taskIsActive(t)}<button class="gen-icon-btn danger" aria-label="删除记录" data-tooltip="删除这条任务记录" onclick={() => deleteTaskRecord(t)} disabled={$store.actionBusyTaskId === t.task_id}><Trash2 size={15} /></button>{/if}</div></div></article>{/each}</div>{#if pageCount > 1}<div bind:this={recordsBottomPagerEl} class="pagination-bar"><button class="btn" onclick={() => $store.currentPage = 1} disabled={$store.currentPage <= 1}><ChevronsLeft size={15} /> 首页</button><button class="btn" onclick={() => taskPageJump(-1)} disabled={$store.currentPage <= 1}><ChevronLeft size={15} /> 上一页</button><span class="muted">第 {$store.currentPage} / {pageCount} 页</span><div class="page-jump"><span class="muted">跳至</span><input type="number" min="1" max={pageCount} bind:value={$store.pageJumpInput} onkeydown={(e) => e.key === 'Enter' && jumpToPage()} /><span class="muted">页</span></div><button class="btn" onclick={() => taskPageJump(1)} disabled={$store.currentPage >= pageCount}>下一页 <ChevronRight size={15} /></button><button class="btn" onclick={() => $store.currentPage = pageCount} disabled={$store.currentPage >= pageCount}>尾页 <ChevronsRight size={15} /></button></div>{/if}</section>{:else}<div class="empty">{#if $store.initialized}当前筛选下没有任务记录。{:else}正在加载任务记录...{/if}</div>{/if}
+			{#if pagedTasks.length}<section class="result-records-block" class:has-longform-above={visibleLongformTasks.length > 0}><div class="result-grid" bind:this={$store.resultGridEl}>{#each renderedPagedTasks as t (t.task_id)}<article class={`card stack result-card engine-surface ${H.engineKind(t.engine_id, engineMap) === 'cloud' ? 'engine-cloud' : 'engine-local'}${$store.playingResultTaskId === t.task_id && ($store.resultAudioPlaying || resultAudioPendingTaskId === t.task_id) ? ' playing' : ''}`}><div class="result-head"><div class="title-row"><input type="checkbox" checked={$store.selectedTaskIds.includes(t.task_id)} disabled={!H.taskCanDelete(t)} onchange={(e) => toggleTaskSelection(t.task_id, (e.currentTarget as HTMLInputElement).checked)} /><strong class="result-title" title={H.displayTitle(t)}>{H.displayTitle(t)}</strong></div><span class="badge result-status" class:ok={t.status === 'success'} class:fail={t.status === 'failed'} class:warn={t.status === 'cancelled' || H.taskIsActive(t)}>{H.taskStatusPillLabel(t, queueCounts, queueOrderedTasks)}</span></div><div class="result-meta result-meta-primary"><span class="badge"><Mic size={11} /> {H.voiceBadgeLabel(t, voiceMap, engineMap)}</span><HoverCopyPopover label="台词" title="台词内容" copyText={H.displayTitle(t)}><button type="button" class="badge result-script-chip" aria-label="查看台词内容"><FileText size={13} /> 台词</button></HoverCopyPopover>{#if H.longformResultLabel(t)}<span class="badge longform-result-badge" class:merged={H.taskIsLongformExport(t)} title={H.longformResultTitle(t)}>{H.longformResultLabel(t)}</span>{/if}</div><div class="result-meta result-meta-secondary"><span class="badge engine"><Cpu size={11} /> {engineMap.get(t.engine_id)?.manifest.display_name ?? t.engine_id}</span><span class="badge badge-kind">{H.engineTypeLabel(t.engine_id, engineMap)}</span>{#if t.created_at}<span class="badge meta-pop" data-text={`生成时间：${H.formatTime(t.created_at)}`}>{H.formatTime(t.created_at)}</span>{/if}</div><div class="row result-info"><p class="muted result-subline">{H.taskTimingLine(t)}</p><div class="row wrap result-info-right">{#if t.result_duration_ms}<span class="badge meta-pop" data-text={`音频时长：${H.formatAudioDuration(t.result_duration_ms)}`}>{H.formatAudioDuration(t.result_duration_ms)}</span>{/if}{#if H.taskIsActive(t)}<button class="gen-icon-btn danger" aria-label="取消任务" data-tooltip={taskCancelTooltip(t)} onclick={() => cancelTask(t)} disabled={$store.actionBusyTaskId === t.task_id}><X size={14} /></button>{/if}<HoverCopyPopover label="参数" title="生成参数" copyText={H.taskParameterCopyText(t, engineMap, voiceMap)}><button type="button" class="param-pop compact" aria-label="查看生成参数"><SlidersHorizontal size={13} /></button></HoverCopyPopover></div></div>{#if H.taskIsActive(t)}<div class="progress-block"><div class="row progress-head"><span class="muted">{H.taskStageLabel(t, queueOrderedTasks)}</span><span class="badge">{H.progressLabel(t, queueOrderedTasks)}</span></div><div class="progress-track" class:waiting-track={H.taskIsWaiting(t)}><div class="progress-fill" class:waiting-fill={H.taskIsWaiting(t)} style={`width:${H.taskProgressWidth(t)}%`}></div></div><div class="row wrap progress-foot"><span class="muted">{#if H.taskIsWaiting(t)}已等待 {H.formatSeconds(H.waitingSeconds(t))}{:else}已运行 {H.elapsedLabel(t)}{/if}</span>{#if H.taskEtaLabel(t)}<span class="muted">{H.taskEtaLabel(t)}</span>{/if}</div>{#if H.taskRuntimeHint(t, queueCounts, queueOrderedTasks)}<p class="progress-hint">{H.taskRuntimeHint(t, queueCounts, queueOrderedTasks)}</p>{/if}</div>{/if}{#if t.result_id}{@const downloadName = H.resultDownloadNameForScope(t, $store.tasks, taskDownloadSequences[t.task_id])}<div class="result-audio-row"><WaveformResultPlayer task={t} audioUrl={resultAudioUrl(t)} peaksUrl={`/api/history/${encodeURIComponent(t.result_id)}/waveform`} downloadUrl={resultDownloadUrl(t, downloadName)} {downloadName} durationLabel={t.result_duration_ms ? H.formatAudioDuration(t.result_duration_ms) : '播放结果'} isPlaying={$store.playingResultTaskId === t.task_id && $store.resultAudioPlaying} isPending={resultAudioPendingTaskId === t.task_id} currentTime={$store.playingResultTaskId === t.task_id ? resultAudioCurrentTime : 0} onPlay={() => toggleResultPlayback(t)} onStop={() => toggleResultPlayback(t)} onSeek={(task, timeSeconds) => seekResultPlayback(task, timeSeconds)} /></div>{/if}{#if t.error_message}<p class="muted error-line task-error-scroll" use:checkOverflow={H.knownErrorMessage(t.error_message)}>{H.knownErrorMessage(t.error_message)}</p>{/if}<div class="result-footer" class:without-audio={!t.result_id}><div class="result-footer-status">{#if taskVerificationReport(t)}{@const r = taskVerificationReport(t)}<div class="verification-line {r.status}"><span class="dot"></span>{H.verificationStatusLabel(r.status)}<span class="coverage">覆盖率 {Math.round(r.coverage * 100)}%</span></div>{:else if taskVerificationPending(t)}<p class="muted verification-pending-line">自动校对中…</p>{:else if taskVerificationError(t)}<p class="muted error-line">{H.knownErrorMessage(taskVerificationError(t))}</p>{/if}</div><div class="row wrap result-card-actions">{#if t.status === 'failed'}<button class="gen-icon-btn" aria-label="重试任务" data-tooltip="使用原参数重新尝试生成" onclick={() => retryTask(t)} disabled={$store.actionBusyTaskId === t.task_id}><RotateCcw size={15} /></button>{/if}{#if H.taskCanDelete(t)}<button class="gen-icon-btn" aria-label="复用参数" data-tooltip="把这条记录的文本和参数带回上方生成区" onclick={() => reuse(t)} disabled={$store.actionBusyTaskId === t.task_id}><Repeat size={15} /></button>{/if}{#if !H.taskIsActive(t)}<button class="gen-icon-btn danger" aria-label="删除记录" data-tooltip="删除这条任务记录" onclick={() => deleteTaskRecord(t)} disabled={$store.actionBusyTaskId === t.task_id}><Trash2 size={15} /></button>{/if}</div></div></article>{/each}</div>{#if pageCount > 1}<div bind:this={recordsBottomPagerEl} class="pagination-bar"><button class="btn" onclick={() => $store.currentPage = 1} disabled={$store.currentPage <= 1}><ChevronsLeft size={15} /> 首页</button><button class="btn" onclick={() => taskPageJump(-1)} disabled={$store.currentPage <= 1}><ChevronLeft size={15} /> 上一页</button><span class="muted">第 {$store.currentPage} / {pageCount} 页</span><div class="page-jump"><span class="muted">跳至</span><input type="number" min="1" max={pageCount} bind:value={$store.pageJumpInput} onkeydown={(e) => e.key === 'Enter' && jumpToPage()} /><span class="muted">页</span></div><button class="btn" onclick={() => taskPageJump(1)} disabled={$store.currentPage >= pageCount}>下一页 <ChevronRight size={15} /></button><button class="btn" onclick={() => $store.currentPage = pageCount} disabled={$store.currentPage >= pageCount}>尾页 <ChevronsRight size={15} /></button></div>{/if}</section>{:else}<div class="empty">{#if recordsInitialized}当前筛选下没有任务记录。{:else}正在加载任务记录...{/if}</div>{/if}
 			</section>
 			</div>
 		</div>

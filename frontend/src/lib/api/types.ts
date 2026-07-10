@@ -712,6 +712,35 @@ export interface GenerationTask {
 	completed_at: string | null;
 }
 
+export interface TaskSummary {
+	all: number;
+	active: number;
+	processing: number;
+	waiting: number;
+	success: number;
+	failed: number;
+}
+
+export interface TaskPageResponse {
+	items: GenerationTask[];
+	total: number;
+	offset: number;
+	limit: number;
+	summary: TaskSummary;
+	download_sequences: Record<string, number>;
+}
+
+export interface TaskPageParams {
+	offset?: number;
+	limit?: number;
+	status?: 'all' | 'active' | 'success' | 'failed';
+	engine_ids?: string[];
+	voice_ids?: string[];
+	q?: string;
+	created_after?: string;
+	sort?: 'latest' | 'oldest' | 'duration_desc';
+}
+
 export interface HistoryItem {
 	result_id: string;
 	task_id: string;
