@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ChevronDown } from 'lucide-svelte';
 	import { tick } from 'svelte';
 
 	type SelectOption = { label: string; value: string };
@@ -60,7 +61,7 @@
 <div class="select" bind:this={root}>
 	<button class="select-trigger" type="button" aria-haspopup="listbox" aria-expanded={open} onclick={toggle}>
 		<span class:placeholder={!selected} title={selected?.label ?? placeholder}>{selected?.label ?? placeholder}</span>
-		<span class="chevron" aria-hidden="true">⌄</span>
+		<span class="chevron" aria-hidden="true"><ChevronDown size={14} /></span>
 	</button>
 
 	{#if open}
@@ -124,8 +125,14 @@
 	}
 
 	.chevron {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 14px;
+		height: 14px;
+		flex: 0 0 14px;
 		color: var(--muted);
-		font-size: 14px;
+		line-height: 1;
 	}
 
 	.select-menu {
