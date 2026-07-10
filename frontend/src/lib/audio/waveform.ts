@@ -3,6 +3,7 @@ export type TimelineTick = {
 	percent: number;
 	label: string;
 	major: boolean;
+	level: 0 | 1 | 2;
 };
 
 export type VisibleWaveformBar = {
@@ -57,11 +58,13 @@ export function buildTimelineTicks(durationSeconds: number, zoom: number) {
 
 	for (let time = 0; time <= durationSeconds + 0.001; time += step) {
 		const index = Math.round(time / step);
+		const isMajor = index % labelEvery === 0;
 		ticks.push({
 			time,
 			percent: durationSeconds ? (time / durationSeconds) * 100 : 0,
-			label: index % labelEvery === 0 ? formatTimelineTick(time) : '',
-			major: index % labelEvery === 0
+			label: isMajor ? formatTimelineTick(time) : '',
+			major: isMajor,
+			level: isMajor ? 2 : index % Math.max(1, Math.ceil(labelEvery / 2)) === 0 ? 1 : 0
 		});
 	}
 
@@ -148,7 +151,6 @@ export async function analyzeWaveformFromBlob(
 		const dynamicCount = Math.max(count, Math.min(180000, Math.ceil(decoded.duration * 60), Math.round(decoded.length / 2048)));
 		const bucketSize = Math.max(1, Math.floor(channel.length / dynamicCount));
 		const rawBars = new Array<number>(dynamicCount).fill(0);
-		let maxPeak = 0.01;
 		const chunkSize = Math.max(360, Math.min(1800, Math.ceil(dynamicCount / 80)));
 
 		for (let index = 0; index < dynamicCount; index++) {
@@ -157,17 +159,15 @@ export async function analyzeWaveformFromBlob(
 			let peak = 0;
 			for (let cursor = start; cursor < end; cursor++) peak = Math.max(peak, Math.abs(channel[cursor] ?? 0));
 			rawBars[index] = peak;
-			maxPeak = Math.max(maxPeak, peak);
 			if (index % chunkSize === 0 || index === dynamicCount - 1) {
 				const upto = index + 1;
-				const normalized = rawBars.slice(0, upto).map((value) => Math.max(0.1, Math.min(1, Math.pow(value / maxPeak, 0.72))));
-				onProgress?.(normalized, Math.max(0.08, Math.min(0.98, upto / dynamicCount)));
+				const peaks = rawBars.slice(0, upto).map((value) => Math.max(0, Math.min(1, value)));
+				onProgress?.(peaks, Math.max(0.08, Math.min(0.98, upto / dynamicCount)));
 				await nextAnimationFrame();
 			}
 		}
 
-		const finalMax = Math.max(...rawBars, 0.01);
-		const finalBars = rawBars.map((value) => Math.max(0.1, Math.min(1, Math.pow(value / finalMax, 0.72))));
+		const finalBars = rawBars.map((value) => Math.max(0, Math.min(1, value)));
 		onProgress?.(finalBars, 1);
 		return {
 			bars: finalBars,
@@ -179,6 +179,7 @@ export async function analyzeWaveformFromBlob(
 }
 
 function formatTimelineTick(valueSeconds: number, fps = 30) {
+	if (valueSeconds <= 0.0001) return '00:00';
 	if (valueSeconds < 1) return `${Math.round(valueSeconds * fps)}f`;
 	const safe = Math.max(0, Math.round(valueSeconds * 10) / 10);
 	const h = Math.floor(safe / 3600);

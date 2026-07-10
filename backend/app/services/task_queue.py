@@ -943,6 +943,7 @@ def _sync_video_localization_tts_result(task: GenerationTask, hist: HistoryItem)
         result_id=hist.result_id,
         output_path=hist.output_path,
         duration_ms=hist.duration_ms,
+        task_id=task.task_id,
     )
 
 

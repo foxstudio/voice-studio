@@ -7,7 +7,7 @@ export function downloadText(filename: string, text: string, type: string) {
 	downloadBlob(filename, new Blob([text], { type }));
 }
 
-function downloadBlob(filename: string, blob: Blob) {
+export function downloadBlob(filename: string, blob: Blob) {
 	const url = URL.createObjectURL(blob);
 	const link = document.createElement('a');
 	link.href = url;

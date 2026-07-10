@@ -6,6 +6,7 @@ from app.errors import AppException
 from app.schemas.voice_studio import (
     Project,
     ProjectCreate,
+    ProjectUpdate,
     ProjectTranscriptionImportRequest,
     ProjectTranscriptionImportResponse,
     Role,
@@ -32,6 +33,23 @@ async def get_project(project_id: str):
     if not project:
         raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
     return project
+
+
+@router.patch("/{project_id}", response_model=Project)
+async def update_project(project_id: str, data: ProjectUpdate):
+    project = project_store.get_project(project_id)
+    if not project:
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
+    patch = data.model_dump(exclude_unset=True)
+    if patch.get("name") is not None:
+        from app.domains.video_localization import service as video_localization_service
+
+        project = video_localization_service.prepare_project_rename(project, str(patch["name"]).strip())
+    if patch.get("description") is not None:
+        project.description = str(patch["description"])
+    if "default_engine_id" in patch:
+        project.default_engine_id = patch["default_engine_id"]
+    return project_store.save_project(project)
 
 
 @router.delete("/{project_id}")

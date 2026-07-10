@@ -1,4 +1,4 @@
-import type { BatchTask, GenerateRequest, VideoLocalizationCue, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationReferenceClip, VideoLocalizationSpeaker } from '$lib/api/types';
+import type { BatchTask, GenerateRequest, VideoLocalizationCue, VideoLocalizationDraft, VideoLocalizationGeneratedCandidate, VideoLocalizationOperation, VideoLocalizationReferenceClip, VideoLocalizationSpeaker, VideoLocalizationTimelineClip } from '$lib/api/types';
 
 export type WorkflowStep = {
 	label: string;
@@ -95,6 +95,18 @@ export function stemAudioUrl(projectId: string, current: VideoLocalizationDraft 
 
 export function referenceAudioUrl(projectId: string, clip: VideoLocalizationReferenceClip) {
 	return projectId && clip.audio_path ? `/api/projects/${projectId}/video-localization/reference-clips/${clip.reference_clip_id}/audio` : '';
+}
+
+export function referenceCoverUrl(projectId: string, clip: VideoLocalizationReferenceClip) {
+	return projectId && clip.cover_frame_path ? `/api/projects/${projectId}/video-localization/reference-clips/${clip.reference_clip_id}/cover` : '';
+}
+
+export function candidateAudioUrl(projectId: string, candidate: VideoLocalizationGeneratedCandidate) {
+	return projectId && candidate.audio_path ? `/api/projects/${projectId}/video-localization/candidates/${candidate.candidate_id}/audio` : '';
+}
+
+export function timelineClipAudioUrl(projectId: string, clip: VideoLocalizationTimelineClip) {
+	return projectId && clip.audio_path ? `/api/projects/${projectId}/video-localization/timeline-clips/${clip.clip_id}/audio` : '';
 }
 
 export function sourceCueAudioUrl(projectId: string, cue: VideoLocalizationCue) {

@@ -44,5 +44,13 @@ def sync_single_result(
     result_id: str,
     output_path: str,
     duration_ms: int | None,
+    task_id: str | None = None,
 ) -> VideoLocalizationDraft:
-    return tts_pipeline.with_single_tts_result(draft, cue_id, result_id=result_id, output_path=output_path, duration_ms=duration_ms)
+    return tts_pipeline.with_single_tts_result(
+        draft,
+        cue_id,
+        result_id=result_id,
+        output_path=output_path,
+        duration_ms=duration_ms,
+        task_id=task_id,
+    )

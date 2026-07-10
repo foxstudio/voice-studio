@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, Body, File, UploadFile
 
-from app.api.video_localization_responses import audio_file_response, json_attachment, require_resource, srt_attachment
+from app.api.video_localization_responses import audio_file_response, download_file_response, json_attachment, require_resource, srt_attachment
 from app.domains.video_localization import operation_queue
 from app.domains.video_localization import service as video_localization_service
 from app.errors import AppException
@@ -12,9 +12,11 @@ from app.domains.video_localization.schemas import (
     VideoLocalizationDraft,
     VideoLocalizationOperation,
     VideoLocalizationOperationRequest,
+    VideoLocalizationReferenceClipCreate,
     VideoLocalizationReferenceClipUpdate,
     VideoLocalizationSpeakerCreate,
     VideoLocalizationSpeakerUpdate,
+    VideoLocalizationSubtitleImportRequest,
 )
 from app.services import batch_queue
 
@@ -33,10 +35,22 @@ async def put_video_localization(project_id: str, draft: VideoLocalizationDraft)
     return require_resource(updated)
 
 
+@router.patch("/{project_id}/video-localization/ui-state", response_model=VideoLocalizationDraft)
+async def patch_video_localization_ui_state(project_id: str, patch: dict = Body(default_factory=dict)):
+    updated = video_localization_service.update_video_localization_ui_state(project_id, patch)
+    return require_resource(updated)
+
+
 @router.delete("/{project_id}/video-localization", response_model=VideoLocalizationDraft)
 async def reset_video_localization(project_id: str):
     updated = video_localization_service.reset_video_localization(project_id)
     return require_resource(updated)
+
+
+@router.post("/{project_id}/video-localization/open-directory")
+async def open_video_localization_project_directory(project_id: str):
+    opened = video_localization_service.open_project_directory(project_id)
+    return require_resource(opened, code="VIDEO_LOCALIZATION_PROJECT_NOT_FOUND", message="Project not found")
 
 
 @router.post("/{project_id}/video-localization/source-media", response_model=VideoLocalizationDraft)
@@ -112,14 +126,20 @@ async def transcribe_video_localization_english(project_id: str):
 
 
 @router.post("/{project_id}/video-localization/reference-clips", response_model=VideoLocalizationDraft)
-async def create_video_localization_reference_clips(project_id: str):
-    updated = video_localization_service.create_reference_clips_from_cues(project_id)
+async def create_video_localization_reference_clips(project_id: str, payload: VideoLocalizationReferenceClipCreate | None = Body(default=None)):
+    updated = video_localization_service.create_reference_clips_from_cues(project_id, payload)
     return require_resource(updated)
 
 
 @router.patch("/{project_id}/video-localization/reference-clips/{reference_clip_id}", response_model=VideoLocalizationDraft)
 async def update_video_localization_reference_clip(project_id: str, reference_clip_id: str, patch: VideoLocalizationReferenceClipUpdate):
     updated = video_localization_service.update_reference_clip(project_id, reference_clip_id, patch)
+    return require_resource(updated)
+
+
+@router.delete("/{project_id}/video-localization/reference-clips/{reference_clip_id}", response_model=VideoLocalizationDraft)
+async def delete_video_localization_reference_clip(project_id: str, reference_clip_id: str):
+    updated = video_localization_service.delete_reference_clip(project_id, reference_clip_id)
     return require_resource(updated)
 
 
@@ -171,6 +191,24 @@ async def get_video_localization_cue_tts_audio(project_id: str, cue_id: str):
     return audio_file_response(audio_path, code="VIDEO_LOCALIZATION_TTS_AUDIO_NOT_FOUND", message="TTS audio file not found")
 
 
+@router.get("/{project_id}/video-localization/candidates/{candidate_id}/audio")
+async def get_video_localization_candidate_audio(project_id: str, candidate_id: str):
+    audio_path = video_localization_service.generated_candidate_audio_file(project_id, candidate_id)
+    return audio_file_response(audio_path, code="VIDEO_LOCALIZATION_CANDIDATE_AUDIO_NOT_FOUND", message="Generated candidate audio not found")
+
+
+@router.post("/{project_id}/video-localization/candidates/{candidate_id}/apply", response_model=VideoLocalizationDraft)
+async def apply_video_localization_candidate(project_id: str, candidate_id: str):
+    updated = video_localization_service.apply_generated_candidate(project_id, candidate_id)
+    return require_resource(updated)
+
+
+@router.get("/{project_id}/video-localization/timeline-clips/{clip_id}/audio")
+async def get_video_localization_timeline_clip_audio(project_id: str, clip_id: str):
+    audio_path = video_localization_service.timeline_clip_audio_file(project_id, clip_id)
+    return audio_file_response(audio_path, code="VIDEO_LOCALIZATION_TIMELINE_CLIP_AUDIO_NOT_FOUND", message="Timeline clip audio not found")
+
+
 @router.get("/{project_id}/video-localization/cues/{cue_id}/source-audio")
 async def get_video_localization_cue_source_audio(project_id: str, cue_id: str):
     audio_path = video_localization_service.source_cue_audio_file(project_id, cue_id)
@@ -183,6 +221,12 @@ async def get_video_localization_reference_clip_audio(project_id: str, reference
     return audio_file_response(audio_path, code="VIDEO_LOCALIZATION_REFERENCE_AUDIO_NOT_FOUND", message="Reference audio file not found")
 
 
+@router.get("/{project_id}/video-localization/reference-clips/{reference_clip_id}/cover")
+async def get_video_localization_reference_clip_cover(project_id: str, reference_clip_id: str):
+    cover_path = video_localization_service.reference_clip_cover_file(project_id, reference_clip_id)
+    return audio_file_response(cover_path, code="VIDEO_LOCALIZATION_REFERENCE_COVER_NOT_FOUND", message="Reference cover frame not found")
+
+
 @router.get("/{project_id}/video-localization/subtitles/{kind}")
 async def export_video_localization_subtitles(project_id: str, kind: str):
     srt = video_localization_service.export_subtitles(project_id, kind)
@@ -191,12 +235,50 @@ async def export_video_localization_subtitles(project_id: str, kind: str):
     return srt_attachment(srt, filename=filename)
 
 
+@router.post("/{project_id}/video-localization/subtitles/{kind}/import", response_model=VideoLocalizationDraft)
+async def import_video_localization_subtitles(project_id: str, kind: str, request: VideoLocalizationSubtitleImportRequest):
+    updated = video_localization_service.import_subtitles(project_id, kind, request)
+    return require_resource(updated)
+
+
 @router.get("/{project_id}/video-localization/export")
 async def export_video_localization(project_id: str):
     data = video_localization_service.export_video_localization(project_id)
     data = require_resource(data)
     filename = f"{project_id}-video-localization.json"
     return json_attachment(data, filename=filename)
+
+
+@router.get("/{project_id}/video-localization/export/timeline")
+async def export_video_localization_timeline(project_id: str):
+    data = video_localization_service.export_timeline_edl(project_id)
+    data = require_resource(data)
+    filename = f"{project_id}-video-localization-edl.json"
+    return json_attachment(data, filename=filename)
+
+
+@router.get("/{project_id}/video-localization/export/timeline/audio-package")
+async def export_video_localization_timeline_audio_package(project_id: str):
+    path = video_localization_service.export_timeline_audio_package(project_id)
+    path = require_resource(path)
+    return download_file_response(
+        path,
+        filename=f"{project_id}-video-localization-audio-package.zip",
+        code="VIDEO_LOCALIZATION_AUDIO_PACKAGE_NOT_FOUND",
+        message="Timeline audio package not found",
+    )
+
+
+@router.get("/{project_id}/video-localization/export/timeline/video")
+async def export_video_localization_timeline_video(project_id: str):
+    path = video_localization_service.export_localized_video(project_id)
+    path = require_resource(path)
+    return download_file_response(
+        path,
+        filename=f"{project_id}-video-localization-localized-video.mp4",
+        code="VIDEO_LOCALIZATION_LOCALIZED_VIDEO_NOT_FOUND",
+        message="Localized video not found",
+    )
 
 
 @router.get("/{project_id}/video-localization/readiness")

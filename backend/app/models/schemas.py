@@ -692,6 +692,12 @@ class ProjectCreate(BaseModel):
     default_engine_id: str | None = None
 
 
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    default_engine_id: str | None = None
+
+
 class ProjectTranscriptionImportRequest(BaseModel):
     transcription_ids: list[str] = Field(default_factory=list)
     mode: Literal["append", "replace"] = "append"
@@ -784,6 +790,12 @@ class VideoLocalizationSpeakerUpdate(BaseModel):
 class VideoLocalizationReferenceClip(VideoLocalizationExtensibleModel):
     reference_clip_id: str
     speaker_id: str | None = None
+    title: str | None = None
+    person_name: str | None = None
+    emotion: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    description: str | None = None
+    cover_frame_path: str | None = None
     source_stem: Literal["vocals_clean", "original_audio", "uploaded_reference", "generated_tts"] = "vocals_clean"
     start_ms: int | None = Field(default=None, ge=0)
     end_ms: int | None = Field(default=None, ge=0)
@@ -802,7 +814,35 @@ class VideoLocalizationReferenceClip(VideoLocalizationExtensibleModel):
         return self
 
 
+class VideoLocalizationReferenceClipCreate(BaseModel):
+    cue_id: str | None = None
+    speaker_id: str | None = None
+    start_ms: int | None = Field(default=None, ge=0)
+    end_ms: int | None = Field(default=None, ge=0)
+    asr_text: str | None = None
+    title: str | None = None
+    person_name: str | None = None
+    emotion: str | None = None
+    tags: list[str] | None = None
+    description: str | None = None
+    cover_frame_path: str | None = None
+
+    @model_validator(mode="after")
+    def validate_time_range(self):
+        if (self.start_ms is None) != (self.end_ms is None):
+            raise PydanticCustomError("incomplete_time_range", "start_ms and end_ms must be provided together")
+        if self.start_ms is not None and self.end_ms is not None and self.end_ms <= self.start_ms:
+            raise PydanticCustomError("invalid_time_range", "end_ms must be greater than start_ms")
+        return self
+
+
 class VideoLocalizationReferenceClipUpdate(BaseModel):
+    title: str | None = None
+    person_name: str | None = None
+    emotion: str | None = None
+    tags: list[str] | None = None
+    description: str | None = None
+    cover_frame_path: str | None = None
     cleanliness: Literal["clean", "needs_review", "blocked", "mixed", "unknown"] | None = None
     asr_status: Literal["pending", "candidate", "verified", "failed", "skipped"] | None = None
     asr_text: str | None = None
@@ -852,6 +892,12 @@ class VideoLocalizationCueUpdate(BaseModel):
     notes: str | None = None
 
 
+class VideoLocalizationSubtitleImportRequest(BaseModel):
+    srt_text: str = Field(min_length=1)
+    update_timing: bool = True
+    overwrite_tts: bool = False
+
+
 class VideoLocalizationQualityIssue(VideoLocalizationExtensibleModel):
     code: str
     message: str
@@ -872,6 +918,9 @@ class VideoLocalizationQualityGate(VideoLocalizationExtensibleModel):
 class VideoLocalizationExportState(VideoLocalizationExtensibleModel):
     production_json_path: str | None = None
     subtitle_paths: dict[str, str] = Field(default_factory=dict)
+    timeline_audio_package_path: str | None = None
+    timeline_audio_manifest_path: str | None = None
+    localized_video_path: str | None = None
     last_exported_at: str | None = None
 
 

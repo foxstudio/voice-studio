@@ -71,7 +71,8 @@ def reconcile_speakers(draft: VideoLocalizationDraft) -> VideoLocalizationDraft:
             if key in seen_ranges:
                 continue
             seen_ranges.add(key)
-            time_ranges.append(VideoLocalizationTimeRange(start_ms=clip.start_ms, end_ms=clip.end_ms, source="reference_candidate"))
+            range_source = "manual_selection" if "generated_from_selection" in clip.quality_flags else "reference_candidate"
+            time_ranges.append(VideoLocalizationTimeRange(start_ms=clip.start_ms, end_ms=clip.end_ms, source=range_source))
 
         for cue in draft.cues:
             if cue.speaker_id != speaker.speaker_id:

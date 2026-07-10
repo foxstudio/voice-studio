@@ -1,0 +1,1077 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>视频本土化剪辑台补充设计</title>
+		<style>
+			:root {
+				--bg: #101214;
+				--screen: #171a1d;
+				--panel: #202428;
+				--panel-2: #262b30;
+				--line: #394249;
+				--soft: #30383f;
+				--text: #f5f3eb;
+				--muted: #a8b0ad;
+				--dim: #79837f;
+				--cyan: #58d1c8;
+				--blue: #7da4ff;
+				--gold: #d9b45f;
+				--violet: #a79cf5;
+				--green: #7fc88f;
+				--red: #e27a70;
+				--ink: #0f1112;
+			}
+
+			* {
+				box-sizing: border-box;
+			}
+
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--text);
+				font-family:
+					Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+					"PingFang SC", "Microsoft YaHei", sans-serif;
+				letter-spacing: 0;
+			}
+
+			button,
+			input,
+			select,
+			textarea {
+				font: inherit;
+				letter-spacing: 0;
+			}
+
+			.page {
+				padding: 22px;
+				display: grid;
+				gap: 28px;
+			}
+
+			.design-head,
+			.mock {
+				max-width: 1720px;
+				margin: 0 auto;
+				width: 100%;
+			}
+
+			.design-head {
+				display: flex;
+				align-items: flex-end;
+				justify-content: space-between;
+				gap: 16px;
+			}
+
+			h1,
+			h2,
+			h3,
+			p {
+				margin: 0;
+			}
+
+			h1 {
+				font-size: 23px;
+			}
+
+			.design-head p {
+				margin-top: 7px;
+				color: var(--muted);
+				font-size: 13px;
+			}
+
+			.design-link,
+			.btn,
+			.icon,
+			.primary,
+			.pill,
+			.tiny {
+				border: 1px solid var(--line);
+				border-radius: 7px;
+				background: #21262a;
+				color: var(--text);
+				text-decoration: none;
+				white-space: nowrap;
+			}
+
+			.design-link {
+				padding: 8px 11px;
+				font-size: 13px;
+			}
+
+			.btn,
+			.primary {
+				min-height: 30px;
+				padding: 5px 10px;
+				font-size: 12px;
+			}
+
+			.icon {
+				width: 30px;
+				height: 30px;
+				font-size: 12px;
+			}
+
+			.primary {
+				background: var(--cyan);
+				border-color: #7fe0d9;
+				color: var(--ink);
+				font-weight: 800;
+			}
+
+			.tiny {
+				width: 24px;
+				height: 24px;
+				font-size: 10px;
+				border-radius: 6px;
+			}
+
+			.pill {
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				min-height: 23px;
+				padding: 3px 8px;
+				font-size: 11px;
+				color: #d7dfdc;
+				background: #1b2023;
+			}
+
+			.pill.ok {
+				color: #c7f2d0;
+				border-color: #3f8056;
+				background: #18271d;
+			}
+
+			.pill.warn {
+				color: #f1d99c;
+				border-color: #7c612b;
+				background: #2d2515;
+			}
+
+			.pill.blue {
+				color: #cbd7ff;
+				border-color: #465d99;
+				background: #1b2236;
+			}
+
+			.row {
+				display: flex;
+				align-items: center;
+				gap: 7px;
+				min-width: 0;
+			}
+
+			.mock {
+				border: 1px solid #3f4a51;
+				border-radius: 10px;
+				overflow: hidden;
+				background: var(--screen);
+				box-shadow: 0 28px 86px rgba(0, 0, 0, 0.38);
+			}
+
+			.mock-title {
+				height: 44px;
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				padding: 0 16px;
+				border-bottom: 1px solid var(--line);
+				background: #121517;
+			}
+
+			.mock-title h2 {
+				font-size: 14px;
+			}
+
+			.appbar {
+				height: 56px;
+				display: grid;
+				grid-template-columns: 330px minmax(0, 1fr) auto;
+				align-items: center;
+				gap: 14px;
+				padding: 0 14px;
+				border-bottom: 1px solid var(--line);
+				background: #191d20;
+			}
+
+			.brand {
+				display: flex;
+				align-items: center;
+				gap: 10px;
+				min-width: 0;
+			}
+
+			.logo {
+				width: 30px;
+				height: 30px;
+				border-radius: 8px;
+				background:
+					linear-gradient(135deg, var(--cyan), transparent 58%),
+					linear-gradient(45deg, var(--gold), transparent 58%),
+					#2b3135;
+				border: 1px solid rgba(255, 255, 255, 0.18);
+			}
+
+			.brand strong,
+			.brand span {
+				display: block;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+
+			.brand strong {
+				font-size: 13px;
+			}
+
+			.brand span,
+			.small {
+				color: var(--muted);
+				font-size: 11px;
+			}
+
+			.workspace {
+				display: grid;
+				grid-template-columns: minmax(0, 1fr) 380px;
+				min-height: 880px;
+			}
+
+			.workspace.collapsed {
+				grid-template-columns: minmax(0, 1fr) 52px;
+			}
+
+			.main {
+				min-width: 0;
+				display: grid;
+				grid-template-rows: 470px auto;
+			}
+
+			.preview {
+				padding: 14px;
+				border-bottom: 1px solid var(--line);
+				display: grid;
+				grid-template-rows: minmax(0, 1fr) auto;
+				gap: 10px;
+			}
+
+			.video {
+				position: relative;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background:
+					radial-gradient(circle at 50% 42%, rgba(88, 209, 200, 0.14), transparent 22%),
+					linear-gradient(180deg, #242a2f, #090b0c 80%);
+				overflow: hidden;
+			}
+
+			.video.empty {
+				display: grid;
+				place-items: center;
+				text-align: center;
+				background:
+					linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px) 0 0 / 38px 38px,
+					linear-gradient(180deg, #20262a, #101315);
+			}
+
+			.drop h3 {
+				font-size: 19px;
+				margin-bottom: 8px;
+			}
+
+			.drop p {
+				color: var(--muted);
+				font-size: 13px;
+				margin-bottom: 14px;
+			}
+
+			.person {
+				position: absolute;
+				left: 50%;
+				top: 34%;
+				width: 112px;
+				height: 172px;
+				transform: translateX(-50%);
+				border-radius: 64px 64px 14px 14px;
+				background:
+					radial-gradient(circle at 50% 22%, #cfa47a 0 20%, transparent 21%),
+					linear-gradient(180deg, #475766 0 48%, #202830 49% 100%);
+			}
+
+			.caption-overlay {
+				position: absolute;
+				left: 14%;
+				right: 14%;
+				bottom: 54px;
+				text-align: center;
+				font-weight: 800;
+				line-height: 1.38;
+				color: #fff4c9;
+				text-shadow: 0 2px 2px #000, 0 0 4px #000;
+			}
+
+			.caption-overlay.boxed {
+				background: rgba(0, 0, 0, 0.55);
+				border-radius: 6px;
+				padding: 7px 10px;
+				color: white;
+				text-shadow: none;
+			}
+
+			.video-controls {
+				position: absolute;
+				left: 12px;
+				right: 12px;
+				bottom: 12px;
+				display: flex;
+				align-items: center;
+				gap: 9px;
+			}
+
+			.scrub {
+				height: 5px;
+				flex: 1;
+				border-radius: 999px;
+				background: #0a0c0d;
+				overflow: hidden;
+			}
+
+			.scrub i {
+				display: block;
+				width: 35%;
+				height: 100%;
+				background: var(--gold);
+			}
+
+			.subbar {
+				display: grid;
+				grid-template-columns: 1fr auto;
+				gap: 10px;
+				align-items: center;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background: var(--panel);
+				padding: 9px 11px;
+			}
+
+			.subline {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				min-width: 0;
+			}
+
+			.subline strong {
+				font-size: 12px;
+				min-width: 68px;
+			}
+
+			.subline span {
+				min-width: 0;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+				color: #e8eeeb;
+				font-size: 13px;
+			}
+
+			.timeline {
+				display: grid;
+				grid-template-rows: 50px minmax(0, 1fr);
+				min-height: 410px;
+			}
+
+			.toolbar {
+				display: grid;
+				grid-template-columns: auto auto minmax(0, 1fr) auto;
+				align-items: center;
+				gap: 10px;
+				padding: 0 14px;
+				border-bottom: 1px solid var(--line);
+				background: #181c1f;
+			}
+
+			.zoom {
+				display: grid;
+				grid-template-columns: 54px minmax(0, 1fr) 36px;
+				align-items: center;
+				gap: 8px;
+				color: var(--muted);
+				font-size: 11px;
+			}
+
+			.zoom-track {
+				height: 5px;
+				border-radius: 999px;
+				background: #0d1012;
+				border: 1px solid #313940;
+				position: relative;
+			}
+
+			.zoom-track::after {
+				content: "";
+				position: absolute;
+				left: 0;
+				top: -1px;
+				width: 52%;
+				height: 5px;
+				border-radius: 999px;
+				background: var(--cyan);
+			}
+
+			.trackgrid {
+				display: grid;
+				grid-template-columns: 168px minmax(0, 1fr);
+				background: #121517;
+			}
+
+			.labels {
+				border-right: 1px solid var(--line);
+				background: #171b1e;
+				padding-top: 28px;
+			}
+
+			.label {
+				height: 64px;
+				display: grid;
+				grid-template-columns: minmax(0, 1fr) auto;
+				align-items: center;
+				gap: 8px;
+				padding: 8px 10px;
+				border-bottom: 1px solid var(--soft);
+			}
+
+			.label.sub {
+				height: 78px;
+			}
+
+			.label strong,
+			.label span {
+				display: block;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+
+			.label strong {
+				font-size: 12px;
+			}
+
+			.label span {
+				margin-top: 2px;
+				color: var(--muted);
+				font-size: 11px;
+			}
+
+			.canvas {
+				position: relative;
+				overflow: hidden;
+			}
+
+			.ruler {
+				height: 28px;
+				border-bottom: 1px solid var(--soft);
+				position: relative;
+				background: #15191b;
+			}
+
+			.ruler span {
+				position: absolute;
+				top: 7px;
+				color: var(--muted);
+				font-size: 10px;
+			}
+
+			.ruler span:nth-child(1) { left: 2%; }
+			.ruler span:nth-child(2) { left: 22%; }
+			.ruler span:nth-child(3) { left: 42%; }
+			.ruler span:nth-child(4) { left: 62%; }
+			.ruler span:nth-child(5) { left: 82%; }
+
+			.rowtrack {
+				position: relative;
+				height: 64px;
+				border-bottom: 1px solid var(--soft);
+				background:
+					linear-gradient(90deg, transparent 0 9.8%, rgba(255, 255, 255, 0.05) 10%, transparent 10.2%) 0 0 / 20% 100%,
+					#171a1d;
+			}
+
+			.rowtrack.sub {
+				height: 78px;
+			}
+
+			.wave {
+				position: absolute;
+				left: 0;
+				right: 0;
+				top: 10px;
+				height: 42px;
+				background:
+					linear-gradient(180deg, transparent 0 20%, rgba(88, 209, 200, 0.6) 21% 79%, transparent 80%),
+					repeating-linear-gradient(90deg, transparent 0 8px, rgba(88, 209, 200, 0.92) 8px 10px, transparent 10px 15px);
+				opacity: 0.88;
+			}
+
+			.wave.blue {
+				background:
+					linear-gradient(180deg, transparent 0 24%, rgba(125, 164, 255, 0.65) 25% 75%, transparent 76%),
+					repeating-linear-gradient(90deg, transparent 0 9px, rgba(125, 164, 255, 0.9) 9px 11px, transparent 11px 16px);
+			}
+
+			.wave.gold {
+				background:
+					linear-gradient(180deg, transparent 0 32%, rgba(217, 180, 95, 0.58) 33% 67%, transparent 68%),
+					repeating-linear-gradient(90deg, transparent 0 11px, rgba(217, 180, 95, 0.82) 11px 13px, transparent 13px 18px);
+			}
+
+			.pending {
+				position: absolute;
+				left: 22%;
+				top: 15px;
+				height: 34px;
+				border: 1px dashed #5e6970;
+				border-radius: 7px;
+				padding: 8px 10px;
+				color: var(--muted);
+				background: rgba(255, 255, 255, 0.03);
+				font-size: 12px;
+			}
+
+			.playhead {
+				position: absolute;
+				left: 34%;
+				top: -28px;
+				bottom: 0;
+				width: 2px;
+				background: var(--gold);
+				z-index: 4;
+			}
+
+			.cue {
+				position: absolute;
+				top: 15px;
+				height: 48px;
+				border: 1px solid #68747b;
+				border-radius: 7px;
+				background: #252b30;
+				padding: 7px 8px;
+				font-size: 11px;
+				overflow: hidden;
+			}
+
+			.cue.active {
+				border-color: var(--cyan);
+				background: #173a37;
+			}
+
+			.cue b,
+			.cue span {
+				display: block;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+
+			.handle {
+				position: absolute;
+				top: 7px;
+				bottom: 7px;
+				width: 4px;
+				border-radius: 99px;
+				background: rgba(255, 255, 255, 0.7);
+			}
+
+			.handle.left { left: 4px; }
+			.handle.right { right: 4px; }
+
+			.side {
+				border-left: 1px solid var(--line);
+				background: #171a1d;
+				padding: 12px;
+				display: grid;
+				align-content: start;
+				gap: 12px;
+			}
+
+			.side-rail {
+				display: none;
+				border-left: 1px solid var(--line);
+				background: #171a1d;
+				padding: 10px;
+				gap: 8px;
+				align-content: start;
+			}
+
+			.workspace.collapsed .side {
+				display: none;
+			}
+
+			.workspace.collapsed .side-rail {
+				display: grid;
+			}
+
+			.panel {
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background: var(--panel);
+				overflow: hidden;
+			}
+
+			.panel-head {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 8px;
+				padding: 10px 11px;
+				border-bottom: 1px solid var(--soft);
+			}
+
+			.panel-head h3 {
+				font-size: 13px;
+			}
+
+			.tabs {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 5px;
+				padding: 5px;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background: #15191b;
+			}
+
+			.tab {
+				border: 1px solid transparent;
+				border-radius: 7px;
+				background: transparent;
+				color: var(--text);
+				min-height: 30px;
+				font-size: 12px;
+			}
+
+			.tab.active {
+				background: var(--panel-2);
+				border-color: var(--line);
+			}
+
+			.fieldset {
+				padding: 11px;
+				display: grid;
+				gap: 10px;
+			}
+
+			.field {
+				display: grid;
+				gap: 5px;
+			}
+
+			.field label {
+				font-size: 11px;
+				color: var(--muted);
+			}
+
+			.field input,
+			.field textarea,
+			.field select {
+				width: 100%;
+				border: 1px solid var(--line);
+				border-radius: 7px;
+				background: #15191b;
+				color: var(--text);
+				padding: 7px 8px;
+				font-size: 12px;
+			}
+
+			.field textarea {
+				min-height: 70px;
+				resize: none;
+			}
+
+			.voice {
+				display: grid;
+				grid-template-columns: 56px minmax(0, 1fr) auto;
+				gap: 9px;
+				align-items: center;
+				padding: 9px 11px;
+				border-bottom: 1px solid var(--soft);
+			}
+
+			.voice.active {
+				background: #172927;
+			}
+
+			.avatar {
+				height: 46px;
+				border: 1px solid var(--line);
+				border-radius: 7px;
+				background:
+					radial-gradient(circle at 50% 32%, #cfa47a 0 17%, transparent 18%),
+					linear-gradient(180deg, #42515f, #151a1f);
+			}
+
+			.voice strong,
+			.voice span {
+				display: block;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+
+			.voice strong {
+				font-size: 12px;
+			}
+
+			.voice span {
+				color: var(--muted);
+				font-size: 11px;
+				margin-top: 3px;
+			}
+
+			.recipe {
+				padding: 10px 11px;
+				border-top: 1px solid var(--soft);
+				display: grid;
+				gap: 8px;
+			}
+
+			.recipe strong {
+				font-size: 12px;
+			}
+
+			.recipe p {
+				color: var(--muted);
+				font-size: 11px;
+				line-height: 1.45;
+			}
+
+			.grid2 {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 7px;
+			}
+
+			.style-presets {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 8px;
+			}
+
+			.style-card {
+				border: 1px solid var(--line);
+				border-radius: 7px;
+				background: #15191b;
+				padding: 8px;
+				min-height: 70px;
+				display: grid;
+				align-content: center;
+				text-align: center;
+				font-size: 12px;
+				font-weight: 800;
+			}
+
+			.style-card.yellow {
+				color: #fff1a8;
+				text-shadow: 0 2px 2px #000, 0 0 4px #000;
+			}
+
+			.style-card.box {
+				color: white;
+			}
+
+			.style-card.box span {
+				background: rgba(0, 0, 0, 0.58);
+				border-radius: 5px;
+				padding: 5px 7px;
+			}
+
+			.style-card.clean {
+				color: white;
+				text-shadow: 0 0 3px #000;
+			}
+
+			.style-card.outline {
+				color: white;
+				text-shadow: 1px 1px #000, -1px -1px #000, 1px -1px #000, -1px 1px #000;
+			}
+
+			.status-save {
+				display: grid;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				gap: 8px;
+				padding: 10px 11px;
+				border-top: 1px solid var(--soft);
+			}
+
+			.status-save div {
+				border: 1px solid var(--soft);
+				border-radius: 7px;
+				background: #171b1e;
+				padding: 8px;
+			}
+
+			.status-save strong,
+			.status-save span {
+				display: block;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+
+			.status-save strong {
+				font-size: 12px;
+			}
+
+			.status-save span {
+				color: var(--muted);
+				font-size: 11px;
+				margin-top: 3px;
+			}
+
+			@media (max-width: 1200px) {
+				.workspace,
+				.workspace.collapsed {
+					grid-template-columns: 1fr;
+				}
+
+				.side,
+				.workspace.collapsed .side {
+					display: grid;
+					border-left: 0;
+					border-top: 1px solid var(--line);
+				}
+
+				.workspace.collapsed .side-rail {
+					display: none;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<div class="page">
+			<header class="design-head">
+				<div>
+					<h1>视频本土化剪辑台补充设计</h1>
+					<p>补两个关键状态：新项目导入态，以及剪辑态里的侧栏联动、字幕样式、音色生成。</p>
+				</div>
+				<a class="design-link" href="./video-localization-cutting-studio-v2.html">返回 V2.1</a>
+			</header>
+
+			<section class="mock">
+				<div class="mock-title">
+					<h2>设计一：无项目 / 导入视频 / 生成轨道</h2>
+					<span class="small">核心目标：用户进来就知道先导入视频，然后一步步把原音轨、人声轨、字幕轨生成出来。</span>
+				</div>
+				<header class="appbar">
+					<div class="brand">
+						<div class="logo"></div>
+						<div>
+							<strong>未命名本土化项目</strong>
+							<span>自动保存等待创建 · 工作目录未选择</span>
+						</div>
+					</div>
+					<div class="row">
+						<span class="pill warn">未导入视频</span>
+						<span class="pill">草稿将实时保存</span>
+						<span class="pill blue">断点恢复已开启</span>
+					</div>
+					<div class="row">
+						<button class="btn">导入项目</button>
+						<button class="btn">另存为</button>
+						<button class="btn">关闭项目</button>
+						<button class="primary">新建项目</button>
+					</div>
+				</header>
+
+				<div class="workspace">
+					<div class="main">
+						<section class="preview">
+							<div class="video empty">
+								<div class="drop">
+									<h3>导入一个视频开始本土化配音</h3>
+									<p>拖入 MP4 / MOV / MKV，系统会创建项目草稿并立即抽取原音轨。</p>
+									<div class="row" style="justify-content: center">
+										<button class="primary">导入视频</button>
+										<button class="btn">打开最近项目</button>
+									</div>
+								</div>
+							</div>
+							<div class="subbar">
+								<div class="subline"><strong>预览字幕</strong><span>导入视频并完成 ASR 后，这里会显示随播放同步的原文/ASR 或本土化字幕。</span></div>
+								<div class="row"><button class="btn">隐藏字幕</button><button class="btn">样式</button></div>
+							</div>
+						</section>
+
+						<section class="timeline">
+							<div class="toolbar">
+								<div class="row"><button class="icon">⏮</button><button class="icon">▶</button><button class="icon">⏭</button></div>
+								<span class="pill">00:00:00.000</span>
+								<div class="zoom"><span>缩放</span><div class="zoom-track"></div><strong>1x</strong></div>
+								<div class="row"><button class="btn">撤销</button><button class="btn">重做</button><button class="primary">保存项目</button></div>
+							</div>
+							<div class="trackgrid">
+								<div class="labels">
+									<div class="label"><div><strong>原音轨</strong><span>导入后自动抽取</span></div><button class="tiny">M</button></div>
+									<div class="label"><div><strong>人声轨</strong><span>由原音轨生成</span></div><button class="btn">生成</button></div>
+									<div class="label"><div><strong>背景音乐</strong><span>由原音轨生成</span></div><button class="tiny">S</button></div>
+									<div class="label sub"><div><strong>字幕轨</strong><span>ASR 后可调整入出点</span></div><button class="btn">生成 ASR</button></div>
+								</div>
+								<div class="canvas">
+									<div class="ruler"><span>00:00</span><span>00:15</span><span>00:30</span><span>00:45</span><span>01:00</span></div>
+									<div class="rowtrack"><div class="pending" style="left: 4%; width: 34%">导入视频后，原音轨会出现在这里</div></div>
+									<div class="rowtrack"><div class="pending" style="left: 4%; width: 26%">点击左侧“生成”得到人声轨</div></div>
+									<div class="rowtrack"><div class="pending" style="left: 4%; width: 30%">同时生成背景音乐/环境声轨</div></div>
+									<div class="rowtrack sub">
+										<div class="cue" style="left: 8%; width: 19%"><span class="handle left"></span><b>字幕 001</b><span>拖动左右边界调整时间</span><span class="handle right"></span></div>
+										<div class="cue" style="left: 31%; width: 22%"><span class="handle left"></span><b>字幕 002</b><span>可删除、拆分、编辑文本</span><span class="handle right"></span></div>
+									</div>
+								</div>
+							</div>
+						</section>
+					</div>
+
+					<aside class="side">
+						<section class="panel">
+							<div class="panel-head"><h3>项目保存建议</h3><span class="pill ok">实时保存</span></div>
+							<div class="fieldset">
+								<p class="small">项目应保存为一个本地项目目录：`project.json` 记录结构化状态，`media/` 存原视频、音轨、样音、TTS 输出，`autosave/` 存操作日志和快照。</p>
+							</div>
+							<div class="status-save">
+								<div><strong>草稿</strong><span>3 秒防抖保存</span></div>
+								<div><strong>操作</strong><span>追加日志</span></div>
+								<div><strong>媒体</strong><span>文件落盘</span></div>
+							</div>
+						</section>
+						<section class="panel">
+							<div class="panel-head"><h3>导入后的自动任务</h3><button class="btn">查看队列</button></div>
+							<div class="fieldset">
+								<span class="pill ok">1. 抽取原音轨</span>
+								<span class="pill">2. 生成人声/背景音乐</span>
+								<span class="pill">3. 生成原文/ASR 字幕</span>
+								<span class="pill">4. 保存恢复点</span>
+							</div>
+						</section>
+					</aside>
+				</div>
+			</section>
+
+			<section class="mock">
+				<div class="mock-title">
+					<h2>设计二：剪辑态 / 侧栏联动 / 字幕显示样式</h2>
+					<span class="small">核心目标：点时间线上的什么，右侧就编辑什么；侧栏可收起，视频字幕显示可切换和预览样式。</span>
+				</div>
+				<header class="appbar">
+					<div class="brand">
+						<div class="logo"></div>
+						<div>
+							<strong>本土化项目：reset-smoke</strong>
+							<span>01:18:24 · 已恢复到上次编辑位置 00:42:11</span>
+						</div>
+					</div>
+					<div class="row"><span class="pill ok">已实时保存</span><span class="pill ok">人声/背景已生成</span><span class="pill warn">12 条字幕待校对</span></div>
+					<div class="row"><button class="btn">项目</button><button class="btn">导入项目</button><button class="btn">关闭项目</button><button class="primary">合成输出</button></div>
+				</header>
+
+				<div class="workspace collapsed">
+					<div class="main">
+						<section class="preview">
+							<div class="video">
+								<div class="person"></div>
+								<div class="caption-overlay">我们要保留原来的节奏，而不只是把文字翻译出来。</div>
+								<div class="video-controls"><button class="icon">▶</button><div class="scrub"><i></i></div><span class="small">00:42:11 / 01:18:24</span></div>
+							</div>
+							<div class="subbar">
+								<div class="subline"><strong>字幕显示</strong><span>默认显示本土化；没有本土化时显示原文/ASR，也可以切到 TTS 或多行对照。</span></div>
+								<div class="row">
+									<button class="btn">显示</button>
+									<button class="btn">原文/ASR</button>
+									<button class="primary">本土化</button>
+									<button class="btn">TTS</button>
+									<button class="btn">多行</button>
+								</div>
+							</div>
+						</section>
+
+						<section class="timeline">
+							<div class="toolbar">
+								<div class="row"><button class="icon">⏮</button><button class="icon">▶</button><button class="icon">⏭</button><span class="pill">00:42:11.208</span></div>
+								<div class="row"><button class="btn">吸附</button><button class="btn">拆分</button><button class="btn">删除</button></div>
+								<div class="zoom"><span>缩放</span><div class="zoom-track"></div><strong>3.2x</strong></div>
+								<div class="row"><button class="btn">保存选区为音色</button><button class="primary">生成到选区</button></div>
+							</div>
+							<div class="trackgrid">
+								<div class="labels">
+									<div class="label"><div><strong>原音轨</strong><span>完整声音</span></div><button class="tiny">M</button></div>
+									<div class="label"><div><strong>人声轨</strong><span>选择样音</span></div><button class="tiny">S</button></div>
+									<div class="label"><div><strong>背景音乐</strong><span>伴奏/环境</span></div><button class="tiny">M</button></div>
+									<div class="label sub"><div><strong>字幕轨</strong><span>选中后右侧同步</span></div><button class="tiny">E</button></div>
+									<div class="label"><div><strong>中文配音</strong><span>生成片段</span></div><button class="tiny">M</button></div>
+								</div>
+								<div class="canvas">
+									<div class="ruler"><span>00:36</span><span>00:39</span><span>00:42</span><span>00:45</span><span>00:48</span></div>
+									<div class="playhead"></div>
+									<div class="rowtrack"><div class="wave"></div></div>
+									<div class="rowtrack"><div class="wave blue"></div></div>
+									<div class="rowtrack"><div class="wave gold"></div></div>
+									<div class="rowtrack sub">
+										<div class="cue" style="left: 8%; width: 18%"><span class="handle left"></span><b>原句 007</b><span>这里需要保留节奏。</span><span class="handle right"></span></div>
+										<div class="cue active" style="left: 28%; width: 22%"><span class="handle left"></span><b>本土化 008</b><span>右侧正在编辑这一段</span><span class="handle right"></span></div>
+										<div class="cue" style="left: 54%; width: 20%"><span class="handle left"></span><b>本土化 009</b><span>后面再交给配音。</span><span class="handle right"></span></div>
+									</div>
+									<div class="rowtrack"><div class="cue active" style="left: 30%; width: 18%; background:#473b82;border-color:#9b8cff"><span class="handle left"></span><b>Sarah_CN_v3</b><span>入点 +0.18s</span><span class="handle right"></span></div></div>
+								</div>
+							</div>
+						</section>
+					</div>
+
+					<aside class="side">
+						<div class="tabs"><button class="tab active">项目音色库</button><button class="tab">保存当前选区</button></div>
+						<section class="panel">
+							<div class="panel-head"><h3>音色库</h3><button class="btn">筛选</button></div>
+							<div class="voice active"><div class="avatar"></div><div><strong>Sarah · calm explainer</strong><span>选中后同步到下方生成面板</span></div><button class="tiny">▶</button></div>
+							<div class="voice"><div class="avatar"></div><div><strong>Host · excited intro</strong><span>1 组参数 · 3 个版本</span></div><button class="tiny">▶</button></div>
+						</section>
+						<section class="panel">
+							<div class="panel-head"><h3>字幕编辑：008</h3><span class="pill blue">来自字幕轨选择</span></div>
+							<div class="fieldset">
+								<div class="field"><label>原文/ASR</label><textarea readonly>We need to preserve the timing, not just translate the words.</textarea></div>
+								<div class="field"><label>本土化字幕</label><textarea>我们要保留原来的节奏，而不只是把文字翻译出来。</textarea></div>
+								<div class="field"><label>TTS 文本</label><textarea>我们要保留原来的节奏，而不只是把文字翻译出来。</textarea></div>
+								<div class="grid2"><button class="btn">删除此字幕</button><button class="primary">保存字幕</button></div>
+							</div>
+						</section>
+						<section class="panel">
+							<div class="panel-head"><h3>音色生成：Sarah</h3><span class="pill ok">已同步</span></div>
+							<div class="recipe">
+								<strong>A 组 · 室内解释声</strong>
+								<p>一键生成会复用这组参数，但台词使用当前选中字幕的 TTS 文本。</p>
+								<div class="grid2"><button class="primary">一键生成</button><button class="btn">带参数去调整</button><button class="btn">仅带样音生成</button><button class="btn">查看版本</button></div>
+							</div>
+						</section>
+						<section class="panel">
+							<div class="panel-head"><h3>字幕样式预览</h3><button class="btn">应用到项目</button></div>
+							<div class="fieldset">
+								<div class="style-presets">
+									<div class="style-card yellow"><span>黄字黑描边</span></div>
+									<div class="style-card box"><span>半透明黑底</span></div>
+									<div class="style-card clean"><span>白字轻阴影</span></div>
+									<div class="style-card outline"><span>白字强描边</span></div>
+								</div>
+								<div class="grid2"><button class="btn">字号 36</button><button class="btn">底部居中</button><button class="btn">文字颜色</button><button class="btn">描边颜色</button></div>
+							</div>
+						</section>
+					</aside>
+					<div class="side-rail">
+						<button class="icon">›</button>
+						<button class="icon">音</button>
+						<button class="icon">字</button>
+						<button class="icon">式</button>
+					</div>
+				</div>
+			</section>
+		</div>
+	</body>
+</html>

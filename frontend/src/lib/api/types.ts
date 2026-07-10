@@ -332,6 +332,12 @@ export interface VideoLocalizationSpeakerUpdate {
 export interface VideoLocalizationReferenceClip {
 	reference_clip_id: string;
 	speaker_id: string | null;
+	title: string | null;
+	person_name: string | null;
+	emotion: string | null;
+	tags: string[];
+	description: string | null;
+	cover_frame_path: string | null;
 	source_stem: 'vocals_clean' | 'original_audio' | 'uploaded_reference' | 'generated_tts';
 	start_ms: number | null;
 	end_ms: number | null;
@@ -345,11 +351,74 @@ export interface VideoLocalizationReferenceClip {
 	[key: string]: unknown;
 }
 
+export interface VideoLocalizationReferenceClipCreate {
+	cue_id?: string | null;
+	speaker_id?: string | null;
+	start_ms?: number | null;
+	end_ms?: number | null;
+	asr_text?: string | null;
+	title?: string | null;
+	person_name?: string | null;
+	emotion?: string | null;
+	tags?: string[] | null;
+	description?: string | null;
+	cover_frame_path?: string | null;
+}
+
 export interface VideoLocalizationReferenceClipUpdate {
+	title?: string | null;
+	person_name?: string | null;
+	emotion?: string | null;
+	tags?: string[] | null;
+	description?: string | null;
+	cover_frame_path?: string | null;
 	cleanliness?: VideoLocalizationReferenceClip['cleanliness'] | null;
 	asr_status?: VideoLocalizationReferenceClip['asr_status'] | null;
 	asr_text?: string | null;
 	notes?: string | null;
+}
+
+export interface VideoLocalizationVoiceRecipe {
+	recipe_id: string;
+	reference_clip_id: string;
+	name: string;
+	description?: string | null;
+	engine_id: string;
+	parameter_snapshot: Record<string, unknown>;
+	tags: string[];
+	created_from_task_id?: string | null;
+	created_at?: string | null;
+	updated_at?: string | null;
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationGeneratedCandidate {
+	candidate_id: string;
+	recipe_id: string;
+	reference_clip_id?: string | null;
+	cue_id?: string | null;
+	audio_path?: string | null;
+	duration_ms?: number | null;
+	text_used?: string | null;
+	task_id?: string | null;
+	notes?: string | null;
+	status: string;
+	created_at?: string | null;
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationTimelineClip {
+	clip_id: string;
+	cue_id?: string | null;
+	candidate_id?: string | null;
+	track_id: string;
+	start_ms?: number | null;
+	end_ms?: number | null;
+	source_start_ms?: number | null;
+	source_end_ms?: number | null;
+	audio_path?: string | null;
+	status?: string | null;
+	[key: string]: unknown;
 }
 
 export interface VideoLocalizationCue {
@@ -415,6 +484,9 @@ export interface VideoLocalizationQualityGate {
 export interface VideoLocalizationExportState {
 	production_json_path: string | null;
 	subtitle_paths: Record<string, string>;
+	timeline_audio_package_path: string | null;
+	timeline_audio_manifest_path: string | null;
+	localized_video_path: string | null;
 	last_exported_at: string | null;
 	[key: string]: unknown;
 }
@@ -451,9 +523,9 @@ export interface VideoLocalizationDraft {
 	operations: VideoLocalizationOperation[];
 	ui_state: Record<string, unknown>;
 	project_voice_samples: Record<string, unknown>[];
-	voice_recipes: Record<string, unknown>[];
-	generated_candidates: Record<string, unknown>[];
-	timeline_clips: Record<string, unknown>[];
+	voice_recipes: VideoLocalizationVoiceRecipe[];
+	generated_candidates: VideoLocalizationGeneratedCandidate[];
+	timeline_clips: VideoLocalizationTimelineClip[];
 	updated_at: string | null;
 }
 
@@ -462,6 +534,12 @@ export interface VideoLocalizationExport extends VideoLocalizationDraft {
 	project_name: string;
 	exported_at: string;
 	export_summary: Record<string, unknown>;
+}
+
+export interface VideoLocalizationSubtitleImportRequest {
+	srt_text: string;
+	update_timing?: boolean;
+	overwrite_tts?: boolean;
 }
 
 export interface GenerateRequest {
@@ -807,6 +885,12 @@ export interface Project {
 	segments: ScriptSegment[];
 	created_at: string;
 	updated_at: string;
+}
+
+export interface ProjectUpdate {
+	name?: string | null;
+	description?: string | null;
+	default_engine_id?: string | null;
 }
 
 export interface ProjectTranscriptionImportResponse {

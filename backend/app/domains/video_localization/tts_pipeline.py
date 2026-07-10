@@ -133,7 +133,15 @@ def with_synced_batch_results(draft: VideoLocalizationDraft, batch: BatchTask) -
     return draft.model_copy(update={"cues": next_cues})
 
 
-def with_single_tts_result(draft: VideoLocalizationDraft, cue_id: str, *, result_id: str, output_path: str, duration_ms: int | None) -> VideoLocalizationDraft:
+def with_single_tts_result(
+    draft: VideoLocalizationDraft,
+    cue_id: str,
+    *,
+    result_id: str,
+    output_path: str,
+    duration_ms: int | None,
+    task_id: str | None = None,
+) -> VideoLocalizationDraft:
     path = Path(output_path)
     if not path.exists():
         raise AppException(400, "VIDEO_LOCALIZATION_TTS_AUDIO_NOT_FOUND", "TTS audio file not found")
@@ -149,7 +157,24 @@ def with_single_tts_result(draft: VideoLocalizationDraft, cue_id: str, *, result
 
     if not updated:
         raise AppException(400, "VIDEO_LOCALIZATION_TTS_CUE_NOT_FOUND", "Cue not found in video localization draft")
-    return draft.model_copy(update={"cues": next_cues})
+    update: dict = {"cues": next_cues}
+    if task_id:
+        update["generated_candidates"] = _with_synced_generated_candidates(
+            draft.generated_candidates,
+            cue_id=cue_id,
+            task_id=task_id,
+            result_id=result_id,
+            output_path=str(path),
+            duration_ms=duration_ms,
+        )
+        update["timeline_clips"] = _with_synced_timeline_clips(
+            draft.timeline_clips,
+            cue_id=cue_id,
+            task_id=task_id,
+            output_path=str(path),
+            duration_ms=duration_ms,
+        )
+    return draft.model_copy(update=update)
 
 
 def tts_audio_path(draft: VideoLocalizationDraft, cue_id: str) -> Path | None:
@@ -158,6 +183,72 @@ def tts_audio_path(draft: VideoLocalizationDraft, cue_id: str) -> Path | None:
         return None
     path = Path(cue.tts_audio_path)
     return path if path.exists() else None
+
+
+def generated_candidate_audio_path(draft: VideoLocalizationDraft, candidate_id: str) -> Path | None:
+    candidate = next((dict(item) for item in draft.generated_candidates if dict(item).get("candidate_id") == candidate_id), None)
+    if not candidate or not candidate.get("audio_path"):
+        return None
+    path = Path(str(candidate["audio_path"]))
+    return path if path.exists() else None
+
+
+def with_applied_generated_candidate(draft: VideoLocalizationDraft, candidate_id: str) -> VideoLocalizationDraft:
+    candidate = next((dict(item) for item in draft.generated_candidates if dict(item).get("candidate_id") == candidate_id), None)
+    if not candidate:
+        raise AppException(404, "VIDEO_LOCALIZATION_CANDIDATE_NOT_FOUND", "Generated candidate not found")
+    audio_path = generated_candidate_audio_path(draft, candidate_id)
+    if not audio_path:
+        raise AppException(400, "VIDEO_LOCALIZATION_CANDIDATE_AUDIO_MISSING", "Generated candidate audio is not available")
+    cue_id = str(candidate.get("cue_id") or "")
+    cue = next((item for item in draft.cues if item.cue_id == cue_id), None)
+    if not cue:
+        raise AppException(400, "VIDEO_LOCALIZATION_CANDIDATE_CUE_MISSING", "Generated candidate is not linked to a cue")
+    duration_ms = _int_or_none(candidate.get("duration_ms"))
+    result_id = str(candidate.get("result_id") or candidate_id)
+    next_cues = [
+        _cue_with_tts_audio(item, result_id=result_id, output_path=str(audio_path), duration_ms=duration_ms) if item.cue_id == cue_id else item
+        for item in draft.cues
+    ]
+    next_candidates = []
+    for item in draft.generated_candidates:
+        next_item = dict(item)
+        if next_item.get("cue_id") == cue_id:
+            next_item["selected"] = next_item.get("candidate_id") == candidate_id
+        next_candidates.append(next_item)
+    clip_start = cue.start_ms or 0
+    clip_end = cue.end_ms or clip_start + (duration_ms or cue.source_duration_ms or 1800)
+    next_clip = {
+        "clip_id": f"clip_{cue_id}",
+        "cue_id": cue_id,
+        "candidate_id": candidate_id,
+        "track_id": "dub",
+        "start_ms": clip_start,
+        "end_ms": clip_end,
+        "source_start_ms": 0,
+        "source_end_ms": duration_ms,
+        "audio_path": str(audio_path),
+        "status": "ready",
+    }
+    replaced = False
+    next_clips = []
+    for item in draft.timeline_clips:
+        clip = dict(item)
+        if clip.get("track_id", "dub") == "dub" and clip.get("cue_id") == cue_id:
+            next_clips.append({**clip, **next_clip, "clip_id": clip.get("clip_id") or next_clip["clip_id"]})
+            replaced = True
+        else:
+            next_clips.append(clip)
+    if not replaced:
+        next_clips.append(next_clip)
+    return draft.model_copy(update={"cues": next_cues, "generated_candidates": next_candidates, "timeline_clips": next_clips})
+
+
+def _int_or_none(value: object) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _cue_with_tts_result(cue: VideoLocalizationCue, batch_task_id: str, segment: BatchSegmentResult) -> VideoLocalizationCue:
@@ -184,6 +275,59 @@ def _cue_with_tts_audio(cue: VideoLocalizationCue, *, result_id: str, output_pat
         if duration_ms is not None:
             update["source_duration_ms"] = duration_ms
     return cue.model_copy(update=update)
+
+
+def _with_synced_generated_candidates(
+    candidates: list[dict],
+    *,
+    cue_id: str,
+    task_id: str,
+    result_id: str,
+    output_path: str,
+    duration_ms: int | None,
+) -> list[dict]:
+    next_candidates = []
+    for candidate in candidates:
+        item = dict(candidate)
+        if item.get("task_id") == task_id:
+            item.update(
+                {
+                    "cue_id": item.get("cue_id") or cue_id,
+                    "result_id": result_id,
+                    "audio_path": output_path,
+                    "duration_ms": duration_ms,
+                    "status": "success",
+                    "error": None,
+                    "updated_at": now_iso(),
+                }
+            )
+        next_candidates.append(item)
+    return next_candidates
+
+
+def _with_synced_timeline_clips(
+    clips: list[dict],
+    *,
+    cue_id: str,
+    task_id: str,
+    output_path: str,
+    duration_ms: int | None,
+) -> list[dict]:
+    next_clips = []
+    for clip in clips:
+        item = dict(clip)
+        candidate_id = str(item.get("candidate_id") or "")
+        if item.get("cue_id") == cue_id and (item.get("task_id") == task_id or candidate_id.endswith(task_id)):
+            item.update(
+                {
+                    "audio_path": output_path,
+                    "status": "ready",
+                }
+            )
+            if duration_ms is not None and item.get("source_end_ms") in (None, ""):
+                item["source_end_ms"] = duration_ms
+        next_clips.append(item)
+    return next_clips
 
 
 def _cue_with_tts_batch_status(

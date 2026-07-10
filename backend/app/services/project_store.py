@@ -5,6 +5,7 @@ import re
 from app.schemas.voice_studio import (
     Project,
     ProjectCreate,
+    ProjectUpdate,
     ProjectTranscriptionImportRequest,
     ProjectTranscriptionImportResponse,
     Role,
@@ -32,6 +33,20 @@ def save_project(project: Project) -> Project:
 
 def create_project(data: ProjectCreate) -> Project:
     return save_project(Project(**data.model_dump()))
+
+
+def update_project(project_id: str, data: ProjectUpdate) -> Project | None:
+    project = get_project(project_id)
+    if not project:
+        return None
+    patch = data.model_dump(exclude_unset=True)
+    if "name" in patch and patch["name"] is not None:
+        project.name = patch["name"].strip() or project.name
+    if "description" in patch and patch["description"] is not None:
+        project.description = patch["description"]
+    if "default_engine_id" in patch:
+        project.default_engine_id = patch["default_engine_id"]
+    return save_project(project)
 
 
 def delete_project(project_id: str) -> None:

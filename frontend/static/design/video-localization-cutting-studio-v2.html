@@ -1,0 +1,1397 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>视频本土化配音剪辑台 V2</title>
+		<style>
+			:root {
+				--bg: #101112;
+				--shell: #17191b;
+				--panel: #202326;
+				--panel-2: #25292d;
+				--panel-3: #2c3136;
+				--line: #3a4248;
+				--line-soft: #30373d;
+				--text: #f6f5ef;
+				--muted: #a9b2b0;
+				--dim: #788381;
+				--cyan: #5fd2c9;
+				--cyan-2: #245b58;
+				--amber: #d7b15d;
+				--green: #78c989;
+				--red: #e07168;
+				--violet: #a79df5;
+				--blue: #7aa4ff;
+				--ink: #101112;
+				--track: #181b1e;
+				--track-alt: #1c2024;
+				--playhead: #f7d36d;
+				--selection: rgba(95, 210, 201, 0.22);
+			}
+
+			* {
+				box-sizing: border-box;
+			}
+
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--text);
+				font-family:
+					Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+					"PingFang SC", "Microsoft YaHei", sans-serif;
+				letter-spacing: 0;
+			}
+
+			button,
+			input,
+			textarea,
+			select {
+				font: inherit;
+				letter-spacing: 0;
+			}
+
+			.page {
+				padding: 22px;
+			}
+
+			.design-head {
+				max-width: 1720px;
+				margin: 0 auto 14px;
+				display: flex;
+				align-items: flex-end;
+				justify-content: space-between;
+				gap: 16px;
+			}
+
+			.design-head h1,
+			.design-head p {
+				margin: 0;
+			}
+
+			.design-head h1 {
+				font-size: 23px;
+				line-height: 1.15;
+			}
+
+			.design-head p {
+				margin-top: 7px;
+				color: var(--muted);
+				font-size: 13px;
+			}
+
+			.design-link {
+				color: #d7dedb;
+				text-decoration: none;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 8px 11px;
+				background: #191c1e;
+				font-size: 13px;
+			}
+
+			.app {
+				max-width: 1720px;
+				min-height: 1040px;
+				margin: 0 auto;
+				border: 1px solid #3c464c;
+				border-radius: 10px;
+				background: var(--shell);
+				overflow: hidden;
+				box-shadow: 0 30px 92px rgba(0, 0, 0, 0.43);
+			}
+
+			.topbar {
+				height: 62px;
+				display: grid;
+				grid-template-columns: 360px minmax(0, 1fr) auto;
+				align-items: center;
+				gap: 14px;
+				padding: 0 16px;
+				border-bottom: 1px solid var(--line);
+				background: #191c1e;
+			}
+
+			.brand {
+				min-width: 0;
+				display: flex;
+				align-items: center;
+				gap: 10px;
+			}
+
+			.brand-mark {
+				width: 31px;
+				height: 31px;
+				border-radius: 8px;
+				border: 1px solid rgba(255, 255, 255, 0.18);
+				background:
+					linear-gradient(135deg, var(--cyan), transparent 58%),
+					linear-gradient(45deg, var(--amber), transparent 57%),
+					#2a3033;
+			}
+
+			.brand strong,
+			.brand span {
+				display: block;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+
+			.brand strong {
+				font-size: 14px;
+			}
+
+			.brand span,
+			.small {
+				color: var(--muted);
+				font-size: 12px;
+			}
+
+			.top-status,
+			.top-actions,
+			.row {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				min-width: 0;
+			}
+
+			.top-status {
+				overflow: hidden;
+			}
+
+			.top-actions {
+				justify-content: flex-end;
+			}
+
+			.badge {
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				min-height: 24px;
+				padding: 4px 8px;
+				border: 1px solid var(--line);
+				border-radius: 7px;
+				background: #202326;
+				color: #d6ddda;
+				font-size: 12px;
+				white-space: nowrap;
+			}
+
+			.badge.ok {
+				color: #c5f0cf;
+				border-color: #3c7851;
+				background: #18281d;
+			}
+
+			.badge.warn {
+				color: #f1d692;
+				border-color: #755c2c;
+				background: #2b2415;
+			}
+
+			.badge.info {
+				color: #c3d2ff;
+				border-color: #455b98;
+				background: #1a2034;
+			}
+
+			.btn,
+			.icon-btn,
+			.primary-btn,
+			.toggle,
+			.tab {
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				min-height: 34px;
+				padding: 7px 11px;
+				background: #202428;
+				color: var(--text);
+				white-space: nowrap;
+			}
+
+			.icon-btn {
+				width: 34px;
+				padding: 0;
+			}
+
+			.primary-btn {
+				background: var(--cyan);
+				border-color: #7adfd7;
+				color: var(--ink);
+				font-weight: 800;
+			}
+
+			.toggle {
+				min-height: 28px;
+				padding: 4px 8px;
+				font-size: 12px;
+				border-radius: 7px;
+			}
+
+			.toggle.active {
+				border-color: #78d8d1;
+				background: #153c3a;
+				color: #c8fbf4;
+			}
+
+			.workspace {
+				display: grid;
+				grid-template-columns: minmax(0, 1fr) 430px;
+				min-height: 978px;
+			}
+
+			.stage {
+				display: grid;
+				grid-template-rows: minmax(0, 560px) auto;
+				min-width: 0;
+				background: #111314;
+			}
+
+			.preview-zone {
+				display: grid;
+				grid-template-columns: minmax(0, 1fr);
+				gap: 12px;
+				padding: 14px;
+				border-bottom: 1px solid var(--line);
+				min-height: 0;
+			}
+
+			.video-stack {
+				min-width: 0;
+				display: grid;
+				grid-template-rows: minmax(0, 1fr) auto;
+				gap: 10px;
+			}
+
+			.video-frame {
+				position: relative;
+				min-height: 330px;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background:
+					linear-gradient(120deg, rgba(255, 255, 255, 0.05), transparent 42%),
+					radial-gradient(circle at 70% 32%, rgba(95, 210, 201, 0.16), transparent 22%),
+					linear-gradient(180deg, #23282c, #0b0d0f 78%);
+				overflow: hidden;
+			}
+
+			.frame-person {
+				position: absolute;
+				left: 43%;
+				bottom: 16%;
+				width: 138px;
+				height: 210px;
+				border-radius: 70px 70px 18px 18px;
+				background:
+					radial-gradient(circle at 50% 20%, #c7a47e 0 19%, transparent 20%),
+					linear-gradient(180deg, #41505e 0 46%, #202830 47% 100%);
+				box-shadow: 0 24px 62px rgba(0, 0, 0, 0.4);
+			}
+
+			.frame-line {
+				position: absolute;
+				left: 0;
+				right: 0;
+				bottom: 68px;
+				height: 1px;
+				background: rgba(255, 255, 255, 0.08);
+			}
+
+			.video-osd {
+				position: absolute;
+				inset: auto 14px 14px 14px;
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 10px;
+			}
+
+			.scrub {
+				flex: 1;
+				height: 6px;
+				border-radius: 99px;
+				background: #0b0d0e;
+				overflow: hidden;
+			}
+
+			.scrub span {
+				display: block;
+				width: 38%;
+				height: 100%;
+				background: var(--playhead);
+			}
+
+			.readonly-subtitles {
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background: var(--panel);
+				padding: 10px 12px;
+				display: grid;
+				gap: 8px;
+			}
+
+			.subtitle-line {
+				display: grid;
+				grid-template-columns: 86px minmax(0, 1fr) auto;
+				align-items: center;
+				gap: 10px;
+				min-height: 32px;
+				padding: 7px 8px;
+				border-radius: 7px;
+				background: #191d20;
+				border: 1px solid var(--line-soft);
+			}
+
+			.subtitle-line.active {
+				border-color: rgba(95, 210, 201, 0.5);
+				background: #172927;
+			}
+
+			.subtitle-line b {
+				color: #d8dedb;
+				font-size: 12px;
+			}
+
+			.subtitle-line span {
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+				font-size: 13px;
+			}
+
+			.subtitle-line time {
+				color: var(--muted);
+				font-size: 12px;
+			}
+
+			.capture-panel,
+			.inspector,
+			.side-panel {
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background: var(--panel);
+				min-width: 0;
+			}
+
+			.panel-head {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 10px;
+				padding: 11px 12px;
+				border-bottom: 1px solid var(--line-soft);
+			}
+
+			.panel-head h2,
+			.panel-head h3 {
+				margin: 0;
+				font-size: 13px;
+			}
+
+			.capture-panel {
+				display: none;
+			}
+
+			.cover-card {
+				display: grid;
+				grid-template-columns: 104px minmax(0, 1fr);
+				gap: 10px;
+				padding: 12px;
+				border-bottom: 1px solid var(--line-soft);
+			}
+
+			.cover {
+				position: relative;
+				height: 76px;
+				border-radius: 8px;
+				border: 1px solid var(--line);
+				background:
+					radial-gradient(circle at 50% 30%, #ca9d78 0 17%, transparent 18%),
+					linear-gradient(180deg, #3a4654, #171b20);
+				overflow: hidden;
+			}
+
+			.cover::after {
+				content: "00:42:11";
+				position: absolute;
+				right: 6px;
+				bottom: 5px;
+				padding: 2px 5px;
+				border-radius: 5px;
+				background: rgba(0, 0, 0, 0.58);
+				color: #f5f1e7;
+				font-size: 10px;
+			}
+
+			.meta-grid {
+				padding: 12px;
+				display: grid;
+				gap: 10px;
+			}
+
+			.field {
+				display: grid;
+				gap: 5px;
+			}
+
+			.field label {
+				color: var(--muted);
+				font-size: 12px;
+			}
+
+			.field input,
+			.field textarea,
+			.field select {
+				width: 100%;
+				border: 1px solid var(--line);
+				border-radius: 7px;
+				background: #171a1c;
+				color: var(--text);
+				padding: 8px 9px;
+				outline: none;
+			}
+
+			.field textarea {
+				min-height: 76px;
+				resize: none;
+			}
+
+			.timeline-zone {
+				display: grid;
+				grid-template-rows: auto minmax(0, 1fr);
+				min-height: 480px;
+			}
+
+			.timeline-toolbar {
+				height: 58px;
+				display: grid;
+				grid-template-columns: auto auto minmax(200px, 1fr) auto;
+				align-items: center;
+				gap: 12px;
+				padding: 0 14px;
+				border-bottom: 1px solid var(--line);
+				background: #181b1d;
+			}
+
+			.transport {
+				display: flex;
+				align-items: center;
+				gap: 7px;
+			}
+
+			.timecode {
+				font-variant-numeric: tabular-nums;
+				font-weight: 800;
+				color: #fff5cf;
+				min-width: 150px;
+			}
+
+			.zoom-field {
+				display: grid;
+				grid-template-columns: 54px minmax(0, 1fr) 42px;
+				align-items: center;
+				gap: 8px;
+				color: var(--muted);
+				font-size: 12px;
+			}
+
+			.zoom-track {
+				height: 6px;
+				border-radius: 99px;
+				background: #0d1011;
+				border: 1px solid #30363a;
+				position: relative;
+			}
+
+			.zoom-track::after {
+				content: "";
+				position: absolute;
+				left: 0;
+				top: -1px;
+				width: 57%;
+				height: 6px;
+				border-radius: 99px;
+				background: var(--cyan);
+			}
+
+			.timeline-shell {
+				display: grid;
+				grid-template-columns: 178px minmax(0, 1fr);
+				min-height: 0;
+				background: #121415;
+			}
+
+			.track-labels {
+				border-right: 1px solid var(--line);
+				background: #171a1c;
+				padding-top: 30px;
+			}
+
+			.track-label {
+				height: 62px;
+				display: grid;
+				grid-template-columns: minmax(0, 1fr) auto;
+				gap: 8px;
+				align-items: center;
+				padding: 8px 10px;
+				border-bottom: 1px solid var(--line-soft);
+			}
+
+			.track-label.sub,
+			.track-label.tts {
+				height: 72px;
+			}
+
+			.track-title strong,
+			.track-title span {
+				display: block;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+
+			.track-title strong {
+				font-size: 12px;
+			}
+
+			.track-title span {
+				margin-top: 2px;
+				color: var(--muted);
+				font-size: 11px;
+			}
+
+			.track-buttons {
+				display: flex;
+				gap: 4px;
+			}
+
+			.track-mini {
+				width: 22px;
+				height: 22px;
+				border-radius: 6px;
+				border: 1px solid var(--line);
+				background: #24282c;
+				color: #dfe6e3;
+				font-size: 10px;
+			}
+
+			.track-mini.on {
+				border-color: #6ed8cf;
+				background: #143b38;
+				color: #c9fbf5;
+			}
+
+			.track-canvas {
+				min-width: 0;
+				overflow: hidden;
+				position: relative;
+			}
+
+			.ruler {
+				height: 30px;
+				position: relative;
+				border-bottom: 1px solid var(--line-soft);
+				background:
+					linear-gradient(90deg, rgba(255, 255, 255, 0.16) 1px, transparent 1px) 0 100% / 10% 9px no-repeat,
+					#151719;
+			}
+
+			.ruler span {
+				position: absolute;
+				top: 8px;
+				color: var(--muted);
+				font-size: 11px;
+				font-variant-numeric: tabular-nums;
+			}
+
+			.ruler span:nth-child(1) {
+				left: 0.5%;
+			}
+
+			.ruler span:nth-child(2) {
+				left: 18.5%;
+			}
+
+			.ruler span:nth-child(3) {
+				left: 38.5%;
+			}
+
+			.ruler span:nth-child(4) {
+				left: 58.5%;
+			}
+
+			.ruler span:nth-child(5) {
+				left: 78.5%;
+			}
+
+			.tracks {
+				position: relative;
+			}
+
+			.tracks::before {
+				content: "";
+				position: absolute;
+				inset: 0;
+				background:
+					linear-gradient(90deg, transparent 0 9.8%, rgba(255, 255, 255, 0.055) 10%, transparent 10.2%) 0 0 / 20% 100%,
+					linear-gradient(90deg, transparent 0 1.8%, rgba(255, 255, 255, 0.025) 2%, transparent 2.2%) 0 0 / 4% 100%;
+				pointer-events: none;
+			}
+
+			.track-row {
+				position: relative;
+				height: 62px;
+				border-bottom: 1px solid var(--line-soft);
+				background: var(--track);
+				overflow: hidden;
+			}
+
+			.track-row:nth-child(even) {
+				background: var(--track-alt);
+			}
+
+			.track-row.sub,
+			.track-row.tts {
+				height: 72px;
+			}
+
+			.wave {
+				position: absolute;
+				left: 0;
+				right: 0;
+				top: 9px;
+				height: 44px;
+				opacity: 0.9;
+				background:
+					linear-gradient(180deg, transparent 0 15%, rgba(95, 210, 201, 0.6) 16% 84%, transparent 85%),
+					repeating-linear-gradient(90deg, transparent 0 7px, rgba(95, 210, 201, 0.9) 7px 9px, transparent 9px 14px);
+				mask-image: linear-gradient(90deg, transparent 0, #000 2%, #000 98%, transparent 100%);
+			}
+
+			.wave.vocal {
+				background:
+					linear-gradient(180deg, transparent 0 22%, rgba(122, 164, 255, 0.7) 23% 77%, transparent 78%),
+					repeating-linear-gradient(90deg, transparent 0 9px, rgba(122, 164, 255, 0.9) 9px 11px, transparent 11px 16px);
+			}
+
+			.wave.music {
+				background:
+					linear-gradient(180deg, transparent 0 30%, rgba(215, 177, 93, 0.62) 31% 69%, transparent 70%),
+					repeating-linear-gradient(90deg, transparent 0 11px, rgba(215, 177, 93, 0.82) 11px 13px, transparent 13px 18px);
+				opacity: 0.82;
+			}
+
+			.selection {
+				position: absolute;
+				left: 28%;
+				top: 0;
+				bottom: 0;
+				width: 14%;
+				background: var(--selection);
+				border-left: 2px solid var(--cyan);
+				border-right: 2px solid var(--cyan);
+				z-index: 3;
+			}
+
+			.selection::before {
+				content: "样音选区 00:39:84 - 00:43:72";
+				position: absolute;
+				top: 6px;
+				left: 8px;
+				color: #dcfffb;
+				font-size: 11px;
+				white-space: nowrap;
+			}
+
+			.playhead {
+				position: absolute;
+				left: 36.5%;
+				top: -30px;
+				bottom: 0;
+				width: 2px;
+				background: var(--playhead);
+				z-index: 5;
+				box-shadow: 0 0 0 1px rgba(247, 211, 109, 0.2);
+			}
+
+			.playhead::before {
+				content: "";
+				position: absolute;
+				left: -6px;
+				top: 0;
+				width: 14px;
+				height: 11px;
+				background: var(--playhead);
+				clip-path: polygon(0 0, 100% 0, 50% 100%);
+			}
+
+			.subtitle-chip {
+				position: absolute;
+				top: 13px;
+				height: 44px;
+				border-radius: 7px;
+				border: 1px solid #59646c;
+				background: #242a2f;
+				padding: 7px 8px;
+				font-size: 12px;
+				overflow: hidden;
+			}
+
+			.subtitle-chip b,
+			.subtitle-chip span {
+				display: block;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+
+			.subtitle-chip b {
+				color: #e9efe9;
+			}
+
+			.subtitle-chip span {
+				margin-top: 3px;
+				color: var(--muted);
+			}
+
+			.subtitle-chip.active {
+				border-color: #8ce4dd;
+				background: #173835;
+			}
+
+			.clip {
+				position: absolute;
+				top: 14px;
+				height: 42px;
+				border-radius: 8px;
+				border: 1px solid #806bd7;
+				background:
+					linear-gradient(90deg, rgba(255, 255, 255, 0.14) 0 2px, transparent 2px 10px) 0 50% / 15px 18px,
+					linear-gradient(180deg, #5c52a6, #38316c);
+				padding: 8px 10px;
+				color: #f4efff;
+				font-size: 12px;
+				box-shadow: 0 9px 22px rgba(0, 0, 0, 0.2);
+			}
+
+			.clip::before,
+			.clip::after {
+				content: "";
+				position: absolute;
+				top: 8px;
+				bottom: 8px;
+				width: 4px;
+				border-radius: 99px;
+				background: rgba(255, 255, 255, 0.65);
+			}
+
+			.clip::before {
+				left: 4px;
+			}
+
+			.clip::after {
+				right: 4px;
+			}
+
+			.side {
+				border-left: 1px solid var(--line);
+				background: var(--shell);
+				padding: 14px 12px;
+				display: grid;
+				align-content: start;
+				gap: 12px;
+				min-width: 0;
+			}
+
+			.tabs {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 6px;
+				padding: 6px;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background: #171a1c;
+			}
+
+			.tab {
+				min-height: 32px;
+				border-color: transparent;
+				background: transparent;
+				font-size: 12px;
+			}
+
+			.tab.active {
+				background: var(--panel-2);
+				border-color: var(--line);
+			}
+
+			.voice-card {
+				display: grid;
+				grid-template-columns: 68px minmax(0, 1fr) auto;
+				gap: 10px;
+				padding: 10px;
+				border-bottom: 1px solid var(--line-soft);
+				align-items: center;
+			}
+
+			.voice-card.active {
+				background: #172927;
+			}
+
+			.voice-card:last-child {
+				border-bottom: 0;
+			}
+
+			.avatar-cover {
+				height: 54px;
+				border-radius: 8px;
+				border: 1px solid var(--line);
+				background:
+					radial-gradient(circle at 50% 32%, #c99b77 0 16%, transparent 17%),
+					linear-gradient(180deg, #465462, #1a1f24);
+				position: relative;
+				overflow: hidden;
+			}
+
+			.avatar-cover.blue {
+				background:
+					radial-gradient(circle at 50% 32%, #c99b77 0 16%, transparent 17%),
+					linear-gradient(180deg, #37557b, #161f2c);
+			}
+
+			.voice-main strong,
+			.voice-main span {
+				display: block;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+
+			.voice-main strong {
+				font-size: 12px;
+			}
+
+			.voice-main span {
+				margin-top: 3px;
+				color: var(--muted);
+				font-size: 11px;
+			}
+
+			.mini-wave {
+				margin-top: 7px;
+				height: 18px;
+				border-radius: 5px;
+				background:
+					linear-gradient(90deg, rgba(95, 210, 201, 0.78) 2px, transparent 2px 6px) 0 0 / 9px 100%,
+					#151819;
+				opacity: 0.8;
+			}
+
+			.card-actions {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 5px;
+			}
+
+			.tiny-btn {
+				width: 28px;
+				height: 26px;
+				border: 1px solid var(--line);
+				border-radius: 7px;
+				background: #202428;
+				color: var(--text);
+				font-size: 11px;
+			}
+
+			.detail-row,
+			.recipe-card,
+			.candidate-card {
+				border-top: 1px solid var(--line-soft);
+				padding: 10px 12px;
+			}
+
+			.detail-row {
+				display: grid;
+				grid-template-columns: 78px minmax(0, 1fr);
+				gap: 8px;
+				color: var(--muted);
+				font-size: 12px;
+			}
+
+			.detail-row strong {
+				color: var(--text);
+			}
+
+			.tag-row {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 6px;
+				padding: 10px 12px;
+				border-top: 1px solid var(--line-soft);
+			}
+
+			.tag {
+				border: 1px solid var(--line);
+				border-radius: 999px;
+				padding: 4px 8px;
+				background: #1a1e21;
+				color: #d8e1df;
+				font-size: 11px;
+			}
+
+			.recipe-card {
+				display: grid;
+				gap: 8px;
+				background: #1b1f22;
+			}
+
+			.recipe-card strong,
+			.candidate-card strong {
+				font-size: 12px;
+			}
+
+			.recipe-card p,
+			.candidate-card p {
+				margin: 0;
+				color: var(--muted);
+				font-size: 11px;
+				line-height: 1.45;
+			}
+
+			.recipe-actions {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 7px;
+			}
+
+			.recipe-actions .primary-btn {
+				grid-column: span 2;
+			}
+
+			.candidate-card {
+				display: grid;
+				grid-template-columns: minmax(0, 1fr) auto;
+				gap: 8px;
+				align-items: center;
+			}
+
+			.lab-grid {
+				padding: 12px;
+				display: grid;
+				gap: 11px;
+			}
+
+			.param-row {
+				display: grid;
+				grid-template-columns: 76px minmax(0, 1fr) 42px;
+				align-items: center;
+				gap: 8px;
+				color: var(--muted);
+				font-size: 12px;
+			}
+
+			.slider {
+				height: 6px;
+				border-radius: 99px;
+				background: #111416;
+				border: 1px solid #333a40;
+				position: relative;
+			}
+
+			.slider::after {
+				content: "";
+				position: absolute;
+				left: 0;
+				top: -1px;
+				height: 6px;
+				border-radius: 99px;
+				background: var(--cyan);
+			}
+
+			.param-row:nth-child(1) .slider::after {
+				width: 62%;
+			}
+
+			.param-row:nth-child(2) .slider::after {
+				width: 46%;
+			}
+
+			.param-row:nth-child(3) .slider::after {
+				width: 71%;
+			}
+
+			.version {
+				display: grid;
+				grid-template-columns: minmax(0, 1fr) auto;
+				gap: 8px;
+				align-items: center;
+				padding: 9px 12px;
+				border-top: 1px solid var(--line-soft);
+			}
+
+			.version strong,
+			.version span {
+				display: block;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+
+			.version strong {
+				font-size: 12px;
+			}
+
+			.version span {
+				color: var(--muted);
+				font-size: 11px;
+				margin-top: 3px;
+			}
+
+			.action-bar {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 8px;
+				padding: 12px;
+				border-top: 1px solid var(--line-soft);
+			}
+
+			@media (max-width: 1180px) {
+				.workspace,
+				.preview-zone {
+					grid-template-columns: 1fr;
+				}
+
+				.side {
+					border-left: 0;
+					border-top: 1px solid var(--line);
+				}
+
+				.capture-panel {
+					display: none;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<div class="page">
+			<header class="design-head">
+				<div>
+						<h1>视频本土化配音剪辑台 V2.1</h1>
+						<p>把“样音、参数组、生成版本”沉淀进项目音色库；右侧根据当前选择打开音色详情、保存选区或字幕编辑。</p>
+				</div>
+					<div class="row">
+						<a class="design-link" href="./video-localization-cutting-studio-v3-options.html">查看补充设计</a>
+						<a class="design-link" href="./video-localization-cutting-studio.html">返回上一版</a>
+					</div>
+			</header>
+
+			<main class="app">
+				<header class="topbar">
+					<div class="brand">
+						<div class="brand-mark"></div>
+						<div>
+							<strong>本土化项目：reset-smoke</strong>
+							<span>源视频 01:18:24 · 目标语言 中文普通话</span>
+						</div>
+					</div>
+					<div class="top-status">
+						<span class="badge ok">视频已导入</span>
+						<span class="badge ok">人声/背景已分离</span>
+						<span class="badge ok">逐字时间戳已生成</span>
+						<span class="badge warn">12 条字幕待确认</span>
+						<span class="badge info">项目音色 4 个</span>
+					</div>
+					<div class="top-actions">
+						<button class="btn">导入 SRT</button>
+						<button class="btn">分段导出</button>
+						<button class="primary-btn">合成输出</button>
+					</div>
+				</header>
+
+				<section class="workspace">
+					<div class="stage">
+						<section class="preview-zone">
+							<div class="video-stack">
+								<div class="video-frame">
+									<div class="frame-person"></div>
+									<div class="frame-line"></div>
+									<div class="video-osd">
+										<button class="icon-btn">▶</button>
+										<div class="scrub"><span></span></div>
+										<span class="small">00:42:11 / 01:18:24</span>
+										<button class="btn">截取封面帧</button>
+									</div>
+								</div>
+								<div class="readonly-subtitles">
+										<div class="subtitle-line">
+											<b>原文/ASR</b>
+											<span>We need to preserve the timing, not just translate the words.</span>
+											<time>00:39:84</time>
+										</div>
+									<div class="subtitle-line active">
+										<b>本土化</b>
+										<span>我们要保留原来的节奏，而不只是把文字翻译出来。</span>
+										<time>00:39:84</time>
+									</div>
+								</div>
+							</div>
+
+							<aside class="capture-panel">
+								<div class="panel-head">
+									<h2>选区保存为项目音色</h2>
+									<span class="badge warn">未保存</span>
+								</div>
+								<div class="cover-card">
+									<div class="cover"></div>
+									<div>
+										<strong>Sarah · 稳定讲述</strong>
+										<p class="small">选中人声轨 3.88 秒，可从视频帧生成封面，之后在本项目内作为克隆样音。</p>
+									</div>
+								</div>
+								<div class="meta-grid">
+									<div class="field">
+										<label>标题</label>
+										<input value="Sarah / calm explainer / clean 4s" />
+									</div>
+									<div class="field">
+										<label>人物与情绪</label>
+										<input value="Sarah，平稳、克制、解释性语气" />
+									</div>
+									<div class="field">
+										<label>样音 ASR</label>
+										<textarea>We need to preserve the timing, not just translate the words.</textarea>
+									</div>
+									<div class="field">
+										<label>备注</label>
+										<textarea>背景音乐较低，人声清晰。适合第 8-20 段同人物克隆。</textarea>
+									</div>
+									<button class="primary-btn">保存到项目音色库</button>
+								</div>
+							</aside>
+						</section>
+
+						<section class="timeline-zone">
+							<div class="timeline-toolbar">
+								<div class="transport">
+									<button class="icon-btn">⏮</button>
+									<button class="icon-btn">▶</button>
+									<button class="icon-btn">⏭</button>
+									<span class="timecode">00:42:11.208</span>
+								</div>
+								<div class="row">
+									<button class="toggle active">吸附</button>
+									<button class="toggle">循环选区</button>
+									<button class="toggle">波形峰值</button>
+								</div>
+								<div class="zoom-field">
+									<span>时间缩放</span>
+									<div class="zoom-track"></div>
+									<strong>3.2x</strong>
+								</div>
+								<div class="row">
+									<button class="icon-btn">↶</button>
+									<button class="icon-btn">↷</button>
+									<button class="btn">剪切</button>
+									<button class="btn">删除</button>
+									<button class="primary-btn">生成到选区</button>
+								</div>
+							</div>
+
+							<div class="timeline-shell">
+								<div class="track-labels">
+									<div class="track-label">
+										<div class="track-title"><strong>原音轨</strong><span>完整视频声音</span></div>
+										<div class="track-buttons"><button class="track-mini">M</button><button class="track-mini">S</button></div>
+									</div>
+									<div class="track-label">
+										<div class="track-title"><strong>人声轨</strong><span>分离后人声</span></div>
+										<div class="track-buttons"><button class="track-mini on">M</button><button class="track-mini">S</button></div>
+									</div>
+									<div class="track-label">
+										<div class="track-title"><strong>背景音乐</strong><span>伴奏/环境声</span></div>
+										<div class="track-buttons"><button class="track-mini">M</button><button class="track-mini">S</button></div>
+									</div>
+									<div class="track-label sub">
+										<div class="track-title"><strong>字幕轨</strong><span>双击编辑 SRT</span></div>
+										<div class="track-buttons"><button class="track-mini">E</button></div>
+									</div>
+									<div class="track-label tts">
+										<div class="track-title"><strong>中文配音</strong><span>生成片段可移动/裁切</span></div>
+										<div class="track-buttons"><button class="track-mini">M</button><button class="track-mini">S</button></div>
+									</div>
+								</div>
+								<div class="track-canvas">
+									<div class="ruler">
+										<span>00:36</span>
+										<span>00:39</span>
+										<span>00:42</span>
+										<span>00:45</span>
+										<span>00:48</span>
+									</div>
+									<div class="tracks">
+										<div class="selection"></div>
+										<div class="playhead"></div>
+										<div class="track-row"><div class="wave"></div></div>
+										<div class="track-row"><div class="wave vocal"></div></div>
+										<div class="track-row"><div class="wave music"></div></div>
+										<div class="track-row sub">
+											<div class="subtitle-chip" style="left: 8%; width: 18%"><b>原句 007</b><span>这里需要保留节奏。</span></div>
+												<div class="subtitle-chip active" style="left: 28%; width: 20%"><b>本土化 008 · 右侧编辑</b><span>我们要保留原来的节奏...</span></div>
+											<div class="subtitle-chip" style="left: 51%; width: 22%"><b>本土化 009</b><span>后面再交给配音合成。</span></div>
+										</div>
+										<div class="track-row tts">
+											<div class="clip" style="left: 29.5%; width: 17%">Sarah_CN_v3 · 入点 +0.18s</div>
+											<div class="clip" style="left: 54%; width: 14%; opacity: 0.65">待重生成</div>
+										</div>
+										</div>
+								</div>
+							</div>
+						</section>
+					</div>
+
+						<aside class="side">
+							<div class="tabs">
+								<button class="tab active">项目音色库</button>
+								<button class="tab">保存当前选区</button>
+							</div>
+
+							<section class="side-panel">
+								<div class="panel-head">
+									<h3>已保存音色</h3>
+									<button class="btn">筛选</button>
+								</div>
+								<div class="voice-card active">
+									<div class="avatar-cover"></div>
+									<div class="voice-main">
+										<strong>Sarah · calm explainer</strong>
+										<span>4.0s · 清晰 · 平稳解释 · 3 组参数</span>
+										<div class="mini-wave"></div>
+									</div>
+									<div class="card-actions"><button class="tiny-btn">▶</button><button class="tiny-btn">⋯</button></div>
+								</div>
+								<div class="voice-card">
+									<div class="avatar-cover blue"></div>
+									<div class="voice-main">
+										<strong>Host · excited intro</strong>
+										<span>5.6s · 稍快 · 适合开场 · 1 组参数</span>
+										<div class="mini-wave"></div>
+									</div>
+									<div class="card-actions"><button class="tiny-btn">▶</button><button class="tiny-btn">⋯</button></div>
+								</div>
+								<div class="voice-card">
+									<div class="avatar-cover"></div>
+									<div class="voice-main">
+										<strong>Guest · low voice</strong>
+										<span>3.2s · 背景音乐低 · 待复核</span>
+										<div class="mini-wave"></div>
+									</div>
+									<div class="card-actions"><button class="tiny-btn">▶</button><button class="tiny-btn">⋯</button></div>
+								</div>
+							</section>
+
+							<section class="side-panel">
+								<div class="panel-head">
+									<h3>音色详情：Sarah</h3>
+									<div class="row">
+										<button class="btn">编辑</button>
+										<button class="btn">删除</button>
+									</div>
+								</div>
+								<div class="detail-row"><span>样音来源</span><strong>人声轨 00:39:84 - 00:43:72</strong></div>
+								<div class="detail-row"><span>原文/ASR</span><strong>We need to preserve the timing...</strong></div>
+								<div class="tag-row">
+									<span class="tag">Sarah</span>
+									<span class="tag">平稳</span>
+									<span class="tag">室内旁白</span>
+									<span class="tag">已校验 ASR</span>
+								</div>
+								<div class="recipe-card">
+									<strong>A 组 · 室内解释声</strong>
+									<p>参数来自首次跳转到语音合成后的成功版本。适合课程/解说段落，速度 0.96，相似度 0.74。</p>
+									<div class="candidate-card">
+										<div><strong>v3 · 节奏最接近</strong><p>3.86s · 已绑定到 008 · 可试听对比</p></div>
+										<button class="btn">试听</button>
+									</div>
+									<div class="recipe-actions">
+										<button class="primary-btn">一键生成当前台词</button>
+										<button class="btn">带参数去调整</button>
+										<button class="btn">仅带样音去生成</button>
+									</div>
+								</div>
+								<div class="recipe-card">
+									<strong>B 组 · 室外采访声</strong>
+									<p>稍快、气息更开，备注为“外景口播”。下面可以继续挂多个生成版本。</p>
+									<div class="recipe-actions">
+										<button class="primary-btn">一键生成当前台词</button>
+										<button class="btn">带参数去调整</button>
+										<button class="btn">仅带样音去生成</button>
+									</div>
+								</div>
+							</section>
+
+							<section class="side-panel">
+								<div class="panel-head">
+									<h3>当前操作：编辑字幕 008</h3>
+									<span class="badge info">侧栏编辑</span>
+								</div>
+								<div class="lab-grid">
+									<div class="field">
+										<label>原文/ASR</label>
+										<textarea readonly>We need to preserve the timing, not just translate the words.</textarea>
+									</div>
+									<div class="field">
+										<label>本土化字幕</label>
+										<textarea>我们要保留原来的节奏，而不只是把文字翻译出来。</textarea>
+									</div>
+									<div class="field">
+										<label>TTS 文本</label>
+										<textarea>我们要保留原来的节奏，而不只是把文字翻译出来。</textarea>
+									</div>
+									<div class="row">
+										<button class="btn">取消</button>
+										<button class="primary-btn" style="flex: 1">保存字幕</button>
+									</div>
+								</div>
+							</section>
+
+							<section class="side-panel">
+								<div class="panel-head">
+									<h3>保存当前选区为音色</h3>
+									<span class="badge warn">新样音</span>
+								</div>
+								<div class="cover-card">
+									<div class="cover"></div>
+									<div>
+										<strong>从选区生成项目音色</strong>
+										<p class="small">封面帧、人物、情绪、标签会和音色库详情合并保存。</p>
+									</div>
+								</div>
+								<div class="meta-grid">
+									<div class="field"><label>名称</label><input value="Sarah · calm explainer" /></div>
+									<div class="field"><label>标签</label><input value="Sarah, 平稳, 室内旁白, 已校验 ASR" /></div>
+									<div class="field"><label>描述</label><textarea>背景音乐较低，人声清晰。适合第 8-20 段同人物克隆。</textarea></div>
+									<button class="primary-btn">保存到项目音色库</button>
+								</div>
+							</section>
+
+						<section class="side-panel">
+							<div class="panel-head">
+								<h3>输出范围</h3>
+								<span class="small">按时间轴状态渲染</span>
+							</div>
+							<div class="action-bar">
+								<button class="btn">导出选中音频</button>
+								<button class="btn">导出全部分段</button>
+								<button class="btn">导出 SRT</button>
+								<button class="primary-btn">渲染视频</button>
+							</div>
+						</section>
+					</aside>
+				</section>
+			</main>
+		</div>
+	</body>
+</html>

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,7 @@ from app.domains.video_localization.schemas import VideoLocalizationCue
 from app.services import audio_tools, settings_store
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
+PROJECT_DIR_NAME_KEY = "video_localization_dir_name"
 
 
 async def save_uploaded_video(project_id: str, file: UploadFile) -> tuple[Path, bytes]:
@@ -36,7 +39,47 @@ async def save_uploaded_video(project_id: str, file: UploadFile) -> tuple[Path, 
 
 def project_video_localization_dir(project_id: str) -> Path:
     settings_store.ensure_directories()
-    return settings_store.expand_path(settings_store.get().project_dir) / project_id / "video_localization"
+    return settings_store.expand_path(settings_store.get().project_dir) / _stored_project_dir_name(project_id) / "video_localization"
+
+
+def project_video_localization_dir_for_name(project_id: str, project_name: str) -> Path:
+    settings_store.ensure_directories()
+    return settings_store.expand_path(settings_store.get().project_dir) / project_dir_name(project_id, project_name) / "video_localization"
+
+
+def project_dir_name(project_id: str, project_name: str) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", project_name.strip())
+    cleaned = re.sub(r"\s+", "_", cleaned).strip("._-")
+    if not cleaned:
+        cleaned = "video-localization"
+    if len(cleaned) > 96:
+        cleaned = cleaned[:96].rstrip("._-") or "video-localization"
+    return f"{cleaned}--{project_id}"
+
+
+def _stored_project_dir_name(project_id: str) -> str:
+    try:
+        from app.services import project_store
+
+        project = project_store.get_project(project_id)
+    except Exception:
+        project = None
+    if not project:
+        return project_id
+    value = project.parameters.get(PROJECT_DIR_NAME_KEY)
+    return str(value).strip() if value else project_id
+
+
+def open_project_video_localization_dir(project_id: str) -> dict[str, str]:
+    path = project_video_localization_dir(project_id)
+    path.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    elif os.name == "nt":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
+    return {"status": "opened", "key": "video_localization_project", "path": str(path)}
 
 
 def clear_project_video_localization_dir(project_id: str) -> None:
@@ -164,6 +207,31 @@ def cut_audio_clip(source_path: Path, destination: Path, start_ms: int, end_ms: 
     if result.returncode != 0 or not destination.exists():
         destination.unlink(missing_ok=True)
         raise AppException(500, "VIDEO_LOCALIZATION_REFERENCE_CLIP_FAILED", "Failed to create reference clip")
+    return destination
+
+
+def extract_video_frame(source_path: Path, destination: Path, at_ms: int) -> Path:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise AppException(500, "VIDEO_LOCALIZATION_FFMPEG_MISSING", "ffmpeg is required to capture reference covers")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        ffmpeg,
+        "-y",
+        "-ss",
+        f"{max(0, at_ms) / 1000:.3f}",
+        "-i",
+        str(source_path),
+        "-frames:v",
+        "1",
+        "-q:v",
+        "2",
+        str(destination),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0 or not destination.exists() or destination.stat().st_size <= 0:
+        destination.unlink(missing_ok=True)
+        raise AppException(500, "VIDEO_LOCALIZATION_REFERENCE_COVER_FAILED", "Failed to capture reference cover frame")
     return destination
 
 

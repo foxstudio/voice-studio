@@ -1,0 +1,1292 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>视频本土化配音 UI 设计稿</title>
+		<style>
+			:root {
+				--bg: #0f1112;
+				--panel: #181a1d;
+				--panel-2: #202327;
+				--panel-3: #252a2e;
+				--line: #343940;
+				--text: #f1f3ef;
+				--muted: #9da7a8;
+				--soft: #c9d0cb;
+				--teal: #48b9aa;
+				--blue: #7f9dff;
+				--amber: #d7a948;
+				--red: #e06a60;
+				--green: #70c584;
+				--ink: #0f1112;
+			}
+
+			* {
+				box-sizing: border-box;
+			}
+
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--text);
+				font-family:
+					Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+					"PingFang SC", "Microsoft YaHei", sans-serif;
+				letter-spacing: 0;
+			}
+
+			button,
+			input,
+			select,
+			textarea {
+				font: inherit;
+				letter-spacing: 0;
+			}
+
+			.design-page {
+				padding: 28px;
+			}
+
+			.design-head {
+				max-width: 1500px;
+				margin: 0 auto 22px;
+				display: flex;
+				align-items: flex-end;
+				justify-content: space-between;
+				gap: 20px;
+			}
+
+			.design-head h1,
+			.design-head p {
+				margin: 0;
+			}
+
+			.design-head h1 {
+				font-size: 28px;
+				line-height: 1.1;
+			}
+
+			.design-head p {
+				margin-top: 8px;
+				color: var(--muted);
+				font-size: 14px;
+			}
+
+			.option-nav {
+				display: flex;
+				gap: 8px;
+				flex-wrap: wrap;
+			}
+
+			.option-nav a {
+				color: var(--soft);
+				text-decoration: none;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 8px 11px;
+				background: #16181a;
+				font-size: 13px;
+			}
+
+			.option {
+				max-width: 1500px;
+				margin: 0 auto 32px;
+			}
+
+			.option-title {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 14px;
+				margin-bottom: 10px;
+			}
+
+			.option-title h2,
+			.option-title p {
+				margin: 0;
+			}
+
+			.option-title h2 {
+				font-size: 18px;
+			}
+
+			.option-title p {
+				color: var(--muted);
+				font-size: 13px;
+			}
+
+			.mock-screen {
+				min-height: 820px;
+				border: 1px solid #3a4045;
+				border-radius: 10px;
+				background:
+					linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 90px),
+					#111315;
+				overflow: hidden;
+				box-shadow: 0 26px 80px rgba(0, 0, 0, 0.34);
+			}
+
+			.mock-topbar {
+				height: 58px;
+				display: grid;
+				grid-template-columns: minmax(240px, 1fr) auto auto;
+				align-items: center;
+				gap: 12px;
+				border-bottom: 1px solid var(--line);
+				padding: 0 18px;
+				background: #151719;
+			}
+
+			.brand {
+				display: flex;
+				align-items: center;
+				gap: 10px;
+				min-width: 0;
+			}
+
+			.brand-mark {
+				width: 28px;
+				height: 28px;
+				border-radius: 8px;
+				background:
+					linear-gradient(135deg, var(--teal), transparent 56%),
+					linear-gradient(45deg, var(--amber), transparent 62%),
+					#252a2e;
+				border: 1px solid rgba(255, 255, 255, 0.15);
+			}
+
+			.brand strong {
+				display: block;
+				font-size: 14px;
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+			}
+
+			.brand span,
+			.small {
+				color: var(--muted);
+				font-size: 12px;
+			}
+
+			.status-pill,
+			.badge,
+			.step-state {
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				gap: 6px;
+				min-height: 24px;
+				border: 1px solid var(--line);
+				border-radius: 7px;
+				padding: 4px 8px;
+				color: var(--soft);
+				background: #181b1e;
+				font-size: 12px;
+				white-space: nowrap;
+			}
+
+			.badge.ok,
+			.step-state.ok {
+				color: #b9ebca;
+				border-color: #34694a;
+				background: #16251c;
+			}
+
+			.badge.warn,
+			.step-state.warn {
+				color: #f1d18a;
+				border-color: #6a5324;
+				background: #2a2112;
+			}
+
+			.badge.fail,
+			.step-state.fail {
+				color: #ffb4ae;
+				border-color: #71332e;
+				background: #2a1715;
+			}
+
+			.primary-btn,
+			.ghost-btn,
+			.icon-btn,
+			.row-btn {
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				min-height: 34px;
+				padding: 7px 12px;
+				color: var(--text);
+				background: #1a1d20;
+			}
+
+			.primary-btn {
+				background: var(--teal);
+				color: var(--ink);
+				border-color: #63d5c8;
+				font-weight: 750;
+			}
+
+			.ghost-btn {
+				color: var(--soft);
+			}
+
+			.icon-btn {
+				width: 34px;
+				padding: 0;
+			}
+
+			.layout-a {
+				display: grid;
+				grid-template-columns: 232px minmax(0, 1fr) 338px;
+				min-height: 762px;
+			}
+
+			.stage-rail {
+				border-right: 1px solid var(--line);
+				padding: 16px 12px;
+				background: #141618;
+				display: grid;
+				grid-template-rows: auto 1fr auto;
+				gap: 16px;
+			}
+
+			.stage-list {
+				display: grid;
+				gap: 8px;
+			}
+
+			.stage-item {
+				display: grid;
+				grid-template-columns: 28px minmax(0, 1fr);
+				gap: 10px;
+				align-items: center;
+				padding: 10px;
+				border-radius: 8px;
+				color: var(--muted);
+				border: 1px solid transparent;
+			}
+
+			.stage-item.active {
+				color: var(--text);
+				background: #202429;
+				border-color: #3c454e;
+			}
+
+			.stage-dot {
+				width: 26px;
+				height: 26px;
+				border-radius: 8px;
+				display: grid;
+				place-items: center;
+				background: #22272c;
+				font-size: 12px;
+				font-weight: 800;
+			}
+
+			.stage-item.done .stage-dot {
+				background: #1d3b2b;
+				color: #bceacb;
+			}
+
+			.stage-item.active .stage-dot {
+				background: var(--teal);
+				color: var(--ink);
+			}
+
+			.stage-item strong {
+				font-size: 13px;
+			}
+
+			.stage-item span {
+				display: block;
+				margin-top: 2px;
+				font-size: 11px;
+			}
+
+			.main-area {
+				padding: 18px;
+				min-width: 0;
+			}
+
+			.work-hero {
+				display: grid;
+				grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+				gap: 14px;
+				margin-bottom: 14px;
+			}
+
+			.panel {
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background: var(--panel);
+			}
+
+			.panel.pad {
+				padding: 14px;
+			}
+
+			.panel-head {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 12px;
+				margin-bottom: 12px;
+			}
+
+			.panel-head h3,
+			.panel-head p {
+				margin: 0;
+			}
+
+			.panel-head h3 {
+				font-size: 16px;
+			}
+
+			.panel-head p {
+				color: var(--muted);
+				font-size: 12px;
+			}
+
+			.video-tile {
+				aspect-ratio: 16 / 9;
+				border-radius: 8px;
+				border: 1px solid #3c4349;
+				background:
+					linear-gradient(155deg, rgba(72, 185, 170, 0.22), transparent 34%),
+					linear-gradient(25deg, rgba(215, 169, 72, 0.2), transparent 32%),
+					linear-gradient(180deg, #2c3034, #141719);
+				position: relative;
+				overflow: hidden;
+			}
+
+			.video-tile::before {
+				content: "";
+				position: absolute;
+				inset: 11% 8%;
+				border: 1px solid rgba(255, 255, 255, 0.1);
+				border-radius: 8px;
+				background:
+					linear-gradient(90deg, rgba(255, 255, 255, 0.05), transparent 44%),
+					repeating-linear-gradient(90deg, transparent 0 54px, rgba(255, 255, 255, 0.08) 55px 56px);
+			}
+
+			.subtitle-band {
+				position: absolute;
+				left: 8%;
+				right: 8%;
+				bottom: 13%;
+				text-align: center;
+				font-weight: 750;
+				text-shadow: 0 2px 14px rgba(0, 0, 0, 0.8);
+			}
+
+			.subtitle-band span {
+				display: block;
+				margin-top: 4px;
+				color: #d7dedc;
+				font-size: 12px;
+				font-weight: 500;
+			}
+
+			.next-card {
+				display: grid;
+				gap: 12px;
+				background: #1c2022;
+			}
+
+			.next-card h2 {
+				margin: 0;
+				font-size: 22px;
+				line-height: 1.25;
+			}
+
+			.action-grid {
+				display: grid;
+				grid-template-columns: repeat(2, minmax(0, 1fr));
+				gap: 10px;
+			}
+
+			.action-tile {
+				display: grid;
+				gap: 8px;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background: #15181b;
+				padding: 12px;
+			}
+
+			.action-tile strong {
+				font-size: 13px;
+			}
+
+			.route-map {
+				display: grid;
+				grid-template-columns: repeat(5, minmax(0, 1fr));
+				gap: 10px;
+			}
+
+			.route-step {
+				min-height: 104px;
+				display: grid;
+				align-content: space-between;
+				gap: 8px;
+				padding: 12px;
+				border-radius: 8px;
+				background: #171a1d;
+				border: 1px solid var(--line);
+			}
+
+			.route-step.active {
+				border-color: #5dcfc0;
+				box-shadow: inset 0 0 0 1px rgba(72, 185, 170, 0.25);
+			}
+
+			.route-step strong {
+				font-size: 13px;
+			}
+
+			.inspector {
+				border-left: 1px solid var(--line);
+				background: #141719;
+				padding: 16px 12px;
+				display: grid;
+				align-content: start;
+				gap: 12px;
+			}
+
+			.issue-list {
+				display: grid;
+				gap: 8px;
+			}
+
+			.issue {
+				display: grid;
+				gap: 8px;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 10px;
+				background: #1b1e21;
+			}
+
+			.issue-top {
+				display: flex;
+				justify-content: space-between;
+				gap: 8px;
+			}
+
+			.issue strong {
+				font-size: 13px;
+			}
+
+			.row-btn {
+				min-height: 30px;
+				padding: 5px 9px;
+				font-size: 12px;
+			}
+
+			.activity {
+				display: grid;
+				gap: 7px;
+			}
+
+			.progress-line {
+				height: 8px;
+				border-radius: 8px;
+				background: #272c31;
+				overflow: hidden;
+			}
+
+			.progress-line span {
+				display: block;
+				height: 100%;
+				border-radius: inherit;
+				background: linear-gradient(90deg, var(--teal), var(--amber));
+			}
+
+			.layout-b {
+				display: grid;
+				grid-template-columns: 320px minmax(0, 1fr) 322px;
+				min-height: 762px;
+			}
+
+			.sentence-pane {
+				border-right: 1px solid var(--line);
+				background: #141719;
+				padding: 14px 12px;
+				display: grid;
+				grid-template-rows: auto auto 1fr;
+				gap: 12px;
+			}
+
+			.search-row {
+				display: grid;
+				grid-template-columns: 1fr auto;
+				gap: 8px;
+			}
+
+			.search-row input,
+			.fake-select,
+			.text-field,
+			textarea {
+				width: 100%;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background: #101214;
+				color: var(--text);
+				padding: 8px 10px;
+				min-height: 36px;
+			}
+
+			.sentence-list {
+				display: grid;
+				gap: 8px;
+				align-content: start;
+				overflow: hidden;
+			}
+
+			.sentence-card {
+				display: grid;
+				gap: 7px;
+				padding: 10px;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background: #1a1d20;
+			}
+
+			.sentence-card.active {
+				border-color: #5dcfc0;
+				background: #1c2526;
+			}
+
+			.sentence-row {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 8px;
+			}
+
+			.sentence-card strong {
+				font-size: 13px;
+				line-height: 1.42;
+			}
+
+			.editor-stage {
+				padding: 16px;
+				display: grid;
+				grid-template-rows: auto auto 1fr;
+				gap: 12px;
+				min-width: 0;
+			}
+
+			.player-strip {
+				display: grid;
+				grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.9fr);
+				gap: 12px;
+			}
+
+			.waveform {
+				height: 126px;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background: #121517;
+				padding: 12px;
+				position: relative;
+				overflow: hidden;
+			}
+
+			.wave-bars {
+				position: absolute;
+				inset: 40px 12px 24px;
+				display: grid;
+				grid-template-columns: repeat(44, 1fr);
+				align-items: center;
+				gap: 3px;
+			}
+
+			.wave-bars i {
+				display: block;
+				border-radius: 4px;
+				background: #4a5559;
+				height: var(--h);
+			}
+
+			.wave-select {
+				position: absolute;
+				left: 21%;
+				right: 43%;
+				top: 28px;
+				bottom: 18px;
+				border-left: 2px solid var(--teal);
+				border-right: 2px solid var(--teal);
+				background: rgba(72, 185, 170, 0.12);
+			}
+
+			.track-labels {
+				display: flex;
+				justify-content: space-between;
+				color: var(--muted);
+				font-size: 11px;
+			}
+
+			.text-editor-grid {
+				display: grid;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				gap: 12px;
+			}
+
+			.text-column {
+				display: grid;
+				gap: 8px;
+			}
+
+			.text-column textarea {
+				min-height: 150px;
+				resize: none;
+				line-height: 1.5;
+			}
+
+			.cue-actions {
+				display: grid;
+				grid-template-columns: repeat(4, minmax(0, 1fr));
+				gap: 10px;
+			}
+
+			.side-checker {
+				border-left: 1px solid var(--line);
+				padding: 14px 12px;
+				background: #141719;
+				display: grid;
+				align-content: start;
+				gap: 12px;
+			}
+
+			.voice-card {
+				display: grid;
+				gap: 10px;
+				padding: 12px;
+				border-radius: 8px;
+				border: 1px solid var(--line);
+				background: #1a1d20;
+			}
+
+			.voice-sample {
+				height: 42px;
+				border-radius: 8px;
+				background:
+					repeating-linear-gradient(90deg, #354044 0 5px, transparent 5px 11px),
+					#111416;
+				border: 1px solid #30373c;
+			}
+
+			.layout-c {
+				display: grid;
+				grid-template-columns: 260px minmax(0, 1fr);
+				min-height: 762px;
+			}
+
+			.command-pane {
+				border-right: 1px solid var(--line);
+				background: #141719;
+				padding: 14px 12px;
+				display: grid;
+				align-content: start;
+				gap: 12px;
+			}
+
+			.command-group {
+				display: grid;
+				gap: 8px;
+			}
+
+			.command-item {
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 10px;
+				background: #191c1f;
+				display: flex;
+				justify-content: space-between;
+				gap: 8px;
+				align-items: center;
+			}
+
+			.delivery-main {
+				padding: 16px;
+				display: grid;
+				grid-template-rows: auto auto 1fr;
+				gap: 14px;
+			}
+
+			.kpi-grid {
+				display: grid;
+				grid-template-columns: repeat(4, minmax(0, 1fr));
+				gap: 10px;
+			}
+
+			.kpi {
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				padding: 12px;
+				background: var(--panel);
+			}
+
+			.kpi strong {
+				display: block;
+				font-size: 27px;
+				line-height: 1;
+			}
+
+			.kpi span {
+				display: block;
+				margin-top: 8px;
+				color: var(--muted);
+				font-size: 12px;
+			}
+
+			.release-grid {
+				display: grid;
+				grid-template-columns: minmax(0, 1.15fr) minmax(330px, 0.85fr);
+				gap: 12px;
+				min-height: 0;
+			}
+
+			table {
+				width: 100%;
+				border-collapse: collapse;
+				font-size: 12px;
+			}
+
+			th,
+			td {
+				border-bottom: 1px solid var(--line);
+				padding: 10px;
+				text-align: left;
+				vertical-align: top;
+			}
+
+			th {
+				color: var(--muted);
+				font-weight: 650;
+				background: #141719;
+			}
+
+			tr:last-child td {
+				border-bottom: 0;
+			}
+
+			.export-stack {
+				display: grid;
+				gap: 10px;
+			}
+
+			.export-card {
+				display: grid;
+				grid-template-columns: 1fr auto;
+				gap: 10px;
+				align-items: center;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				background: #1a1d20;
+				padding: 12px;
+			}
+
+			@media (max-width: 1100px) {
+				.design-page {
+					padding: 18px;
+				}
+
+				.design-head,
+				.option-title {
+					align-items: flex-start;
+					flex-direction: column;
+				}
+
+				.layout-a,
+				.layout-b,
+				.layout-c,
+				.work-hero,
+				.player-strip,
+				.release-grid {
+					grid-template-columns: 1fr;
+				}
+
+				.inspector,
+				.side-checker,
+				.command-pane,
+				.stage-rail,
+				.sentence-pane {
+					border-left: 0;
+					border-right: 0;
+					border-bottom: 1px solid var(--line);
+				}
+
+				.route-map,
+				.text-editor-grid,
+				.kpi-grid {
+					grid-template-columns: 1fr;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<main class="design-page">
+			<header class="design-head">
+				<div>
+					<h1>视频本土化配音 UI 设计稿</h1>
+					<p>三个方向都保留现有能力，只改变信息架构和第一眼的操作路径。</p>
+				</div>
+				<nav class="option-nav" aria-label="设计方案">
+					<a href="#option-a">方案 A 流程工作台</a>
+					<a href="#option-b">方案 B 字幕剪辑台</a>
+					<a href="#option-c">方案 C 交付检查台</a>
+					<a href="./video-localization-cutting-studio.html">新版剪辑台</a>
+					<a href="./video-localization-cutting-studio-v2.html">剪辑台 V2</a>
+					<a href="./video-localization-cutting-studio-v3-options.html">补充设计</a>
+				</nav>
+			</header>
+
+			<section id="option-a" class="option">
+				<div class="option-title">
+					<div>
+						<h2>方案 A：流程工作台</h2>
+						<p>适合新用户。左侧是固定流程，中间永远显示当前该做的事，右侧把阻断项变成可点击任务。</p>
+					</div>
+					<span class="badge ok">推荐起步方案</span>
+				</div>
+				<div class="mock-screen">
+					<div class="mock-topbar">
+						<div class="brand">
+							<div class="brand-mark"></div>
+							<div>
+								<strong>reset-smoke / Plaud Note Pro</strong>
+								<span>85.7s · 3840x2160 · 已自动保存</span>
+							</div>
+						</div>
+						<span class="status-pill">当前：声音匹配</span>
+						<button class="primary-btn">继续下一步</button>
+					</div>
+					<div class="layout-a">
+						<aside class="stage-rail">
+							<div class="brand">
+								<div class="brand-mark"></div>
+								<div>
+									<strong>配音流程</strong>
+									<span>5 个阶段</span>
+								</div>
+							</div>
+							<div class="stage-list">
+								<div class="stage-item done">
+									<div class="stage-dot">1</div>
+									<div><strong>素材</strong><span>视频、源音、人声已就绪</span></div>
+								</div>
+								<div class="stage-item done">
+									<div class="stage-dot">2</div>
+									<div><strong>字幕</strong><span>1 句已识别，待校对</span></div>
+								</div>
+								<div class="stage-item active">
+									<div class="stage-dot">3</div>
+									<div><strong>声音</strong><span>缺少参考音</span></div>
+								</div>
+								<div class="stage-item">
+									<div class="stage-dot">4</div>
+									<div><strong>生成</strong><span>等待可生成句子</span></div>
+								</div>
+								<div class="stage-item">
+									<div class="stage-dot">5</div>
+									<div><strong>交付</strong><span>JSON 与字幕</span></div>
+								</div>
+							</div>
+							<button class="ghost-btn">更多操作</button>
+						</aside>
+						<section class="main-area">
+							<div class="work-hero">
+								<div class="panel pad">
+									<div class="panel-head">
+										<div>
+											<h3>源视频预览</h3>
+											<p>当前句子：cue_0001 · 00:00.00 - 00:10.70</p>
+										</div>
+										<span class="badge warn">待校对</span>
+									</div>
+									<div class="video-tile">
+										<div class="subtitle-band">
+											234235
+											<span>Meet Alex. Like most of us, his day is packed...</span>
+										</div>
+									</div>
+								</div>
+								<div class="panel pad next-card">
+									<span class="badge fail">还差 2 件事</span>
+									<h2>先为当前说话人挑一段干净参考音</h2>
+									<p class="small">完成后，这一句就可以进入 TTS 生成队列。</p>
+									<div class="action-grid">
+										<div class="action-tile">
+											<strong>生成参考音候选</strong>
+											<span class="small">从分离后人声里切片</span>
+											<button class="primary-btn">生成候选</button>
+										</div>
+										<div class="action-tile">
+											<strong>校对当前句</strong>
+											<span class="small">确认中文和 TTS 台词</span>
+											<button class="ghost-btn">去校对</button>
+										</div>
+									</div>
+								</div>
+							</div>
+							<div class="panel pad">
+								<div class="panel-head">
+									<div>
+										<h3>制作路径</h3>
+										<p>每个格子只承载一个阶段，当前阶段自动高亮。</p>
+									</div>
+									<span class="badge warn">质量门阻断</span>
+								</div>
+								<div class="route-map">
+									<div class="route-step">
+										<strong>导入视频</strong>
+										<span class="step-state ok">完成</span>
+										<span class="small">source.webm</span>
+									</div>
+									<div class="route-step">
+										<strong>识别字幕</strong>
+										<span class="step-state ok">1 句</span>
+										<span class="small">qwen3-asr-mlx</span>
+									</div>
+									<div class="route-step active">
+										<strong>匹配声音</strong>
+										<span class="step-state fail">缺参考音</span>
+										<span class="small">speaker_01</span>
+									</div>
+									<div class="route-step">
+										<strong>生成配音</strong>
+										<span class="step-state">等待</span>
+										<span class="small">0 可生成</span>
+									</div>
+									<div class="route-step">
+										<strong>导出交付</strong>
+										<span class="step-state">等待</span>
+										<span class="small">JSON / SRT</span>
+									</div>
+								</div>
+							</div>
+						</section>
+						<aside class="inspector">
+							<div class="panel-head">
+								<div>
+									<h3>待处理</h3>
+									<p>点击后跳到对应位置</p>
+								</div>
+								<span class="badge fail">2</span>
+							</div>
+							<div class="issue-list">
+								<div class="issue">
+									<div class="issue-top">
+										<strong>cue_0001 缺少参考音</strong>
+										<span class="badge fail">阻断</span>
+									</div>
+									<span class="small">克隆路线需要干净且已验证的参考音。</span>
+									<button class="row-btn">生成参考音候选</button>
+								</div>
+								<div class="issue">
+									<div class="issue-top">
+										<strong>cue_0001 仍待校对</strong>
+										<span class="badge warn">待确认</span>
+									</div>
+									<span class="small">确认中文字幕、TTS 台词和时间窗。</span>
+									<button class="row-btn">打开当前句</button>
+								</div>
+							</div>
+							<div class="panel pad activity">
+								<div class="panel-head">
+									<h3>最近任务</h3>
+									<span class="badge ok">已完成</span>
+								</div>
+								<span class="small">英文 ASR 转字幕 · qwen3-asr-mlx</span>
+								<div class="progress-line"><span style="width: 100%"></span></div>
+								<span class="small">上次失败：faster-whisper 缺模型</span>
+							</div>
+						</aside>
+					</div>
+				</div>
+			</section>
+
+			<section id="option-b" class="option">
+				<div class="option-title">
+					<div>
+						<h2>方案 B：字幕剪辑台</h2>
+						<p>适合高频制作。把一句话的所有动作集中在一个剪辑台：选句、看视频、拖时间、改三轨文本。</p>
+					</div>
+					<span class="badge warn">最像专业工具</span>
+				</div>
+				<div class="mock-screen">
+					<div class="mock-topbar">
+						<div class="brand">
+							<div class="brand-mark"></div>
+							<div>
+								<strong>字幕剪辑 / cue_0001</strong>
+								<span>1 句 · 1 人 · 0 条参考音</span>
+							</div>
+						</div>
+						<span class="status-pill">单句精修</span>
+						<button class="primary-btn">保存并标记可生成</button>
+					</div>
+					<div class="layout-b">
+						<aside class="sentence-pane">
+							<div class="panel-head">
+								<div>
+									<h3>句子</h3>
+									<p>先选一句，再编辑</p>
+								</div>
+								<span class="badge">1</span>
+							</div>
+							<div class="search-row">
+								<input value="搜索字幕或说话人" aria-label="搜索字幕或说话人" />
+								<button class="icon-btn">+</button>
+							</div>
+							<div class="sentence-list">
+								<div class="sentence-card active">
+									<div class="sentence-row">
+										<span class="badge warn">待校对</span>
+										<span class="small">00:00.00 - 00:10.70</span>
+									</div>
+									<strong>234235</strong>
+									<span class="small">Meet Alex. Like most of us, his day is packed...</span>
+									<div class="sentence-row">
+										<span class="badge">speaker_01</span>
+										<span class="badge fail">无参考音</span>
+									</div>
+								</div>
+								<div class="sentence-card">
+									<div class="sentence-row">
+										<span class="badge">空白</span>
+										<span class="small">新增片段</span>
+									</div>
+									<strong>点击新增下一句</strong>
+									<span class="small">手动补充时间和字幕</span>
+								</div>
+							</div>
+						</aside>
+						<section class="editor-stage">
+							<div class="player-strip">
+								<div class="video-tile">
+									<div class="subtitle-band">
+										234235
+										<span>Meet Alex. Like most of us...</span>
+									</div>
+								</div>
+								<div class="panel pad">
+									<div class="panel-head">
+										<div>
+											<h3>当前句检查</h3>
+											<p>保存前只看这几个信号</p>
+										</div>
+										<span class="badge fail">不能生成</span>
+									</div>
+									<div class="issue-list">
+										<div class="issue">
+											<div class="issue-top">
+												<strong>参考音</strong>
+												<span class="badge fail">缺少</span>
+											</div>
+											<button class="row-btn">去声音面板</button>
+										</div>
+										<div class="issue">
+											<div class="issue-top">
+												<strong>状态</strong>
+												<span class="badge warn">待校对</span>
+											</div>
+											<button class="row-btn">标记可生成</button>
+										</div>
+									</div>
+								</div>
+							</div>
+							<div class="waveform">
+								<div class="track-labels">
+									<span>源音轨 / 分离人声</span>
+									<span>IN 00:00.00 · OUT 00:10.70 · 10.7s</span>
+								</div>
+								<div class="wave-bars" aria-hidden="true">
+									<i style="--h:24%"></i><i style="--h:42%"></i><i style="--h:68%"></i><i style="--h:50%"></i><i style="--h:86%"></i><i style="--h:58%"></i><i style="--h:32%"></i><i style="--h:76%"></i><i style="--h:44%"></i><i style="--h:64%"></i><i style="--h:78%"></i><i style="--h:40%"></i><i style="--h:30%"></i><i style="--h:74%"></i><i style="--h:88%"></i><i style="--h:54%"></i><i style="--h:33%"></i><i style="--h:66%"></i><i style="--h:71%"></i><i style="--h:37%"></i><i style="--h:22%"></i><i style="--h:48%"></i><i style="--h:75%"></i><i style="--h:91%"></i><i style="--h:61%"></i><i style="--h:43%"></i><i style="--h:27%"></i><i style="--h:69%"></i><i style="--h:82%"></i><i style="--h:45%"></i><i style="--h:36%"></i><i style="--h:56%"></i><i style="--h:79%"></i><i style="--h:66%"></i><i style="--h:38%"></i><i style="--h:20%"></i><i style="--h:51%"></i><i style="--h:63%"></i><i style="--h:72%"></i><i style="--h:47%"></i><i style="--h:31%"></i><i style="--h:24%"></i><i style="--h:18%"></i><i style="--h:15%"></i>
+								</div>
+								<div class="wave-select"></div>
+							</div>
+							<div class="text-editor-grid">
+								<label class="text-column">
+									<span class="small">英文字幕</span>
+									<textarea>Meet Alex. Like most of us, his day is packed with meetings, calls, and briefings.</textarea>
+								</label>
+								<label class="text-column">
+									<span class="small">中文字幕</span>
+									<textarea>234235</textarea>
+								</label>
+								<label class="text-column">
+									<span class="small">TTS 台词</span>
+									<textarea>346456</textarea>
+								</label>
+							</div>
+							<div class="cue-actions">
+								<button class="ghost-btn">试听原声</button>
+								<button class="ghost-btn">试听 TTS</button>
+								<button class="ghost-btn">发送单句</button>
+								<button class="primary-btn">保存当前句</button>
+							</div>
+						</section>
+						<aside class="side-checker">
+							<div class="panel-head">
+								<div>
+									<h3>声音</h3>
+									<p>当前句绑定 speaker_01</p>
+								</div>
+								<span class="badge fail">未就绪</span>
+							</div>
+							<div class="voice-card">
+								<div class="sentence-row">
+									<strong>A / speaker_01</strong>
+									<span class="badge">参考原声</span>
+								</div>
+								<div class="voice-sample"></div>
+								<span class="small">还没有可用参考音。可以从当前片段生成候选。</span>
+								<button class="primary-btn">生成参考音候选</button>
+							</div>
+							<div class="voice-card">
+								<div class="sentence-row">
+									<strong>批量状态</strong>
+									<span class="badge">0 可生成</span>
+								</div>
+								<span class="small">当前句保存为可生成后，会出现在生成队列里。</span>
+								<button class="ghost-btn">查看批量队列</button>
+							</div>
+						</aside>
+					</div>
+				</div>
+			</section>
+
+			<section id="option-c" class="option">
+				<div class="option-title">
+					<div>
+						<h2>方案 C：交付检查台</h2>
+						<p>适合收尾和批量项目。所有内容围绕“哪些能生成、哪些阻断、哪些文件可交付”。</p>
+					</div>
+					<span class="badge">偏运营看板</span>
+				</div>
+				<div class="mock-screen">
+					<div class="mock-topbar">
+						<div class="brand">
+							<div class="brand-mark"></div>
+							<div>
+								<strong>配音交付 / reset-smoke</strong>
+								<span>质量门：存在阻断 · 最近检查 22:11</span>
+							</div>
+						</div>
+						<span class="status-pill">交付前检查</span>
+						<button class="primary-btn">修复下一个阻断</button>
+					</div>
+					<div class="layout-c">
+						<aside class="command-pane">
+							<div class="panel-head">
+								<div>
+									<h3>检查清单</h3>
+									<p>发布前按这里走</p>
+								</div>
+							</div>
+							<div class="command-group">
+								<div class="command-item"><span>源视频</span><span class="badge ok">通过</span></div>
+								<div class="command-item"><span>源音轨</span><span class="badge ok">通过</span></div>
+								<div class="command-item"><span>背景 stem</span><span class="badge ok">通过</span></div>
+								<div class="command-item"><span>质量门</span><span class="badge fail">阻断</span></div>
+								<div class="command-item"><span>TTS 覆盖</span><span class="badge fail">0/1</span></div>
+							</div>
+							<button class="ghost-btn">重新检查</button>
+							<button class="ghost-btn">返回字幕</button>
+							<button class="ghost-btn">返回声音</button>
+						</aside>
+						<section class="delivery-main">
+							<div class="kpi-grid">
+								<div class="kpi"><strong>1</strong><span>总句数</span></div>
+								<div class="kpi"><strong>0</strong><span>可生成</span></div>
+								<div class="kpi"><strong>1</strong><span>阻断项</span></div>
+								<div class="kpi"><strong>0</strong><span>已生成音频</span></div>
+							</div>
+							<div class="panel pad">
+								<div class="panel-head">
+									<div>
+										<h3>批量生成</h3>
+										<p>只有通过检查的句子会进入队列。</p>
+									</div>
+									<button class="primary-btn">批量生成可用句</button>
+								</div>
+								<div class="progress-line"><span style="width: 0%"></span></div>
+							</div>
+							<div class="release-grid">
+								<div class="panel">
+									<table>
+										<thead>
+											<tr>
+												<th>句子</th>
+												<th>说话人</th>
+												<th>参考音</th>
+												<th>TTS</th>
+												<th>处理</th>
+											</tr>
+										</thead>
+										<tbody>
+											<tr>
+												<td>
+													<strong>cue_0001</strong><br />
+													<span class="small">00:00.00 - 00:10.70</span>
+												</td>
+												<td>speaker_01</td>
+												<td><span class="badge fail">缺少</span></td>
+												<td><span class="badge">未生成</span></td>
+												<td><button class="row-btn">去修复</button></td>
+											</tr>
+											<tr>
+												<td>
+													<strong>下一句</strong><br />
+													<span class="small">等待新增</span>
+												</td>
+												<td>-</td>
+												<td><span class="badge">等待</span></td>
+												<td><span class="badge">等待</span></td>
+												<td><button class="row-btn">新增句子</button></td>
+											</tr>
+										</tbody>
+									</table>
+								</div>
+								<div class="panel pad export-stack">
+									<div class="panel-head">
+										<div>
+											<h3>交付文件</h3>
+											<p>通过检查后再导出最终文件。</p>
+										</div>
+									</div>
+									<div class="export-card">
+										<div>
+											<strong>中英字幕草稿</strong>
+											<div class="small">SRT / 可先导出</div>
+										</div>
+										<button class="row-btn">导出</button>
+									</div>
+									<div class="export-card">
+										<div>
+											<strong>Readiness JSON</strong>
+											<div class="small">交付检查报告</div>
+										</div>
+										<button class="row-btn">下载</button>
+									</div>
+									<div class="export-card">
+										<div>
+											<strong>Production JSON</strong>
+											<div class="small">配音工程包</div>
+										</div>
+										<button class="row-btn">下载</button>
+									</div>
+								</div>
+							</div>
+						</section>
+					</div>
+				</div>
+			</section>
+		</main>
+	</body>
+</html>

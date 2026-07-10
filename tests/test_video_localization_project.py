@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
+import json
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -17,9 +20,10 @@ from app.schemas.voice_studio import AppSettings, BatchSegmentResult, BatchTask,
 from app.domains.video_localization import media_assets  # noqa: E402
 from app.domains.video_localization import operation_queue as video_localization_operation_queue  # noqa: E402
 from app.domains.video_localization import reference_clips as video_localization_reference_clips  # noqa: E402
+from app.domains.video_localization import exporting as video_localization_exporting  # noqa: E402
 from app.domains.video_localization import service as video_localization_service  # noqa: E402
 from app.domains.video_localization import source_pipeline as video_localization_source_pipeline  # noqa: E402
-from app.services import audio_tools, batch_queue, database, settings_store, task_queue  # noqa: E402
+from app.services import audio_tools, batch_queue, database, project_store, settings_store, task_queue  # noqa: E402
 from app.api import video_localization as video_localization_api  # noqa: E402
 
 
@@ -70,6 +74,16 @@ def test_video_localization_draft_round_trips_in_project_parameters(tmp_path: Pa
                 "review_status": "needs_review",
             }
         ],
+        "ui_state": {
+            "selected_cue_id": "cue_0001",
+            "sidebar_collapsed": True,
+            "subtitle_preview": {"enabled": True, "source": "localized", "stylePreset": "boxed"},
+            "track_states": {"original": {"muted": True, "solo": False, "volume": 0.35}},
+            "timeline_zoom": 2,
+        },
+        "voice_recipes": [{"recipe_id": "recipe_001", "reference_clip_id": "ref_001", "name": "室内温和"}],
+        "generated_candidates": [{"candidate_id": "candidate_001", "recipe_id": "recipe_001", "status": "success"}],
+        "timeline_clips": [{"clip_id": "clip_001", "cue_id": "cue_0001", "track_id": "dub", "start_ms": 1200}],
         "quality_gate": {"pending_issues": 1},
     }
 
@@ -81,9 +95,103 @@ def test_video_localization_draft_round_trips_in_project_parameters(tmp_path: Pa
     fetched = client.get(f"/api/projects/{project['project_id']}/video-localization")
     assert fetched.status_code == 200
     assert fetched.json()["reference_clips"][0]["source_stem"] == "vocals_clean"
+    assert fetched.json()["ui_state"]["selected_cue_id"] == "cue_0001"
+    assert fetched.json()["ui_state"]["track_states"]["original"]["volume"] == 0.35
+    assert fetched.json()["voice_recipes"][0]["name"] == "室内温和"
+    assert fetched.json()["generated_candidates"][0]["candidate_id"] == "candidate_001"
+    assert fetched.json()["timeline_clips"][0]["track_id"] == "dub"
 
     stored_project = client.get(f"/api/projects/{project['project_id']}").json()
     assert stored_project["parameters"]["video_localization"]["cues"][0]["cue_id"] == "cue_0001"
+    assert stored_project["parameters"]["video_localization"]["ui_state"]["sidebar_collapsed"] is True
+
+
+def test_video_localization_rejects_stale_full_draft_but_ui_patch_preserves_results(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "并发自动保存", "description": ""}).json()
+    first = client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [{"cue_id": "cue_0001", "start_ms": 0, "end_ms": 1000, "tts_recommended_text": "测试。"}],
+            "generated_candidates": [{"candidate_id": "candidate_001", "recipe_id": "recipe_001", "status": "success"}],
+            "ui_state": {"timeline_zoom": 1},
+        },
+    )
+    stale = first.json()
+
+    patched = client.patch(
+        f"/api/projects/{project['project_id']}/video-localization/ui-state",
+        json={"timeline_zoom": 4, "sidebar_collapsed": True},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["ui_state"]["timeline_zoom"] == 4
+    assert patched.json()["generated_candidates"][0]["candidate_id"] == "candidate_001"
+
+    stale["ui_state"]["timeline_zoom"] = 2
+    conflict = client.put(f"/api/projects/{project['project_id']}/video-localization", json=stale)
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "VIDEO_LOCALIZATION_DRAFT_CONFLICT"
+
+
+def test_video_localization_save_writes_project_manifest_and_autosave(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "可恢复项目", "description": ""}).json()
+
+    response = client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "source.mp4", "duration_ms": 3400},
+            "ui_state": {"selected_cue_id": "cue_0001", "timeline_zoom": 1.6},
+            "cues": [{"cue_id": "cue_0001", "start_ms": 0, "end_ms": 1200, "en_subtitle_text": "Hello"}],
+        },
+    )
+
+    assert response.status_code == 200
+    root = tmp_path / "projects" / project["project_id"] / "video_localization"
+    manifest_path = root / "project.json"
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["kind"] == "video_localization_project"
+    assert manifest["project_id"] == project["project_id"]
+    assert manifest["project_name"] == "可恢复项目"
+    assert manifest["storage"]["primary_state"] == "voice_studio_db.projects.parameters.video_localization"
+    assert manifest["draft"]["ui_state"]["timeline_zoom"] == 1.6
+    assert manifest["draft"]["cues"][0]["cue_id"] == "cue_0001"
+    assert set(manifest["storage"]["directories"]) >= {"source", "audio", "stems", "references", "tts", "exports", "autosave"}
+    for path in manifest["storage"]["directories"].values():
+        assert Path(path).exists()
+    autosaves = sorted((root / "autosave").glob("*-project.json"))
+    assert len(autosaves) == 1
+    assert json.loads(autosaves[0].read_text(encoding="utf-8"))["draft"]["source_media"]["filename"] == "source.mp4"
+
+
+def test_video_localization_recovers_from_project_snapshot_when_database_draft_is_missing(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "快照恢复", "description": ""}).json()
+    saved = client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "recover.mp4", "duration_ms": 3200},
+            "cues": [{"cue_id": "cue_recovered", "start_ms": 0, "end_ms": 1200, "en_subtitle_text": "Recovered."}],
+        },
+    )
+    assert saved.status_code == 200
+
+    stored = project_store.get_project(project["project_id"])
+    assert stored is not None
+    stored.parameters = {key: value for key, value in stored.parameters.items() if key != "video_localization"}
+    project_store.save_project(stored)
+
+    recovered = client.get(f"/api/projects/{project['project_id']}/video-localization")
+    assert recovered.status_code == 200
+    assert recovered.json()["source_media"]["filename"] == "recover.mp4"
+    assert recovered.json()["cues"][0]["cue_id"] == "cue_recovered"
 
 
 def test_video_localization_empty_draft_has_contract_defaults(tmp_path: Path):
@@ -101,6 +209,80 @@ def test_video_localization_empty_draft_has_contract_defaults(tmp_path: Path):
     assert body["stems"]["separation_status"] == "pending"
     assert body["quality_gate"]["status"] == "unknown"
     assert body["quality_gate"]["pending_issues"] == 0
+    assert body["ui_state"] == {}
+    assert body["voice_recipes"] == []
+    assert body["generated_candidates"] == []
+    assert body["timeline_clips"] == []
+
+
+def test_video_localization_import_localized_srt_updates_cues(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "导入字幕", "description": ""}).json()
+    draft = {
+        "project_type": "video_localization",
+        "schema_version": "v1",
+        "cues": [
+            {
+                "cue_id": "cue_0001",
+                "start_ms": 0,
+                "end_ms": 1000,
+                "en_subtitle_text": "Hello",
+                "tts_recommended_text": "",
+            },
+            {
+                "cue_id": "cue_0002",
+                "start_ms": 1200,
+                "end_ms": 2200,
+                "en_subtitle_text": "World",
+                "tts_recommended_text": "保留已有台词",
+            },
+        ],
+    }
+    client.put(f"/api/projects/{project['project_id']}/video-localization", json=draft)
+
+    srt_text = """1
+00:00:02,500 --> 00:00:04,000
+你好
+
+2
+00:00:04,100 --> 00:00:05,600
+世界
+"""
+    response = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/subtitles/zh/import",
+        json={"srt_text": srt_text, "update_timing": True, "overwrite_tts": False},
+    )
+
+    assert response.status_code == 200
+    cues = response.json()["cues"]
+    assert cues[0]["start_ms"] == 2500
+    assert cues[0]["end_ms"] == 4000
+    assert cues[0]["source_duration_ms"] == 1500
+    assert cues[0]["zh_localized_subtitle_text"] == "你好"
+    assert cues[0]["tts_recommended_text"] == "你好"
+    assert "zh_srt_import" in cues[0]["quality_flags"]
+    assert cues[1]["zh_localized_subtitle_text"] == "世界"
+    assert cues[1]["tts_recommended_text"] == "保留已有台词"
+
+    fetched = client.get(f"/api/projects/{project['project_id']}/video-localization").json()
+    assert fetched["cues"][0]["zh_localized_subtitle_text"] == "你好"
+
+
+def test_video_localization_import_srt_rejects_invalid_payload(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "坏字幕", "description": ""}).json()
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={"project_type": "video_localization", "schema_version": "v1", "cues": [{"cue_id": "cue_0001"}]},
+    )
+
+    response = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/subtitles/zh/import",
+        json={"srt_text": "not an srt"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_SUBTITLE_IMPORT_EMPTY"
 
 
 def test_video_localization_reset_clears_draft_and_project_assets(tmp_path: Path):
@@ -476,6 +658,34 @@ def test_video_localization_import_source_media_updates_draft(tmp_path: Path, mo
     assert video_path.exists()
     assert video_path.name == "demo_clip.mp4"
     assert project["project_id"] in str(video_path)
+    assert "导入视频" in str(video_path)
+
+
+def test_video_localization_project_rename_moves_storage_and_paths(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "旧项目名", "description": ""}).json()
+    monkeypatch.setattr(media_assets, "probe_video", lambda path: {"duration_ms": 3400})
+
+    imported = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/source-media",
+        files={"file": ("demo.mp4", b"fake-video-bytes", "video/mp4")},
+    ).json()
+    old_video_path = Path(imported["source_media"]["video_path"])
+    old_root = old_video_path.parents[1]
+    assert old_root.name == "video_localization"
+    assert "旧项目名" in str(old_root)
+
+    updated = client.patch(f"/api/projects/{project['project_id']}", json={"name": "新项目名"}).json()
+    assert updated["name"] == "新项目名"
+    assert "新项目名" in updated["parameters"]["video_localization_dir_name"]
+
+    fetched = client.get(f"/api/projects/{project['project_id']}/video-localization").json()
+    new_video_path = Path(fetched["source_media"]["video_path"])
+    assert new_video_path.exists()
+    assert new_video_path.read_bytes() == b"fake-video-bytes"
+    assert "新项目名" in str(new_video_path)
+    assert str(new_video_path) != str(old_video_path)
+    assert not old_root.parent.exists()
 
 
 def test_video_localization_source_video_can_be_played_after_import(tmp_path: Path):
@@ -944,6 +1154,171 @@ def test_video_localization_reference_candidates_from_clean_vocals(tmp_path: Pat
     assert body["speakers"][0]["time_ranges"][0]["source"] == "reference_candidate"
 
 
+def test_video_localization_reference_clip_can_save_current_selection_metadata(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "当前选区音色", "description": ""}).json()
+    vocals_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "stems" / "vocals.wav"
+    vocals_path.parent.mkdir(parents=True, exist_ok=True)
+    vocals_path.write_bytes(b"vocals")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "stems": {"separation_status": "completed", "vocals_clean_path": str(vocals_path)},
+            "speakers": [{"speaker_id": "speaker_01", "display_name": "A"}],
+            "cues": [
+                {"cue_id": "cue_0001", "speaker_id": "speaker_01", "start_ms": 1000, "end_ms": 2600, "en_subtitle_text": "First line."},
+                {"cue_id": "cue_0002", "speaker_id": "speaker_01", "start_ms": 3000, "end_ms": 4600, "en_subtitle_text": "Second line."},
+            ],
+        },
+    )
+
+    def fake_cut(source_path: Path, destination: Path, start_ms: int, end_ms: int):
+        assert source_path == vocals_path
+        assert start_ms == 3000
+        assert end_ms == 4600
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"selection")
+        return destination
+
+    monkeypatch.setattr(media_assets, "cut_audio_clip", fake_cut)
+    monkeypatch.setattr(video_localization_reference_clips.audio_tools, "probe_audio", lambda path: {"duration_ms": 1600, "sample_rate": 24000, "channels": 1})
+
+    response = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/reference-clips",
+        json={
+            "cue_id": "cue_0002",
+            "title": "室外开心",
+            "person_name": "Alex",
+            "emotion": "开心",
+            "tags": ["室外", "开心", "室外"],
+            "description": "适合开放空间台词",
+            "cover_frame_path": "/tmp/frame.jpg",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["reference_clips"]) == 1
+    clip = body["reference_clips"][0]
+    assert clip["reference_clip_id"] == "ref_speaker_01_cue_0002"
+    assert clip["title"] == "室外开心"
+    assert clip["person_name"] == "Alex"
+    assert clip["emotion"] == "开心"
+    assert clip["tags"] == ["室外", "开心"]
+    assert clip["description"] == "适合开放空间台词"
+    assert clip["cover_frame_path"] == "/tmp/frame.jpg"
+    assert body["cues"][0]["reference_clip_id"] is None
+    assert body["cues"][1]["reference_clip_id"] == "ref_speaker_01_cue_0002"
+
+    updated = client.patch(
+        f"/api/projects/{project['project_id']}/video-localization/reference-clips/ref_speaker_01_cue_0002",
+        json={"title": "室外更开心", "tags": ["户外", "近景"], "description": ""},
+    )
+    assert updated.status_code == 200
+    updated_clip = updated.json()["reference_clips"][0]
+    assert updated_clip["title"] == "室外更开心"
+    assert updated_clip["tags"] == ["户外", "近景"]
+    assert updated_clip["description"] is None
+
+
+def test_video_localization_reference_clip_uses_independent_audio_selection(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "自由选区音色", "description": ""}).json()
+    vocals_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "stems" / "vocals.wav"
+    video_path = tmp_path / "source.mp4"
+    vocals_path.parent.mkdir(parents=True, exist_ok=True)
+    vocals_path.write_bytes(b"vocals")
+    video_path.write_bytes(b"video")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"duration_ms": 10000, "video_path": str(video_path)},
+            "stems": {"separation_status": "completed", "vocals_clean_path": str(vocals_path)},
+            "speakers": [{"speaker_id": "speaker_01", "display_name": "A"}],
+            "cues": [{"cue_id": "cue_0001", "speaker_id": "speaker_01", "start_ms": 1000, "end_ms": 2600, "en_subtitle_text": "Cue text."}],
+        },
+    )
+
+    def fake_cut(source_path: Path, destination: Path, start_ms: int, end_ms: int):
+        assert source_path == vocals_path
+        assert start_ms == 4200
+        assert end_ms == 6100
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"free-selection")
+        return destination
+
+    monkeypatch.setattr(media_assets, "cut_audio_clip", fake_cut)
+    monkeypatch.setattr(video_localization_reference_clips.audio_tools, "probe_audio", lambda path: {"duration_ms": 1900, "sample_rate": 24000, "channels": 1})
+
+    def fake_extract_frame(source_path: Path, destination: Path, at_ms: int):
+        assert source_path == video_path
+        assert at_ms == 5150
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"cover-frame")
+        return destination
+
+    monkeypatch.setattr(media_assets, "extract_video_frame", fake_extract_frame)
+
+    response = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/reference-clips",
+        json={
+            "cue_id": "cue_0001",
+            "speaker_id": "speaker_01",
+            "start_ms": 4200,
+            "end_ms": 6100,
+            "asr_text": "Independent selection text.",
+            "title": "自由选区",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    clip = body["reference_clips"][0]
+    assert clip["reference_clip_id"] == "ref_speaker_01_4200_6100"
+    assert clip["start_ms"] == 4200
+    assert clip["end_ms"] == 6100
+    assert clip["asr_text"] == "Independent selection text."
+    assert clip["cover_frame_path"].endswith("ref_speaker_01_4200_6100.jpg")
+    assert "generated_from_selection" in clip["quality_flags"]
+    assert body["cues"][0]["start_ms"] == 1000
+    assert body["cues"][0]["end_ms"] == 2600
+    assert any(item["source"] == "manual_selection" and item["start_ms"] == 4200 and item["end_ms"] == 6100 for item in body["speakers"][0]["time_ranges"])
+    cover = client.get(f"/api/projects/{project['project_id']}/video-localization/reference-clips/ref_speaker_01_4200_6100/cover")
+    assert cover.status_code == 200
+    assert cover.content == b"cover-frame"
+
+
+def test_video_localization_delete_reference_clip_unbinds_cues_and_speakers(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "删除项目音色", "description": ""}).json()
+    reference_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "references" / "ref_001.wav"
+    reference_path.parent.mkdir(parents=True, exist_ok=True)
+    reference_path.write_bytes(b"reference")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "speakers": [{"speaker_id": "speaker_01", "reference_clip_ids": ["ref_001"]}],
+            "reference_clips": [{"reference_clip_id": "ref_001", "speaker_id": "speaker_01", "audio_path": str(reference_path), "cleanliness": "needs_review"}],
+            "cues": [{"cue_id": "cue_0001", "speaker_id": "speaker_01", "start_ms": 0, "end_ms": 1200, "reference_clip_id": "ref_001"}],
+        },
+    )
+
+    response = client.delete(f"/api/projects/{project['project_id']}/video-localization/reference-clips/ref_001")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reference_clips"] == []
+    assert body["cues"][0]["reference_clip_id"] is None
+    assert body["speakers"][0]["reference_clip_ids"] == []
+    assert reference_path.exists()
+
+
 def test_video_localization_async_reference_clip_operation_updates_draft(tmp_path: Path, monkeypatch):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "异步参考音候选", "description": ""}).json()
@@ -1133,6 +1508,233 @@ def test_video_localization_subtitle_export_rejects_unsupported_kind(tmp_path: P
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_SUBTITLE_KIND_UNSUPPORTED"
+
+
+def test_video_localization_timeline_edl_export_includes_clips_and_cues(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "时间线 EDL", "description": ""}).json()
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "source.mp4", "duration_ms": 4200},
+            "stems": {"original_audio_path": "/tmp/source.wav"},
+            "ui_state": {"track_states": {"dub": {"muted": False, "solo": True, "volume": 0.8}}},
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "start_ms": 100,
+                    "end_ms": 1200,
+                    "en_subtitle_text": "Hello",
+                    "zh_localized_subtitle_text": "你好",
+                    "tts_recommended_text": "你好",
+                    "tts_audio_path": "/tmp/tts.wav",
+                    "audio_route": "clone_from_source",
+                }
+            ],
+            "timeline_clips": [
+                {
+                    "clip_id": "clip_001",
+                    "cue_id": "cue_0001",
+                    "candidate_id": "candidate_001",
+                    "track_id": "dub",
+                    "start_ms": 100,
+                    "end_ms": 1200,
+                    "source_start_ms": 0,
+                    "source_end_ms": 1100,
+                    "audio_path": "/tmp/tts.wav",
+                    "status": "ready",
+                }
+            ],
+        },
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/export/timeline")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "video_localization_timeline_edl"
+    assert body["project_name"] == "时间线 EDL"
+    assert body["duration_ms"] == 4200
+    assert body["track_states"]["dub"]["solo"] is True
+    assert body["timeline_clips"][0]["clip_id"] == "clip_001"
+    assert body["cues"][0]["localized_text"] == "你好"
+
+
+def test_video_localization_timeline_audio_package_exports_segments_and_manifest(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "时间线音频包", "description": ""}).json()
+    tts_path = tmp_path / "tts" / "cue_0001.wav"
+    samples = np.sin(np.linspace(0, np.pi * 8, 24000, endpoint=False)).astype(np.float32) * 0.2
+    audio_tools.write_audio(tts_path, samples, 24000)
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "source.mp4", "duration_ms": 2500},
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "start_ms": 500,
+                    "end_ms": 1500,
+                    "tts_audio_path": str(tts_path),
+                    "generated_duration_ms": 1000,
+                    "audio_route": "clone_from_source",
+                }
+            ],
+            "timeline_clips": [
+                {
+                    "clip_id": "clip_001",
+                    "cue_id": "cue_0001",
+                    "track_id": "dub",
+                    "start_ms": 500,
+                    "end_ms": 1300,
+                    "source_start_ms": 100,
+                    "source_end_ms": 900,
+                    "audio_path": str(tts_path),
+                    "status": "ready",
+                }
+            ],
+        },
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/export/timeline/audio-package")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/zip")
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        names = set(archive.namelist())
+        assert "manifest.json" in names
+        assert "dub-track.wav" in names
+        assert "segments/001_clip_001.wav" in names
+        manifest = json.loads(archive.read("manifest.json"))
+    assert manifest["kind"] == "video_localization_timeline_audio_package"
+    assert manifest["segments"][0]["timeline_start_ms"] == 500
+    assert manifest["segments"][0]["source_start_ms"] == 100
+    assert manifest["missing_segments"] == []
+    stored = client.get(f"/api/projects/{project['project_id']}/video-localization").json()
+    assert stored["exports"]["timeline_audio_package_path"].endswith(".zip")
+    assert Path(stored["exports"]["timeline_audio_package_path"]).exists()
+
+
+def test_video_localization_audio_package_preserves_original_voice_route(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "保留原声片段", "description": ""}).json()
+    vocals_path = tmp_path / "stems" / "vocals.wav"
+    samples = np.sin(np.linspace(0, np.pi * 6, 48000, endpoint=False)).astype(np.float32) * 0.18
+    audio_tools.write_audio(vocals_path, samples, 48000)
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "source.mp4", "duration_ms": 1000},
+            "stems": {"separation_status": "completed", "vocals_clean_path": str(vocals_path)},
+            "cues": [{"cue_id": "cue_0001", "start_ms": 200, "end_ms": 700, "audio_route": "preserve_original_audio"}],
+        },
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/export/timeline/audio-package")
+
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        names = set(archive.namelist())
+    assert "segments/001_preserve_cue_0001.wav" in names
+    assert manifest["segments"][0]["audio_route"] == "preserve_original_audio"
+    assert manifest["segments"][0]["source_start_ms"] == 200
+    assert manifest["segments"][0]["source_end_ms"] == 700
+
+
+def test_video_localization_timeline_audio_package_rejects_missing_sources(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "缺少音频包", "description": ""}).json()
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "source.mp4", "duration_ms": 2500},
+            "cues": [{"cue_id": "cue_0001", "start_ms": 0, "end_ms": 1000}],
+            "timeline_clips": [
+                {
+                    "clip_id": "clip_missing",
+                    "cue_id": "cue_0001",
+                    "track_id": "dub",
+                    "start_ms": 0,
+                    "end_ms": 1000,
+                    "audio_path": str(tmp_path / "missing.wav"),
+                }
+            ],
+        },
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/export/timeline/audio-package")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_RENDER_AUDIO_MISSING"
+
+
+def test_video_localization_localized_video_export_returns_file(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "合成视频", "description": ""}).json()
+    source_video = tmp_path / "source.mp4"
+    source_video.write_bytes(b"fake-video")
+    tts_path = tmp_path / "tts" / "cue_0001.wav"
+    samples = np.sin(np.linspace(0, np.pi * 8, 24000, endpoint=False)).astype(np.float32) * 0.2
+    audio_tools.write_audio(tts_path, samples, 24000)
+
+    def fake_mux(source_path: Path, dub_path: Path, background_path: Path | None, destination: Path):
+        assert source_path == source_video
+        assert dub_path.exists()
+        assert background_path is None
+        mixed_audio, _ = audio_tools.read_audio(dub_path)
+        assert 0.09 <= float(np.max(np.abs(mixed_audio))) <= 0.11
+        destination.write_bytes(b"localized-video")
+
+    monkeypatch.setattr(video_localization_exporting, "_mux_localized_video", fake_mux)
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "source.mp4", "duration_ms": 1200, "video_path": str(source_video)},
+            "ui_state": {"track_states": {"dub": {"muted": False, "solo": True, "volume": 0.5}}},
+            "cues": [{"cue_id": "cue_0001", "start_ms": 0, "end_ms": 1000, "audio_route": "clone_from_source", "tts_audio_path": str(tts_path), "generated_duration_ms": 1000}],
+        },
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/export/timeline/video")
+
+    assert response.status_code == 200
+    assert response.content == b"localized-video"
+    stored = client.get(f"/api/projects/{project['project_id']}/video-localization").json()
+    assert stored["exports"]["localized_video_path"].endswith("localized-video.mp4")
+    assert Path(stored["exports"]["localized_video_path"]).exists()
+
+
+def test_video_localization_localized_video_export_rejects_missing_source_video(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "无源视频", "description": ""}).json()
+    tts_path = tmp_path / "tts" / "cue_0001.wav"
+    samples = np.sin(np.linspace(0, np.pi * 8, 24000, endpoint=False)).astype(np.float32) * 0.2
+    audio_tools.write_audio(tts_path, samples, 24000)
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "source.mp4", "duration_ms": 1200, "video_path": str(tmp_path / "missing.mp4")},
+            "cues": [{"cue_id": "cue_0001", "start_ms": 0, "end_ms": 1000, "tts_audio_path": str(tts_path), "generated_duration_ms": 1000}],
+        },
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/export/timeline/video")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_RENDER_SOURCE_VIDEO_MISSING"
 
 
 def test_video_localization_tts_batch_submits_ready_clean_reference_cues(tmp_path: Path, monkeypatch):
@@ -1519,6 +2121,32 @@ def test_video_localization_single_tts_generation_syncs_from_task_queue(tmp_path
         json={
             "project_type": "video_localization",
             "schema_version": "v1",
+            "generated_candidates": [
+                {
+                    "candidate_id": "candidate_task-video-single",
+                    "recipe_id": "recipe_001",
+                    "reference_clip_id": "ref_001",
+                    "cue_id": "cue_0001",
+                    "task_id": "task-video-single",
+                    "audio_path": None,
+                    "duration_ms": None,
+                    "status": "queued",
+                }
+            ],
+            "timeline_clips": [
+                {
+                    "clip_id": "clip_candidate_task-video-single",
+                    "cue_id": "cue_0001",
+                    "candidate_id": "candidate_task-video-single",
+                    "track_id": "dub",
+                    "start_ms": 1000,
+                    "end_ms": 3200,
+                    "source_start_ms": 0,
+                    "source_end_ms": None,
+                    "audio_path": None,
+                    "status": "queued",
+                }
+            ],
             "cues": [
                 {
                     "cue_id": "cue_0001",
@@ -1559,6 +2187,55 @@ def test_video_localization_single_tts_generation_syncs_from_task_queue(tmp_path
     assert cue["tts_result_id"] == "result-video-single"
     assert cue["tts_audio_path"] == str(output_path)
     assert cue["generated_duration_ms"] == 2300
+    candidate = response.json()["generated_candidates"][0]
+    assert candidate["result_id"] == "result-video-single"
+    assert candidate["audio_path"] == str(output_path)
+    assert candidate["duration_ms"] == 2300
+    assert candidate["status"] == "success"
+    clip = response.json()["timeline_clips"][0]
+    assert clip["audio_path"] == str(output_path)
+    assert clip["source_end_ms"] == 2300
+    assert clip["status"] == "ready"
+
+
+def test_video_localization_candidate_can_be_previewed_and_applied(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "候选试听与采用", "description": ""}).json()
+    first_path = tmp_path / "outputs" / "first.wav"
+    second_path = tmp_path / "outputs" / "second.wav"
+    first_path.parent.mkdir(parents=True, exist_ok=True)
+    first_path.write_bytes(b"first-audio")
+    second_path.write_bytes(b"second-audio")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [{"cue_id": "cue_0001", "start_ms": 1000, "end_ms": 3000, "tts_recommended_text": "候选台词。", "tts_audio_path": str(first_path)}],
+            "generated_candidates": [
+                {"candidate_id": "candidate_first", "recipe_id": "recipe_001", "cue_id": "cue_0001", "audio_path": str(first_path), "duration_ms": 1800, "status": "success"},
+                {"candidate_id": "candidate_second", "recipe_id": "recipe_001", "cue_id": "cue_0001", "audio_path": str(second_path), "duration_ms": 2100, "status": "success"},
+            ],
+            "timeline_clips": [{"clip_id": "clip_cue_0001", "cue_id": "cue_0001", "candidate_id": "candidate_first", "track_id": "dub", "start_ms": 1000, "end_ms": 3000, "audio_path": str(first_path), "status": "ready"}],
+        },
+    )
+
+    preview = client.get(f"/api/projects/{project['project_id']}/video-localization/candidates/candidate_second/audio")
+    assert preview.status_code == 200
+    assert preview.content == b"second-audio"
+
+    applied = client.post(f"/api/projects/{project['project_id']}/video-localization/candidates/candidate_second/apply")
+    assert applied.status_code == 200
+    body = applied.json()
+    assert body["cues"][0]["tts_audio_path"] == str(second_path)
+    assert body["cues"][0]["generated_duration_ms"] == 2100
+    assert body["timeline_clips"][0]["candidate_id"] == "candidate_second"
+    assert body["timeline_clips"][0]["audio_path"] == str(second_path)
+    assert body["generated_candidates"][0]["selected"] is False
+    assert body["generated_candidates"][1]["selected"] is True
+    clip_audio = client.get(f"/api/projects/{project['project_id']}/video-localization/timeline-clips/clip_cue_0001/audio")
+    assert clip_audio.status_code == 200
+    assert clip_audio.content == b"second-audio"
 
 
 def test_video_localization_tts_batch_sync_rejects_wrong_project(tmp_path: Path):
