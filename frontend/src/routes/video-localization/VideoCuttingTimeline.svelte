@@ -449,11 +449,18 @@
 	}
 
 	function trackAudible(trackId: VideoLocalizationTrackId) {
-		if (trackId === 'original' && !hasSourceAudio) return false;
-		if ((trackId === 'vocals' || trackId === 'background') && !stemsReady) return false;
+		if (!trackHasMedia(trackId)) return false;
 		if (trackStates[trackId]?.muted) return false;
 		const soloTracks = (['original', 'vocals', 'background', 'dub'] as VideoLocalizationTrackId[]).filter((candidate) => trackStates[candidate]?.solo);
 		return !soloTracks.length || soloTracks.includes(trackId);
+	}
+
+	function trackHasMedia(trackId: VideoLocalizationTrackId) {
+		if (clipsForTrack(trackId).length) return true;
+		if (trackId === 'original') return hasSourceAudio;
+		if (trackId === 'vocals') return Boolean(draft?.stems.vocals_clean_path);
+		if (trackId === 'background') return Boolean(draft?.stems.background_path);
+		return false;
 	}
 
 	function updateDubWaveform(clipId: string, bars: number[], durationSeconds: number) {
