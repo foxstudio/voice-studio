@@ -412,6 +412,8 @@ def save_preset(payload: PresetTemplateUpsert) -> PresetTemplate:
         scene=payload.scene,
         description=payload.description,
         engine_id=payload.engine_id,
+        input_mode=payload.input_mode,
+        input_assets=payload.input_assets,
         sample_text=payload.sample_text,
         parameters=payload.parameters,
         source_test_id=payload.source_test_id,

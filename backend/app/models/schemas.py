@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import uuid
 import os
+import urllib.parse
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
 
@@ -111,7 +112,7 @@ class ParameterSchema(BaseModel):
     min: float | None = None
     max: float | None = None
     step: float | None = None
-    options: list[dict[str, str]] = Field(default_factory=list)
+    options: list[dict[str, Any]] = Field(default_factory=list)
     required: bool = False
     capability: str | None = None
 
@@ -130,6 +131,15 @@ class EngineManifest(BaseModel):
     privacy_level: str = "local_only"
     default_use_case: str = ""
     parameter_schema: list[ParameterSchema] = Field(default_factory=list)
+    input_modes: list[Literal["text", "audio", "image"]] = Field(default_factory=list)
+    max_reference_audio: int = 0
+    max_reference_image: int = 0
+    mutually_exclusive_inputs: list[list[str]] = Field(default_factory=list)
+    prompt_reference_syntax: str | None = None
+    supported_output_formats: list[str] = Field(default_factory=list)
+    supported_sample_rates: list[int] = Field(default_factory=list)
+    max_prompt_chars: int | None = None
+    max_output_seconds: int | None = None
 
 
 class EngineState(BaseModel):
@@ -180,6 +190,24 @@ class AppSettings(BaseModel):
     default_emotion: str = "calm"
     default_emo_alpha: float = 0.6
     theme: Literal["system", "dark", "light"] = "system"
+
+    @field_validator("doubao_base_url")
+    @classmethod
+    def validate_doubao_base_url(cls, value: str) -> str:
+        parsed = urllib.parse.urlparse(value)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "openspeech.bytedance.com"
+            or parsed.username
+            or parsed.password
+            or parsed.port not in (None, 443)
+            or parsed.path not in ("", "/")
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("doubao_base_url 必须是火山引擎官方 HTTPS 地址")
+        return value.rstrip("/")
 
 
 class MimoSecretUpdate(BaseModel):
@@ -350,12 +378,52 @@ class TranscriptionBatchSupplementRequest(TimestampSupplementRequest):
     transcription_ids: list[str] = Field(default_factory=list)
 
 
+class EngineInputAsset(BaseModel):
+    """Managed input reference used by model-specific request adapters.
+
+    Raw local paths and Base64 are intentionally not part of this public
+    envelope. A later resolver must turn stable file IDs into validated paths.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    asset_id: str
+    type: Literal["audio", "image", "speaker"]
+    source: Literal["voice_library", "upload", "cloud_speaker", "preset"]
+    file_id: str | None = None
+    voice_id: str | None = None
+    speaker_id: str | None = None
+    display_name: str | None = None
+    ref_text: str | None = None
+    source_file_id: str | None = None
+    clip_file_id: str | None = None
+    trim_start_ms: int | None = Field(default=None, ge=0)
+    trim_end_ms: int | None = Field(default=None, ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    mime_type: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    license_status: LicenseStatus | None = None
+
+    @model_validator(mode="after")
+    def validate_managed_identifier(self):
+        if self.type == "speaker" and not self.speaker_id:
+            raise PydanticCustomError("speaker_id_required", "speaker 类型素材必须提供 speaker_id")
+        if self.type in {"audio", "image"} and not any((self.file_id, self.source_file_id, self.clip_file_id)):
+            raise PydanticCustomError("file_id_required", "音频和图片素材必须提供受管理的 file_id")
+        if self.trim_start_ms is not None and self.trim_end_ms is not None and self.trim_end_ms < self.trim_start_ms:
+            raise PydanticCustomError("invalid_trim_range", "trim_end_ms must be greater than or equal to trim_start_ms")
+        return self
+
+
 class GenerateRequest(BaseModel):
     text: str
     engine_id: str = "indextts-v2"
     source: str | None = None
     project_id: str | None = None
     segment_id: str | None = None
+    input_mode: Literal["text", "audio", "image"] | None = None
+    input_assets: list[EngineInputAsset] = Field(default_factory=list)
+    engine_parameters: dict[str, Any] = Field(default_factory=dict)
     voice_id: str | None = None
     reference_audio_path: str | None = None
     voice_source: VoiceSource | None = None
@@ -486,6 +554,12 @@ class LongformGenerateRequest(BaseModel):
     silence_ms: int = Field(default=300, ge=0, le=5000)
     normalize: bool = False
 
+    @model_validator(mode="after")
+    def reject_single_only_engines(self):
+        if self.generate_request.engine_id == "doubao-seed-audio-1.0":
+            raise PydanticCustomError("single_generation_only", "Seed Audio 1.0 暂只支持单次生成")
+        return self
+
 
 class LongformSegmentTask(BaseModel):
     index: int
@@ -562,6 +636,14 @@ class BatchGenerateRequest(BaseModel):
     segments: list[BatchSegmentInput]
     parameters: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def reject_single_only_engines(self):
+        if self.engine_id == "doubao-seed-audio-1.0" or any(
+            segment.engine_id == "doubao-seed-audio-1.0" for segment in self.segments
+        ):
+            raise PydanticCustomError("single_generation_only", "Seed Audio 1.0 暂只支持单次生成")
+        return self
+
 
 class BatchSegmentResult(BaseModel):
     segment_id: str
@@ -611,6 +693,12 @@ class GenerationTask(BaseModel):
     result_id: str | None = None
     result_duration_ms: int | None = None
     generation_time_ms: int | None = None
+    provider_request_id: str | None = None
+    provider_log_id: str | None = None
+    provider_state_uncertain: bool = False
+    original_duration_ms: int | None = None
+    subtitle: dict[str, Any] | None = None
+    response_source: str | None = None
     verification: TTSVerificationResponse | None = None
     verification_error: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
@@ -637,6 +725,11 @@ class HistoryItem(BaseModel):
     output_path: str | None = None
     duration_ms: int | None = None
     generation_time_ms: int | None = None
+    provider_request_id: str | None = None
+    provider_log_id: str | None = None
+    original_duration_ms: int | None = None
+    subtitle: dict[str, Any] | None = None
+    response_source: str | None = None
     verification: TTSVerificationResponse | None = None
     verification_error: str | None = None
     parameter_snapshot: dict[str, Any] = Field(default_factory=dict)
@@ -1007,6 +1100,8 @@ class PresetTemplate(BaseModel):
     scene: str
     description: str
     engine_id: str
+    input_mode: Literal["text", "audio", "image"] | None = None
+    input_assets: list[EngineInputAsset] = Field(default_factory=list)
     sample_text: str
     parameters: dict[str, Any] = Field(default_factory=dict)
     source_test_id: str | None = None
@@ -1020,6 +1115,8 @@ class PresetTemplateUpsert(BaseModel):
     scene: str = ""
     description: str = ""
     engine_id: str = "indextts-v2"
+    input_mode: Literal["text", "audio", "image"] | None = None
+    input_assets: list[EngineInputAsset] = Field(default_factory=list)
     sample_text: str = ""
     parameters: dict[str, Any] = Field(default_factory=dict)
     source_test_id: str | None = None

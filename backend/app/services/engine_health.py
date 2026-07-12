@@ -75,7 +75,7 @@ def _health_cloud_engine(engine_id: str) -> dict[str, Any]:
     settings = settings_store.get()
     if not settings.cloud_enabled:
         return {"healthy": False, "status": "cloud_disabled", "detail": "云端引擎未启用"}
-    if engine_policy.is_doubao_tts(engine_id):
+    if engine_policy.is_doubao_engine(engine_id):
         if not settings.doubao_api_key_configured:
             return {"healthy": False, "status": "api_key_missing", "detail": "豆包 API Key 未配置"}
         return {"healthy": True, "status": "configured", "base_url": settings.doubao_base_url}

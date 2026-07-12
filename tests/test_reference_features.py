@@ -205,6 +205,33 @@ def test_custom_presets_can_be_created_updated_and_deleted(tmp_path: Path):
     assert client.get(f"/api/presets/{preset['preset_id']}").status_code == 404
 
 
+def test_seed_audio_custom_preset_round_trips_mode_assets_and_parameters(tmp_path: Path):
+    client = _client(tmp_path)
+    payload = {
+        "name": "我的文字声音场景",
+        "scene": "Seed Audio / 文本模式",
+        "description": "保存当前文本模式的声音场景。",
+        "engine_id": "doubao-seed-audio-1.0",
+        "input_mode": "text",
+        "input_assets": [],
+        "sample_text": "雨声中，两个人用压低的声音交谈。",
+        "parameters": {"format": "wav", "sample_rate": 24000, "speech_rate": 0},
+        "recommended_voice_type": "generated_audio",
+        "tags": ["Seed Audio", "文本"],
+    }
+
+    created = client.post("/api/presets", json=payload)
+
+    assert created.status_code == 200
+    preset = created.json()
+    assert preset["input_mode"] == "text"
+    assert preset["input_assets"] == []
+    assert preset["parameters"] == payload["parameters"]
+    restored = client.get(f"/api/presets/{preset['preset_id']}")
+    assert restored.status_code == 200
+    assert restored.json()["input_mode"] == "text"
+
+
 def test_agent_can_register_voice_with_license_and_tags(tmp_path: Path):
     client = _client(tmp_path)
 
@@ -350,11 +377,14 @@ def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path, monke
         "mimo-v2.5-asr",
         "doubao-tts-preset",
         "doubao-tts-voiceclone",
+        "doubao-seed-audio-1.0",
         "qwen3-asr-mlx",
         "faster-whisper-turbo",
     }
     assert "emotion_control" in by_id["indextts-v2"]["capabilities"]
     assert by_id["mimo-v2.5-tts-preset"]["engine_type"] == "cloud"
+    assert by_id["doubao-seed-audio-1.0"]["input_modes"] == ["text", "audio", "image"]
+    assert by_id["doubao-seed-audio-1.0"]["max_reference_audio"] == 3
     assert "mimo-v2.5-tts" not in by_id
     assert "speech_recognition" in by_id["qwen3-asr-mlx"]["capabilities"]
     assert "vad" in by_id["faster-whisper-turbo"]["capabilities"]

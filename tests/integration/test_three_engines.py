@@ -108,6 +108,7 @@ class TestEngineRegistryAPI:
             "mimo-v2.5-asr",
             "doubao-tts-preset",
             "doubao-tts-voiceclone",
+            "doubao-seed-audio-1.0",
             "qwen3-asr-mlx",
             "faster-whisper-turbo",
         ]

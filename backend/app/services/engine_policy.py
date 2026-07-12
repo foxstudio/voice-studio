@@ -9,7 +9,8 @@ _ALIASES = {"mimo-v2.5-tts": "mimo-v2.5-tts-preset"}
 MIMO_TTS_ENGINES = {"mimo-v2.5-tts", "mimo-v2.5-tts-preset", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"}
 MIMO_ENGINES = {*MIMO_TTS_ENGINES, "mimo-v2.5-asr"}
 DOUBAO_TTS_ENGINES = {"doubao-tts-preset", "doubao-tts-voiceclone"}
-DOUBAO_ENGINES = {*DOUBAO_TTS_ENGINES}
+DOUBAO_SEED_AUDIO_ENGINES = {"doubao-seed-audio-1.0"}
+DOUBAO_ENGINES = {*DOUBAO_TTS_ENGINES, *DOUBAO_SEED_AUDIO_ENGINES}
 EXTERNAL_WORKER_ENGINES = {"f5-tts", "cosyvoice-sft", "cosyvoice-zero-shot"}
 EXTERNAL_SUBPROCESS_ENGINES = {"emotivoice", "confucius4-mlx-int8", "qwen3-tts-mlx-0.6b", *EXTERNAL_WORKER_ENGINES}
 LOCAL_MODEL_ENGINES = {"indextts-v2", "omnivoice"}
@@ -30,6 +31,7 @@ _TIMEOUTS = {
     "mimo-v2.5-tts-voiceclone": 300,
     "doubao-tts-preset": 300,
     "doubao-tts-voiceclone": 300,
+    "doubao-seed-audio-1.0": 300,
 }
 
 
@@ -45,12 +47,32 @@ def is_doubao_tts(engine_id: str) -> bool:
     return engine_id in DOUBAO_TTS_ENGINES
 
 
+def is_doubao_engine(engine_id: str) -> bool:
+    return engine_id in DOUBAO_ENGINES
+
+
 def is_cloud_engine(engine_id: str) -> bool:
     return engine_id in MIMO_ENGINES or engine_id in DOUBAO_ENGINES
 
 
 def requires_idempotency_marker(engine_id: str) -> bool:
     return is_mimo_tts(engine_id)
+
+
+def requires_manual_replay_after_start(engine_id: str) -> bool:
+    return engine_id in DOUBAO_SEED_AUDIO_ENGINES
+
+
+def is_single_generation_only(engine_id: str) -> bool:
+    return engine_id in DOUBAO_SEED_AUDIO_ENGINES
+
+
+def supports_longform(engine_id: str) -> bool:
+    return not is_single_generation_only(engine_id)
+
+
+def supports_batch(engine_id: str) -> bool:
+    return not is_single_generation_only(engine_id)
 
 
 def timeout_seconds_for(engine_id: str) -> int:
