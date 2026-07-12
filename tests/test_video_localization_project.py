@@ -1715,6 +1715,55 @@ def test_video_localization_localized_video_export_returns_file(tmp_path: Path, 
     assert Path(stored["exports"]["localized_video_path"]).exists()
 
 
+def test_video_localization_mixdown_respects_editable_background_clip(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "背景片段裁切", "description": ""}).json()
+    source_video = tmp_path / "source.mp4"
+    source_video.write_bytes(b"fake-video")
+    background_path = tmp_path / "background.wav"
+    audio_tools.write_audio(background_path, np.full(48000 * 2, 0.2, dtype=np.float32), 48000)
+    tts_path = tmp_path / "tts.wav"
+    audio_tools.write_audio(tts_path, np.zeros(24000, dtype=np.float32), 24000)
+
+    def fake_mux(source_path: Path, mixdown_path: Path, background_path_arg: Path | None, destination: Path):
+        assert source_path == source_video
+        assert background_path_arg is None
+        mixed_audio, sample_rate = audio_tools.read_audio(mixdown_path)
+        assert float(np.max(np.abs(mixed_audio[: int(sample_rate * 0.4)]))) < 0.001
+        assert 0.19 <= float(np.max(np.abs(mixed_audio[int(sample_rate * 0.55) : int(sample_rate * 0.9)]))) <= 0.21
+        assert float(np.max(np.abs(mixed_audio[int(sample_rate * 1.1) :]))) < 0.001
+        destination.write_bytes(b"localized-video")
+
+    monkeypatch.setattr(video_localization_exporting, "_mux_localized_video", fake_mux)
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "source.mp4", "duration_ms": 1500, "video_path": str(source_video)},
+            "stems": {"background_path": str(background_path), "separation_status": "completed"},
+            "ui_state": {"track_states": {"background": {"muted": False, "solo": True, "volume": 1.0}}},
+            "cues": [{"cue_id": "cue_0001", "start_ms": 0, "end_ms": 1000, "audio_route": "clone_from_source", "tts_audio_path": str(tts_path)}],
+            "timeline_clips": [
+                {
+                    "clip_id": "media_background",
+                    "track_id": "background",
+                    "start_ms": 500,
+                    "end_ms": 1000,
+                    "source_start_ms": 200,
+                    "source_end_ms": 700,
+                    "audio_path": str(background_path),
+                },
+                {"clip_id": "dub_0001", "cue_id": "cue_0001", "track_id": "dub", "start_ms": 0, "end_ms": 1000, "audio_path": str(tts_path)},
+            ],
+        },
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/export/timeline/video")
+
+    assert response.status_code == 200, response.json()
+
+
 def test_video_localization_localized_video_export_rejects_missing_source_video(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "无源视频", "description": ""}).json()

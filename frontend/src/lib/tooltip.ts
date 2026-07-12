@@ -17,6 +17,7 @@ let currentTarget: Element | null = null;
 let showTimer: ReturnType<typeof setTimeout> | null = null;
 let hideTimer: ReturnType<typeof setTimeout> | null = null;
 let hideRaf: ReturnType<typeof setTimeout> | null = null;
+let initialized = false;
 
 function ensureContainer() {
 	if (container) return;
@@ -60,6 +61,11 @@ function scheduleShow(target: Element) {
 	if (showTimer) clearTimeout(showTimer);
 	if (hideTimer) clearTimeout(hideTimer);
 	if (hideRaf) clearTimeout(hideRaf);
+	if (currentTarget && currentTarget !== target) {
+		show(target);
+		return;
+	}
+	if (currentTarget === target) return;
 
 	showTimer = setTimeout(() => show(target), SHOW_DELAY);
 }
@@ -149,7 +155,8 @@ function onScroll() {
 }
 
 export function initTooltips() {
-	if (typeof window === 'undefined') return;
+	if (typeof window === 'undefined' || initialized) return;
+	initialized = true;
 	document.addEventListener('mouseover', onMouseOver);
 	document.addEventListener('mouseout', onMouseOut);
 	document.addEventListener('focusin', onFocusIn);

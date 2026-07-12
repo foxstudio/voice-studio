@@ -6,6 +6,7 @@ export type VideoLocalizationTrackState = {
 	volume: number;
 	label?: string;
 	collapsed?: boolean;
+	locked?: boolean;
 };
 
 export type VideoLocalizationTrackStates = Record<VideoLocalizationTrackId, VideoLocalizationTrackState>;
@@ -60,10 +61,10 @@ const DEFAULT_TRACK_STATE: VideoLocalizationTrackState = {
 
 export function defaultTrackStates(): VideoLocalizationTrackStates {
 	return {
-		original: { ...DEFAULT_TRACK_STATE },
+		original: { ...DEFAULT_TRACK_STATE, solo: true },
 		vocals: { ...DEFAULT_TRACK_STATE },
 		background: { ...DEFAULT_TRACK_STATE },
-		subtitles: { muted: false, solo: false, volume: 1 },
+		subtitles: { muted: false, solo: false, volume: 1, collapsed: true },
 		dub: { ...DEFAULT_TRACK_STATE }
 	};
 }
@@ -85,14 +86,16 @@ export function resolveTrackStates(value: unknown): VideoLocalizationTrackStates
 	if (!value || typeof value !== 'object') return defaults;
 	const raw = value as Record<string, Partial<VideoLocalizationTrackState>>;
 	for (const key of Object.keys(defaults) as VideoLocalizationTrackId[]) {
-		const track = raw[key] ?? {};
+		const track = raw[key];
+		if (!track) continue;
 		const solo = track.solo === true;
 		defaults[key] = {
 			muted: solo ? false : track.muted === true,
 			solo,
-			volume: clampNumber(track.volume, 0, 1, 1),
+			volume: clampNumber(track.volume, 0, 2, 1),
 			label: typeof track.label === 'string' ? track.label : undefined,
-			collapsed: track.collapsed === true
+			collapsed: typeof track.collapsed === 'boolean' ? track.collapsed : defaults[key].collapsed,
+			locked: track.locked === true
 		};
 	}
 	return defaults;

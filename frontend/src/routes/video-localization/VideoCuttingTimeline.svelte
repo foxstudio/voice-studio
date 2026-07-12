@@ -1,12 +1,11 @@
 <script lang="ts">
-	import { Captions, ChevronDown, ChevronRight, FileAudio, Mic2, Pause, Play, Redo2, Save, Scissors, SkipBack, SkipForward, Trash2, Undo2, Wand2, ZoomIn, ZoomOut } from 'lucide-svelte';
+	import { Captions, ChevronDown, ChevronRight, ChevronsLeft, ChevronsRight, FileAudio, Lock, Mic2, Pause, Play, Redo2, Save, Scissors, SkipBack, SkipForward, Trash2, Undo2, Unlock, Wand2, ZoomIn, ZoomOut } from 'lucide-svelte';
 	import { tick } from 'svelte';
 	import { buildTimelineTicks, formatTimecode, formatTimelineZoom } from '$lib/audio/waveform';
 	import type { VideoLocalizationCue, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationTimelineClip } from '$lib/api/types';
-	import { durationLabel, isActiveOperation, operationStatusLabel, sourceAudioUrl, stemAudioUrl, timelineClipAudioUrl } from './utils';
+	import { durationLabel, isActiveOperation, operationStatusLabel, timelineClipAudioUrl } from './utils';
 	import { TRACK_LABELS, type SubtitlePreviewSource, type SubtitlePreviewState, type VideoLocalizationTrackId, type VideoLocalizationTrackState, type VideoLocalizationTrackStates } from './studio-state';
-	import ClipWaveform from './ClipWaveform.svelte';
-	import TrackWaveform from './TrackWaveform.svelte';
+	import EditableAudioClip from './EditableAudioClip.svelte';
 
 	let {
 		projectId,
@@ -107,6 +106,9 @@
 	let timelineScrollLeft = $state(0);
 	let timelineViewportWidth = $state(0);
 	let timelineSeekDrag = $state(false);
+	let timelinePanState = $state<{ startX: number; scrollLeft: number } | null>(null);
+	let pendingSeekMs = 0;
+	let seekAnimationFrame = 0;
 	let selectionDrag = $state<'start' | 'end' | null>(null);
 	let rangeCreateState = $state<{ startX: number; startMs: number; moved: boolean } | null>(null);
 	let rangeStartMs = $state<number | null>(null);
@@ -115,7 +117,7 @@
 	let editingTrackId = $state<VideoLocalizationTrackId | null>(null);
 	let editingTrackValue = $state('');
 	let openVolumeTrack = $state<VideoLocalizationTrackId | null>(null);
-	let meterWaveforms = $state<Partial<Record<VideoLocalizationTrackId, number[]>>>({});
+	let volumeClickTimer: ReturnType<typeof setTimeout> | null = null;
 	let dubWaveforms = $state<Record<string, { bars: number[]; durationSeconds: number }>>({});
 	let trackHeights = $state<Record<VideoLocalizationTrackId, number>>({
 		original: 58,
@@ -129,21 +131,20 @@
 	const hasSourceAudio = $derived(Boolean(draft?.source_media.audio_path || draft?.stems.original_audio_path));
 	const stemsReady = $derived(draft?.stems.separation_status === 'completed');
 	const hasAsr = $derived(Boolean(draft?.cues.some((cue) => cue.en_subtitle_text?.trim())));
-	const originalAudioSrc = $derived(sourceAudioUrl(projectId, draft));
-	const vocalsAudioSrc = $derived(stemAudioUrl(projectId, draft, 'vocals'));
-	const backgroundAudioSrc = $derived(stemAudioUrl(projectId, draft, 'background'));
 	const durationMs = $derived(draft?.source_media.duration_ms ?? Math.max(...(draft?.cues ?? []).map((cue) => cue.end_ms ?? 0), 0));
 	const timelineDurationMs = $derived(durationMs ? Math.max(durationMs, 1000) : 60000);
 	const timelineTicks = $derived(buildTimelineTicks(timelineDurationMs / 1000, timelineZoom));
 	const playheadPercent = $derived(Math.max(0, Math.min(100, (currentTimeMs / timelineDurationMs) * 100)));
 	const activeOperationText = $derived(latestOperation && isActiveOperation(latestOperation) ? `${latestOperation.label ?? latestOperation.kind} · ${operationStatusLabel(latestOperation)}` : '');
 	const selectedCue = $derived(draft?.cues.find((cue) => cue.cue_id === selectedCueId) ?? null);
-	const canEditSelectedCue = $derived(Boolean(selectedCue));
-	const canSplitSelectedCue = $derived(Boolean(selectedCue && selectedCue.start_ms !== null && selectedCue.end_ms !== null && selectedCue.end_ms - selectedCue.start_ms >= 700));
-	const canMergeSelectedCue = $derived(Boolean(selectedCue && nextCueAfter(selectedCue)));
+	const canEditSelectedCue = $derived(Boolean(selectedCue) && !trackStates.subtitles.locked);
+	const canSplitSelectedCue = $derived(Boolean(!trackStates.subtitles.locked && selectedCue && selectedCue.start_ms !== null && selectedCue.end_ms !== null && selectedCue.end_ms - selectedCue.start_ms >= 700));
+	const canMergeSelectedCue = $derived(Boolean(!trackStates.subtitles.locked && selectedCue && nextCueAfter(selectedCue)));
 	const hasRangeSelection = $derived(rangeStartMs !== null && rangeEndMs !== null && Math.abs(rangeEndMs - rangeStartMs) >= 300);
 	const rangeStartValue = $derived(rangeStartMs ?? 0);
 	const rangeEndValue = $derived(rangeEndMs ?? rangeStartValue);
+	const rangeStartPercent = $derived(Math.max(0, Math.min(100, (rangeStartValue / timelineDurationMs) * 100)));
+	const rangeEndPercent = $derived(Math.max(0, Math.min(100, (rangeEndValue / timelineDurationMs) * 100)));
 	const rangeLeftPercent = $derived(hasRangeSelection ? Math.max(0, Math.min(100, (Math.min(rangeStartValue, rangeEndValue) / timelineDurationMs) * 100)) : 0);
 	const rangeWidthPercent = $derived(hasRangeSelection ? Math.max(0.4, Math.min(100 - rangeLeftPercent, (Math.abs(rangeEndValue - rangeStartValue) / timelineDurationMs) * 100)) : 0);
 	const masterLevel = $derived(isPlaying ? estimateMasterLevel() : 0);
@@ -152,7 +153,6 @@
 
 	$effect(() => {
 		projectId;
-		meterWaveforms = {};
 	});
 
 	function cueLeft(cue: VideoLocalizationCue) {
@@ -174,7 +174,7 @@
 		const start = startMs ?? 0;
 		const end = Math.max(start + 300, endMs ?? start + 1800);
 		const left = clipLeft(start);
-		return Math.max(4, Math.min(100 - left, ((end - start) / timelineDurationMs) * 100));
+		return Math.max(0.02, Math.min(100 - left, ((end - start) / timelineDurationMs) * 100));
 	}
 
 	function timelineClipTime(clip: VideoLocalizationTimelineClip) {
@@ -205,6 +205,10 @@
 		onTrackStateChange(trackId, { solo, ...(solo ? { muted: false } : {}) });
 	}
 
+	function toggleLocked(trackId: VideoLocalizationTrackId) {
+		onTrackStateChange(trackId, { locked: !trackStates[trackId].locked });
+	}
+
 	function toggleSubtitleTrack() {
 		onTrackStateChange('subtitles', { collapsed: !subtitleTrackCollapsed });
 	}
@@ -219,6 +223,7 @@
 	}
 
 	function beginTrackRename(trackId: VideoLocalizationTrackId) {
+		if (trackStates[trackId].locked) return;
 		editingTrackId = trackId;
 		editingTrackValue = trackName(trackId);
 		requestAnimationFrame(() => {
@@ -256,16 +261,50 @@
 
 	function dbToVolume(db: number) {
 		if (!Number.isFinite(db) || db <= -60) return 0;
-		return Math.max(0, Math.min(1, Math.pow(10, Math.min(0, db) / 20)));
+		return Math.max(0, Math.min(2, Math.pow(10, Math.min(6.02, db) / 20)));
 	}
 
 	function updateTrackDb(trackId: VideoLocalizationTrackId, db: number) {
-		onTrackStateChange(trackId, { volume: dbToVolume(db) });
+		onTrackStateChange(trackId, { volume: dbToVolume(Math.max(-60, Math.min(6.02, db))) });
+	}
+
+	function beginVolumeEdit(trackId: VideoLocalizationTrackId) {
+		openVolumeTrack = trackId;
+		requestAnimationFrame(() => {
+			const input = document.querySelector<HTMLInputElement>(`[data-volume-input="${trackId}"]`);
+			input?.focus();
+			input?.select();
+		});
+	}
+
+	function finishVolumeEdit(trackId: VideoLocalizationTrackId) {
+		if (openVolumeTrack === trackId) openVolumeTrack = null;
+	}
+
+	function handleVolumeInputKeydown(event: KeyboardEvent, trackId: VideoLocalizationTrackId) {
+		if (event.key === 'Enter') {
+			event.preventDefault();
+			(event.currentTarget as HTMLInputElement).blur();
+		} else if (event.key === 'Escape') {
+			event.preventDefault();
+			finishVolumeEdit(trackId);
+		}
+	}
+
+	function resetTrackDb(event: MouseEvent, trackId: VideoLocalizationTrackId) {
+		event.preventDefault();
+		event.stopPropagation();
+		if (volumeClickTimer) clearTimeout(volumeClickTimer);
+		volumeClickTimer = null;
+		openVolumeTrack = null;
+		updateTrackDb(trackId, 0);
 	}
 
 	function beginVolumeScrub(event: PointerEvent, trackId: VideoLocalizationTrackId) {
 		event.preventDefault();
 		event.stopPropagation();
+		if (volumeClickTimer) clearTimeout(volumeClickTimer);
+		volumeClickTimer = null;
 		const startX = event.clientX;
 		const startDb = volumeToDb(trackStates[trackId].volume, 2);
 		let moved = false;
@@ -273,12 +312,12 @@
 			const delta = moveEvent.clientX - startX;
 			if (Math.abs(delta) >= 2) moved = true;
 			if (!moved) return;
-			updateTrackDb(trackId, Math.round(Math.max(-60, Math.min(0, startDb + delta * 0.1)) * 10) / 10);
+			updateTrackDb(trackId, Math.round(Math.max(-60, Math.min(6, startDb + delta * 0.1)) * 10) / 10);
 		};
 		const stop = () => {
 			window.removeEventListener('pointermove', move);
 			window.removeEventListener('pointerup', stop);
-			if (!moved) openVolumeTrack = openVolumeTrack === trackId ? null : trackId;
+			if (!moved) volumeClickTimer = setTimeout(() => beginVolumeEdit(trackId), 220);
 		};
 		window.addEventListener('pointermove', move);
 		window.addEventListener('pointerup', stop, { once: true });
@@ -307,25 +346,44 @@
 		const pointerX = clientX === undefined ? rect.width / 2 : Math.max(0, Math.min(rect.width, clientX - rect.left));
 		const anchorRatio = (trackCanvasEl.scrollLeft + pointerX) / Math.max(1, trackCanvasEl.scrollWidth);
 		stepTimelineZoom(delta);
-		void tick().then(() => {
+		void tick().then(() => requestAnimationFrame(() => {
 			if (!trackCanvasEl) return;
 			trackCanvasEl.scrollLeft = Math.max(0, anchorRatio * trackCanvasEl.scrollWidth - pointerX);
 			updateTimelineViewport(trackCanvasEl);
-		});
+		}));
 	}
 
 	function handleTimelineKeydown(event: KeyboardEvent) {
 		const target = event.target as HTMLElement | null;
 		if (target?.closest('input,textarea,select,[contenteditable="true"]')) return;
-		if (event.key === '+' || event.key === '=') {
+		if (event.code === 'Space') {
+			event.preventDefault();
+			onTransportAction('play-pause');
+		} else if (event.key === '+' || event.key === '=') {
 			event.preventDefault();
 			zoomTimelineAtPointer(1);
 		} else if (event.key === '-' || event.key === '_') {
 			event.preventDefault();
 			zoomTimelineAtPointer(-1);
+		} else if (event.key.toLowerCase() === 'i') {
+			event.preventDefault();
+			setSelectionPoint('start');
+		} else if (event.key.toLowerCase() === 'o') {
+			event.preventDefault();
+			setSelectionPoint('end');
 		} else if (event.key === 'Escape') {
 			openVolumeTrack = null;
 		}
+	}
+
+	function setSelectionPoint(edge: 'start' | 'end') {
+		const timeMs = Math.max(0, Math.min(timelineDurationMs, currentTimeMs));
+		if (edge === 'start') {
+			rangeStartMs = Math.min(timeMs, (rangeEndMs ?? timelineDurationMs) - 300);
+			if (rangeEndMs !== null && rangeEndMs <= rangeStartMs) rangeEndMs = null;
+			return;
+		}
+		rangeEndMs = Math.max(timeMs, (rangeStartMs ?? 0) + 300);
 	}
 
 	function setRangeFromSelectedCue() {
@@ -348,20 +406,12 @@
 
 	function levelForTrack(trackId: VideoLocalizationTrackId) {
 		if (!trackAudible(trackId)) return 0;
-		if (trackId === 'dub') return levelForDubTrack();
-		const bars = meterWaveforms[trackId] ?? [];
-		if (!bars.length) return 0;
-		const index = Math.max(0, Math.min(bars.length - 1, Math.round((currentTimeMs / timelineDurationMs) * (bars.length - 1))));
-		const windowSize = 3;
-		let peak = 0;
-		for (let cursor = Math.max(0, index - windowSize); cursor <= Math.min(bars.length - 1, index + windowSize); cursor += 1) {
-			peak = Math.max(peak, bars[cursor] ?? 0);
-		}
-		return Math.max(0, Math.min(2, peak * (trackStates[trackId]?.volume ?? 1)));
+		if (clipsForTrack(trackId).length) return levelForClipTrack(trackId);
+		return 0;
 	}
 
-	function levelForDubTrack() {
-		const clip = draft?.timeline_clips.find((item) => item.track_id === 'dub' && currentTimeMs >= (item.start_ms ?? 0) && currentTimeMs <= (item.end_ms ?? 0));
+	function levelForClipTrack(trackId: VideoLocalizationTrackId) {
+		const clip = clipsForTrack(trackId).find((item) => currentTimeMs >= (item.start_ms ?? 0) && currentTimeMs <= (item.end_ms ?? 0));
 		if (!clip) return 0;
 		const analysis = dubWaveforms[clip.clip_id];
 		if (!analysis?.bars.length) return 0;
@@ -372,7 +422,23 @@
 		const index = Math.max(0, Math.min(analysis.bars.length - 1, Math.round((localMs / durationMs) * (analysis.bars.length - 1))));
 		let peak = 0;
 		for (let cursor = Math.max(0, index - 2); cursor <= Math.min(analysis.bars.length - 1, index + 2); cursor += 1) peak = Math.max(peak, analysis.bars[cursor] ?? 0);
-		return peak * (trackStates.dub.volume ?? 1);
+		return peak * (trackStates[trackId].volume ?? 1);
+	}
+
+	function clipsForTrack(trackId: VideoLocalizationTrackId) {
+		return draft?.timeline_clips.filter((clip) => clip.track_id === trackId && clip.audio_path) ?? [];
+	}
+
+	function clipLabel(clip: VideoLocalizationTimelineClip, trackId: VideoLocalizationTrackId) {
+		if (trackId === 'dub') return clip.cue_id || clip.clip_id;
+		return trackName(trackId);
+	}
+
+	function clipTone(trackId: VideoLocalizationTrackId): 'source' | 'vocals' | 'music' | 'dub' {
+		if (trackId === 'original') return 'source';
+		if (trackId === 'vocals') return 'vocals';
+		if (trackId === 'background') return 'music';
+		return 'dub';
 	}
 
 	function trackMeterPercent(trackId: VideoLocalizationTrackId) {
@@ -390,36 +456,57 @@
 		return !soloTracks.length || soloTracks.includes(trackId);
 	}
 
-	function updateMeterWaveform(trackId: VideoLocalizationTrackId, bars: number[]) {
-		meterWaveforms = { ...meterWaveforms, [trackId]: bars };
-	}
-
 	function updateDubWaveform(clipId: string, bars: number[], durationSeconds: number) {
 		dubWaveforms = { ...dubWaveforms, [clipId]: { bars, durationSeconds } };
 	}
 
 	function seekFromPointer(event: PointerEvent | MouseEvent) {
-		if (!timelineContentEl) return;
-		const rect = timelineContentEl.getBoundingClientRect();
-		const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
-		onSeekTimeline(Math.round(ratio * timelineDurationMs));
+		scheduleTimelineSeek(timeFromPointer(event));
+	}
+
+	function scheduleTimelineSeek(timeMs: number, flush = false) {
+		pendingSeekMs = Math.max(0, Math.min(timelineDurationMs, Math.round(timeMs)));
+		if (flush) {
+			if (seekAnimationFrame) cancelAnimationFrame(seekAnimationFrame);
+			seekAnimationFrame = 0;
+			onSeekTimeline(pendingSeekMs);
+			return;
+		}
+		if (seekAnimationFrame) return;
+		seekAnimationFrame = requestAnimationFrame(() => {
+			seekAnimationFrame = 0;
+			onSeekTimeline(pendingSeekMs);
+		});
 	}
 
 	function handleTimelinePointerDown(event: PointerEvent) {
-		if ((event.target as HTMLElement).closest('button,input,.cue-chip,.tts-chip,.range-handle,.track-resize-handle,.track-label-width-handle')) return;
-		event.preventDefault();
-		if ((event.target as HTMLElement).closest('[data-audio-selection-track]')) {
-			const startMs = timeFromPointer(event);
-			rangeCreateState = { startX: event.clientX, startMs, moved: false };
+		const target = event.target as HTMLElement;
+		if (event.button === 1 && (target.closest('.timeline-ruler') || target.closest('[data-track-row]'))) {
+			event.preventDefault();
+			if (target.closest('[data-track-row]')) {
+				const startMs = timeFromPointer(event);
+				rangeCreateState = { startX: event.clientX, startMs, moved: false };
+			} else {
+				timelinePanState = { startX: event.clientX, scrollLeft: trackCanvasEl?.scrollLeft ?? 0 };
+			}
 			(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
 			return;
 		}
+		if (event.button !== 0) return;
+		if (target.closest('button,input,.cue-chip,.clip-handle,.range-handle,.track-resize-handle,.track-label-width-handle')) return;
+		event.preventDefault();
+		if (target.closest('[data-track-row]')) return;
 		timelineSeekDrag = true;
 		(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
 		seekFromPointer(event);
 	}
 
 	function handleTimelinePointerMove(event: PointerEvent) {
+		if (timelinePanState && trackCanvasEl) {
+			trackCanvasEl.scrollLeft = timelinePanState.scrollLeft - (event.clientX - timelinePanState.startX);
+			updateTimelineViewport(trackCanvasEl);
+			return;
+		}
 		moveCueDrag(event);
 		moveClipDrag(event);
 		if (rangeCreateState) moveRangeCreation(event);
@@ -431,8 +518,10 @@
 		endCueDrag();
 		endClipDrag();
 		if (rangeCreateState && !rangeCreateState.moved) onSeekTimeline(rangeCreateState.startMs);
+		if (timelineSeekDrag) scheduleTimelineSeek(pendingSeekMs, true);
 		rangeCreateState = null;
 		timelineSeekDrag = false;
+		timelinePanState = null;
 		selectionDrag = null;
 	}
 
@@ -534,6 +623,8 @@
 	}
 
 	function startCueDrag(event: PointerEvent, cue: VideoLocalizationCue, mode: DragMode) {
+		if (event.button !== 0) return;
+		if (trackStates.subtitles.locked) return;
 		const time = cueLiveTime(cue);
 		if (time.end_ms <= time.start_ms) return;
 		event.preventDefault();
@@ -577,6 +668,9 @@
 	}
 
 	function startClipDrag(event: PointerEvent, clip: VideoLocalizationTimelineClip, mode: DragMode) {
+		if (event.button !== 0) return;
+		const trackId = clip.track_id as VideoLocalizationTrackId;
+		if (trackStates[trackId]?.locked) return;
 		const time = timelineClipTime(clip);
 		event.preventDefault();
 		event.stopPropagation();
@@ -664,21 +758,21 @@
 
 <svelte:window onkeydown={handleTimelineKeydown} onpointerdown={closeFloatingControls} />
 
-<section class="cut-timeline">
+<section class="cut-timeline" aria-label="视频本土化时间线">
 	<div class="timeline-toolbar">
 		<div class="transport">
-			<button class="icon-btn" type="button" aria-label="跳到开始" title="跳到开始：将播放指针移回时间线起点。" data-tooltip="跳到开始：将播放指针移回时间线起点。" onclick={() => onTransportAction('start')}><SkipBack size={15} /></button>
-			<button class="icon-btn" type="button" aria-label={isPlaying ? '暂停' : '播放'} title={isPlaying ? '暂停：停止视频和所有启用轨道的播放。' : '播放：从当前指针同步播放视频和启用的轨道。'} data-tooltip={isPlaying ? '暂停：停止视频和所有启用轨道的播放。' : '播放：从当前指针同步播放视频和启用的轨道。'} onclick={() => onTransportAction('play-pause')}>
+			<button class="icon-btn" type="button" aria-label="跳到开始" data-tooltip="跳到开始：将播放指针移回时间线起点。" onclick={() => onTransportAction('start')}><SkipBack size={15} /></button>
+			<button class="icon-btn" type="button" aria-label={isPlaying ? '暂停' : '播放'} data-tooltip={isPlaying ? '暂停｜停止视频和所有启用轨道的播放。快捷键：Space' : '播放｜从当前指针同步播放视频和启用的轨道。快捷键：Space'} onclick={() => onTransportAction('play-pause')}>
 				{#if isPlaying}<Pause size={15} />{:else}<Play size={15} />{/if}
 			</button>
-			<button class="icon-btn" type="button" aria-label="跳到下一段" title="下一段：跳到后一个字幕片段的入点。" data-tooltip="下一段：跳到后一个字幕片段的入点。" onclick={() => onTransportAction('next')}><SkipForward size={15} /></button>
-			<button class="icon-btn" type="button" aria-label="撤销配音片段编辑" title="撤销：恢复上一次配音片段移动或裁切。" data-tooltip="撤销：恢复上一次配音片段移动或裁切。" onclick={onUndoTimelineClip} disabled={!canUndoTimeline}><Undo2 size={15} /></button>
-			<button class="icon-btn" type="button" aria-label="重做配音片段编辑" title="重做：重新应用刚撤销的配音片段编辑。" data-tooltip="重做：重新应用刚撤销的配音片段编辑。" onclick={onRedoTimelineClip} disabled={!canRedoTimeline}><Redo2 size={15} /></button>
+			<button class="icon-btn" type="button" aria-label="跳到下一段" data-tooltip="下一段：跳到后一个字幕片段的入点。" onclick={() => onTransportAction('next')}><SkipForward size={15} /></button>
+			<button class="icon-btn" type="button" aria-label="撤销配音片段编辑" data-tooltip="撤销：恢复上一次配音片段移动或裁切。" onclick={onUndoTimelineClip} disabled={!canUndoTimeline}><Undo2 size={15} /></button>
+			<button class="icon-btn" type="button" aria-label="重做配音片段编辑" data-tooltip="重做：重新应用刚撤销的配音片段编辑。" onclick={onRedoTimelineClip} disabled={!canRedoTimeline}><Redo2 size={15} /></button>
 			<div class="subtitle-layer-controls" aria-label="视频字幕显示">
 				<Captions size={13} />
-				<button class:active={subtitlePreview.sources?.asr === true} type="button" title="ASR 字幕：切换视频预览中的原文识别字幕。" onclick={() => onToggleSubtitleSource('asr')}>ASR</button>
-				<button class:active={subtitlePreview.sources?.localized === true} type="button" title="本土化字幕：切换视频预览中的本土化译文。" onclick={() => onToggleSubtitleSource('localized')}>本土化</button>
-				<button class:active={subtitlePreview.sources?.tts === true} type="button" title="TTS 文本：切换视频预览中的实际配音台词。" onclick={() => onToggleSubtitleSource('tts')}>TTS</button>
+				<button class:active={subtitlePreview.sources?.asr === true} type="button" data-tooltip="ASR 字幕｜显示或隐藏视频预览中的原文识别字幕。" onclick={() => onToggleSubtitleSource('asr')}>ASR</button>
+				<button class:active={subtitlePreview.sources?.localized === true} type="button" data-tooltip="本土化字幕｜显示或隐藏视频预览中的本土化译文。" onclick={() => onToggleSubtitleSource('localized')}>本土化</button>
+				<button class:active={subtitlePreview.sources?.tts === true} type="button" data-tooltip="TTS 文本｜显示或隐藏视频预览中的实际配音台词。" onclick={() => onToggleSubtitleSource('tts')}>TTS</button>
 			</div>
 		</div>
 		<div class="timeline-actions">
@@ -700,19 +794,23 @@
 				<span>{formatTimelineZoom(timelineZoom)}x</span>
 				<button type="button" onclick={() => stepTimelineZoom(1)} disabled={timelineZoom >= 1200} aria-label="放大时间线" data-tooltip="放大时间线：更精细地查看波形和片段。"><ZoomIn size={13} /></button>
 			</div>
+			<div class="range-marker-tools" aria-label="设置出入点">
+				<button class:active={rangeStartMs !== null} type="button" aria-label="设置入点" data-tooltip="设置入点：把当前播放指针设为选区起点。快捷键 I" onclick={() => setSelectionPoint('start')}><ChevronsLeft size={14} /></button>
+				<button class:active={rangeEndMs !== null} type="button" aria-label="设置出点" data-tooltip="设置出点：把当前播放指针设为选区终点。快捷键 O" onclick={() => setSelectionPoint('end')}><ChevronsRight size={14} /></button>
+			</div>
 			<button class="tool-btn icon-tool" type="button" onclick={onExtractAudio} disabled={!hasVideo || hasSourceAudio || extractingAudio} aria-label="抽取原音轨" data-tooltip="抽取原音轨：从视频中生成可编辑的原始音频轨。">
 				<FileAudio size={13} />
 			</button>
 			<button class="tool-btn icon-tool" type="button" onclick={onSeparateStems} disabled={!hasSourceAudio || stemsReady || separatingStems} aria-label="生成人声和背景轨" data-tooltip="生成人声和背景轨：把原音轨分离成人声与伴奏/环境声。">
 				<Mic2 size={13} />
 			</button>
-			<button class="primary-tool icon-tool" type="button" onclick={onTranscribeEnglish} disabled={!hasSourceAudio || hasAsr || transcribingAsr} aria-label="生成字幕轨" data-tooltip="生成字幕轨：识别原音频并创建可编辑字幕片段。">
+			<button class="primary-tool icon-tool" type="button" onclick={onTranscribeEnglish} disabled={!hasSourceAudio || hasAsr || transcribingAsr || trackStates.subtitles.locked} aria-label="生成字幕轨" data-tooltip="生成字幕轨：识别原音频并创建可编辑字幕片段。">
 				<Captions size={13} />
 			</button>
 		</div>
 	</div>
 
-	<div class="tracks" style={`grid-template-columns:${labelColumnWidth}px minmax(0, 1fr)`}>
+	<div class="tracks" style={`grid-template-columns:${labelColumnWidth}px minmax(0, 1fr);--label-column-width:${labelColumnWidth}px`}>
 		<div class="track-labels">
 			<div class="track-meter-head level-meter" class:active={isPlaying} aria-label="当前时间与音频电平">
 				<div class="meter-track" aria-hidden="true">
@@ -725,124 +823,132 @@
 				</div>
 				<strong class="time-readout">{formatTimecode(currentTimeMs / 1000, 30)}</strong>
 			</div>
-			<div class="track-label subtitle track-subtitle" class:collapsed={subtitleTrackCollapsed} style={`height:${subtitleTrackHeight}px`}>
+			<div class="track-label subtitle track-subtitle" class:collapsed={subtitleTrackCollapsed} class:track-locked={trackStates.subtitles.locked} style={`height:${subtitleTrackHeight}px`}>
 				<div>
 					{#if editingTrackId === 'subtitles'}
 						<input class="track-name-input" data-track-name="subtitles" aria-label="修改字幕轨名称" value={editingTrackValue} oninput={(event) => (editingTrackValue = event.currentTarget.value)} onblur={() => finishTrackRename('subtitles')} onkeydown={(event) => handleTrackNameKeydown(event, 'subtitles')} />
 					{:else}
-						<button class="track-name-button" type="button" title="重命名轨道：点击后编辑字幕轨名称。" onclick={() => beginTrackRename('subtitles')}>{trackName('subtitles')}</button>
+						<button class="track-name-button" type="button" disabled={trackStates.subtitles.locked} data-tooltip="字幕轨名称｜点击修改轨道名称。锁定时不可编辑。" onclick={() => beginTrackRename('subtitles')}>{trackName('subtitles')}</button>
 					{/if}
 					<span>点击片段同步右侧编辑</span>
 				</div>
 				<div class="track-controls">
-					<button class="track-action" type="button" title="生成字幕轨：识别原音轨并创建可编辑的 ASR 字幕。" onclick={onTranscribeEnglish} disabled={!hasSourceAudio || hasAsr || transcribingAsr}>ASR</button>
-					<button class="track-collapse" type="button" aria-label={subtitleTrackCollapsed ? '展开字幕轨' : '折叠字幕轨'} title={subtitleTrackCollapsed ? '展开字幕轨：显示完整字幕内容，可在片段内横向滚动。' : '折叠字幕轨：只保留单行摘要，过长内容使用省略号。'} onclick={toggleSubtitleTrack}>
+					<button class="track-action" type="button" data-tooltip="生成 ASR 字幕｜识别原音轨并创建可编辑字幕片段。" onclick={onTranscribeEnglish} disabled={!hasSourceAudio || hasAsr || transcribingAsr || trackStates.subtitles.locked}>ASR</button>
+					<button class="track-collapse" type="button" aria-label={subtitleTrackCollapsed ? '展开字幕轨' : '折叠字幕轨'} data-tooltip={subtitleTrackCollapsed ? '展开字幕轨｜显示完整字幕内容，片段高度同步增大。' : '折叠字幕轨｜收紧轨道与字幕片段，只显示单行摘要。'} onclick={toggleSubtitleTrack}>
 						{#if subtitleTrackCollapsed}<ChevronRight size={13} />{:else}<ChevronDown size={13} />{/if}
 					</button>
+					<button class="track-toggle lock-toggle" class:active={trackStates.subtitles.locked} type="button" aria-label={trackStates.subtitles.locked ? '解锁字幕轨' : '锁定字幕轨'} data-tooltip={trackStates.subtitles.locked ? '解锁字幕轨｜允许移动、裁切和删除字幕片段。' : '锁定字幕轨｜禁止修改字幕片段，但不影响显示和播放。'} onclick={() => toggleLocked('subtitles')}>{#if trackStates.subtitles.locked}<Lock size={12} />{:else}<Unlock size={12} />{/if}</button>
 				</div>
 			</div>
-			<div class="track-label track-audio track-original" class:track-muted={trackStates.original.muted} style={`height:${trackHeights.original}px`}>
+			<div class="track-label track-audio track-original" class:track-muted={trackStates.original.muted} class:track-locked={trackStates.original.locked} style={`height:${trackHeights.original}px`}>
 				<i class="track-title-level" style={`width:${trackMeterPercent('original')}%`}></i>
 				<div>
 					{#if editingTrackId === 'original'}
 						<input class="track-name-input" data-track-name="original" aria-label="修改原音轨名称" value={editingTrackValue} oninput={(event) => (editingTrackValue = event.currentTarget.value)} onblur={() => finishTrackRename('original')} onkeydown={(event) => handleTrackNameKeydown(event, 'original')} />
 					{:else}
-						<button class="track-name-button" type="button" title="重命名轨道：点击后编辑原音轨名称。" onclick={() => beginTrackRename('original')}>{trackName('original')}</button>
+						<button class="track-name-button" type="button" disabled={trackStates.original.locked} data-tooltip="原音轨名称｜点击修改轨道名称。锁定时不可编辑。" onclick={() => beginTrackRename('original')}>{trackName('original')}</button>
 					{/if}
 					<span>{hasSourceAudio ? '完整视频声音' : '导入后自动抽取'}</span>
 				</div>
 				<div class="track-controls">
-					<button class="track-toggle" class:active={trackStates.original.muted} type="button" title="静音原音轨：播放时不输出完整视频声音。" onclick={() => toggleMuted('original')}>M</button>
-					<button class="track-toggle" class:active={trackStates.original.solo} type="button" title="独奏原音轨：只播放完整视频声音。" onclick={() => toggleSolo('original')}>S</button>
+					<button class="track-toggle" class:active={trackStates.original.muted} type="button" data-tooltip="静音原音轨｜关闭当前轨道声音，片段变为灰色。" onclick={() => toggleMuted('original')}>M</button>
+					<button class="track-toggle" class:active={trackStates.original.solo} type="button" data-tooltip="独奏原音轨｜只播放当前轨道；所有 S 均关闭时播放全部未静音轨道。" onclick={() => toggleSolo('original')}>S</button>
 					<div class="volume-control">
-						<button class="volume-db-button" class:active={openVolumeTrack === 'original'} type="button" aria-label="调整原音轨音量" title="音量：点击输入精确 dB；按住并左右拖动，以 0.1 dB 调整。" onpointerdown={(event) => beginVolumeScrub(event, 'original')}>{volumeDbLabel('original')}</button>
 						{#if openVolumeTrack === 'original'}
-							<div class="volume-popover" role="group" aria-label="原音轨音量" onpointerdown={(event) => event.stopPropagation()}>
-								<input aria-label="原音轨音量 dB" type="number" min="-60" max="0" step="0.01" value={volumeToDb(trackStates.original.volume, 2)} oninput={(event) => updateTrackDb('original', Number(event.currentTarget.value))} />
+							<div class="volume-inline-editor" role="group" aria-label="原音轨音量" onpointerdown={(event) => event.stopPropagation()}>
+								<input data-volume-input="original" aria-label="原音轨音量 dB" type="number" min="-60" max="6.02" step="0.01" value={volumeToDb(trackStates.original.volume, 2)} oninput={(event) => updateTrackDb('original', Number(event.currentTarget.value))} onblur={() => finishVolumeEdit('original')} onkeydown={(event) => handleVolumeInputKeydown(event, 'original')} />
 								<span>dB</span>
 							</div>
+						{:else}
+							<button class="volume-db-button" type="button" aria-label="调整原音轨音量" data-tooltip="原音轨音量：单击精确输入，按住左右拖动以 0.1 dB 调整，双击重置为 0 dB。" onpointerdown={(event) => beginVolumeScrub(event, 'original')} ondblclick={(event) => resetTrackDb(event, 'original')}>{volumeDbLabel('original')}</button>
 						{/if}
 					</div>
+					<button class="track-toggle lock-toggle" class:active={trackStates.original.locked} type="button" aria-label={trackStates.original.locked ? '解锁原音轨' : '锁定原音轨'} data-tooltip={trackStates.original.locked ? '解锁原音轨｜允许移动、裁切和删除音频片段。' : '锁定原音轨｜禁止修改片段，但不影响声音播放。'} onclick={() => toggleLocked('original')}>{#if trackStates.original.locked}<Lock size={12} />{:else}<Unlock size={12} />{/if}</button>
 				</div>
-				<button class="track-resize-handle" type="button" aria-label="调整原音轨高度" title="调整轨道高度：上下拖动改变原音轨的显示高度。" onpointerdown={(event) => beginTrackHeightResize(event, 'original')}></button>
+				<button class="track-resize-handle" type="button" aria-label="调整原音轨高度" data-tooltip="调整原音轨高度：上下拖动改变轨道显示高度。" onpointerdown={(event) => beginTrackHeightResize(event, 'original')}></button>
 			</div>
-			<div class="track-label track-audio track-vocals" class:track-muted={trackStates.vocals.muted} style={`height:${trackHeights.vocals}px`}>
+			<div class="track-label track-audio track-vocals" class:track-muted={trackStates.vocals.muted} class:track-locked={trackStates.vocals.locked} style={`height:${trackHeights.vocals}px`}>
 				<i class="track-title-level" style={`width:${trackMeterPercent('vocals')}%`}></i>
 				<div>
 					{#if editingTrackId === 'vocals'}
 						<input class="track-name-input" data-track-name="vocals" aria-label="修改人声轨名称" value={editingTrackValue} oninput={(event) => (editingTrackValue = event.currentTarget.value)} onblur={() => finishTrackRename('vocals')} onkeydown={(event) => handleTrackNameKeydown(event, 'vocals')} />
 					{:else}
-						<button class="track-name-button" type="button" title="重命名轨道：点击后编辑人声轨名称。" onclick={() => beginTrackRename('vocals')}>{trackName('vocals')}</button>
+						<button class="track-name-button" type="button" disabled={trackStates.vocals.locked} data-tooltip="人声轨名称｜点击修改轨道名称。锁定时不可编辑。" onclick={() => beginTrackRename('vocals')}>{trackName('vocals')}</button>
 					{/if}
 					<span>{stemsReady ? '分离后人声' : '由原音轨生成'}</span>
 				</div>
 				<div class="track-controls">
-					<button class="track-toggle" class:active={trackStates.vocals.muted} type="button" title="静音人声轨：播放时不输出分离后人声。" onclick={() => toggleMuted('vocals')}>M</button>
-					<button class="track-toggle" class:active={trackStates.vocals.solo} type="button" title="独奏人声轨：只播放分离后人声。" onclick={() => toggleSolo('vocals')}>S</button>
+					<button class="track-toggle" class:active={trackStates.vocals.muted} type="button" data-tooltip="静音人声轨｜关闭当前轨道声音，片段变为灰色。" onclick={() => toggleMuted('vocals')}>M</button>
+					<button class="track-toggle" class:active={trackStates.vocals.solo} type="button" data-tooltip="独奏人声轨｜只播放当前轨道；所有 S 均关闭时播放全部未静音轨道。" onclick={() => toggleSolo('vocals')}>S</button>
 					<div class="volume-control">
-						<button class="volume-db-button" class:active={openVolumeTrack === 'vocals'} type="button" aria-label="调整人声轨音量" title="音量：点击输入精确 dB；按住并左右拖动，以 0.1 dB 调整。" onpointerdown={(event) => beginVolumeScrub(event, 'vocals')}>{volumeDbLabel('vocals')}</button>
 						{#if openVolumeTrack === 'vocals'}
-							<div class="volume-popover" role="group" aria-label="人声轨音量" onpointerdown={(event) => event.stopPropagation()}>
-								<input aria-label="人声轨音量 dB" type="number" min="-60" max="0" step="0.01" value={volumeToDb(trackStates.vocals.volume, 2)} oninput={(event) => updateTrackDb('vocals', Number(event.currentTarget.value))} />
+							<div class="volume-inline-editor" role="group" aria-label="人声轨音量" onpointerdown={(event) => event.stopPropagation()}>
+								<input data-volume-input="vocals" aria-label="人声轨音量 dB" type="number" min="-60" max="6.02" step="0.01" value={volumeToDb(trackStates.vocals.volume, 2)} oninput={(event) => updateTrackDb('vocals', Number(event.currentTarget.value))} onblur={() => finishVolumeEdit('vocals')} onkeydown={(event) => handleVolumeInputKeydown(event, 'vocals')} />
 								<span>dB</span>
 							</div>
+						{:else}
+							<button class="volume-db-button" type="button" aria-label="调整人声轨音量" data-tooltip="人声轨音量：单击精确输入，按住左右拖动以 0.1 dB 调整，双击重置为 0 dB。" onpointerdown={(event) => beginVolumeScrub(event, 'vocals')} ondblclick={(event) => resetTrackDb(event, 'vocals')}>{volumeDbLabel('vocals')}</button>
 						{/if}
 					</div>
-					<button class="track-action" type="button" title="生成人声和背景轨：从原音轨执行人声分离。" onclick={onSeparateStems} disabled={!hasSourceAudio || stemsReady || separatingStems}>生成</button>
+					<button class="track-toggle lock-toggle" class:active={trackStates.vocals.locked} type="button" aria-label={trackStates.vocals.locked ? '解锁人声轨' : '锁定人声轨'} data-tooltip={trackStates.vocals.locked ? '解锁人声轨｜允许移动、裁切和删除音频片段。' : '锁定人声轨｜禁止修改片段，但不影响声音播放。'} onclick={() => toggleLocked('vocals')}>{#if trackStates.vocals.locked}<Lock size={12} />{:else}<Unlock size={12} />{/if}</button>
 				</div>
-				<button class="track-resize-handle" type="button" aria-label="调整人声轨高度" title="调整轨道高度：上下拖动改变人声轨的显示高度。" onpointerdown={(event) => beginTrackHeightResize(event, 'vocals')}></button>
+				<button class="track-resize-handle" type="button" aria-label="调整人声轨高度" data-tooltip="调整人声轨高度：上下拖动改变轨道显示高度。" onpointerdown={(event) => beginTrackHeightResize(event, 'vocals')}></button>
 			</div>
-			<div class="track-label track-audio track-background" class:track-muted={trackStates.background.muted} style={`height:${trackHeights.background}px`}>
+			<div class="track-label track-audio track-background" class:track-muted={trackStates.background.muted} class:track-locked={trackStates.background.locked} style={`height:${trackHeights.background}px`}>
 				<i class="track-title-level" style={`width:${trackMeterPercent('background')}%`}></i>
 				<div>
 					{#if editingTrackId === 'background'}
 						<input class="track-name-input" data-track-name="background" aria-label="修改背景音乐轨名称" value={editingTrackValue} oninput={(event) => (editingTrackValue = event.currentTarget.value)} onblur={() => finishTrackRename('background')} onkeydown={(event) => handleTrackNameKeydown(event, 'background')} />
 					{:else}
-						<button class="track-name-button" type="button" title="重命名轨道：点击后编辑背景音乐轨名称。" onclick={() => beginTrackRename('background')}>{trackName('background')}</button>
+						<button class="track-name-button" type="button" disabled={trackStates.background.locked} data-tooltip="背景音乐轨名称｜点击修改轨道名称。锁定时不可编辑。" onclick={() => beginTrackRename('background')}>{trackName('background')}</button>
 					{/if}
 					<span>{stemsReady ? '伴奏/环境声' : '与人声轨同时生成'}</span>
 				</div>
 				<div class="track-controls">
-					<button class="track-toggle" class:active={trackStates.background.muted} type="button" title="静音背景音乐轨：播放时不输出伴奏和环境声。" onclick={() => toggleMuted('background')}>M</button>
-					<button class="track-toggle" class:active={trackStates.background.solo} type="button" title="独奏背景音乐轨：只播放伴奏和环境声。" onclick={() => toggleSolo('background')}>S</button>
+					<button class="track-toggle" class:active={trackStates.background.muted} type="button" data-tooltip="静音背景音乐轨｜关闭当前轨道声音，片段变为灰色。" onclick={() => toggleMuted('background')}>M</button>
+					<button class="track-toggle" class:active={trackStates.background.solo} type="button" data-tooltip="独奏背景音乐轨｜只播放当前轨道；所有 S 均关闭时播放全部未静音轨道。" onclick={() => toggleSolo('background')}>S</button>
 					<div class="volume-control">
-						<button class="volume-db-button" class:active={openVolumeTrack === 'background'} type="button" aria-label="调整背景音乐轨音量" title="音量：点击输入精确 dB；按住并左右拖动，以 0.1 dB 调整。" onpointerdown={(event) => beginVolumeScrub(event, 'background')}>{volumeDbLabel('background')}</button>
 						{#if openVolumeTrack === 'background'}
-							<div class="volume-popover" role="group" aria-label="背景音乐轨音量" onpointerdown={(event) => event.stopPropagation()}>
-								<input aria-label="背景音乐轨音量 dB" type="number" min="-60" max="0" step="0.01" value={volumeToDb(trackStates.background.volume, 2)} oninput={(event) => updateTrackDb('background', Number(event.currentTarget.value))} />
+							<div class="volume-inline-editor" role="group" aria-label="背景音乐轨音量" onpointerdown={(event) => event.stopPropagation()}>
+								<input data-volume-input="background" aria-label="背景音乐轨音量 dB" type="number" min="-60" max="6.02" step="0.01" value={volumeToDb(trackStates.background.volume, 2)} oninput={(event) => updateTrackDb('background', Number(event.currentTarget.value))} onblur={() => finishVolumeEdit('background')} onkeydown={(event) => handleVolumeInputKeydown(event, 'background')} />
 								<span>dB</span>
 							</div>
+						{:else}
+							<button class="volume-db-button" type="button" aria-label="调整背景音乐轨音量" data-tooltip="背景音乐轨音量：单击精确输入，按住左右拖动以 0.1 dB 调整，双击重置为 0 dB。" onpointerdown={(event) => beginVolumeScrub(event, 'background')} ondblclick={(event) => resetTrackDb(event, 'background')}>{volumeDbLabel('background')}</button>
 						{/if}
 					</div>
+					<button class="track-toggle lock-toggle" class:active={trackStates.background.locked} type="button" aria-label={trackStates.background.locked ? '解锁背景音乐轨' : '锁定背景音乐轨'} data-tooltip={trackStates.background.locked ? '解锁背景音乐轨｜允许移动、裁切和删除音频片段。' : '锁定背景音乐轨｜禁止修改片段，但不影响声音播放。'} onclick={() => toggleLocked('background')}>{#if trackStates.background.locked}<Lock size={12} />{:else}<Unlock size={12} />{/if}</button>
 				</div>
-				<button class="track-resize-handle" type="button" aria-label="调整背景音乐轨高度" title="调整轨道高度：上下拖动改变背景音乐轨的显示高度。" onpointerdown={(event) => beginTrackHeightResize(event, 'background')}></button>
+				<button class="track-resize-handle" type="button" aria-label="调整背景音乐轨高度" data-tooltip="调整背景音乐轨高度：上下拖动改变轨道显示高度。" onpointerdown={(event) => beginTrackHeightResize(event, 'background')}></button>
 			</div>
-			<div class="track-label track-audio track-dub" class:track-muted={trackStates.dub.muted} style={`height:${trackHeights.dub}px`}>
+			<div class="track-label track-audio track-dub" class:track-muted={trackStates.dub.muted} class:track-locked={trackStates.dub.locked} style={`height:${trackHeights.dub}px`}>
 				<i class="track-title-level" style={`width:${trackMeterPercent('dub')}%`}></i>
 				<div>
 					{#if editingTrackId === 'dub'}
 						<input class="track-name-input" data-track-name="dub" aria-label="修改中文配音轨名称" value={editingTrackValue} oninput={(event) => (editingTrackValue = event.currentTarget.value)} onblur={() => finishTrackRename('dub')} onkeydown={(event) => handleTrackNameKeydown(event, 'dub')} />
 					{:else}
-						<button class="track-name-button" type="button" title="重命名轨道：点击后编辑中文配音轨名称。" onclick={() => beginTrackRename('dub')}>{trackName('dub')}</button>
+						<button class="track-name-button" type="button" disabled={trackStates.dub.locked} data-tooltip="中文配音轨名称｜点击修改轨道名称。锁定时不可编辑。" onclick={() => beginTrackRename('dub')}>{trackName('dub')}</button>
 					{/if}
 					<span>后续放入生成音频</span>
 				</div>
 				<div class="track-controls">
-					<button class="track-toggle" class:active={trackStates.dub.muted} type="button" title="静音中文配音轨：播放时不输出生成的中文配音。" onclick={() => toggleMuted('dub')}>M</button>
-					<button class="track-toggle" class:active={trackStates.dub.solo} type="button" title="独奏中文配音轨：只播放生成的中文配音。" onclick={() => toggleSolo('dub')}>S</button>
+					<button class="track-toggle" class:active={trackStates.dub.muted} type="button" data-tooltip="静音中文配音轨｜关闭当前轨道声音，片段变为灰色。" onclick={() => toggleMuted('dub')}>M</button>
+					<button class="track-toggle" class:active={trackStates.dub.solo} type="button" data-tooltip="独奏中文配音轨｜只播放当前轨道；所有 S 均关闭时播放全部未静音轨道。" onclick={() => toggleSolo('dub')}>S</button>
 					<div class="volume-control">
-						<button class="volume-db-button" class:active={openVolumeTrack === 'dub'} type="button" aria-label="调整中文配音轨音量" title="音量：点击输入精确 dB；按住并左右拖动，以 0.1 dB 调整。" onpointerdown={(event) => beginVolumeScrub(event, 'dub')}>{volumeDbLabel('dub')}</button>
 						{#if openVolumeTrack === 'dub'}
-							<div class="volume-popover" role="group" aria-label="中文配音轨音量" onpointerdown={(event) => event.stopPropagation()}>
-								<input aria-label="中文配音轨音量 dB" type="number" min="-60" max="0" step="0.01" value={volumeToDb(trackStates.dub.volume, 2)} oninput={(event) => updateTrackDb('dub', Number(event.currentTarget.value))} />
+							<div class="volume-inline-editor" role="group" aria-label="中文配音轨音量" onpointerdown={(event) => event.stopPropagation()}>
+								<input data-volume-input="dub" aria-label="中文配音轨音量 dB" type="number" min="-60" max="6.02" step="0.01" value={volumeToDb(trackStates.dub.volume, 2)} oninput={(event) => updateTrackDb('dub', Number(event.currentTarget.value))} onblur={() => finishVolumeEdit('dub')} onkeydown={(event) => handleVolumeInputKeydown(event, 'dub')} />
 								<span>dB</span>
 							</div>
+						{:else}
+							<button class="volume-db-button" type="button" aria-label="调整中文配音轨音量" data-tooltip="中文配音轨音量：单击精确输入，按住左右拖动以 0.1 dB 调整，双击重置为 0 dB。" onpointerdown={(event) => beginVolumeScrub(event, 'dub')} ondblclick={(event) => resetTrackDb(event, 'dub')}>{volumeDbLabel('dub')}</button>
 						{/if}
 					</div>
+					<button class="track-toggle lock-toggle" class:active={trackStates.dub.locked} type="button" aria-label={trackStates.dub.locked ? '解锁中文配音轨' : '锁定中文配音轨'} data-tooltip={trackStates.dub.locked ? '解锁中文配音轨｜允许移动、裁切和删除音频片段。' : '锁定中文配音轨｜禁止修改片段，但不影响声音播放。'} onclick={() => toggleLocked('dub')}>{#if trackStates.dub.locked}<Lock size={12} />{:else}<Unlock size={12} />{/if}</button>
 				</div>
-				<button class="track-resize-handle" type="button" aria-label="调整中文配音轨高度" title="调整轨道高度：上下拖动改变中文配音轨的显示高度。" onpointerdown={(event) => beginTrackHeightResize(event, 'dub')}></button>
+				<button class="track-resize-handle" type="button" aria-label="调整中文配音轨高度" data-tooltip="调整中文配音轨高度：上下拖动改变轨道显示高度。" onpointerdown={(event) => beginTrackHeightResize(event, 'dub')}></button>
 			</div>
-			<button class="track-label-width-handle" type="button" aria-label="调整轨道标题宽度" title="调整标题宽度：左右拖动改变所有轨道标题栏的宽度。" onpointerdown={beginLabelColumnResize}></button>
+			<button class="track-label-width-handle" type="button" aria-label="调整轨道标题宽度" data-tooltip="调整标题宽度：左右拖动改变所有轨道标题栏宽度。" onpointerdown={beginLabelColumnResize}></button>
 		</div>
 
 		<div
@@ -857,6 +963,7 @@
 			<div
 				class="timeline-content"
 				class:dragging={Boolean(dragState)}
+				class:panning={Boolean(timelinePanState)}
 				style={`width:${timelineZoom * 100}%`}
 				bind:this={timelineContentEl}
 				role="application"
@@ -878,10 +985,10 @@
 				<div class="playhead" style={`left:${playheadPercent}%`}></div>
 				{#if hasRangeSelection}
 					<div class="range-selection" style={`left:${rangeLeftPercent}%;width:${rangeWidthPercent}%`}></div>
-					<button class="range-handle in" type="button" style={`left:${rangeLeftPercent}%`} aria-label="拖动选区入点" title="选区入点：拖动调整样音或生成范围的开始时间。" onpointerdown={(event) => beginSelectionDrag(event, 'start')}>I</button>
-					<button class="range-handle out" type="button" style={`left:${rangeLeftPercent + rangeWidthPercent}%`} aria-label="拖动选区出点" title="选区出点：拖动调整样音或生成范围的结束时间。" onpointerdown={(event) => beginSelectionDrag(event, 'end')}>O</button>
 				{/if}
-				<div class="track-row subtitle row-subtitle" class:collapsed={subtitleTrackCollapsed} style={`height:${subtitleTrackHeight}px`}>
+				{#if rangeStartMs !== null}<button class="range-handle in" type="button" style={`left:${rangeStartPercent}%`} aria-label={`拖动选区入点，当前 ${rangeStartMs} 毫秒`} data-tooltip="选区入点｜拖动修改范围开始位置。快捷键：I" onpointerdown={(event) => beginSelectionDrag(event, 'start')}>I</button>{/if}
+				{#if rangeEndMs !== null}<button class="range-handle out" type="button" style={`left:${rangeEndPercent}%`} aria-label={`拖动选区出点，当前 ${rangeEndMs} 毫秒`} data-tooltip="选区出点｜拖动修改范围结束位置。快捷键：O" onpointerdown={(event) => beginSelectionDrag(event, 'end')}>O</button>{/if}
+				<div class="track-row subtitle row-subtitle" data-track-row class:collapsed={subtitleTrackCollapsed} class:locked={trackStates.subtitles.locked} style={`height:${subtitleTrackHeight}px`}>
 					{#if draft?.cues.length}
 						{#each draft.cues as cue}
 							<button
@@ -894,7 +1001,7 @@
 								onclick={() => !dragState && onSelectCue(cue.cue_id)}
 								onpointerdown={(event) => startCueDrag(event, cue, 'move')}
 								aria-label={`选择字幕 ${cue.cue_id}`}
-								title={`选择字幕：打开 ${cue.cue_id}，拖动片段可调整位置。`}
+								data-tooltip={`选择字幕：打开 ${cue.cue_id}，拖动片段可调整位置。`}
 							>
 								<span
 									class="cue-handle"
@@ -925,69 +1032,37 @@
 						<div class="pending-block">生成 ASR 后，字幕片段会出现在这里</div>
 					{/if}
 				</div>
-				<div class="track-row row-original" data-audio-selection-track="original" class:muted={trackStates.original.muted} style={`height:${trackHeights.original}px`}>
-					{#if hasSourceAudio}
-						<TrackWaveform audioSrc={originalAudioSrc} tone="source" {timelineZoom} scrollLeft={timelineScrollLeft} viewportWidth={timelineViewportWidth} gain={trackStates.original.volume} onAnalysis={(bars) => updateMeterWaveform('original', bars)} />
+				<div class="track-row row-original" data-track-row data-audio-selection-track="original" class:muted={trackStates.original.muted} class:locked={trackStates.original.locked} style={`height:${trackHeights.original}px`}>
+					{#if clipsForTrack('original').length}
+						{#each clipsForTrack('original') as clip}
+							<EditableAudioClip {clip} audioSrc={timelineClipAudioUrl(projectId, clip)} label={clipLabel(clip, 'original')} tone={clipTone('original')} left={clipLeft(timelineClipTime(clip).start_ms)} width={clipWidth(timelineClipTime(clip).start_ms, timelineClipTime(clip).end_ms)} dragging={clipDragState?.clipId === clip.clip_id} locked={trackStates.original.locked} startMs={timelineClipTime(clip).start_ms} endMs={timelineClipTime(clip).end_ms} sourceStartMs={timelineClipTime(clip).source_start_ms ?? 0} sourceEndMs={timelineClipTime(clip).source_end_ms ?? null} {timelineDurationMs} {timelineZoom} {timelineScrollLeft} {timelineViewportWidth} onMove={(event) => startClipDrag(event, clip, 'move')} onTrimStart={(event) => startClipDrag(event, clip, 'trim-start')} onTrimEnd={(event) => startClipDrag(event, clip, 'trim-end')} onDelete={() => onDeleteTimelineClip(clip.clip_id)} onAnalysis={(bars, durationSeconds) => updateDubWaveform(clip.clip_id, bars, durationSeconds)} />
+						{/each}
 					{:else}
 						<div class="pending-block">导入视频后，原音轨会出现在这里</div>
 					{/if}
 				</div>
-				<div class="track-row row-vocals" data-audio-selection-track="vocals" class:muted={trackStates.vocals.muted} style={`height:${trackHeights.vocals}px`}>
-					{#if stemsReady}
-						<TrackWaveform audioSrc={vocalsAudioSrc} tone="vocals" {timelineZoom} scrollLeft={timelineScrollLeft} viewportWidth={timelineViewportWidth} gain={trackStates.vocals.volume} onAnalysis={(bars) => updateMeterWaveform('vocals', bars)} />
+				<div class="track-row row-vocals" data-track-row data-audio-selection-track="vocals" class:muted={trackStates.vocals.muted} class:locked={trackStates.vocals.locked} style={`height:${trackHeights.vocals}px`}>
+					{#if clipsForTrack('vocals').length}
+						{#each clipsForTrack('vocals') as clip}
+							<EditableAudioClip {clip} audioSrc={timelineClipAudioUrl(projectId, clip)} label={clipLabel(clip, 'vocals')} tone={clipTone('vocals')} left={clipLeft(timelineClipTime(clip).start_ms)} width={clipWidth(timelineClipTime(clip).start_ms, timelineClipTime(clip).end_ms)} dragging={clipDragState?.clipId === clip.clip_id} locked={trackStates.vocals.locked} startMs={timelineClipTime(clip).start_ms} endMs={timelineClipTime(clip).end_ms} sourceStartMs={timelineClipTime(clip).source_start_ms ?? 0} sourceEndMs={timelineClipTime(clip).source_end_ms ?? null} {timelineDurationMs} {timelineZoom} {timelineScrollLeft} {timelineViewportWidth} onMove={(event) => startClipDrag(event, clip, 'move')} onTrimStart={(event) => startClipDrag(event, clip, 'trim-start')} onTrimEnd={(event) => startClipDrag(event, clip, 'trim-end')} onDelete={() => onDeleteTimelineClip(clip.clip_id)} onAnalysis={(bars, durationSeconds) => updateDubWaveform(clip.clip_id, bars, durationSeconds)} />
+						{/each}
 					{:else}
 						<div class="pending-block">点击“生成人声/背景”得到人声轨</div>
 					{/if}
 				</div>
-				<div class="track-row row-background" data-audio-selection-track="background" class:muted={trackStates.background.muted} style={`height:${trackHeights.background}px`}>
-					{#if stemsReady}
-						<TrackWaveform audioSrc={backgroundAudioSrc} tone="music" {timelineZoom} scrollLeft={timelineScrollLeft} viewportWidth={timelineViewportWidth} gain={trackStates.background.volume} onAnalysis={(bars) => updateMeterWaveform('background', bars)} />
+				<div class="track-row row-background" data-track-row data-audio-selection-track="background" class:muted={trackStates.background.muted} class:locked={trackStates.background.locked} style={`height:${trackHeights.background}px`}>
+					{#if clipsForTrack('background').length}
+						{#each clipsForTrack('background') as clip}
+							<EditableAudioClip {clip} audioSrc={timelineClipAudioUrl(projectId, clip)} label={clipLabel(clip, 'background')} tone={clipTone('background')} left={clipLeft(timelineClipTime(clip).start_ms)} width={clipWidth(timelineClipTime(clip).start_ms, timelineClipTime(clip).end_ms)} dragging={clipDragState?.clipId === clip.clip_id} locked={trackStates.background.locked} startMs={timelineClipTime(clip).start_ms} endMs={timelineClipTime(clip).end_ms} sourceStartMs={timelineClipTime(clip).source_start_ms ?? 0} sourceEndMs={timelineClipTime(clip).source_end_ms ?? null} {timelineDurationMs} {timelineZoom} {timelineScrollLeft} {timelineViewportWidth} onMove={(event) => startClipDrag(event, clip, 'move')} onTrimStart={(event) => startClipDrag(event, clip, 'trim-start')} onTrimEnd={(event) => startClipDrag(event, clip, 'trim-end')} onDelete={() => onDeleteTimelineClip(clip.clip_id)} onAnalysis={(bars, durationSeconds) => updateDubWaveform(clip.clip_id, bars, durationSeconds)} />
+						{/each}
 					{:else}
 						<div class="pending-block">背景音乐轨会与人声轨同时生成</div>
 					{/if}
 				</div>
-				<div class="track-row row-dub" data-audio-selection-track="dub" class:muted={trackStates.dub.muted} style={`height:${trackHeights.dub}px`}>
-					{#if draft?.timeline_clips.length}
-						{#each draft.timeline_clips.filter((clip) => clip.track_id === 'dub') as clip}
-							<div
-								class="tts-chip"
-								class:dragging={clipDragState?.clipId === clip.clip_id}
-								role="button"
-								tabindex="0"
-								style={`left:${clipLeft(timelineClipTime(clip).start_ms)}%;width:${clipWidth(timelineClipTime(clip).start_ms, timelineClipTime(clip).end_ms)}%`}
-								onpointerdown={(event) => startClipDrag(event, clip, 'move')}
-								aria-label={`移动配音 clip ${clip.clip_id}`}
-							>
-								<ClipWaveform
-									audioSrc={timelineClipAudioUrl(projectId, clip)}
-									sourceStartMs={timelineClipTime(clip).source_start_ms ?? 0}
-									sourceEndMs={timelineClipTime(clip).source_end_ms ?? null}
-									onAnalysis={(bars, durationSeconds) => updateDubWaveform(clip.clip_id, bars, durationSeconds)}
-								/>
-								<span
-									class="cue-handle"
-									role="slider"
-									tabindex="-1"
-									aria-label="裁切配音 clip 入点"
-									aria-valuemin="0"
-									aria-valuemax={timelineDurationMs}
-									aria-valuenow={timelineClipTime(clip).start_ms}
-									onpointerdown={(event) => startClipDrag(event, clip, 'trim-start')}
-								></span>
-								<strong>{clip.cue_id || clip.clip_id}</strong>
-								<span>{clip.status || 'TTS'}</span>
-									<button class="clip-delete" type="button" aria-label={`删除配音 clip ${clip.clip_id}`} title="删除配音片段：从中文配音轨移除该音频。" onclick={(event) => { event.stopPropagation(); onDeleteTimelineClip(clip.clip_id); }}>×</button>
-								<span
-									class="cue-handle"
-									role="slider"
-									tabindex="-1"
-									aria-label="裁切配音 clip 出点"
-									aria-valuemin="0"
-									aria-valuemax={timelineDurationMs}
-									aria-valuenow={timelineClipTime(clip).end_ms}
-									onpointerdown={(event) => startClipDrag(event, clip, 'trim-end')}
-								></span>
-							</div>
+				<div class="track-row row-dub" data-track-row data-audio-selection-track="dub" class:muted={trackStates.dub.muted} class:locked={trackStates.dub.locked} style={`height:${trackHeights.dub}px`}>
+					{#if clipsForTrack('dub').length}
+						{#each clipsForTrack('dub') as clip}
+							<EditableAudioClip {clip} audioSrc={timelineClipAudioUrl(projectId, clip)} label={clipLabel(clip, 'dub')} tone={clipTone('dub')} left={clipLeft(timelineClipTime(clip).start_ms)} width={clipWidth(timelineClipTime(clip).start_ms, timelineClipTime(clip).end_ms)} dragging={clipDragState?.clipId === clip.clip_id} locked={trackStates.dub.locked} startMs={timelineClipTime(clip).start_ms} endMs={timelineClipTime(clip).end_ms} sourceStartMs={timelineClipTime(clip).source_start_ms ?? 0} sourceEndMs={timelineClipTime(clip).source_end_ms ?? null} {timelineDurationMs} {timelineZoom} {timelineScrollLeft} {timelineViewportWidth} onMove={(event) => startClipDrag(event, clip, 'move')} onTrimStart={(event) => startClipDrag(event, clip, 'trim-start')} onTrimEnd={(event) => startClipDrag(event, clip, 'trim-end')} onDelete={() => onDeleteTimelineClip(clip.clip_id)} onAnalysis={(bars, durationSeconds) => updateDubWaveform(clip.clip_id, bars, durationSeconds)} />
 						{/each}
 					{:else}
 						<div class="pending-block">生成的中文配音会作为 clip 放入这里</div>
@@ -995,6 +1070,8 @@
 				</div>
 			</div>
 		</div>
+		<div class="timeline-edge-shadow left" aria-hidden="true"></div>
+		<div class="timeline-edge-shadow right" aria-hidden="true"></div>
 	</div>
 </section>
 
@@ -1003,7 +1080,7 @@
 		border: 1px solid var(--line);
 		border-radius: 8px;
 		background: #0f1216;
-		overflow: hidden;
+		overflow: visible;
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 	}
 
@@ -1122,12 +1199,10 @@
 		top: 3px;
 		z-index: 3;
 		min-width: 82px;
-		padding: 1px 5px;
+		padding: 1px 0;
 		border: 0;
 		border-radius: 3px;
-		background:
-			repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 4px),
-			rgba(7, 11, 14, 0.74);
+		background: transparent;
 		color: #f6e8a8;
 		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 		font-size: 9px;
@@ -1188,6 +1263,35 @@
 		font-variant-numeric: tabular-nums;
 	}
 
+	.range-marker-tools {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		padding: 2px;
+		border: 1px solid var(--line);
+		border-radius: 7px;
+		background: #101419;
+	}
+
+	.range-marker-tools button {
+		width: 24px;
+		height: 24px;
+		padding: 0;
+		border: 1px solid transparent;
+		border-radius: 5px;
+		background: transparent;
+		color: #aebbc3;
+		display: inline-grid;
+		place-items: center;
+		cursor: pointer;
+	}
+
+	.range-marker-tools button.active {
+		border-color: rgba(87, 208, 200, 0.72);
+		background: #173a37;
+		color: #d5fffb;
+	}
+
 	.operation-chip {
 		border: 1px solid var(--line);
 		border-radius: 999px;
@@ -1233,6 +1337,27 @@
 		position: relative;
 	}
 
+	.icon-btn:hover:not(:disabled),
+	.icon-btn:focus-visible,
+	.tool-btn:hover:not(:disabled),
+	.tool-btn:focus-visible,
+	.primary-tool:hover:not(:disabled),
+	.primary-tool:focus-visible,
+	.track-toggle:hover:not(:disabled),
+	.track-toggle:focus-visible,
+	.track-action:hover:not(:disabled),
+	.track-action:focus-visible,
+	.track-collapse:hover:not(:disabled),
+	.track-collapse:focus-visible,
+	.range-marker-tools button:hover:not(:disabled),
+	.range-marker-tools button:focus-visible {
+		border-color: rgba(113, 224, 215, 0.72);
+		background: #26343a;
+		color: #efffff;
+		box-shadow: 0 0 0 1px rgba(87, 208, 200, 0.12);
+		outline: none;
+	}
+
 	.tool-btn,
 	.primary-tool,
 	.track-action {
@@ -1240,28 +1365,6 @@
 		padding: 3px 7px;
 		font-size: 11px;
 		white-space: nowrap;
-	}
-
-	.icon-btn:hover:not(:disabled)::after,
-	.icon-tool:hover:not(:disabled)::after,
-	.zoom-stepper button:hover:not(:disabled)::after {
-		content: attr(data-tooltip);
-		position: absolute;
-		top: calc(100% + 7px);
-		right: 0;
-		z-index: 60;
-		width: max-content;
-		max-width: 260px;
-		border: 1px solid #35414a;
-		border-radius: 6px;
-		padding: 7px 9px;
-		background: #0d1114;
-		color: var(--text);
-		font-size: 11px;
-		line-height: 1.35;
-		font-weight: 600;
-		box-shadow: 0 12px 24px rgba(0, 0, 0, 0.32);
-		pointer-events: none;
 	}
 
 	.primary-tool {
@@ -1287,7 +1390,8 @@
 
 	.tracks {
 		display: grid;
-		min-height: 350px;
+		position: relative;
+		align-items: start;
 	}
 
 	.track-labels {
@@ -1337,18 +1441,26 @@
 		pointer-events: none;
 	}
 
-	.track-label.track-muted::after,
-	.track-row.muted::after {
+	.track-label.track-locked::after,
+	.track-row.locked::after {
 		content: "";
 		position: absolute;
 		inset: 0;
 		z-index: 6;
-		background: repeating-linear-gradient(135deg, rgba(10, 13, 16, 0.52) 0 5px, rgba(110, 124, 133, 0.1) 5px 7px);
+		background: repeating-linear-gradient(135deg, rgba(8, 11, 14, 0.12) 0 7px, rgba(190, 204, 212, 0.075) 7px 9px);
 		pointer-events: none;
+	}
+
+	.track-label.track-locked::after {
+		z-index: 1;
 	}
 
 	.track-label.track-muted .track-title-level {
 		display: none;
+	}
+
+	.track-label.track-muted {
+		filter: grayscale(0.82) saturate(0.28) brightness(0.78);
 	}
 
 	.track-original { --track-color: #58d1c8; }
@@ -1367,7 +1479,9 @@
 	}
 
 	.track-name-input {
-		width: 100%;
+		width: min(132px, 100%);
+		height: 20px;
+		box-sizing: border-box;
 		border: 0;
 		border-radius: 4px;
 		padding: 1px 4px 1px 0;
@@ -1425,6 +1539,11 @@
 		color: #d4fffb;
 	}
 
+	.lock-toggle {
+		display: grid;
+		place-items: center;
+	}
+
 	.track-action {
 		min-height: 26px;
 		padding: 3px 8px;
@@ -1464,12 +1583,12 @@
 	}
 
 	.volume-db-button {
-		min-width: 48px;
+		min-width: 44px;
 		height: 23px;
-		border: 1px solid var(--line);
+		border: 1px solid transparent;
 		border-radius: 5px;
 		padding: 0 5px;
-		background: rgba(14, 19, 23, 0.68);
+		background: transparent;
 		color: #b9c5cd;
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-size: 8px;
@@ -1478,49 +1597,46 @@
 		white-space: nowrap;
 	}
 
-	.volume-db-button:hover,
-	.volume-db-button.active {
-		border-color: #4f6b70;
-		background: #16282b;
-		color: #8de7df;
+	.volume-db-button:hover {
+		background: rgba(255, 255, 255, 0.035);
+		color: #d6e1e6;
 	}
 
-	.volume-popover {
-		position: absolute;
-		top: calc(100% + 5px);
-		right: 0;
-		z-index: 50;
-		width: 108px;
-		height: 34px;
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
-		align-items: center;
-		gap: 7px;
-		padding: 0 8px;
-		border: 1px solid #38444c;
-		border-radius: 6px;
-		background: #0d1114;
-		box-shadow: 0 10px 22px rgba(0, 0, 0, 0.42);
-	}
-
-	.volume-popover input {
-		width: 100%;
+	.volume-inline-editor {
+		width: 54px;
 		height: 23px;
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		padding: 0 3px;
+		box-sizing: border-box;
+		border: 1px solid rgba(87, 208, 200, 0.45);
+		border-radius: 4px;
+		background: #0d1216;
+	}
+
+	.volume-inline-editor input {
+		width: 36px;
+		height: 19px;
 		border: 0;
-		border-bottom: 1px solid #4f646c;
 		background: transparent;
 		color: #e2edf2;
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-		font-size: 11px;
+		font-size: 9px;
+		font-variant-numeric: tabular-nums;
 		outline: none;
 	}
 
-	.volume-popover span {
+	.volume-inline-editor input::-webkit-inner-spin-button,
+	.volume-inline-editor input::-webkit-outer-spin-button {
+		appearance: none;
+		margin: 0;
+	}
+
+	.volume-inline-editor span {
 		color: #d9e4ea;
-		font-size: 10px;
+		font-size: 8px;
 		font-weight: 750;
-		font-variant-numeric: tabular-nums;
-		text-align: right;
 	}
 
 	.track-resize-handle {
@@ -1568,6 +1684,12 @@
 	}
 
 	.timeline-content.dragging {
+		cursor: grabbing;
+		user-select: none;
+	}
+
+	.timeline-content.panning,
+	.timeline-content.panning .timeline-ruler {
 		cursor: grabbing;
 		user-select: none;
 	}
@@ -1633,6 +1755,7 @@
 			linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
 			#191e22;
 		border-bottom: 1px solid var(--line);
+		cursor: grab;
 	}
 
 	.timeline-ruler span {
@@ -1683,24 +1806,50 @@
 	.row-dub { --row-tint: rgba(101, 210, 143, 0.06); }
 
 	.track-row.muted {
-		filter: saturate(0.35) brightness(0.72);
+		filter: grayscale(0.9) saturate(0.18) brightness(0.7);
+	}
+
+	.timeline-edge-shadow {
+		position: absolute;
+		top: 28px;
+		bottom: 0;
+		z-index: 12;
+		width: 18px;
+		pointer-events: none;
+	}
+
+	.timeline-edge-shadow.left {
+		left: var(--label-column-width);
+		background: linear-gradient(90deg, rgba(4, 7, 9, 0.52), transparent);
+	}
+
+	.timeline-edge-shadow.right {
+		right: 0;
+		background: linear-gradient(270deg, rgba(4, 7, 9, 0.48), transparent);
 	}
 
 	.pending-block {
 		position: absolute;
 		left: 4%;
-		top: 13px;
+		top: 50%;
+		transform: translateY(-50%);
 		min-width: min(360px, 58%);
+		max-width: 82%;
+		max-height: calc(100% - 6px);
+		box-sizing: border-box;
 		border: 1px dashed #56616a;
-		border-radius: 7px;
-		padding: 7px 10px;
+		border-radius: 5px;
+		padding: 4px 9px;
 		color: var(--muted);
 		background: rgba(255, 255, 255, 0.03);
-		font-size: 12px;
+		font-size: 11px;
+		line-height: 15px;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
-	.cue-chip,
-	.tts-chip {
+	.cue-chip {
 		position: absolute;
 		top: 10px;
 		height: 50px;
@@ -1737,18 +1886,11 @@
 		cursor: grabbing;
 	}
 
-	.tts-chip.dragging {
-		border-color: #f4d36b;
-		background: #564b1f;
-		box-shadow: 0 0 0 2px rgba(244, 211, 107, 0.18);
-		cursor: grabbing;
-	}
-
 	.cue-handle {
 		position: absolute;
 		top: 4px;
 		bottom: 4px;
-		width: 10px;
+		width: 8px;
 		background: transparent;
 		cursor: ew-resize;
 	}
@@ -1759,7 +1901,7 @@
 		top: 3px;
 		bottom: 3px;
 		left: 50%;
-		width: 3px;
+		width: 2px;
 		border-radius: 999px;
 		background: rgba(255, 255, 255, 0.46);
 		transform: translateX(-50%);
@@ -1773,13 +1915,8 @@
 		right: 0;
 	}
 
-	.cue-chip:hover .cue-handle,
-	.cue-chip.active .cue-handle,
-	.tts-chip:hover .cue-handle,
-	.tts-chip.dragging .cue-handle::after,
 	.cue-chip:hover .cue-handle::after,
-	.cue-chip.active .cue-handle::after,
-	.tts-chip:hover .cue-handle::after {
+	.cue-chip.active .cue-handle::after {
 		background: #f4d36b;
 	}
 
@@ -1795,6 +1932,11 @@
 
 	.cue-chip .cue-text {
 		scrollbar-width: none;
+	}
+
+	.row-subtitle:not(.collapsed) .cue-chip .cue-text {
+		overflow-x: auto;
+		text-overflow: clip;
 	}
 
 	.cue-chip .cue-text::-webkit-scrollbar {
@@ -1824,53 +1966,6 @@
 	.cue-chip em {
 		color: var(--muted);
 		margin-top: 2px;
-	}
-
-	.tts-chip {
-		top: 12px;
-		height: 34px;
-		border-color: #9282e8;
-		background:
-			linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent),
-			#463b82;
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto auto;
-		align-items: center;
-		gap: 6px;
-		padding: 5px 22px 5px 14px;
-	}
-
-	.tts-chip > :not(.clip-waveform) {
-		position: relative;
-		z-index: 2;
-	}
-
-	.tts-chip strong,
-	.tts-chip span {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.tts-chip > span:not(.cue-handle) {
-		color: #d8d3ff;
-		font-size: 10px;
-	}
-
-	.clip-delete {
-		width: 20px;
-		height: 20px;
-		border: 1px solid rgba(255, 255, 255, 0.2);
-		border-radius: 6px;
-		background: rgba(0, 0, 0, 0.22);
-		color: #fff;
-		line-height: 1;
-		cursor: pointer;
-	}
-
-	.clip-delete:hover {
-		border-color: #ff9b9b;
-		background: #5a232b;
 	}
 
 	@media (max-width: 1180px) {

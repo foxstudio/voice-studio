@@ -1,13 +1,12 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import type { VideoLocalizationCue, VideoLocalizationDraft } from '$lib/api/types';
-	import { sourceVideoUrl, stemAudioUrl, timelineClipAudioUrl } from './utils';
+	import { sourceAudioUrl, sourceVideoUrl, stemAudioUrl, timelineClipAudioUrl } from './utils';
 	import { defaultSubtitlePreviewState, defaultTrackStates, TRACK_LABELS, type SubtitlePreviewState, type VideoLocalizationTrackId, type VideoLocalizationTrackStates } from './studio-state';
 
-	type PlaybackCommand = {
-		seq: number;
-		action: 'play-pause' | 'seek';
-		timeMs?: number;
+	type PlaybackController = {
+		playPause: () => void;
+		seek: (timeMs: number) => void;
 	};
 
 	let {
@@ -17,11 +16,11 @@
 		importing = false,
 		subtitlePreview = defaultSubtitlePreviewState(),
 		trackStates = defaultTrackStates(),
-		playbackCommand = null,
 		onRequestImport = () => {},
 		onImportFile = () => {},
 		onVideoTimeUpdate = () => {},
-		onPlaybackStateChange = () => {}
+		onPlaybackStateChange = () => {},
+		onControllerReady = () => {}
 	}: {
 		selectedCue: VideoLocalizationCue | null;
 		draft: VideoLocalizationDraft | null;
@@ -29,35 +28,38 @@
 		importing?: boolean;
 		subtitlePreview?: SubtitlePreviewState;
 		trackStates?: VideoLocalizationTrackStates;
-		playbackCommand?: PlaybackCommand | null;
 		onRequestImport?: () => void;
 		onImportFile?: (file: File) => void;
 		onVideoTimeUpdate?: (timeMs: number) => void;
 		onPlaybackStateChange?: (playing: boolean) => void;
+		onControllerReady?: (controller: PlaybackController | null) => void;
 	} = $props();
 
 	let sourceVideoFailed = $state(false);
 	let videoPreviewEl = $state<HTMLDivElement | null>(null);
 	let previewSize = $state<{ width: number; height: number } | null>(null);
 	let previewVideoEl = $state<HTMLVideoElement | null>(null);
+	let originalAudioEl = $state<HTMLAudioElement | null>(null);
 	let vocalsAudioEl = $state<HTMLAudioElement | null>(null);
 	let backgroundAudioEl = $state<HTMLAudioElement | null>(null);
 	let dubAudioEl = $state<HTMLAudioElement | null>(null);
 	let activeDubClipId = $state('');
 	let dubAudioSrc = $state('');
-	let handledPlaybackSeq = $state(0);
 	let dragDepth = $state(0);
 	let playbackFrame = 0;
+	let mixAudioContext: AudioContext | null = null;
+	const trackGainNodes = new Map<HTMLAudioElement, GainNode>();
 
 	const previewVideoSrc = $derived(sourceVideoUrl(projectId, draft));
+	const originalAudioSrc = $derived(sourceAudioUrl(projectId, draft));
 	const vocalsAudioSrc = $derived(stemAudioUrl(projectId, draft, 'vocals'));
 	const backgroundAudioSrc = $derived(stemAudioUrl(projectId, draft, 'background'));
 	const hasDubMedia = $derived(Boolean(draft?.timeline_clips.some((clip) => clip.track_id === 'dub' && clip.audio_path)));
 	const soloTracks = $derived((['original', 'vocals', 'background', 'dub'] as VideoLocalizationTrackId[]).filter((trackId) => trackStates[trackId].solo));
 	const hasSoloTrack = $derived(soloTracks.length > 0);
-	const originalActive = $derived(trackAudible('original', Boolean(previewVideoSrc)));
-	const vocalsActive = $derived(trackAudible('vocals', Boolean(vocalsAudioSrc)));
-	const backgroundActive = $derived(trackAudible('background', Boolean(backgroundAudioSrc)));
+	const originalActive = $derived(trackAudible('original', trackMediaAvailable('original', originalAudioSrc)));
+	const vocalsActive = $derived(trackAudible('vocals', trackMediaAvailable('vocals', vocalsAudioSrc)));
+	const backgroundActive = $derived(trackAudible('background', trackMediaAvailable('background', backgroundAudioSrc)));
 	const dubActive = $derived(trackAudible('dub', hasDubMedia));
 	const previewModeLabel = $derived(playbackModeLabel());
 	const subtitleLines = $derived(buildSubtitleLines(selectedCue, subtitlePreview.source));
@@ -79,27 +81,19 @@
 	});
 
 	$effect(() => {
-		const command = playbackCommand;
-		if (!command || command.seq === handledPlaybackSeq || !previewVideoEl) return;
-		handledPlaybackSeq = command.seq;
-		if (command.action === 'seek') {
-			previewVideoEl.currentTime = Math.max(0, (command.timeMs ?? 0) / 1000);
-			onVideoTimeUpdate(Math.round(previewVideoEl.currentTime * 1000));
-			return;
-		}
-		if (previewVideoEl.paused) {
-			void previewVideoEl.play();
-		} else {
-			previewVideoEl.pause();
-		}
+		applyTrackMix();
 	});
 
-	$effect(() => {
-		applyTrackMix();
+	onMount(() => {
+		onControllerReady({ playPause: playPauseFromGesture, seek: seekPreview });
+		return () => onControllerReady(null);
 	});
 
 	onDestroy(() => {
 		stopPlaybackClock();
+		trackGainNodes.clear();
+		if (mixAudioContext) void mixAudioContext.close();
+		mixAudioContext = null;
 	});
 
 	function buildSubtitleLines(cue: VideoLocalizationCue | null, source: SubtitlePreviewState['source']) {
@@ -127,6 +121,14 @@
 		return hasSoloTrack ? state.solo : true;
 	}
 
+	function trackMediaAvailable(trackId: VideoLocalizationTrackId, fallbackSrc: string) {
+		const disabledTracks = Array.isArray(draft?.ui_state?.disabled_media_tracks)
+			? draft.ui_state.disabled_media_tracks.map(String)
+			: [];
+		if (disabledTracks.includes(trackId)) return false;
+		return hasTimelineMedia(trackId) || Boolean(fallbackSrc);
+	}
+
 	function playbackModeLabel() {
 		const labels: string[] = [];
 		if (originalActive) labels.push(TRACK_LABELS.original);
@@ -139,25 +141,45 @@
 
 	function applyTrackMix() {
 		if (previewVideoEl) {
-			previewVideoEl.muted = !originalActive;
-			previewVideoEl.volume = clampVolume(trackStates.original.volume);
+			previewVideoEl.muted = Boolean(originalAudioSrc || vocalsAudioSrc || backgroundAudioSrc || dubAudioSrc);
 		}
+		applyAudioTrack(originalAudioEl, originalActive, trackStates.original.volume);
 		applyAudioTrack(vocalsAudioEl, vocalsActive, trackStates.vocals.volume);
 		applyAudioTrack(backgroundAudioEl, backgroundActive, trackStates.background.volume);
 		applyAudioTrack(dubAudioEl, dubActive, trackStates.dub.volume);
+		if (previewVideoEl && !previewVideoEl.paused) syncAuxiliaryTracks(true);
 	}
 
 	function applyAudioTrack(audio: HTMLAudioElement | null, active: boolean, volume: number) {
 		if (!audio) return;
-		audio.muted = !active;
-		audio.volume = clampVolume(volume);
+		const gainNode = ensureTrackGain(audio);
+		audio.muted = false;
+		audio.volume = 1;
+		if (gainNode) gainNode.gain.value = active ? clampGain(volume) : 0;
+		else audio.volume = active ? Math.min(1, clampGain(volume)) : 0;
 		if (!active) {
 			audio.pause();
 			return;
 		}
-		if (previewVideoEl && !previewVideoEl.paused) {
-			syncAudioTrack(audio, previewVideoEl.currentTime, true);
+	}
+
+	function ensureTrackGain(audio: HTMLAudioElement) {
+		const existing = trackGainNodes.get(audio);
+		if (existing) return existing;
+		try {
+			mixAudioContext ??= new AudioContext();
+			const source = mixAudioContext.createMediaElementSource(audio);
+			const gain = mixAudioContext.createGain();
+			source.connect(gain).connect(mixAudioContext.destination);
+			trackGainNodes.set(audio, gain);
+			return gain;
+		} catch {
+			return null;
 		}
+	}
+
+	function hasTimelineMedia(trackId: VideoLocalizationTrackId) {
+		return Boolean(draft?.timeline_clips.some((clip) => clip.track_id === trackId && clip.audio_path));
 	}
 
 	function syncAudioTrack(audio: HTMLAudioElement | null, currentTime: number, playIfNeeded = false) {
@@ -168,20 +190,46 @@
 		}
 		if (Math.abs(audio.currentTime - currentTime) > 0.18) audio.currentTime = currentTime;
 		if (playIfNeeded && audio.paused) {
-			void audio.play().catch(() => {
-				// Browser autoplay policies can reject auxiliary tracks; the main video remains usable.
-			});
+			void audio.play().then(
+				() => delete audio.dataset.playbackError,
+				(error: unknown) => {
+					audio.dataset.playbackError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+				}
+			);
 		}
 	}
 
 	function syncAuxiliaryTracks(playIfNeeded = false) {
 		const time = previewVideoEl?.currentTime ?? 0;
-		if (vocalsActive) syncAudioTrack(vocalsAudioEl, time, playIfNeeded);
+		if (originalActive) syncTimelineTrack('original', originalAudioEl, time, playIfNeeded);
+		else originalAudioEl?.pause();
+		if (vocalsActive) syncTimelineTrack('vocals', vocalsAudioEl, time, playIfNeeded);
 		else vocalsAudioEl?.pause();
-		if (backgroundActive) syncAudioTrack(backgroundAudioEl, time, playIfNeeded);
+		if (backgroundActive) syncTimelineTrack('background', backgroundAudioEl, time, playIfNeeded);
 		else backgroundAudioEl?.pause();
 		if (dubActive) syncDubTrack(time, playIfNeeded);
 		else dubAudioEl?.pause();
+	}
+
+	function syncTimelineTrack(trackId: VideoLocalizationTrackId, audio: HTMLAudioElement | null, currentTime: number, playIfNeeded = false) {
+		const trackClips = draft?.timeline_clips.filter((item) => item.track_id === trackId && item.audio_path) ?? [];
+		if (!trackClips.length) {
+			syncAudioTrack(audio, currentTime, playIfNeeded);
+			return;
+		}
+		const timeMs = Math.round(currentTime * 1000);
+		const clip = trackClips.find((item) => {
+			const start = item.start_ms ?? 0;
+			const end = item.end_ms ?? start + 1800;
+			return timeMs >= start && timeMs < end;
+		});
+		if (!clip) {
+			audio?.pause();
+			return;
+		}
+		const sourceStartSeconds = Math.max(0, (clip.source_start_ms ?? 0) / 1000);
+		const localTime = sourceStartSeconds + Math.max(0, currentTime - (clip.start_ms ?? 0) / 1000);
+		syncAudioTrack(audio, localTime, playIfNeeded);
 	}
 
 	function syncDubTrack(currentTime: number, playIfNeeded = false) {
@@ -207,16 +255,57 @@
 		syncAudioTrack(dubAudioEl, localTime, playIfNeeded);
 	}
 
+	function seekPreview(timeMs: number) {
+		if (!previewVideoEl) return;
+		const nextTime = Math.max(0, timeMs / 1000);
+		const fastSeek = (previewVideoEl as HTMLVideoElement & { fastSeek?: (time: number) => void }).fastSeek;
+		if (typeof fastSeek === 'function' && Math.abs(previewVideoEl.currentTime - nextTime) > 0.35) fastSeek.call(previewVideoEl, nextTime);
+		else previewVideoEl.currentTime = nextTime;
+		onVideoTimeUpdate(Math.round(previewVideoEl.currentTime * 1000));
+		syncAuxiliaryTracks(!previewVideoEl.paused);
+	}
+
+	function playPauseFromGesture() {
+		if (!previewVideoEl) return;
+		if (!previewVideoEl.paused) {
+			previewVideoEl.pause();
+			return;
+		}
+		if (mixAudioContext?.state === 'suspended') void mixAudioContext.resume();
+		const videoPlayRequest = previewVideoEl.play();
+		syncAuxiliaryTracks(true);
+		void videoPlayRequest;
+	}
+
 	function handleVideoPlay() {
+		if (mixAudioContext?.state === 'suspended') void mixAudioContext.resume();
 		onPlaybackStateChange(true);
 		applyTrackMix();
 		syncAuxiliaryTracks(true);
 		startPlaybackClock();
 	}
 
+	function handlePlaybackGesturePointer(event: PointerEvent) {
+		const target = event.target as HTMLElement | null;
+		if (target === previewVideoEl || target?.closest('button[aria-label="播放"]')) beginAuxiliaryPlaybackFromGesture();
+	}
+
+	function handlePlaybackGestureKey(event: KeyboardEvent) {
+		if (event.code !== 'Space') return;
+		const target = event.target as HTMLElement | null;
+		if (target?.closest('input,textarea,select,[contenteditable="true"]')) return;
+		beginAuxiliaryPlaybackFromGesture();
+	}
+
+	function beginAuxiliaryPlaybackFromGesture() {
+		if (mixAudioContext?.state === 'suspended') void mixAudioContext.resume();
+		syncAuxiliaryTracks(true);
+	}
+
 	function handleVideoPause() {
 		onPlaybackStateChange(false);
 		stopPlaybackClock();
+		originalAudioEl?.pause();
 		vocalsAudioEl?.pause();
 		backgroundAudioEl?.pause();
 		dubAudioEl?.pause();
@@ -256,10 +345,10 @@
 		playbackFrame = 0;
 	}
 
-	function clampVolume(value: number | null | undefined) {
+	function clampGain(value: number | null | undefined) {
 		const parsed = Number(value);
 		if (!Number.isFinite(parsed)) return 1;
-		return Math.max(0, Math.min(1, parsed));
+		return Math.max(0, Math.min(2, parsed));
 	}
 
 	function handlePreviewDragEnter(event: DragEvent) {
@@ -315,6 +404,8 @@
 	}
 </script>
 
+<svelte:window onpointerdown={handlePlaybackGesturePointer} onkeydown={handlePlaybackGestureKey} />
+
 <section class="panel preview-panel">
 	<div
 		class="video-preview"
@@ -334,7 +425,8 @@
 				class="preview-video"
 				bind:this={previewVideoEl}
 				controls
-				preload="metadata"
+				preload="auto"
+				playsinline
 				src={previewVideoSrc}
 				onerror={() => (sourceVideoFailed = true)}
 				onplay={handleVideoPlay}
@@ -343,14 +435,17 @@
 				onseeked={handleVideoSeek}
 				ontimeupdate={handleVideoTimeUpdate}
 			></video>
+			{#if originalAudioSrc}
+				<audio bind:this={originalAudioEl} data-audio-group="video-localization-preview" preload="metadata" src={originalAudioSrc} aria-label="原音轨预览"></audio>
+			{/if}
 			{#if vocalsAudioSrc}
-				<audio bind:this={vocalsAudioEl} preload="metadata" src={vocalsAudioSrc} aria-label="人声轨预览"></audio>
+				<audio bind:this={vocalsAudioEl} data-audio-group="video-localization-preview" preload="metadata" src={vocalsAudioSrc} aria-label="人声轨预览"></audio>
 			{/if}
 			{#if backgroundAudioSrc}
-				<audio bind:this={backgroundAudioEl} preload="metadata" src={backgroundAudioSrc} aria-label="背景音乐轨预览"></audio>
+				<audio bind:this={backgroundAudioEl} data-audio-group="video-localization-preview" preload="metadata" src={backgroundAudioSrc} aria-label="背景音乐轨预览"></audio>
 			{/if}
 			{#if dubAudioSrc}
-				<audio bind:this={dubAudioEl} preload="auto" src={dubAudioSrc} aria-label="中文配音轨预览" onloadedmetadata={() => syncAuxiliaryTracks(Boolean(previewVideoEl && !previewVideoEl.paused))}></audio>
+				<audio bind:this={dubAudioEl} data-audio-group="video-localization-preview" preload="auto" src={dubAudioSrc} aria-label="中文配音轨预览" onloadedmetadata={() => syncAuxiliaryTracks(Boolean(previewVideoEl && !previewVideoEl.paused))}></audio>
 			{/if}
 			<div class="playback-mode-chip">{previewModeLabel}</div>
 		{:else}
@@ -358,7 +453,7 @@
 				<div class="empty-copy">
 					<strong>导入一个视频开始本土化配音</strong>
 					<span>{sourceVideoFailed ? '视频加载失败，可以重新导入。' : '拖入或选择 MP4 / MOV / MKV，导入后会创建草稿并抽取原音轨。'}</span>
-					<button type="button" title="导入视频：创建新的本土化项目并自动抽取原音轨。" onclick={onRequestImport} disabled={importing}>{importing ? '导入中' : '导入视频'}</button>
+					<button type="button" data-tooltip="导入视频：创建新的本土化项目并自动抽取原音轨。" onclick={onRequestImport} disabled={importing}>{importing ? '导入中' : '导入视频'}</button>
 				</div>
 			</div>
 		{/if}
@@ -383,7 +478,7 @@
 				<span>会创建一个新的本土化项目</span>
 			</div>
 		{/if}
-		<button class="preview-resize-handle" type="button" aria-label="调整视频预览大小" title="调整预览大小：拖动可分别改变视频预览宽度和高度。" onpointerdown={beginPreviewResize}></button>
+		<button class="preview-resize-handle" type="button" aria-label="调整视频预览大小" data-tooltip="调整预览大小：拖动可分别改变视频预览宽度和高度。" onpointerdown={beginPreviewResize}></button>
 	</div>
 	{#if draft?.stems.separation_status === 'failed'}
 		<p class="media-status muted">人声分离失败。请检查本地分离依赖或重试当前任务。</p>

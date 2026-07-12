@@ -35,8 +35,11 @@
 		const onPlay = (event: Event) => {
 			const current = event.target;
 			if (!(current instanceof HTMLAudioElement)) return;
+			const concurrentGroup = current.dataset.audioGroup;
+			if (concurrentGroup) return;
 			document.querySelectorAll('audio').forEach((audio) => {
-				if (audio !== current) audio.pause();
+				if (audio === current) return;
+				audio.pause();
 			});
 		};
 		document.addEventListener('play', onPlay, true);

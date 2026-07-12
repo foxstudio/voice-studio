@@ -256,16 +256,16 @@
 
 <aside class="inspector">
 	<div class="inspector-mode-tabs" aria-label="右侧检查器">
-		<button class:active={activeSection === 'voice'} type="button" title="音色：管理项目样音，或把当前音频选区保存为音色。" onclick={() => onSectionChange('voice')}><AudioLines size={14} /><span>音色</span></button>
-		<button class:active={activeSection === 'generate'} type="button" title="生成：使用当前音色和参数组生成所选字幕的配音。" onclick={() => onSectionChange('generate')}><WandSparkles size={14} /><span>生成</span></button>
-		<button class:active={activeSection === 'subtitle'} type="button" title="字幕：编辑时间线中当前选中的字幕片段。" onclick={() => onSectionChange('subtitle')}><Captions size={14} /><span>字幕</span></button>
-		<button class:active={activeSection === 'style'} type="button" title="样式：调整视频预览中的字幕位置和外观。" onclick={() => onSectionChange('style')}><Palette size={14} /><span>样式</span></button>
+		<button class:active={activeSection === 'voice'} type="button" data-tooltip="音色：管理项目样音，或把当前音频选区保存为音色。" onclick={() => onSectionChange('voice')}><AudioLines size={14} /><span>音色</span></button>
+		<button class:active={activeSection === 'generate'} type="button" data-tooltip="生成：使用当前音色和参数组生成所选字幕的配音。" onclick={() => onSectionChange('generate')}><WandSparkles size={14} /><span>生成</span></button>
+		<button class:active={activeSection === 'subtitle'} type="button" data-tooltip="字幕：编辑时间线中当前选中的字幕片段。" onclick={() => onSectionChange('subtitle')}><Captions size={14} /><span>字幕</span></button>
+		<button class:active={activeSection === 'style'} type="button" data-tooltip="样式：调整视频预览中的字幕位置和外观。" onclick={() => onSectionChange('style')}><Palette size={14} /><span>样式</span></button>
 	</div>
 
 	{#if activeSection === 'voice'}
 		<div class="inspector-tabs">
-			<button class:active={activeTab === 'library'} type="button" title="项目音色库：试听、检索和编辑本项目已保存的样音。" onclick={() => (activeTab = 'library')}>项目音色库</button>
-			<button class:active={activeTab === 'save-selection'} type="button" title="保存当前选区：把时间线上的自由音频范围裁成项目样音。" onclick={() => (activeTab = 'save-selection')}>保存当前选区</button>
+			<button class:active={activeTab === 'library'} type="button" data-tooltip="项目音色库：试听、检索和编辑本项目已保存的样音。" onclick={() => (activeTab = 'library')}>项目音色库</button>
+			<button class:active={activeTab === 'save-selection'} type="button" data-tooltip="保存当前选区：把时间线上的自由音频范围裁成项目样音。" onclick={() => (activeTab = 'save-selection')}>保存当前选区</button>
 		</div>
 	{/if}
 
@@ -282,7 +282,7 @@
 			{#if draft?.reference_clips.length}
 				<div class="voice-list">
 					{#each filteredVoices as clip}
-						<button class="voice-card" class:active={selectedVoice?.reference_clip_id === clip.reference_clip_id} type="button" title={`选择音色：将“${voiceTitle(clip)}”绑定到当前字幕和生成面板。`} onclick={() => selectVoice(clip)}>
+						<button class="voice-card" class:active={selectedVoice?.reference_clip_id === clip.reference_clip_id} type="button" data-tooltip={`选择音色：将“${voiceTitle(clip)}”绑定到当前字幕和生成面板。`} onclick={() => selectVoice(clip)}>
 							<div class="voice-cover">
 								{#if referenceCoverUrl(projectId, clip)}<img src={referenceCoverUrl(projectId, clip)} alt="" />{/if}
 							</div>
@@ -333,16 +333,16 @@
 						</label>
 					</div>
 					<div class="reference-actions">
-						<button type="button" title="保存信息：更新当前项目音色的名称、人物、情绪和标签。" onclick={saveSelectedVoiceMeta} disabled={referenceUpdatingId === selectedVoice.reference_clip_id}>保存信息</button>
+						<button type="button" data-tooltip="保存信息：更新当前项目音色的名称、人物、情绪和标签。" onclick={saveSelectedVoiceMeta} disabled={referenceUpdatingId === selectedVoice.reference_clip_id}>保存信息</button>
 						<button
 							type="button"
-							title="确认可用：标记当前样音为干净且 ASR 已验证，可用于声音克隆。"
+							data-tooltip="确认可用：标记当前样音为干净且 ASR 已验证，可用于声音克隆。"
 							disabled={referenceUpdatingId === selectedVoice.reference_clip_id || !selectedVoice.asr_text?.trim()}
 							onclick={() => onUpdateReferenceClip(selectedVoice.reference_clip_id, { cleanliness: 'clean', asr_status: 'verified', asr_text: selectedVoice.asr_text ?? '' }, '参考音已确认可用')}
 						>
 							确认可用
 						</button>
-						<button class="danger-btn" type="button" title="删除音色：从当前项目音色库移除该样音。" onclick={() => onDeleteReferenceClip(selectedVoice.reference_clip_id)} disabled={referenceUpdatingId === selectedVoice.reference_clip_id}>删除</button>
+						<button class="danger-btn" type="button" data-tooltip="删除音色：从当前项目音色库移除该样音。" onclick={() => onDeleteReferenceClip(selectedVoice.reference_clip_id)} disabled={referenceUpdatingId === selectedVoice.reference_clip_id}>删除</button>
 					</div>
 				</div>
 			{/if}
@@ -387,7 +387,7 @@
 					</label>
 				</div>
 				<p>{saveSelectionHint}</p>
-				<button type="button" title={canSaveSelection ? '保存选区：从人声轨裁切当前范围并加入项目音色库。' : saveSelectionHint} disabled={!canSaveSelection || creatingReferences} onclick={saveSelectionAsVoice}>
+				<button type="button" data-tooltip={canSaveSelection ? '保存选区：从人声轨裁切当前范围并加入项目音色库。' : saveSelectionHint} disabled={!canSaveSelection || creatingReferences} onclick={saveSelectionAsVoice}>
 					{creatingReferences ? '保存中' : '保存到项目音色库'}
 				</button>
 			</div>
@@ -414,18 +414,18 @@
 			<div class="recipe-list">
 				{#if selectedVoiceRecipes.length}
 					{#each selectedVoiceRecipes as recipe}
-						<button class="recipe-card" class:active={selectedRecipe?.recipe_id === recipe.recipe_id} type="button" title={`选择参数组：后续生成将复用“${recipe.name}”的引擎与参数。`} disabled={!selectedVoice} onclick={() => onSelectedRecipeIdChange(recipe.recipe_id)}>
+						<button class="recipe-card" class:active={selectedRecipe?.recipe_id === recipe.recipe_id} type="button" data-tooltip={`选择参数组：后续生成将复用“${recipe.name}”的引擎与参数。`} disabled={!selectedVoice} onclick={() => onSelectedRecipeIdChange(recipe.recipe_id)}>
 							<strong>{recipe.name}</strong>
 							<span>{recipe.description || `${recipe.engine_id} · ${(recipe.tags ?? []).join(' / ') || '无标签'}`}</span>
 						</button>
 					{/each}
 				{:else}
-					<button class="recipe-card active" type="button" title="默认参数：首次生成使用当前引擎默认值，并自动保存为参数组。" disabled={!canGenerateVoice}>
+					<button class="recipe-card active" type="button" data-tooltip="默认参数：首次生成使用当前引擎默认值，并自动保存为参数组。" disabled={!canGenerateVoice}>
 						<strong>默认参数</strong>
 						<span>首次一键生成时会自动保存为参数组</span>
 					</button>
 				{/if}
-				<button class="recipe-card add-recipe" type="button" title="新增参数组：复制当前音色默认参数并创建可复用预设。" disabled={!canGenerateVoice} onclick={onCreateVoiceRecipe}>
+				<button class="recipe-card add-recipe" type="button" data-tooltip="新增参数组：复制当前音色默认参数并创建可复用预设。" disabled={!canGenerateVoice} onclick={onCreateVoiceRecipe}>
 					<strong>新增参数组</strong>
 					<span>复制当前音色默认参数后再命名</span>
 				</button>
@@ -454,15 +454,15 @@
 						</label>
 					</details>
 					<div class="reference-actions">
-						<button type="button" title="保存参数组：更新名称、标签、描述和参数快照。" onclick={saveSelectedRecipe}>保存参数组</button>
-						<button class="danger-btn" type="button" title="删除参数组：移除当前音色下的这组生成参数。" onclick={() => onDeleteVoiceRecipe(selectedRecipe.recipe_id)}>删除参数组</button>
+						<button type="button" data-tooltip="保存参数组：更新名称、标签、描述和参数快照。" onclick={saveSelectedRecipe}>保存参数组</button>
+						<button class="danger-btn" type="button" data-tooltip="删除参数组：移除当前音色下的这组生成参数。" onclick={() => onDeleteVoiceRecipe(selectedRecipe.recipe_id)}>删除参数组</button>
 					</div>
 				</div>
 			{/if}
 			<div class="voice-lab-actions">
-				<button type="button" title="一键生成：使用当前音色、参数组和字幕台词提交配音。" onclick={onQuickGenerateVoice} disabled={!canGenerateVoice || generatingVoice}>{generatingVoice ? '提交中' : '一键生成'}</button>
-				<button type="button" title="重新调参：打开语音生成页并带入当前样音、台词和参数。" onclick={onTuneVoiceInGenerate} disabled={!canGenerateVoice}>重新调参</button>
-				<button type="button" title="仅带样音：打开语音生成页，只复用当前样音并使用默认参数。" onclick={onSendReferenceOnlyToGenerate} disabled={!canGenerateVoice}>仅带样音</button>
+				<button type="button" data-tooltip="一键生成：使用当前音色、参数组和字幕台词提交配音。" onclick={onQuickGenerateVoice} disabled={!canGenerateVoice || generatingVoice}>{generatingVoice ? '提交中' : '一键生成'}</button>
+				<button type="button" data-tooltip="重新调参：打开语音生成页并带入当前样音、台词和参数。" onclick={onTuneVoiceInGenerate} disabled={!canGenerateVoice}>重新调参</button>
+				<button type="button" data-tooltip="仅带样音：打开语音生成页，只复用当前样音并使用默认参数。" onclick={onSendReferenceOnlyToGenerate} disabled={!canGenerateVoice}>仅带样音</button>
 			</div>
 			<div class="recipe-summary">
 				<strong>已生成版本</strong>
@@ -479,7 +479,7 @@
 						{#if candidateAudioUrl(projectId, candidate)}
 							<audio controls preload="metadata" src={candidateAudioUrl(projectId, candidate)}></audio>
 						{/if}
-						<button type="button" title="采用候选：把这个声音设为当前字幕版本并替换中文配音轨片段。" disabled={isAppliedCandidate(candidate) || candidate.status !== 'success' || candidateApplyingId === candidate.candidate_id} onclick={() => onApplyGeneratedCandidate(candidate.candidate_id)}>
+						<button type="button" data-tooltip="采用候选：把这个声音设为当前字幕版本并替换中文配音轨片段。" disabled={isAppliedCandidate(candidate) || candidate.status !== 'success' || candidateApplyingId === candidate.candidate_id} onclick={() => onApplyGeneratedCandidate(candidate.candidate_id)}>
 							{candidateApplyingId === candidate.candidate_id ? '应用中' : isAppliedCandidate(candidate) ? '已采用' : '采用'}
 						</button>
 					</div>
@@ -544,8 +544,8 @@
 				</label>
 			</div>
 			<div class="cue-actions">
-				<button class="save-btn" type="button" title="保存字幕：保存当前片段的时间码、文本、说话人和音频路线。" onclick={onSaveCue} disabled={savingCue}>{savingCue ? '保存中' : '保存字幕'}</button>
-				<button class="danger-btn" type="button" title="删除片段：从字幕轨移除当前字幕片段。" onclick={onDeleteCue}>删除片段</button>
+				<button class="save-btn" type="button" data-tooltip="保存字幕：保存当前片段的时间码、文本、说话人和音频路线。" onclick={onSaveCue} disabled={savingCue}>{savingCue ? '保存中' : '保存字幕'}</button>
+				<button class="danger-btn" type="button" data-tooltip="删除片段：从字幕轨移除当前字幕片段。" onclick={onDeleteCue}>删除片段</button>
 			</div>
 		{:else}
 			<p class="empty-text">点击时间线上的字幕片段后，这里会同步显示原文/ASR、本土化字幕和 TTS 文本。</p>
@@ -561,11 +561,11 @@
 		</div>
 		<div class="subtitle-controls">
 			<div class="segmented">
-				<button class:active={subtitlePreview.enabled} type="button" title="切换字幕：显示或隐藏视频预览中的所有字幕层。" onclick={() => onUpdateSubtitlePreview({ enabled: !subtitlePreview.enabled })}>
+				<button class:active={subtitlePreview.enabled} type="button" data-tooltip="切换字幕：显示或隐藏视频预览中的所有字幕层。" onclick={() => onUpdateSubtitlePreview({ enabled: !subtitlePreview.enabled })}>
 					{subtitlePreview.enabled ? '显示' : '隐藏'}
 				</button>
-				<button class:active={subtitlePreview.position === 'bottom'} type="button" title="底部：将字幕预览放在视频安全区底部。" onclick={() => onUpdateSubtitlePreview({ position: 'bottom' })}>底部</button>
-				<button class:active={subtitlePreview.position === 'middle'} type="button" title="中部：将字幕预览移动到视频画面中部。" onclick={() => onUpdateSubtitlePreview({ position: 'middle' })}>中部</button>
+				<button class:active={subtitlePreview.position === 'bottom'} type="button" data-tooltip="底部：将字幕预览放在视频安全区底部。" onclick={() => onUpdateSubtitlePreview({ position: 'bottom' })}>底部</button>
+				<button class:active={subtitlePreview.position === 'middle'} type="button" data-tooltip="中部：将字幕预览移动到视频画面中部。" onclick={() => onUpdateSubtitlePreview({ position: 'middle' })}>中部</button>
 			</div>
 			<label class="field">
 				<span>字幕来源</span>
@@ -594,7 +594,7 @@
 					class:clean={preset === 'clean-shadow'}
 					class:outline={preset === 'strong-outline'}
 					type="button"
-					title={`字幕样式：应用“${SUBTITLE_STYLE_LABELS[preset]}”预设到视频预览。`}
+					data-tooltip={`字幕样式：应用“${SUBTITLE_STYLE_LABELS[preset]}”预设到视频预览。`}
 					onclick={() => onUpdateSubtitlePreview({ stylePreset: preset })}
 				>
 					<span>{SUBTITLE_STYLE_LABELS[preset]}</span>

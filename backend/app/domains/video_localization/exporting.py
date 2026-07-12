@@ -351,6 +351,11 @@ def _timestamp_slug() -> str:
 def _write_localized_mixdown(path: Path, draft: VideoLocalizationDraft, dub_track_path: Path, duration_ms: int) -> list[dict]:
     track_states = _resolved_audio_track_states(draft)
     solo_tracks = {track_id for track_id, state in track_states.items() if state["solo"]}
+    disabled_media_tracks = {
+        str(track_id)
+        for track_id in draft.ui_state.get("disabled_media_tracks", [])
+        if isinstance(track_id, str)
+    }
     source_audio_path = _existing_path(draft.source_media.audio_path) or _existing_path(draft.stems.original_audio_path)
     track_paths = {
         "original": source_audio_path,
@@ -363,13 +368,42 @@ def _write_localized_mixdown(path: Path, draft: VideoLocalizationDraft, dub_trac
     for track_id in ("original", "vocals", "background", "dub"):
         state = track_states[track_id]
         source_path = track_paths[track_id]
-        active = not state["muted"] and (not solo_tracks or track_id in solo_tracks)
+        active = track_id not in disabled_media_tracks and not state["muted"] and (not solo_tracks or track_id in solo_tracks)
         if not active or not source_path:
             continue
-        audio, sr = audio_tools.read_audio(source_path)
         gain = state["volume"]
-        chunks.append((0, audio.astype(np.float32) * gain, sr))
-        mixed_tracks.append({"track_id": track_id, "volume": gain, "source_path": str(source_path)})
+        editable_clips = [dict(clip) for clip in draft.timeline_clips if dict(clip).get("track_id") == track_id]
+        if track_id == "dub" or not editable_clips:
+            audio, sr = audio_tools.read_audio(source_path)
+            chunks.append((0, audio.astype(np.float32) * gain, sr))
+            mixed_tracks.append({"track_id": track_id, "volume": gain, "source_path": str(source_path)})
+            continue
+        for clip in editable_clips:
+            clip_path = _existing_path(clip.get("audio_path")) or source_path
+            if not clip_path:
+                continue
+            audio, sr = audio_tools.read_audio(clip_path)
+            source_start_ms = max(0, _int_value(clip.get("source_start_ms"), 0))
+            timeline_start_ms = max(0, _int_value(clip.get("start_ms"), 0))
+            timeline_end_ms = max(timeline_start_ms, _int_value(clip.get("end_ms"), duration_ms))
+            source_end_ms = _source_end_ms(clip, clip_path, source_start_ms, timeline_end_ms - timeline_start_ms)
+            start_frame = max(0, int(sr * source_start_ms / 1000))
+            end_frame = min(len(audio), int(sr * source_end_ms / 1000))
+            if end_frame <= start_frame:
+                continue
+            chunks.append((timeline_start_ms, audio[start_frame:end_frame].astype(np.float32) * gain, sr))
+            mixed_tracks.append(
+                {
+                    "track_id": track_id,
+                    "clip_id": clip.get("clip_id"),
+                    "volume": gain,
+                    "source_path": str(clip_path),
+                    "start_ms": timeline_start_ms,
+                    "end_ms": timeline_end_ms,
+                    "source_start_ms": source_start_ms,
+                    "source_end_ms": source_end_ms,
+                }
+            )
     _write_aligned_dub_track(path, chunks, duration_ms)
     return mixed_tracks
 

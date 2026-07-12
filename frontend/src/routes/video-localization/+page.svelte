@@ -119,14 +119,14 @@
 	let previewTimeMs = $state(0);
 	let previewPlaying = $state(false);
 	let audioSelectionRange = $state<{ start_ms: number; end_ms: number } | null>(null);
-	let playbackCommandSeq = $state(0);
-	let playbackCommand = $state<{ seq: number; action: 'play-pause' | 'seek'; timeMs?: number } | null>(null);
+	let previewPlaybackController: { playPause: () => void; seek: (timeMs: number) => void } | null = null;
 	let autoSaveStatus = $state<'idle' | 'dirty' | 'saving' | 'saved' | 'failed'>('idle');
 	let autoSaveScope = $state<'ui' | 'draft' | null>(null);
 	let pendingUiStatePatch = $state<Record<string, unknown>>({});
 	let lastAutoSavedAt = $state('');
-	let timelineUndoStack = $state<VideoLocalizationTimelineClip[][]>([]);
-	let timelineRedoStack = $state<VideoLocalizationTimelineClip[][]>([]);
+	type TimelineSnapshot = { clips: VideoLocalizationTimelineClip[]; disabledMediaTracks: string[] };
+	let timelineUndoStack = $state<TimelineSnapshot[]>([]);
+	let timelineRedoStack = $state<TimelineSnapshot[]>([]);
 	let videoInput: HTMLInputElement | null = null;
 	let operationPollingTimer: ReturnType<typeof setInterval> | null = null;
 	let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -252,7 +252,11 @@
 		}
 		error = '';
 		try {
-			draft = await Api.videoLocalizationDraft(nextProjectId);
+			const loadedDraft = await Api.videoLocalizationDraft(nextProjectId);
+			const editableDraft = withEditableMediaClips(loadedDraft);
+			const addedMediaClips = editableDraft.timeline_clips.length > loadedDraft.timeline_clips.length;
+			draft = editableDraft;
+			if (addedMediaClips) scheduleDraftAutosave();
 			const lastEngineId = draft.source_media.metadata?.english_asr_engine_id;
 			if (typeof lastEngineId === 'string' && ASR_ENGINE_PRIORITY.includes(lastEngineId as AsrEngineId)) {
 				selectedAsrEngineId = lastEngineId as AsrEngineId;
@@ -416,7 +420,7 @@
 			projects = [...projects, project];
 			projectId = project.project_id;
 			const targetProjectId = project.project_id;
-			draft = await Api.importVideoLocalizationSource(targetProjectId, file);
+			draft = withEditableMediaClips(await Api.importVideoLocalizationSource(targetProjectId, file));
 			if (!draft.source_media.audio_path && !draft.stems.original_audio_path) {
 				const operation = await Api.submitVideoLocalizationOperation(targetProjectId, 'source_audio', {});
 				operations = sortOperations([operation, ...operations.filter((item) => item.operation_id !== operation.operation_id)]);
@@ -959,8 +963,24 @@
 
 	function rememberTimelineClips() {
 		if (!draft) return;
-		timelineUndoStack = [draft.timeline_clips.map((clip) => ({ ...clip })), ...timelineUndoStack].slice(0, 30);
+		timelineUndoStack = [timelineSnapshot(), ...timelineUndoStack].slice(0, 30);
 		timelineRedoStack = [];
+	}
+
+	function timelineSnapshot(): TimelineSnapshot {
+		return {
+			clips: draft?.timeline_clips.map((clip) => ({ ...clip })) ?? [],
+			disabledMediaTracks: Array.isArray(draft?.ui_state?.disabled_media_tracks) ? draft.ui_state.disabled_media_tracks.map(String) : []
+		};
+	}
+
+	function applyTimelineSnapshot(snapshot: TimelineSnapshot) {
+		if (!draft) return;
+		draft = {
+			...draft,
+			timeline_clips: snapshot.clips.map((clip) => ({ ...clip })),
+			ui_state: { ...draft.ui_state, disabled_media_tracks: [...snapshot.disabledMediaTracks] }
+		};
 	}
 
 	function updateTimelineClipFromTimeline(clipId: string, startMs: number, endMs: number, sourceStartMs: number, sourceEndMs: number | null) {
@@ -990,9 +1010,18 @@
 	function deleteTimelineClip(clipId: string) {
 		if (!draft) return;
 		rememberTimelineClips();
-		draft = { ...draft, timeline_clips: draft.timeline_clips.filter((clip) => clip.clip_id !== clipId) };
+		const target = draft.timeline_clips.find((clip) => clip.clip_id === clipId);
+		const isMediaTrack = Boolean(target && ['original', 'vocals', 'background'].includes(target.track_id));
+		const disabledTracks = Array.isArray(draft.ui_state?.disabled_media_tracks) ? draft.ui_state.disabled_media_tracks.map(String) : [];
+		draft = {
+			...draft,
+			timeline_clips: draft.timeline_clips.filter((clip) => clip.clip_id !== clipId),
+			ui_state: isMediaTrack && target
+				? { ...draft.ui_state, disabled_media_tracks: [...new Set([...disabledTracks, target.track_id])] }
+				: draft.ui_state
+		};
 		scheduleDraftAutosave();
-		message = '配音 clip 已从时间线移除';
+		message = '音频片段已从时间线移除';
 		setTimeout(() => (message = ''), 1600);
 	}
 
@@ -1000,8 +1029,8 @@
 		if (!draft || !timelineUndoStack.length) return;
 		const [previous, ...rest] = timelineUndoStack;
 		timelineUndoStack = rest;
-		timelineRedoStack = [draft.timeline_clips.map((clip) => ({ ...clip })), ...timelineRedoStack].slice(0, 30);
-		draft = { ...draft, timeline_clips: previous.map((clip) => ({ ...clip })) };
+		timelineRedoStack = [timelineSnapshot(), ...timelineRedoStack].slice(0, 30);
+		applyTimelineSnapshot(previous);
 		scheduleDraftAutosave();
 	}
 
@@ -1009,8 +1038,8 @@
 		if (!draft || !timelineRedoStack.length) return;
 		const [next, ...rest] = timelineRedoStack;
 		timelineRedoStack = rest;
-		timelineUndoStack = [draft.timeline_clips.map((clip) => ({ ...clip })), ...timelineUndoStack].slice(0, 30);
-		draft = { ...draft, timeline_clips: next.map((clip) => ({ ...clip })) };
+		timelineUndoStack = [timelineSnapshot(), ...timelineUndoStack].slice(0, 30);
+		applyTimelineSnapshot(next);
 		scheduleDraftAutosave();
 	}
 
@@ -1464,11 +1493,61 @@
 
 	async function refreshDraftOnly() {
 		if (!projectId) return;
-		draft = await Api.videoLocalizationDraft(projectId);
+		const loadedDraft = await Api.videoLocalizationDraft(projectId);
+		const editableDraft = withEditableMediaClips(loadedDraft);
+		const addedMediaClips = editableDraft.timeline_clips.length > loadedDraft.timeline_clips.length;
+		draft = editableDraft;
+		if (addedMediaClips) scheduleDraftAutosave();
 		draftOnlyCueIds = [];
 		operations = sortOperations(draft.operations ?? operations);
 		if (!selectedCueId && draft.cues[0]) selectedCueId = draft.cues[0].cue_id;
 		if (!selectedVoiceId && draft.reference_clips[0]) selectedVoiceId = draft.reference_clips[0].reference_clip_id;
+	}
+
+	function withEditableMediaClips(value: VideoLocalizationDraft) {
+		const durationMs = Math.max(300, Math.round(value.source_media.duration_ms ?? 0));
+		const disabledTracks = Array.isArray(value.ui_state?.disabled_media_tracks) ? value.ui_state.disabled_media_tracks.map(String) : [];
+		const mediaTracks: Array<{ trackId: 'original' | 'vocals' | 'background'; audioPath: string | null }> = [
+			{ trackId: 'original', audioPath: value.source_media.audio_path || value.stems.original_audio_path },
+			{ trackId: 'vocals', audioPath: value.stems.vocals_clean_path },
+			{ trackId: 'background', audioPath: value.stems.background_path }
+		];
+		const additions: VideoLocalizationTimelineClip[] = [];
+		for (const track of mediaTracks) {
+			if (!track.audioPath || disabledTracks.includes(track.trackId) || value.timeline_clips.some((clip) => clip.track_id === track.trackId)) continue;
+			additions.push({
+				clip_id: `media_${track.trackId}`,
+				track_id: track.trackId,
+				start_ms: 0,
+				end_ms: durationMs,
+				source_start_ms: 0,
+				source_end_ms: durationMs,
+				audio_path: track.audioPath,
+				status: 'ready',
+				media_clip: true
+			});
+		}
+		if (!additions.length) return value;
+		const initializeOriginalSolo = additions.some((clip) => clip.track_id === 'original') && value.ui_state?.initial_track_mix_configured !== true;
+		if (!initializeOriginalSolo) return { ...value, timeline_clips: [...value.timeline_clips, ...additions] };
+		const existingStates = value.ui_state?.track_states && typeof value.ui_state.track_states === 'object'
+			? value.ui_state.track_states as Record<string, Record<string, unknown>>
+			: {};
+		return {
+			...value,
+			timeline_clips: [...value.timeline_clips, ...additions],
+			ui_state: {
+				...value.ui_state,
+				initial_track_mix_configured: true,
+				track_states: {
+					...existingStates,
+					original: { ...(existingStates.original ?? {}), muted: false, solo: true, volume: existingStates.original?.volume ?? 1 },
+					vocals: { ...(existingStates.vocals ?? {}), solo: false },
+					background: { ...(existingStates.background ?? {}), solo: false },
+					dub: { ...(existingStates.dub ?? {}), solo: false }
+				}
+			}
+		};
 	}
 
 	function closeCurrentProject() {
@@ -1560,31 +1639,31 @@
 		previewPlaying = playing;
 	}
 
-	function sendPlaybackCommand(action: 'play-pause' | 'seek', timeMs?: number) {
-		playbackCommandSeq += 1;
-		playbackCommand = { seq: playbackCommandSeq, action, timeMs };
-		if (action === 'seek' && typeof timeMs === 'number') previewTimeMs = timeMs;
+	function seekPreview(timeMs: number) {
+		const boundedTimeMs = Math.max(0, Math.round(timeMs));
+		previewTimeMs = boundedTimeMs;
+		previewPlaybackController?.seek(boundedTimeMs);
 	}
 
 	function handleTimelineTransport(action: 'start' | 'play-pause' | 'next') {
 		if (action === 'play-pause') {
-			sendPlaybackCommand('play-pause');
+			previewPlaybackController?.playPause();
 			return;
 		}
 		if (action === 'start') {
-			sendPlaybackCommand('seek', 0);
+			seekPreview(0);
 			return;
 		}
 		const nextCue = (draft?.cues ?? [])
 			.filter((cue) => cue.start_ms !== null && cue.start_ms > previewTimeMs + 80)
 			.sort((a, b) => (a.start_ms ?? 0) - (b.start_ms ?? 0))[0];
 		const nextTimeMs = nextCue?.start_ms ?? draft?.source_media.duration_ms ?? 0;
-		sendPlaybackCommand('seek', nextTimeMs);
+		seekPreview(nextTimeMs);
 		if (nextCue) selectCue(nextCue.cue_id);
 	}
 
 	function seekTimeline(timeMs: number) {
-		sendPlaybackCommand('seek', Math.max(0, Math.round(timeMs)));
+		seekPreview(timeMs);
 	}
 
 	function updateDraftUiState(patch: Record<string, unknown>) {
@@ -1767,15 +1846,15 @@
 								disabled={projectNameSaving}
 								onkeydown={handleProjectNameKeydown}
 							/>
-							<button type="button" aria-label="保存项目名称" title="保存名称：同步修改项目名称和对应的项目目录名称。" onclick={saveProjectNameEdit} disabled={projectNameSaving || !projectNameDraft.trim()}><Check size={13} /></button>
-							<button type="button" aria-label="取消修改项目名称" title="取消修改：保留当前项目名称不变。" onclick={cancelProjectNameEdit} disabled={projectNameSaving}><X size={13} /></button>
+							<button type="button" aria-label="保存项目名称" data-tooltip="保存名称：同步修改项目名称和对应的项目目录名称。" onclick={saveProjectNameEdit} disabled={projectNameSaving || !projectNameDraft.trim()}><Check size={13} /></button>
+							<button type="button" aria-label="取消修改项目名称" data-tooltip="取消修改：保留当前项目名称不变。" onclick={cancelProjectNameEdit} disabled={projectNameSaving}><X size={13} /></button>
 						</div>
 					{:else}
 						<div class="project-name-display">
 							<h1>{selectedProject?.name || draft?.source_media.filename || '未命名本土化项目'}</h1>
-							<button type="button" aria-label="修改项目名称" title="修改项目名称" data-tooltip="修改名称：项目目录会随新名称同步调整。" onclick={startProjectNameEdit} disabled={!selectedProject || importing}><Pencil size={12} /></button>
+							<button type="button" aria-label="修改项目名称" data-tooltip="修改名称：项目目录会随新名称同步调整。" onclick={startProjectNameEdit} disabled={!selectedProject || importing}><Pencil size={12} /></button>
 							<div class="project-switcher">
-								<button class="project-history-toggle" class:active={projectMenuOpen} type="button" aria-label="切换历史项目" aria-expanded={projectMenuOpen} title="切换历史项目" data-tooltip="切换项目：查看并打开以前保存的视频本土化项目。" onclick={toggleProjectMenu} disabled={loading || !projects.length}><ChevronDown size={13} /></button>
+								<button class="project-history-toggle" class:active={projectMenuOpen} type="button" aria-label="切换历史项目" aria-expanded={projectMenuOpen} data-tooltip="切换项目：查看并打开以前保存的视频本土化项目。" onclick={toggleProjectMenu} disabled={loading || !projects.length}><ChevronDown size={13} /></button>
 								{#if projectMenuOpen}
 									<div class="project-menu" role="menu" aria-label="历史项目">
 										<div class="project-menu-head"><strong>历史项目</strong><span>{projects.length}</span></div>
@@ -1807,7 +1886,6 @@
 				onclick={closeCurrentProject}
 				disabled={!projectId}
 				aria-label="关闭当前项目"
-				title="关闭当前项目"
 				data-tooltip="关闭当前项目，项目文件仍会保留在本地目录。"
 			>
 				<X size={15} />
@@ -1818,12 +1896,11 @@
 				onclick={openProjectDirectory}
 				disabled={!projectId || openingProjectDirectory}
 				aria-label="打开项目目录"
-				title="打开项目目录"
 				data-tooltip="在 Finder 中打开当前项目保存目录。"
 			>
 				<FolderOpen size={15} />
 			</button>
-			<button class="icon-action" type="button" onclick={toggleInspectorCollapsed} title={inspectorCollapsed ? '展开侧栏：显示音色、字幕与样式检查器。' : '收起侧栏：为视频和时间线释放更多空间。'} data-tooltip={inspectorCollapsed ? '展开侧栏：显示音色、字幕与样式检查器。' : '收起侧栏：为视频和时间线释放更多空间。'} aria-label={inspectorCollapsed ? '展开侧栏' : '收起侧栏'}>
+			<button class="icon-action" type="button" onclick={toggleInspectorCollapsed} data-tooltip={inspectorCollapsed ? '展开侧栏：显示音色、字幕与样式检查器。' : '收起侧栏：为视频和时间线释放更多空间。'} aria-label={inspectorCollapsed ? '展开侧栏' : '收起侧栏'}>
 				{#if inspectorCollapsed}
 					<PanelRightOpen size={16} />
 				{:else}
@@ -1846,11 +1923,11 @@
 				{importing}
 				{subtitlePreview}
 				{trackStates}
-				{playbackCommand}
 				onRequestImport={() => videoInput?.click()}
 				onImportFile={importVideoFile}
 				onVideoTimeUpdate={updatePreviewTime}
 				onPlaybackStateChange={updatePreviewPlaying}
+				onControllerReady={(controller) => (previewPlaybackController = controller)}
 			/>
 			<LocalizationTextImport open={localizationImportOpen} cueCount={draft?.cues.length ?? 0} onApply={applyLocalizationText} onApplySrt={applyLocalizationSrt} onClose={() => (localizationImportOpen = false)} />
 			<VideoCuttingTimeline
@@ -1899,17 +1976,17 @@
 				</div>
 			{/if}
 			<div class="cutting-utility-row">
-				<button class="mini-btn" type="button" title="导入字幕：载入外部完成的本土化文本或 SRT，并按字幕片段匹配。" onclick={() => (localizationImportOpen = !localizationImportOpen)} disabled={!draft?.cues.length}>
+				<button class="mini-btn" type="button" data-tooltip="导入字幕：载入外部完成的本土化文本或 SRT，并按字幕片段匹配。" onclick={() => (localizationImportOpen = !localizationImportOpen)} disabled={!draft?.cues.length}>
 					{localizationImportOpen ? '收起字幕导入' : '导入字幕'}
 				</button>
-				<button class="mini-btn" type="button" title="创建本土化占位稿：复制原文并标记待本土化，便于后续逐条编辑或导入译文。" onclick={localizeChineseDraft} disabled={!draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) || localizingDraft}>
+				<button class="mini-btn" type="button" data-tooltip="创建本土化占位稿：复制原文并标记待本土化，便于后续逐条编辑或导入译文。" onclick={localizeChineseDraft} disabled={!draft?.cues.some((cue) => cue.en_subtitle_text?.trim()) || localizingDraft}>
 					{localizingDraft ? '创建中' : '创建本土化占位稿'}
 				</button>
-				<button class="mini-btn" type="button" title="新增字幕片段：在时间线末尾创建一条可编辑字幕。" onclick={addCue} disabled={!draft}>新增字幕片段</button>
-				<button class="mini-btn" type="button" title="生成参考音候选：从已识别的干净人声片段创建项目音色候选。" onclick={createReferenceCandidates} disabled={draft?.stems.separation_status !== 'completed' || creatingReferences}>
+				<button class="mini-btn" type="button" data-tooltip="新增字幕片段：在时间线末尾创建一条可编辑字幕。" onclick={addCue} disabled={!draft}>新增字幕片段</button>
+				<button class="mini-btn" type="button" data-tooltip="生成参考音候选：从已识别的干净人声片段创建项目音色候选。" onclick={createReferenceCandidates} disabled={draft?.stems.separation_status !== 'completed' || creatingReferences}>
 					{creatingReferences ? '生成中' : '生成参考音候选'}
 				</button>
-				<button class="mini-btn btn-danger" type="button" title="清空当前任务：移除当前项目的本土化工作数据，保留项目本身。" onclick={resetCurrentTask} disabled={!hasResettableDraft || resetting}>
+				<button class="mini-btn btn-danger" type="button" data-tooltip="清空当前任务：移除当前项目的本土化工作数据，保留项目本身。" onclick={resetCurrentTask} disabled={!hasResettableDraft || resetting}>
 					<Trash2 size={13} /> {resetting ? '清空中' : '清空当前任务'}
 				</button>
 			</div>
@@ -1929,9 +2006,9 @@
 									</div>
 									<div class="operation-actions">
 										{#if isActiveOperation(operation)}
-											<button class="tiny-btn" type="button" title="取消任务：停止该后台处理任务并保留已完成的数据。" onclick={() => cancelOperation(operation)} disabled={operationActionId === operation.operation_id}>取消</button>
+											<button class="tiny-btn" type="button" data-tooltip="取消任务：停止该后台处理任务并保留已完成的数据。" onclick={() => cancelOperation(operation)} disabled={operationActionId === operation.operation_id}>取消</button>
 										{:else if operation.status === 'failed' || operation.status === 'cancelled'}
-											<button class="tiny-btn" type="button" title="重试任务：使用相同参数重新提交失败或已取消的任务。" onclick={() => retryOperation(operation)} disabled={operationActionId === operation.operation_id}>重试</button>
+											<button class="tiny-btn" type="button" data-tooltip="重试任务：使用相同参数重新提交失败或已取消的任务。" onclick={() => retryOperation(operation)} disabled={operationActionId === operation.operation_id}>重试</button>
 										{/if}
 									</div>
 								</div>
@@ -1947,20 +2024,20 @@
 						<span>{readyCount} 可生成 / {generatedCount} 已有音频 / {blockedCount} 阻断</span>
 					</div>
 					<div class="delivery-actions">
-						<button class="mini-btn" type="button" title="批量 TTS：提交所有满足条件且尚未生成音频的字幕片段。" onclick={submitBatchTts} disabled={!canSubmitCount || submittingBatch}>
+						<button class="mini-btn" type="button" data-tooltip="批量 TTS：提交所有满足条件且尚未生成音频的字幕片段。" onclick={submitBatchTts} disabled={!canSubmitCount || submittingBatch}>
 							{submittingBatch ? '提交中' : `批量 TTS ${canSubmitCount || ''}`}
 						</button>
 						<input class="batch-input" value={ttsBatchId} placeholder="Batch ID" oninput={(event) => (ttsBatchId = event.currentTarget.value)} />
-						<button class="mini-btn" type="button" title="同步结果：按 Batch ID 拉取已完成的 TTS 音频并回填时间线。" onclick={syncBatchTtsResults} disabled={!ttsBatchId.trim() || syncingBatch}>{syncingBatch ? '同步中' : '同步结果'}</button>
-						<button class="mini-btn" type="button" title="导出 SRT：下载包含原文和本土化文本的字幕文件。" onclick={exportBilingualSrt} disabled={!draft?.cues.length}>导出 SRT</button>
-						<button class="mini-btn" type="button" title="导出 EDL：下载时间线片段、轨道路由和字幕信息。" onclick={exportTimelineEdl} disabled={!draft}>导出 EDL</button>
-						<button class="mini-btn" type="button" title="导出音频包：输出对齐后的中文配音轨、分段音频和清单。" onclick={exportTimelineAudioPackage} disabled={!generatedCount || exportingAudioPackage}>
+						<button class="mini-btn" type="button" data-tooltip="同步结果：按 Batch ID 拉取已完成的 TTS 音频并回填时间线。" onclick={syncBatchTtsResults} disabled={!ttsBatchId.trim() || syncingBatch}>{syncingBatch ? '同步中' : '同步结果'}</button>
+						<button class="mini-btn" type="button" data-tooltip="导出 SRT：下载包含原文和本土化文本的字幕文件。" onclick={exportBilingualSrt} disabled={!draft?.cues.length}>导出 SRT</button>
+						<button class="mini-btn" type="button" data-tooltip="导出 EDL：下载时间线片段、轨道路由和字幕信息。" onclick={exportTimelineEdl} disabled={!draft}>导出 EDL</button>
+						<button class="mini-btn" type="button" data-tooltip="导出音频包：输出对齐后的中文配音轨、分段音频和清单。" onclick={exportTimelineAudioPackage} disabled={!generatedCount || exportingAudioPackage}>
 							{exportingAudioPackage ? '导出中' : `导出音频包${generatedCount ? ` ${generatedCount}` : ''}`}
 						</button>
-						<button class="mini-btn" type="button" title="导出合成视频：按当前时间线生成本土化视频文件。" onclick={exportLocalizedVideo} disabled={!draft?.source_media.video_path || !generatedCount || exportingLocalizedVideo}>
+						<button class="mini-btn" type="button" data-tooltip="导出合成视频：按当前时间线生成本土化视频文件。" onclick={exportLocalizedVideo} disabled={!draft?.source_media.video_path || !generatedCount || exportingLocalizedVideo}>
 							{exportingLocalizedVideo ? '合成中' : '导出合成视频'}
 						</button>
-						<button class="mini-btn" type="button" title="交付检查：导出阻断项、警告和可生成片段统计。" onclick={exportReadinessAudit} disabled={!draft}>交付检查</button>
+						<button class="mini-btn" type="button" data-tooltip="交付检查：导出阻断项、警告和可生成片段统计。" onclick={exportReadinessAudit} disabled={!draft}>交付检查</button>
 					</div>
 					<p class="delivery-note">
 						{draft?.exports.localized_video_path
@@ -2010,10 +2087,10 @@
 			/>
 		{:else}
 			<aside class="inspector-rail">
-				<button class="rail-tab" type="button" onclick={() => focusInspector('voice')} aria-label="音色" title="音色：展开项目音色库和样音保存面板。"><AudioLines size={15} /></button>
-				<button class="rail-tab" type="button" onclick={() => focusInspector('generate')} aria-label="生成" title="生成：展开音色参数组和配音候选面板。"><WandSparkles size={15} /></button>
-				<button class="rail-tab" type="button" onclick={() => focusInspector('subtitle')} aria-label="字幕" title="字幕：展开当前字幕片段编辑面板。"><Captions size={15} /></button>
-				<button class="rail-tab" type="button" onclick={() => focusInspector('style')} aria-label="样式" title="字幕样式：展开字幕外观和位置设置。"><Palette size={15} /></button>
+				<button class="rail-tab" type="button" onclick={() => focusInspector('voice')} aria-label="音色" data-tooltip="音色｜展开项目音色库和样音保存面板。"><AudioLines size={15} /></button>
+				<button class="rail-tab" type="button" onclick={() => focusInspector('generate')} aria-label="生成" data-tooltip="生成｜展开音色参数组和配音候选面板。"><WandSparkles size={15} /></button>
+				<button class="rail-tab" type="button" onclick={() => focusInspector('subtitle')} aria-label="字幕" data-tooltip="字幕｜展开当前字幕片段编辑面板。"><Captions size={15} /></button>
+				<button class="rail-tab" type="button" onclick={() => focusInspector('style')} aria-label="样式" data-tooltip="样式｜展开字幕外观和位置设置。"><Palette size={15} /></button>
 			</aside>
 		{/if}
 	</section>
@@ -2094,7 +2171,7 @@
 		white-space: nowrap;
 	}
 
-	.cutting-brand > div {
+	.cutting-brand > div:not(.brand-mark) {
 		display: flex;
 		align-items: baseline;
 		gap: 8px;
@@ -2148,28 +2225,14 @@
 		flex: 0 0 auto;
 	}
 
-	.project-name-display button[data-tooltip] {
-		position: relative;
-	}
-
-	.project-name-display button[data-tooltip]:hover:not(:disabled)::after {
-		content: attr(data-tooltip);
-		position: absolute;
-		top: calc(100% + 7px);
-		left: 0;
-		z-index: 80;
-		width: max-content;
-		max-width: 250px;
-		border: 1px solid #35414a;
-		border-radius: 6px;
-		padding: 7px 9px;
-		background: #0d1114;
-		color: var(--text);
-		font-size: 11px;
-		font-weight: 600;
-		line-height: 1.35;
-		box-shadow: 0 12px 24px rgba(0, 0, 0, 0.34);
-		pointer-events: none;
+	.project-name-display button:hover:not(:disabled),
+	.project-name-display button:focus-visible,
+	.project-name-editor button:hover:not(:disabled),
+	.project-name-editor button:focus-visible {
+		border-color: rgba(113, 224, 215, 0.72);
+		background: #26343a;
+		color: #efffff;
+		outline: none;
 	}
 
 	.project-switcher {
@@ -2329,22 +2392,12 @@
 		cursor: pointer;
 	}
 
-	.cutting-mode .icon-action:hover:not(:disabled)::after {
-		content: attr(data-tooltip);
-		position: absolute;
-		top: calc(100% + 7px);
-		right: 0;
-		z-index: 30;
-		width: max-content;
-		max-width: 260px;
-		border: 1px solid #35414a;
-		border-radius: 6px;
-		padding: 7px 9px;
-		background: #0d1114;
-		color: var(--text);
-		font-size: 11px;
-		line-height: 1.35;
-		box-shadow: 0 12px 24px rgba(0, 0, 0, 0.32);
+	.cutting-mode .icon-action:hover:not(:disabled),
+	.cutting-mode .icon-action:focus-visible {
+		border-color: rgba(113, 224, 215, 0.72);
+		background: #26343a;
+		color: #efffff;
+		outline: none;
 	}
 
 	.cutting-mode .btn,
