@@ -50,9 +50,10 @@ export const api = {
 	put: <T>(path: string, body: unknown) =>
 		fetchWithTimeout(`/api${path}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(parse<T>),
 	delete: <T>(path: string) => fetchWithTimeout(`/api${path}`, { method: 'DELETE' }).then(parse<T>),
-	upload: <T>(path: string, file: File) => {
+	upload: <T>(path: string, file: File, fields: Record<string, string> = {}) => {
 		const form = new FormData();
 		form.append('file', file);
+		for (const [key, value] of Object.entries(fields)) form.append(key, value);
 		return fetchWithTimeout(`/api${path}`, { method: 'POST', body: form }).then(parse<T>);
 	},
 	postForm: <T>(path: string, form: FormData) => fetchWithTimeout(`/api${path}`, { method: 'POST', body: form }).then(parse<T>)

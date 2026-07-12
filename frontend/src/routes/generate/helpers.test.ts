@@ -17,6 +17,7 @@ import {
 	formatSeconds,
 	formatAudioDuration,
 	resultDownloadNameForScope,
+	verificationStatusLabel,
 } from './helpers';
 import type { EngineDetail, GenerationTask, ParameterSchema, VoiceAsset } from '$lib/api/types';
 
@@ -32,6 +33,10 @@ function makeTask(overrides: Partial<GenerationTask> = {}): GenerationTask {
 		...overrides,
 	} as GenerationTask;
 }
+
+it('labels non-speech Seed Audio verification without showing a false failure', () => {
+	expect(verificationStatusLabel('skipped')).toBe('无需台词校对');
+});
 
 function parameter(overrides: Partial<ParameterSchema> & Pick<ParameterSchema, 'key' | 'label'>): ParameterSchema {
 	return {
@@ -168,6 +173,23 @@ describe('displayTitle', () => {
 });
 
 describe('requestFromTask', () => {
+	it('preserves the Seed Audio envelope for parameter reuse', () => {
+		const request = requestFromTask(makeTask({
+			engine_id: 'doubao-seed-audio-1.0',
+			input_text: '@音频1 说话',
+			parameters: {
+				engine_id: 'doubao-seed-audio-1.0',
+				text: '@音频1 说话',
+				input_mode: 'audio',
+				input_assets: [{ asset_id: 'speaker-1', type: 'speaker', source: 'cloud_speaker', speaker_id: 'speaker-1' }],
+				engine_parameters: { format: 'mp3', sample_rate: 48000 }
+			}
+		}));
+
+		expect(request.input_mode).toBe('audio');
+		expect(request.input_assets).toEqual([expect.objectContaining({ speaker_id: 'speaker-1' })]);
+		expect(request.engine_parameters).toEqual({ format: 'mp3', sample_rate: 48000 });
+	});
 	it('rebuilds a full request from a normal task parameter snapshot', () => {
 		const request = requestFromTask(makeTask({
 			engine_id: 'omnivoice',

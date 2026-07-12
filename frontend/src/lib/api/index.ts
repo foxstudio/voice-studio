@@ -7,6 +7,7 @@ import type {
 	DoubaoCloudVoiceListResponse,
 	DoubaoVoiceCloneResponse,
 	EngineDetail,
+	EngineGenerateRequest,
 	EngineSpeaker,
 	ExportRecord,
 	EvaluationReport,
@@ -49,6 +50,7 @@ import type {
 	VoiceAssetCreate,
 	VoiceClipTranscribeResponse,
 	SEREmotionResult,
+	SeedAudioImageUploadResult,
 	VoiceAssetUpdate,
 	VoiceSeed
 } from './types';
@@ -95,10 +97,12 @@ export const Api = {
 	refreshDoubaoCloudVoices: () => api.post<DoubaoCloudRefreshResponse>('/voices/doubao/cloud/refresh'),
 	unbindDoubaoVoice: (id: string) => api.delete<VoiceAsset>(`/voices/${id}/doubao/binding`),
 	uploadVoice: (file: File) => api.upload<UploadResult>('/voices/upload', file),
+	uploadSeedAudioImage: (file: File, licenseStatus: 'self_voice' | 'authorized' | 'company_authorized' | 'test_only' = 'self_voice') =>
+		api.upload<SeedAudioImageUploadResult>('/seed-audio/assets/image', file, { license_status: licenseStatus }),
 	clipTranscribeVoice: (fileId: string, body: { start_ms: number; end_ms: number; language?: 'auto' | 'zh' | 'en'; engine_id?: string }) =>
 		api.post<VoiceClipTranscribeResponse>(`/voices/files/${encodeURIComponent(fileId)}/clip-transcribe`, body),
 	generatePlan: (body: GeneratePlanRequest) => api.post<GeneratePlanResponse>('/generate/plan', body),
-	generate: (body: GenerateRequest) => api.post<GenerateResponse>('/generate', body),
+	generate: (body: GenerateRequest | EngineGenerateRequest) => api.post<GenerateResponse>('/generate', body),
 	generateLongform: (body: LongformGenerateRequest) => api.post<LongformTask>('/longform/generate', body),
 	longformTasks: (params: { includeCompleted?: boolean; limit?: number } = {}) => {
 		const search = new URLSearchParams();

@@ -18,6 +18,29 @@
 	import type { LongformStrategy, PresetDraft } from '$lib/stores/generate';
 	import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from './helpers';
 	import { taskDateStartIso, taskServerQuery } from './records-query';
+	import SeedAudioPanel from './engine-ui/seed-audio/SeedAudioPanel.svelte';
+	import SeedAudioInlineControls from './engine-ui/seed-audio/SeedAudioInlineControls.svelte';
+	import { engineUiRegistry } from './engine-ui/registry';
+	import { seedAudioProfile } from './engine-ui/seed-audio/profile';
+	import { seedAudioStateFromRequest, seedAudioStateToRequest } from './engine-ui/seed-audio/request';
+	import { applySeedAudioPreset, seedAudioPresetsForMode, type SeedAudioPresetBundle } from './engine-ui/seed-audio/presets';
+	import {
+		SEED_AUDIO_ENGINE_ID,
+		activeSeedAudioDraft,
+		createDefaultSeedAudioState,
+		setSeedAudioImage,
+		setSeedAudioReference,
+		updateSeedAudioPrompt,
+		type SeedAudioReferenceAsset,
+		type SeedAudioState
+	} from './engine-ui/seed-audio/state';
+	import {
+		createReferenceAudioDraft,
+		legacyCustomVoicePatchFromDraft,
+		referenceAudioDraftFromLegacyState
+	} from './engine-ui/reference-audio/draft';
+
+	if (!engineUiRegistry.has(SEED_AUDIO_ENGINE_ID)) engineUiRegistry.register(seedAudioProfile);
 
 	const store = generateStore;
 	type VideoLocalizationHandoffMeta = {
@@ -29,6 +52,7 @@
 		recipe_id: string | null;
 		created_at: string;
 	};
+	type ComposerPreset = PresetTemplate & { seedBundle?: SeedAudioPresetBundle };
 
 	let _autoResizeRO: ResizeObserver | undefined = $state();
 	let _speakerCatalogRequestKey = '';
@@ -85,6 +109,17 @@
 	let customVoiceTrimHover = $state(false);
 	let customVoiceTrimFocusWithin = $state(false);
 	let videoLocalizationHandoff = $state<VideoLocalizationHandoffMeta | null>(null);
+	let seedVoicePickerSlot: 1 | 2 | 3 | null = $state(null);
+	let seedSpeakerPickerSlot: 1 | 2 | 3 | null = $state(null);
+	let seedEditingSlot: 1 | 2 | 3 | null = $state(null);
+	let seedSpeakerId = $state('');
+	let seedSpeakerName = $state('');
+	let seedAssetBusy = $state(false);
+	let seedAssetError = $state('');
+	let seedPreviewAudio: HTMLAudioElement | null = $state(null);
+	let seedPreviewingSlot: 1 | 2 | 3 | null = $state(null);
+	let seedShowAdvanced = $state(false);
+	const seedOwnedObjectUrls = new Set<string>();
 
 	const selected = $derived($store.engines.find(e => e.manifest.engine_id === $store.engineId));
 	const activeParamKeys = $derived(new Set(selected?.manifest.parameter_schema.map(p => p.key) ?? []));
@@ -113,13 +148,38 @@
 	const isDoubaoPreset = $derived($store.engineId === 'doubao-tts-preset'); const isDoubaoClone = $derived($store.engineId === 'doubao-tts-voiceclone'); const isDoubao = $derived(isDoubaoPreset || isDoubaoClone);
 	const isEmotiVoice = $derived($store.engineId === 'emotivoice'); const isF5 = $derived($store.engineId === 'f5-tts'); const isConfucius4 = $derived($store.engineId === 'confucius4-mlx-int8'); const isQwen3TTS = $derived($store.engineId === 'qwen3-tts-mlx-0.6b');
 	const isCosyVoice = $derived($store.engineId === 'cosyvoice-sft'); const isCosyVoiceZeroShot = $derived($store.engineId === 'cosyvoice-zero-shot');
+	const isSeedAudio = $derived($store.engineId === SEED_AUDIO_ENGINE_ID);
+	const seedAudioState = $derived(($store.engineUiStateById[SEED_AUDIO_ENGINE_ID] as SeedAudioState | undefined) ?? createDefaultSeedAudioState());
+	const seedVoiceChoices = $derived($store.voices.filter(voice => voice.reference_audio_ids.length > 0));
+	const seedCloudSpeakerChoices = $derived.by(() => $store.voices.flatMap(voice => voice.engine_bindings.filter(binding => binding.available && binding.external_voice_id).map(binding => ({ id: binding.external_voice_id!, name: voice.name }))));
 	const usesReferenceVoice = $derived(isIndexTTS || isOmniVoice || isConfucius4 || isQwen3TTS || isMimoClone || isDoubaoClone || isF5 || isCosyVoiceZeroShot);
 	const qwen3ReferenceRoute = $derived(isQwen3TTS && ($store.voiceSource === 'reference_audio' || Boolean($store.voiceId)));
 	const qwen3VoiceDesignRoute = $derived(isQwen3TTS && !qwen3ReferenceRoute && Boolean($store.voiceDesignPrompt.trim()));
 	const qwen3PresetRoute = $derived(isQwen3TTS && !qwen3ReferenceRoute && !qwen3VoiceDesignRoute);
 	const qwen3PresetDisabledText = $derived($store.voiceSource === 'reference_audio' ? '自定义音色已接管，预置音色不参与本次生成。' : '本地音色库已接管，预置音色不参与本次生成。');
 	const followsReferenceEmotion = $derived(isIndexTTS && !$store.emotion);
-	const enginePresets = $derived($store.presets.filter(p => p.engine_id === $store.engineId));
+	const enginePresets = $derived.by((): ComposerPreset[] => {
+		if (!isSeedAudio) return $store.presets.filter((preset) => preset.engine_id === $store.engineId);
+		const builtins = seedAudioPresetsForMode(seedAudioState.mode).map((preset): ComposerPreset => ({
+			preset_id: preset.presetId,
+			name: preset.name,
+			scene: preset.description,
+			description: preset.description,
+			engine_id: preset.engineId,
+			input_mode: preset.inputMode,
+			input_assets: preset.assets,
+			sample_text: preset.promptTemplate,
+			parameters: {},
+			source_test_id: null,
+			recommended_voice_type: 'generated_audio',
+			tags: preset.tags,
+			seedBundle: preset
+		}));
+		const custom = $store.presets.filter((preset) =>
+			preset.engine_id === SEED_AUDIO_ENGINE_ID && preset.input_mode === seedAudioState.mode
+		);
+		return [...builtins, ...custom];
+	});
 	const hasRunningTasks = $derived(taskSummary.active > 0 || $store.longformTasks.some(t => H.statusIsActive(t.status)));
 	const visibleLongformTasks = $derived($store.longformTasks.filter(t => t.status !== 'success'));
 	const queueOrderedTasks = $derived.by(() => $store.tasks.filter(t => H.taskIsActive(t)).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.task_id.localeCompare(b.task_id)));
@@ -178,11 +238,157 @@
 	const resultPageSizePresets = [8, 10, 12, 14, 16, 18, 20, 24, 28, 32];
 	const hasActiveFilters = $derived(Boolean($store.taskQuery.trim()) || $store.taskStatusTab !== 'all' || $store.taskEngineFilter !== 'all' || $store.taskSourceFilter !== 'all' || $store.taskDateFilter !== 'all' || $store.taskSortBy !== 'latest');
 
-	function requestBody(): GenerateRequest { return store.toRequest(); }
+	function updateSeedAudioState(next: SeedAudioState) {
+		const activeObjectUrls = new Set<string>();
+		for (const slot of next.drafts.audio.references) {
+			const referenceAudio = slot.asset?.referenceAudio;
+			if (!referenceAudio) continue;
+			for (const url of [referenceAudio.source.previewUrl, referenceAudio.clip.previewUrl]) {
+				if (url.startsWith('blob:')) activeObjectUrls.add(url);
+			}
+		}
+		const imagePreviewUrl = next.drafts.image.image?.previewUrl ?? '';
+		if (imagePreviewUrl.startsWith('blob:')) activeObjectUrls.add(imagePreviewUrl);
+		for (const url of seedOwnedObjectUrls) {
+			if (activeObjectUrls.has(url)) continue;
+			URL.revokeObjectURL(url);
+			seedOwnedObjectUrls.delete(url);
+		}
+		$store.engineUiStateById = { ...$store.engineUiStateById, [SEED_AUDIO_ENGINE_ID]: next };
+		$store.error = '';
+	}
+	function createSeedObjectUrl(file: File) {
+		const url = URL.createObjectURL(file);
+		seedOwnedObjectUrls.add(url);
+		return url;
+	}
+	function releaseSeedObjectUrl(url: string) {
+		if (!seedOwnedObjectUrls.delete(url)) return;
+		URL.revokeObjectURL(url);
+	}
+	function seedAudioFileUrl(fileId: string) { return fileId ? `/api/voices/files/${encodeURIComponent(fileId)}/audio` : ''; }
+	async function uploadSeedAudioReference(slot: 1 | 2 | 3, file: File) {
+		seedAssetError = '';
+		if (file.size > 10 * 1024 * 1024) { seedAssetError = '参考声音不能超过 10MB，请裁短或压缩后重试。'; return; }
+		if (!file.type.startsWith('audio/') && !/\.(wav|mp3|pcm|ogg|opus)$/i.test(file.name)) { seedAssetError = '只支持 WAV、MP3、PCM 或 OGG Opus 音频。'; return; }
+		seedAssetBusy = true;
+		const previewUrl = createSeedObjectUrl(file);
+		try {
+			const [uploaded, durationSeconds] = await Promise.all([Api.uploadVoice(file), loadAudioDuration(previewUrl)]);
+			const durationMs = Math.round(durationSeconds * 1000);
+			const referenceAudio = createReferenceAudioDraft(`seed-slot-${slot}-${uploaded.file_id}`, {
+				sourceKind: 'upload',
+				source: { fileId: uploaded.file_id, fileName: file.name, path: uploaded.path, previewUrl, durationMs, mimeType: file.type, sizeBytes: file.size },
+				clip: { fileId: uploaded.file_id, fileName: file.name, path: uploaded.path, previewUrl, durationMs, mimeType: file.type, sizeBytes: file.size },
+				trim: { startMs: 0, endMs: durationMs },
+				qualityWarnings: uploaded.quality.warnings
+			});
+			const asset: SeedAudioReferenceAsset = {
+				assetId: referenceAudio.draftId, type: 'audio', source: 'upload', displayName: file.name,
+				voiceId: '', speakerId: '', licenseStatus: 'self_voice', referenceAudio
+			};
+			updateSeedAudioState(setSeedAudioReference(seedAudioState, slot, asset));
+			if (durationMs > 30_000) {
+				seedAssetError = '原始音频超过 30 秒，已为你打开编辑器。请裁选 30 秒以内片段并点击“使用选区”。';
+				await openSeedAudioEditor(slot, asset);
+			}
+		} catch (e) {
+			releaseSeedObjectUrl(previewUrl);
+			seedAssetError = (e as Error).message || '参考声音上传失败，请检查文件后重试。';
+		} finally {
+			seedAssetBusy = false;
+		}
+	}
+	function chooseSeedVoice(slot: 1 | 2 | 3, voice: VoiceAsset, fileId: string) {
+		if (!voice.reference_audio_ids.includes(fileId)) { seedAssetError = '所选文件不属于这个音色，请重新选择。'; return; }
+		const referenceAudio = createReferenceAudioDraft(`seed-voice-${voice.voice_id}-${fileId}`, {
+			sourceKind: 'voice_library',
+			source: { fileId, fileName: `${voice.name} · ${fileId.slice(0, 8)}`, path: `${fileId}.wav`, previewUrl: seedAudioFileUrl(fileId) },
+			clip: { fileId, fileName: `${voice.name} · ${fileId.slice(0, 8)}`, path: `${fileId}.wav`, previewUrl: seedAudioFileUrl(fileId) },
+			transcript: { text: voice.reference_text }
+		});
+		updateSeedAudioState(setSeedAudioReference(seedAudioState, slot, {
+			assetId: referenceAudio.draftId, type: 'audio', source: 'voice_library', displayName: voice.name,
+			voiceId: voice.voice_id, speakerId: '', licenseStatus: voice.license_status, referenceAudio
+		}));
+		seedVoicePickerSlot = null;
+	}
+	function chooseSeedSpeaker(slot: 1 | 2 | 3, speakerId: string, name = '') {
+		const id = speakerId.trim();
+		if (!id) { seedAssetError = '请填写有效的豆包 speaker ID。'; return; }
+		updateSeedAudioState(setSeedAudioReference(seedAudioState, slot, {
+			assetId: `seed-speaker-${id}`, type: 'speaker', source: 'cloud_speaker', displayName: name.trim() || id,
+			voiceId: '', speakerId: id, licenseStatus: 'authorized', referenceAudio: null
+		}));
+		seedSpeakerPickerSlot = null;
+		seedSpeakerId = '';
+		seedSpeakerName = '';
+	}
+	async function uploadSeedAudioImage(file: File) {
+		seedAssetError = '';
+		if (file.size > 10 * 1024 * 1024) { seedAssetError = '参考图片不能超过 10MB，请压缩后重试。'; return; }
+		if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { seedAssetError = '只支持 JPEG、PNG 或 WebP 图片。'; return; }
+		seedAssetBusy = true;
+		const previewUrl = createSeedObjectUrl(file);
+		try {
+			const uploaded = await Api.uploadSeedAudioImage(file, 'self_voice');
+			updateSeedAudioState(setSeedAudioImage(seedAudioState, {
+				assetId: `seed-image-${uploaded.file_id}`, source: 'upload', fileId: uploaded.file_id,
+				displayName: uploaded.original_name, previewUrl, mimeType: uploaded.mime_type,
+				sizeBytes: uploaded.size_bytes, licenseStatus: uploaded.license_status
+			}));
+		} catch (e) {
+			releaseSeedObjectUrl(previewUrl);
+			seedAssetError = (e as Error).message || '参考图片上传失败，请检查格式后重试。';
+		} finally { seedAssetBusy = false; }
+	}
+	async function previewSeedReference(slot: 1 | 2 | 3, asset: SeedAudioReferenceAsset) {
+		if (asset.type === 'speaker') { seedAssetError = '云端 speaker 没有本地样音；生成后可在结果中试听。'; return; }
+		const fileId = asset.referenceAudio?.clip.fileId;
+		const url = asset.referenceAudio?.clip.previewUrl || seedAudioFileUrl(fileId ?? '');
+		if (!url) { seedAssetError = '这条参考声音的本地文件已不存在，请替换后再试听。'; return; }
+		if (!seedPreviewAudio) seedPreviewAudio = new Audio();
+		if (seedPreviewingSlot === slot && !seedPreviewAudio.paused) { seedPreviewAudio.pause(); seedPreviewingSlot = null; return; }
+		seedPreviewAudio.src = url;
+		seedPreviewingSlot = slot;
+		seedPreviewAudio.onended = () => (seedPreviewingSlot = null);
+		try { await seedPreviewAudio.play(); } catch (e) { seedPreviewingSlot = null; seedAssetError = `参考声音无法播放：${(e as Error).message || '文件不可访问'}`; }
+	}
+	async function openSeedAudioEditor(slot: 1 | 2 | 3, asset: SeedAudioReferenceAsset) {
+		if (asset.type !== 'audio' || !asset.referenceAudio) return;
+		seedEditingSlot = slot;
+		const patch = legacyCustomVoicePatchFromDraft(asset.referenceAudio);
+		// The slot owns its blob preview URL. The shared editor must not revoke it
+		// merely because it switches playback to the managed server file.
+		$store = { ...get(store), ...patch, customVoicePreviewUrl: '' };
+		await restoreCustomVoiceReference({
+			reference_audio_path: patch.customVoiceReferenceAudioPath || `${patch.customVoiceFileId}.wav`,
+			custom_reference_source_audio_path: patch.customVoiceSourceAudioPath || `${patch.customVoiceSourceFileId || patch.customVoiceFileId}.wav`,
+			custom_reference_source_duration_ms: patch.customVoiceSourceDurationMs,
+			custom_reference_trim_start_ms: patch.customVoiceTrimStartMs,
+			custom_reference_trim_end_ms: patch.customVoiceTrimEndMs,
+			ref_text: patch.customVoiceTranscript
+		} as GenerateRequest);
+	}
+	function syncSeedAudioEditorDraft() {
+		if (!seedEditingSlot) return;
+		const current = seedAudioState.drafts.audio.references[seedEditingSlot - 1]?.asset;
+		if (!current || current.type !== 'audio') return;
+		const referenceAudio = referenceAudioDraftFromLegacyState(get(store), current.referenceAudio?.draftId ?? current.assetId);
+		updateSeedAudioState(setSeedAudioReference(seedAudioState, seedEditingSlot, { ...current, referenceAudio }));
+	}
+	async function applyActiveReferenceTrim() { await applyCustomVoiceTrim(); if (isSeedAudio) syncSeedAudioEditorDraft(); }
+	function updateActiveReferenceTranscript(text: string) { updateCustomVoiceTranscript(text); if (isSeedAudio) syncSeedAudioEditorDraft(); }
+	function closeActiveReferenceEditor() { resetCustomVoice(); seedEditingSlot = null; }
 	function referenceAudioFileIdFromPath(path: string | null | undefined) { if (!path) return ''; const filename = path.split('/').pop() ?? ''; return filename.replace(/\.[^.]+$/, ''); }
 	function revokeObjectUrlIfNeeded(url: string) { if (url.startsWith('blob:')) URL.revokeObjectURL(url); }
 	async function restoreRequest(req: GenerateRequest) {
 		resetCustomVoice();
+		if (req.engine_id === SEED_AUDIO_ENGINE_ID && req.input_mode) {
+			$store.engineId = SEED_AUDIO_ENGINE_ID;
+			updateSeedAudioState(seedAudioStateFromRequest(req as unknown as Record<string, unknown>));
+			return;
+		}
 		store.fromRequest(req);
 		$store = { ...get(store) };
 		if (req.reference_audio_path) await restoreCustomVoiceReference(req);
@@ -208,15 +414,25 @@
 	function videoLocalizationHandoffLabel(meta: VideoLocalizationHandoffMeta) {
 		return meta.mode === 'tune_with_recipe' ? '带参数调试' : '仅带样音生成';
 	}
-	function currentPresetParameters() { const req = store.toRequest(); const params: Record<string, unknown> = { language: req.language, output_format: req.output_format }; for (const k of selected?.manifest.parameter_schema.map(p => p.key) ?? []) { const v = (req as unknown as Record<string, unknown>)[k]; if (v !== undefined && v !== null && v !== '') params[k] = v; } return params; }
+	function currentComposerText() { return isSeedAudio ? activeSeedAudioDraft(seedAudioState).prompt : $store.text; }
+	function currentPresetParameters() { if (isSeedAudio) return seedAudioStateToRequest(seedAudioState).engine_parameters; const req = store.toRequest(); const params: Record<string, unknown> = { language: req.language, output_format: req.output_format }; for (const k of selected?.manifest.parameter_schema.map(p => p.key) ?? []) { const v = (req as unknown as Record<string, unknown>)[k]; if (v !== undefined && v !== null && v !== '') params[k] = v; } return params; }
 	function resetCurrentEngineParams() { const keepText = $store.text; const keepVoiceId = $store.voiceId; const keepShowMore = $store.showMoreParams; store.setEngine($store.engineId); $store.text = keepText; $store.showMoreParams = keepShowMore; if (usesReferenceVoice) $store.voiceId = keepVoiceId; }
 	function setSpeedValue(value: string | number) { const n = Number(value); if (!Number.isFinite(n)) return; $store.speed = Math.min(2, Math.max(0.5, Math.round(n * 100) / 100)); }
 	function setTaskDateFilter(value: TaskDateFilter) { $store.taskDateFilter = value; $store.currentPage = 1; }
-	function resetPresetDraft() { $store.presetDraft = { name: '', scene: '', description: '', tags: '', sample_text: $store.text }; $store.editingPresetId = ''; }
+	function resetPresetDraft() { $store.presetDraft = { name: '', scene: '', description: '', tags: '', sample_text: currentComposerText() }; $store.editingPresetId = ''; }
 	function presetTooltip(p: PresetTemplate) { return `${p.description || '无说明'}\n示例：${p.sample_text || '未设置'}\n标签：${p.tags.join('、') || '无'}`; }
 	function openPresetEditor(p?: PresetTemplate) { if (p) { $store.editingPresetId = p.preset_id; $store.presetDraft = { name: p.name, scene: p.scene, description: p.description, tags: p.tags.join('，'), sample_text: p.sample_text }; } else resetPresetDraft(); $store.showPresetEditor = true; }
 	function applyPreset(p: PresetTemplate) { const pp = p.parameters; const m = p.engine_id.startsWith('mimo-v2.5'); const keepVoiceId = p.recommended_voice_type === 'reference_voice' && p.engine_id === $store.engineId && usesReferenceVoice ? $store.voiceId : ''; store.fromRequest({ text: p.sample_text, engine_id: p.engine_id, voice_id: keepVoiceId || null, reference_audio_path: null, ref_text: null, language: String(pp.language ?? 'zh'), emotion_mode: pp.emotion ? 'emotion_vector' : 'follow_reference', emotion: typeof pp.emotion === 'string' ? pp.emotion : null, emotion_values: null, emotion_text: typeof pp.emotion_text === 'string' ? pp.emotion_text : null, style_instruction: typeof pp.style_instruction === 'string' ? pp.style_instruction : null, voice_design_prompt: typeof pp.voice_design_prompt === 'string' ? pp.voice_design_prompt : null, mimo_voice: typeof pp.mimo_voice === 'string' ? pp.mimo_voice : null, speaker_id: typeof pp.speaker_id === 'string' ? pp.speaker_id : null, prompt: typeof pp.prompt === 'string' ? pp.prompt : null, nfe_step: Number(pp.nfe_step ?? 32), cfg_strength: Number(pp.cfg_strength ?? 2.0), target_rms: Number(pp.target_rms ?? 0.1), cross_fade_duration: Number(pp.cross_fade_duration ?? 0.15), sway_sampling_coef: Number(pp.sway_sampling_coef ?? -1.0), fix_duration: Number(pp.fix_duration ?? 0), remove_silence: Boolean(pp.remove_silence ?? false), emo_alpha: Number(pp.emo_alpha ?? 0.6), speed: Number(pp.speed ?? 1.0), temperature: Number(pp.temperature ?? (m ? 0.6 : 0.8)), top_p: Number(pp.top_p ?? (m ? 0.95 : 0.8)), top_k: Number(pp.top_k ?? 30), repetition_penalty: Number(pp.repetition_penalty ?? 10), seed: pp.seed === undefined || pp.seed === null ? null : Number(pp.seed), max_mel_tokens: Number(pp.max_mel_tokens ?? 1500), max_tokens: Number(pp.max_tokens ?? 1200), cfg_scale: pp.cfg_scale === undefined || pp.cfg_scale === null ? null : Number(pp.cfg_scale), ddpm_steps: pp.ddpm_steps === undefined || pp.ddpm_steps === null ? null : Number(pp.ddpm_steps), max_text_tokens_per_segment: Number(pp.max_text_tokens_per_segment ?? 120), interval_silence: Number(pp.interval_silence ?? 200), diffusion_steps: Number(pp.diffusion_steps ?? (p.engine_id === 'omnivoice' ? 32 : 25)), cfg_rate: Number(pp.cfg_rate ?? 0.7), guidance_scale: Number(pp.guidance_scale ?? 2.0), duration: Number(pp.duration ?? 0), audio_chunk_duration: Number(pp.audio_chunk_duration ?? 15), audio_chunk_threshold: Number(pp.audio_chunk_threshold ?? 30), output_format: (pp.output_format ?? 'wav') as 'wav' | 'mp3' | 'flac', } as GenerateRequest); $store.error = ''; }
-	async function savePreset() { if (!$store.presetDraft.name.trim()) return; $store.presetBusy = true; try { const payload = { preset_id: $store.editingPresetId || null, name: $store.presetDraft.name.trim(), scene: $store.presetDraft.scene.trim(), description: $store.presetDraft.description.trim(), engine_id: $store.engineId, sample_text: $store.presetDraft.sample_text.trim() || $store.text, parameters: currentPresetParameters(), source_test_id: null, recommended_voice_type: isOmniVoice && !$store.voiceId ? 'voice_design' : 'reference_voice', tags: $store.presetDraft.tags.split(/[，,]/).map(t => t.trim()).filter(Boolean) }; const saved = $store.editingPresetId ? await Api.updatePreset($store.editingPresetId, payload) : await Api.createPreset(payload); $store.presets = [saved, ...$store.presets.filter(i => i.preset_id !== saved.preset_id)]; $store.showPresetEditor = false; resetPresetDraft(); } catch (e) { $store.error = (e as Error).message; } finally { $store.presetBusy = false; } }
+	function applyComposerPreset(p: ComposerPreset) {
+		if (p.seedBundle) { updateSeedAudioState(applySeedAudioPreset(seedAudioState, p.seedBundle)); return; }
+		if (p.engine_id !== SEED_AUDIO_ENGINE_ID) { applyPreset(p); return; }
+		if (!p.input_mode) { $store.error = '这个 Seed Audio 预设缺少模式信息，不能应用。'; return; }
+		try {
+			const restored = seedAudioStateFromRequest({ engine_id: SEED_AUDIO_ENGINE_ID, text: p.sample_text, input_mode: p.input_mode, input_assets: p.input_assets ?? [], engine_parameters: p.parameters });
+			updateSeedAudioState({ ...seedAudioState, mode: restored.mode, drafts: { ...seedAudioState.drafts, [restored.mode]: restored.drafts[restored.mode] } } as SeedAudioState);
+		} catch (error) { $store.error = (error as Error).message; }
+	}
+	async function savePreset() { if (!$store.presetDraft.name.trim()) return; $store.presetBusy = true; try { const seedRequest = isSeedAudio ? seedAudioStateToRequest(seedAudioState) : null; const payload = { preset_id: $store.editingPresetId || null, name: $store.presetDraft.name.trim(), scene: $store.presetDraft.scene.trim(), description: $store.presetDraft.description.trim(), engine_id: $store.engineId, input_mode: seedRequest?.input_mode ?? null, input_assets: seedRequest?.input_assets ?? [], sample_text: $store.presetDraft.sample_text.trim() || currentComposerText(), parameters: currentPresetParameters(), source_test_id: null, recommended_voice_type: isSeedAudio ? 'generated_audio' : isOmniVoice && !$store.voiceId ? 'voice_design' : 'reference_voice', tags: $store.presetDraft.tags.split(/[，,]/).map(t => t.trim()).filter(Boolean) }; const saved = $store.editingPresetId ? await Api.updatePreset($store.editingPresetId, payload) : await Api.createPreset(payload); $store.presets = [saved, ...$store.presets.filter(i => i.preset_id !== saved.preset_id)]; $store.showPresetEditor = false; resetPresetDraft(); } catch (e) { $store.error = (e as Error).message; } finally { $store.presetBusy = false; } }
 	async function deletePreset(p: PresetTemplate) { if (!p.preset_id.startsWith('custom_')) return; if (!window.confirm(`删除自定义预设「${p.name}」吗？`)) return; $store.presetBusy = true; try { await Api.deletePreset(p.preset_id); $store.presets = $store.presets.filter(i => i.preset_id !== p.preset_id); } catch (e) { $store.error = (e as Error).message; } finally { $store.presetBusy = false; } }
 	function formatSrtTime(valueMs: number) { const total = Math.max(0, Math.round(valueMs)); const h = Math.floor(total / 3600000); const m = Math.floor((total % 3600000) / 60000); const s = Math.floor((total % 60000) / 1000); const ms = total % 1000; return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`; }
 	function segmentsToSrt(segments: TranscriptionSegment[], fallbackText: string, durationMs: number | null) { const usable = segments.filter(s => s.text.trim()); if (usable.length) return usable.map((s, i) => `${i + 1}\n${formatSrtTime(s.start_ms)} --> ${formatSrtTime(s.end_ms)}\n${s.text.trim()}`).join('\n\n') + '\n'; const text = fallbackText.trim(); if (!text) return ''; return `1\n00:00:00,000 --> ${formatSrtTime(durationMs ?? 2000)}\n${text}\n`; }
@@ -320,7 +536,8 @@
 		applyCustomVoiceClipResult(result, result.transcription, durationMs, `/api/voices/files/${encodeURIComponent(result.file_id)}/audio`);
 	}
 	async function applyCustomVoiceTrim() {
-		if (!customVoiceOriginalFile) {
+		const sourceFileId = $store.customVoiceSourceFileId;
+		if (!customVoiceOriginalFile && !sourceFileId) {
 			$store.customVoiceError = '请先拖入音频文件。';
 			return;
 		}
@@ -335,16 +552,21 @@
 		clearCustomVoiceProcessedState();
 		stopVoicePreview();
 		try {
-			if ($store.customVoiceSourceFileId) {
-				await processCustomVoiceClipOnBackend($store.customVoiceSourceFileId, startMs, endMs, durationMs);
+			if (sourceFileId) {
+				await processCustomVoiceClipOnBackend(sourceFileId, startMs, endMs, durationMs);
 				return;
 			}
+			if (!customVoiceOriginalFile) throw new Error('原始参考音频不可用');
 			const fullDuration = (customVoiceSourceDurationMs ?? 0) / 1000;
 			const useOriginal = start <= 0.01 && (!fullDuration || end >= fullDuration - 0.01);
 			const blob = useOriginal ? customVoiceOriginalFile : await cropAudioFile(customVoiceOriginalFile, start, end);
 			const clipFile = useOriginal ? customVoiceOriginalFile : new File([blob], trimFileName(customVoiceOriginalFile, start, end), { type: 'audio/wav' });
 			await processCustomVoiceClip(clipFile, URL.createObjectURL(clipFile), durationMs);
 		} catch (e) {
+			if (!customVoiceOriginalFile) {
+				$store.customVoiceError = (e as Error).message || '音频裁切失败';
+				return;
+			}
 			try {
 				const blob = await cropAudioFile(customVoiceOriginalFile, start, end);
 				const clipFile = new File([blob], trimFileName(customVoiceOriginalFile, start, end), { type: 'audio/wav' });
@@ -708,7 +930,30 @@
 	function longformSingleDisabled(plan: GeneratePlanResponse | null) { return plan?.mode === 'longform_strongly_recommended'; }
 	function closeLongformDialog(v: LongformStrategy | null) { const r = $store.pendingLongformResolve; const next = v === 'single' && longformSingleDisabled($store.pendingLongformPlan) ? null : v; $store.showLongformDialog = false; $store.pendingLongformResolve = null; $store.pendingLongformPlan = null; r?.(next); }
 	function longformSegmentsFor(plan: GeneratePlanResponse): PlannedTextSegment[] { return plan.segments.length ? plan.segments : [{ index: 1, text: $store.text.trim(), char_count: $store.text.trim().length, segment_reason: 'direct_text' }]; }
+	async function generateSeedAudio() {
+		$store.error = '';
+		$store.busy = true;
+		try {
+			const request = seedAudioStateToRequest(seedAudioState);
+			const uploadsUserMedia = request.input_assets.some(asset => asset.type !== 'speaker');
+			if (uploadsUserMedia) {
+				const shouldAsk = $store.settings?.doubao_upload_confirm !== false;
+				if (shouldAsk && !window.confirm('本次会把参考素材和生成描述上传到豆包云端，最长可能生成 120 秒，参考费用上限约 2 元。确认继续吗？')) return;
+				request.engine_parameters.confirm_upload = true;
+			}
+			const eng = $store.engines.find(item => item.manifest.engine_id === SEED_AUDIO_ENGINE_ID);
+			if (eng && eng.state.status !== 'loaded') await Api.startEngine(SEED_AUDIO_ENGINE_ID);
+			const response = await Api.generate(request);
+			$store.currentPage = 1;
+			void poll(response.task_id).catch((e) => { $store.error = (e as Error).message || '任务状态刷新失败'; });
+		} catch (e) {
+			$store.error = (e as Error).message || 'Seed Audio 生成失败';
+		} finally {
+			$store.busy = false;
+		}
+	}
 	async function generate() {
+		if (isSeedAudio) { await generateSeedAudio(); return; }
 		if (!$store.text.trim()) return;
 		$store.error = '';
 		$store.busy = true;
@@ -818,7 +1063,26 @@
 			$store.actionBusyTaskId = '';
 		}
 	}
-	async function runTextTool(mode: 'clean' | 'numbers' | 'split') { if (!$store.text.trim() && mode !== 'split') return; $store.textToolBusy = mode; try { if (mode === 'clean') { $store.text = (await Api.cleanText($store.text)).text; return; } if (mode === 'numbers') { $store.text = (await Api.normalizeNumbers($store.text)).text; return; } $store.textSegments = (await Api.splitText($store.text)).segments; $store.showSplitPreview = true; $store.splitPreviewCollapsed = false; } finally { $store.textToolBusy = ''; } }
+	async function runTextToolFor(mode: 'clean' | 'numbers' | 'split', text: string, replaceText: (next: string) => void) {
+		if (!text.trim()) return;
+		$store.textToolBusy = mode;
+		try {
+			if (mode === 'clean') { replaceText((await Api.cleanText(text)).text); return; }
+			if (mode === 'numbers') { replaceText((await Api.normalizeNumbers(text)).text); return; }
+			$store.textSegments = (await Api.splitText(text)).segments;
+			$store.showSplitPreview = true;
+			$store.splitPreviewCollapsed = false;
+		} finally {
+			$store.textToolBusy = '';
+		}
+	}
+	async function runTextTool(mode: 'clean' | 'numbers' | 'split') {
+		await runTextToolFor(mode, $store.text, (next) => ($store.text = next));
+	}
+	async function runSeedTextTool(mode: 'clean' | 'numbers' | 'split') {
+		const prompt = activeSeedAudioDraft(seedAudioState).prompt;
+		await runTextToolFor(mode, prompt, (next) => updateSeedAudioState(updateSeedAudioPrompt(seedAudioState, next)));
+	}
 	function taskCancelTooltip(t: GenerationTask) {
 		return t.longform_task_id && t.task_type === 'segment'
 			? '停止这条分段所属的长文本队列'
@@ -870,7 +1134,7 @@
 	function taskVerificationPending(t: GenerationTask) { if (t.status !== 'success' || !t.result_id || H.taskIsLongformSegment(t) || H.taskIsLongformExport(t) || taskVerificationReport(t) || taskVerificationError(t)) return false; const c = new Date(t.completed_at ?? t.created_at).getTime(); if (!Number.isFinite(c)) return false; return Date.now() - c < 5 * 60 * 1000; }
 	function taskVerificationReport(t: GenerationTask) { return $store.verificationReports[t.task_id] ?? t.verification; }
 	function taskVerificationError(t: GenerationTask) { return $store.verificationErrors[t.task_id] || t.verification_error || ''; }
-	async function verifyTask(t: GenerationTask) { if (!t.result_id) return; $store.verificationBusyTaskId = t.task_id; $store.verificationErrors = { ...$store.verificationErrors, [t.task_id]: '' }; try { const report = await Api.verifyTTSOutput({ result_id: t.result_id, expected_text: t.input_text, asr_engine_id: 'qwen3-asr-mlx', language: (t.parameters['language'] === 'en' || t.parameters['language'] === 'auto' ? t.parameters['language'] : 'zh') as 'auto' | 'zh' | 'en' }); $store.verificationReports = { ...$store.verificationReports, [t.task_id]: report }; $store.tasks = $store.tasks.map(i => i.task_id === t.task_id ? { ...i, verification: report, verification_error: null } : i); } catch (e) { $store.verificationErrors = { ...$store.verificationErrors, [t.task_id]: (e as Error).message || '校对失败' }; } finally { $store.verificationBusyTaskId = ''; } }
+	async function verifyTask(t: GenerationTask) { if (!t.result_id) return; $store.verificationBusyTaskId = t.task_id; $store.verificationErrors = { ...$store.verificationErrors, [t.task_id]: '' }; try { const report = await Api.verifyTTSOutput({ result_id: t.result_id, asr_engine_id: 'qwen3-asr-mlx', language: (t.parameters['language'] === 'en' || t.parameters['language'] === 'auto' ? t.parameters['language'] : 'zh') as 'auto' | 'zh' | 'en' }); $store.verificationReports = { ...$store.verificationReports, [t.task_id]: report }; $store.tasks = $store.tasks.map(i => i.task_id === t.task_id ? { ...i, verification: report, verification_error: null } : i); } catch (e) { $store.verificationErrors = { ...$store.verificationErrors, [t.task_id]: (e as Error).message || '校对失败' }; } finally { $store.verificationBusyTaskId = ''; } }
 	function resultAudioUrl(t: GenerationTask) { return t.result_id ? `/api/history/${t.result_id}/audio` : ''; }
 	function resultDownloadUrl(t: GenerationTask, filename = '') { return t.result_id ? `/api/history/${t.result_id}/audio?download=1${filename ? `&filename=${encodeURIComponent(filename)}` : ''}` : ''; }
 	function syncResultAudioCurrentTime() {
@@ -1012,6 +1276,35 @@
 		}
 	}
 	function checkOverflow(node: HTMLElement, _text: string) { let frame = 0; const check = () => { frame = 0; node.classList.toggle('fade-overflow', node.scrollHeight > node.offsetHeight); }; const schedule = () => { if (frame) cancelAnimationFrame(frame); frame = requestAnimationFrame(check); }; schedule(); return { update(_nextText: string) { schedule(); }, destroy() { if (frame) cancelAnimationFrame(frame); } }; }
+	function presetDescriptionMarquee(node: HTMLElement) {
+		const viewport = node.querySelector<HTMLElement>('.preset-description-marquee');
+		const track = node.querySelector<HTMLElement>('.preset-description-track');
+		let frame = 0;
+		const reset = () => {
+			if (!track) return;
+			if (frame) cancelAnimationFrame(frame);
+			track.style.transition = 'none';
+			track.style.transform = 'translateX(0)';
+		};
+		const play = () => {
+			if (!track) return;
+			reset();
+			const distance = Math.max(0, track.scrollWidth - (viewport?.clientWidth ?? 0));
+			viewport?.classList.toggle('is-overflowing', distance > 1);
+			if (distance <= 1) return;
+			frame = requestAnimationFrame(() => {
+				track.style.transition = `transform ${Math.max(2200, distance * 26)}ms linear 350ms`;
+				track.style.transform = `translateX(-${distance}px)`;
+			});
+		};
+		const resizeObserver = new ResizeObserver(() => reset());
+		if (viewport) resizeObserver.observe(viewport);
+		node.addEventListener('mouseenter', play);
+		node.addEventListener('mouseleave', reset);
+		node.addEventListener('focusin', play);
+		node.addEventListener('focusout', reset);
+		return { destroy() { reset(); resizeObserver.disconnect(); node.removeEventListener('mouseenter', play); node.removeEventListener('mouseleave', reset); node.removeEventListener('focusin', play); node.removeEventListener('focusout', reset); } };
+	}
 	function trapDialogFocus(node: HTMLElement, closeDialog: () => void) {
 		const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 		let close = closeDialog;
@@ -1100,9 +1393,16 @@
 			if (_speakerCatalogTimer) clearTimeout(_speakerCatalogTimer);
 			stopTaskCardStream();
 			if ($store.customVoicePreviewUrl) revokeObjectUrlIfNeeded($store.customVoicePreviewUrl);
+			seedPreviewAudio?.pause();
+			for (const url of seedOwnedObjectUrls) URL.revokeObjectURL(url);
+			seedOwnedObjectUrls.clear();
 		};
 	});
-	$effect(() => { if ($store.engineId !== $store.lastEngineId) store.setEngine($store.engineId); });
+	$effect(() => {
+		if ($store.engineId === $store.lastEngineId) return;
+		if ($store.lastEngineId === SEED_AUDIO_ENGINE_ID && seedEditingSlot !== null) closeActiveReferenceEditor();
+		store.setEngine($store.engineId);
+	});
 	$effect(() => { if (!hasMoreParams && $store.showMoreParams) $store.showMoreParams = false; });
 	$effect(() => { const eid = $store.engineId; const q = $store.speakerQuery.trim(); const g = $store.speakerGenderFilter; const key = `${eid}|${q}|${g}`; if (key === _speakerCatalogRequestKey) return; _speakerCatalogRequestKey = key; if (_speakerCatalogTimer) clearTimeout(_speakerCatalogTimer); _speakerCatalogTimer = setTimeout(() => { untrack(() => { void loadSpeakerCatalog(eid, q, g); }); }, 150); });
 	$effect(() => { if (!$store.initialized) return; if (!usesReferenceVoice) { if ($store.voiceId) untrack(() => { $store.voiceId = ''; }); if ($store.voiceSource !== 'voice_library') untrack(() => { $store.voiceSource = 'voice_library'; }); return; } if (isDoubaoClone && $store.voiceSource !== 'voice_library') untrack(() => { $store.voiceSource = 'voice_library'; }); if ($store.voiceSource === 'reference_audio' && $store.voiceId) untrack(() => { $store.voiceId = ''; }); if ($store.voiceSource === 'voice_library' && $store.voiceId && !visibleVoiceOptions.some(v => v.voice_id === $store.voiceId)) untrack(() => { $store.voiceId = ''; }); });
@@ -1154,11 +1454,19 @@
 		</div>
 	{/if}
 	<div class="workbench"><div class="panel stack compose-panel">
-		<div class="row gen-section-head preset-head"><div><h2>合成预设</h2><p class="muted">跟随当前引擎，只显示可用于 {selected?.manifest.display_name ?? $store.engineId} 的参数组合。</p></div><div class="row wrap preset-tools"><span class="muted">{enginePresets.length} 组</span><button class="btn compact preset-toggle-btn" type="button" aria-expanded={presetStripOpen} data-tooltip={presetStripOpen ? '收起预设面板' : '展开预设面板'} onclick={() => (presetStripOpen = !presetStripOpen)}><ChevronRight size={14} /> {presetStripOpen ? '收起' : '展开'}</button></div></div>
-		{#if presetStripOpen}<div class="preset-strip">{#each enginePresets as p}{#if p.preset_id.startsWith('custom_')}<div class="preset-chip custom-preset"><div class="preset-custom-head"><button class="preset-action-btn" type="button" aria-label="编辑预设" data-tooltip="编辑这个自定义预设" onclick={() => openPresetEditor(p)}><Pencil size={12} /></button><button class="preset-custom-title text-pop" type="button" data-text={presetTooltip(p)} onclick={() => applyPreset(p)}><strong>{p.name}</strong></button><button class="preset-action-btn danger" type="button" aria-label="删除预设" data-tooltip="删除这个自定义预设" onclick={() => deletePreset(p)}><Trash2 size={12} /></button></div><button class="preset-custom-subtitle text-pop" type="button" data-text={presetTooltip(p)} onclick={() => applyPreset(p)}>{p.scene || p.description || H.engineTypeLabel(p.engine_id, engineMap)}</button></div>{:else}<div class="preset-chip"><button class="preset-main text-pop" type="button" data-text={presetTooltip(p)} onclick={() => applyPreset(p)}><strong>{p.name}</strong><span>{p.scene || p.description || H.engineTypeLabel(p.engine_id, engineMap)}</span></button></div>{/if}{/each}<button class="preset-chip preset-add-chip" type="button" aria-label="保存当前参数为预设" data-tooltip="把当前文本、音色和参数保存成这个引擎的自定义预设" onclick={() => openPresetEditor()}><Plus size={17} /><span>保存当前</span></button></div>{/if}
+		<div class="row gen-section-head preset-head"><div><h2>合成预设</h2><p class="muted">跟随当前引擎{isSeedAudio ? '和模式' : ''}，只显示可用于 {selected?.manifest.display_name ?? $store.engineId}{isSeedAudio ? ` · ${seedAudioState.mode === 'text' ? '文本' : seedAudioState.mode === 'audio' ? '语音' : '图片'}模式` : ''} 的参数组合。</p></div><div class="row wrap preset-tools"><span class="muted">{enginePresets.length} 组</span><button class="btn compact preset-toggle-btn" type="button" aria-expanded={presetStripOpen} data-tooltip={presetStripOpen ? '收起预设面板' : '展开预设面板'} onclick={() => (presetStripOpen = !presetStripOpen)}><ChevronRight size={14} /> {presetStripOpen ? '收起' : '展开'}</button></div></div>
+		{#if presetStripOpen}<div class="preset-strip">{#each enginePresets as p}{#if p.preset_id.startsWith('custom_')}<div class="preset-chip custom-preset"><div class="preset-custom-head"><button class="preset-action-btn" type="button" aria-label="编辑预设" data-tooltip="编辑这个自定义预设" onclick={() => openPresetEditor(p)}><Pencil size={12} /></button><button class="preset-custom-title text-pop" type="button" data-text={presetTooltip(p)} onclick={() => applyComposerPreset(p)}><strong>{p.name}</strong></button><button class="preset-action-btn danger" type="button" aria-label="删除预设" data-tooltip="删除这个自定义预设" onclick={() => deletePreset(p)}><Trash2 size={12} /></button></div><button class="preset-custom-subtitle text-pop" type="button" data-text={presetTooltip(p)} onclick={() => applyComposerPreset(p)}>{p.scene || p.description || H.engineTypeLabel(p.engine_id, engineMap)}</button></div>{:else}<div class="preset-chip"><button class="preset-main" type="button" aria-label={`应用预设：${p.name}`} use:presetDescriptionMarquee onclick={() => applyComposerPreset(p)}><strong>{p.name}</strong><span class="preset-description-marquee"><span class="preset-description-track">{p.scene || p.description || H.engineTypeLabel(p.engine_id, engineMap)}</span></span></button></div>{/if}{/each}<button class="preset-chip preset-add-chip" type="button" aria-label="保存当前参数为预设" data-tooltip="把当前文本、素材和参数保存成这个引擎当前模式的自定义预设" onclick={() => openPresetEditor()}><Plus size={17} /><span>保存当前</span></button></div>{/if}
 		{#if $store.showPresetEditor}<div class="preset-editor"><div class="row gen-section-head"><div><h3>{$store.editingPresetId ? '编辑自定义预设' : '保存当前为预设'}</h3><p class="muted">绑定引擎：{selected?.manifest.display_name ?? $store.engineId}</p></div><button class="gen-icon-btn mini" type="button" aria-label="关闭预设编辑器" data-tooltip="关闭预设编辑器" onclick={() => ($store.showPresetEditor = false)}>X</button></div><div class="preset-editor-grid"><label class="field"><span>名称</span><input bind:value={$store.presetDraft.name} placeholder="例如：课程慢讲" /></label><label class="field"><span>场景</span><input bind:value={$store.presetDraft.scene} placeholder="例如：教程 / 长文旁白" /></label><label class="field wide"><span>描述</span><input bind:value={$store.presetDraft.description} placeholder="简短说明" /></label><label class="field"><span>标签</span><input bind:value={$store.presetDraft.tags} placeholder="慢讲，课程" /></label><label class="field wide"><span>示例文本</span><textarea bind:value={$store.presetDraft.sample_text} placeholder="可选"></textarea></label></div><div class="row wrap"><button class="btn primary compact" type="button" onclick={savePreset} disabled={$store.presetBusy || !$store.presetDraft.name.trim()}><Save size={14} /> {$store.presetBusy ? '保存中' : '保存预设'}</button><button class="btn compact" type="button" onclick={() => ($store.showPresetEditor = false)}>取消</button></div></div>{/if}
 		<div class="param-inline-row">
 			<label class="param-inline engine-param-inline"><span>引擎</span><EngineSelector engines={ttsEngines} bind:value={$store.engineId} /></label>
+			{#if isSeedAudio}
+				<SeedAudioInlineControls
+					state={seedAudioState}
+					showAdvanced={seedShowAdvanced}
+					onChange={updateSeedAudioState}
+					onToggleAdvanced={() => (seedShowAdvanced = !seedShowAdvanced)}
+				/>
+			{:else}
 			{#if usesReferenceVoice}<div class="param-inline voice-param-inline" class:library-source={$store.voiceSource === 'voice_library'} class:custom-source={$store.voiceSource === 'reference_audio'}><span>声音</span><div class="voice-source-control"><div class="gen-segmented voice-source-tabs" role="tablist" aria-label="声音来源"><button class:active={$store.voiceSource === 'voice_library'} type="button" onclick={() => setVoiceSource('voice_library')}>{isDoubaoClone ? '云端音色' : '音色库'}</button>{#if !isDoubaoClone}<button class:active={$store.voiceSource === 'reference_audio'} type="button" onclick={() => setVoiceSource('reference_audio')}>自定义</button>{/if}</div>{#if $store.voiceSource === 'voice_library'}<div class="voice-inline"><VoiceSelector voices={visibleVoiceOptions} bind:value={$store.voiceId} /><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听音色' : '试听当前音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停当前音色试听' : '试听当前选择的音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{:else}<div class="custom-voice-inline"><span class="custom-voice-chip" class:ok={customVoiceMatched}>{#if customVoiceMatched}<CircleCheck size={13} />{:else}<FileAudio size={13} />{/if}{$store.customVoiceFileName || '未上传'}</span><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听自定义音色' : '试听自定义音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停自定义音色试听' : '试听当前自定义音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{/if}</div></div>{#if activeVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={activeVoicePreviewUrl} preload="none" ontimeupdate={handleVoicePreviewTimeUpdate} onended={stopVoicePreview} onpause={handleVoicePreviewPause}></audio>{/if}{/if}
 			{#if activeParamKeys.has('speed')}<label class="param-inline-range"><span>语速</span><input class="speed-number" type="number" min="0.5" max="2" step="0.05" value={$store.speed.toFixed(2)} oninput={(e) => setSpeedValue((e.currentTarget as HTMLInputElement).value)} onblur={(e) => ((e.currentTarget as HTMLInputElement).value = $store.speed.toFixed(2))} /><input type="range" min="0.5" max="2" step="0.05" value={$store.speed} oninput={(e) => setSpeedValue((e.currentTarget as HTMLInputElement).value)} /></label>{/if}
 			<label class="param-inline param-inline-format"><span>格式</span><select bind:value={$store.outputFormat}><option value="wav">WAV</option><option value="mp3">MP3</option><option value="flac">FLAC</option></select></label>
@@ -1166,8 +1474,29 @@
 				<button class="btn param-action-btn param-reset-btn" type="button" data-tooltip="把当前引擎的参数恢复到默认值。正文和已选参考音色会保留。" onclick={resetCurrentEngineParams}><RotateCcw size={14} /> 重置参数</button>
 				{#if hasMoreParams}<button class="btn param-action-btn param-inline-more" type="button" onclick={() => ($store.showMoreParams = !$store.showMoreParams)}><Settings size={14} /> {$store.showMoreParams ? '收起高级' : '更多选项'}</button>{/if}
 			</div>
+			{/if}
 		</div>
-			{#if usesReferenceVoice && $store.voiceSource === 'reference_audio'}
+		{#if isSeedAudio}
+			<SeedAudioPanel
+				state={seedAudioState}
+				showAdvanced={seedShowAdvanced}
+				generateBusy={$store.busy}
+				assetBusy={seedAssetBusy}
+				onChange={updateSeedAudioState}
+				onGenerate={generateSeedAudio}
+				onTextTool={runSeedTextTool}
+				textToolBusy={$store.textToolBusy}
+				onUploadAudio={uploadSeedAudioReference}
+				onChooseVoice={(slot) => { seedVoicePickerSlot = slot; seedAssetError = ''; }}
+				onChooseSpeaker={(slot) => { seedSpeakerPickerSlot = slot; seedAssetError = ''; }}
+				onEditAudio={openSeedAudioEditor}
+				onPreviewAudio={previewSeedReference}
+				onUploadImage={uploadSeedAudioImage}
+			/>
+			{#if seedAssetError}<div class="badge fail seed-asset-error">{seedAssetError}</div>{/if}
+		{/if}
+			{#if isSeedAudio && seedEditingSlot && $store.customVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={$store.customVoicePreviewUrl} preload="none" ontimeupdate={handleVoicePreviewTimeUpdate} onended={stopVoicePreview} onpause={handleVoicePreviewPause}></audio>{/if}
+			{#if (usesReferenceVoice && $store.voiceSource === 'reference_audio') || (isSeedAudio && seedEditingSlot !== null)}
 				<section class="custom-voice-panel">
 					<div class="custom-voice-source-row">
 						<div class="custom-voice-dropzone" role="region" aria-label="自定义音色拖拽上传区" class:drag-active={customVoiceDragActive} ondragenter={(e) => { e.preventDefault(); customVoiceDragActive = true; }} ondragover={(e) => { e.preventDefault(); customVoiceDragActive = true; }} ondragleave={(e) => { e.preventDefault(); customVoiceDragActive = false; }} ondrop={onCustomVoiceDrop}>
@@ -1179,7 +1508,7 @@
 							{#if $store.customVoiceBusy}<span class="badge">{customVoiceBusyMode === 'source' ? '读取' : 'ASR'}</span>{:else if customVoiceMatched}<span class="badge ok">已匹配</span>{:else if customVoiceReady}<span class="badge">待识别</span>{/if}
 						</div>
 						<label class="field custom-voice-text custom-voice-text-inline custom-voice-card">
-							<textarea rows="2" aria-label="台词文本" value={$store.customVoiceTranscript} oninput={(e) => updateCustomVoiceTranscript((e.currentTarget as HTMLTextAreaElement).value)} placeholder="ASR 识别后可编辑中文或英文台词" disabled={!$store.customVoiceFileName}></textarea>
+							<textarea rows="2" aria-label="台词文本" value={$store.customVoiceTranscript} oninput={(e) => updateActiveReferenceTranscript((e.currentTarget as HTMLTextAreaElement).value)} placeholder="ASR 识别后可编辑中文或英文台词" disabled={!$store.customVoiceFileName}></textarea>
 						</label>
 						<div class="custom-voice-srt-card custom-voice-card">
 							<div class="custom-voice-metrics">
@@ -1221,9 +1550,9 @@
 											<button class="trim-marker-btn trim-marker-in-btn trim-icon-only" type="button" aria-label="将当前指针设为入点" data-tooltip="将当前指针设为入点，快捷键 I" onclick={setCustomVoiceTrimStartAtPlayhead} disabled={!customVoiceSourceDurationMs}><ChevronsLeft size={13} /></button>
 											<button class="trim-marker-btn trim-marker-out-btn trim-icon-only" type="button" aria-label="将当前指针设为出点" data-tooltip="将当前指针设为出点，快捷键 O" onclick={setCustomVoiceTrimEndAtPlayhead} disabled={!customVoiceSourceDurationMs}><ChevronsRight size={13} /></button>
 											<button class="trim-marker-btn trim-icon-only" type="button" aria-label="重置为完整选区" data-tooltip="重置为完整选区" onclick={resetCustomVoiceTrimRange} disabled={!customVoiceSourceDurationMs}><RotateCcw size={13} /></button>
-											<button class="btn compact primary trim-apply-btn trim-icon-only" type="button" aria-label="使用选区并识别台词" data-tooltip="使用当前选区作为样音，并用 ASR 识别台词" onclick={applyCustomVoiceTrim} disabled={$store.customVoiceBusy || !customVoiceSourceDurationMs || customVoiceSelectedDurationMs < 100}><CircleCheck size={13} /></button>
-											<button class="btn compact trim-inline-action trim-icon-only" type="button" aria-label="注册为音色" data-tooltip="把当前选区和台词保存到音色库" onclick={openVoiceRegisterDialog} disabled={$store.customVoiceBusy || !$store.customVoiceFileId || !$store.customVoiceTranscript.trim()}><Plus size={13} /></button>
-											<button class="btn compact trim-inline-action trim-icon-only" type="button" aria-label="清除参考音频" data-tooltip="清除当前参考音频、裁切选区和识别文本" onclick={resetCustomVoice} disabled={!$store.customVoiceFileName}><X size={13} /></button>
+											<button class="btn compact primary trim-apply-btn trim-icon-only" type="button" aria-label="使用选区并识别台词" data-tooltip="使用当前选区作为样音，并用 ASR 识别台词" onclick={applyActiveReferenceTrim} disabled={$store.customVoiceBusy || !customVoiceSourceDurationMs || customVoiceSelectedDurationMs < 100}><CircleCheck size={13} /></button>
+											{#if !isSeedAudio}<button class="btn compact trim-inline-action trim-icon-only" type="button" aria-label="注册为音色" data-tooltip="把当前选区和台词保存到音色库" onclick={openVoiceRegisterDialog} disabled={$store.customVoiceBusy || !$store.customVoiceFileId || !$store.customVoiceTranscript.trim()}><Plus size={13} /></button>{/if}
+											<button class="btn compact trim-inline-action trim-icon-only" type="button" aria-label={isSeedAudio ? '关闭参考声音编辑器' : '清除参考音频'} data-tooltip={isSeedAudio ? '关闭编辑器并保留当前参考声音' : '清除当前参考音频、裁切选区和识别文本'} onclick={isSeedAudio ? closeActiveReferenceEditor : resetCustomVoice} disabled={!$store.customVoiceFileName}><X size={13} /></button>
 										</div>
 									</div>
 								<div class="custom-voice-editor-strip">
@@ -1265,7 +1594,7 @@
 					{/if}
 				</section>
 			{/if}
-		{#if $store.showMoreParams && hasMoreParams}<div class="more-params-panel">
+		{#if !isSeedAudio && $store.showMoreParams && hasMoreParams}<div class="more-params-panel">
 			{#if activeParamKeys.has('speaker_id')}<div class="field param-field" class:span-wide={isEmotiVoice} class:field-muted={isQwen3TTS && !qwen3PresetRoute}><label class="param-label" for="spk">{isQwen3TTS ? '预置音色' : '音色'}</label><div class="param-control">{#if isEmotiVoice}<div class="speaker-catalog-tools"><div class="gen-search-field speaker-search"><Search size={14} /><input bind:value={$store.speakerQuery} placeholder="搜索" />{#if $store.speakerQuery.trim()}<button class="gen-search-clear" type="button" onclick={() => ($store.speakerQuery = '')}><X size={13} /></button>{/if}</div><select class="speaker-gender" bind:value={$store.speakerGenderFilter}><option value="all">全部</option><option value="F">女声</option><option value="M">男声</option></select></div>{/if}<select id="spk" bind:value={$store.speakerId} disabled={isQwen3TTS && !qwen3PresetRoute}>{#each speakerChoices as o}<option value={o.value}>{o.label}</option>{/each}</select>{#if isEmotiVoice}<small>{$store.speakerCatalogLoading ? '读取中' : `结果 ${$store.speakerCatalog.length} 条`}</small>{:else if isQwen3TTS}<small>{qwen3PresetRoute ? '未选择本地/自定义音色时生效。填写声音描述后会改用 VoiceDesign。' : (qwen3VoiceDesignRoute ? '声音描述已接管，预置音色不参与本次生成。' : qwen3PresetDisabledText)}</small>{/if}</div></div>{/if}
 			{#if activeParamKeys.has('prompt')}<div class="field param-field"><label class="param-label" for="vprompt">情绪提示</label><div class="param-control"><select id="vprompt" bind:value={$store.voicePrompt}>{#each promptOptions as o}<option value={o.value}>{o.label}</option>{/each}</select></div></div>{/if}
 			{#if isMimoPreset}<div class="field param-field"><label class="param-label" for="mimo-v">MiMo 音色</label><div class="param-control"><select id="mimo-v" bind:value={$store.mimoVoice}>{#each mimoVoiceOptions as o}<option value={o.value}>{o.label}</option>{/each}</select></div></div>{/if}
@@ -1276,9 +1605,24 @@
 			{#if isOmniVoice && $store.voiceSource === 'voice_library' && !$store.voiceId}<div class="field param-field"><label class="param-label" for="vd">设计标签</label><div class="param-control"><select id="vd" bind:value={$store.voiceDesign}><option value="女，青年，中音调">女，青年，中音调</option><option value="男，青年，中音调">男，青年，中音调</option><option value="女，中年，高音调">女，中年，高音调</option><option value="男，中年，低音调">男，中年，低音调</option><option value="女，青年，耳语">女，青年，耳语</option></select></div></div>{/if}
 			{#if advancedParameterSchema.length > 0}<ParameterPanel autoExpand={true} parameterSchema={advancedParameterSchema} values={{ temperature: $store.temperature, top_p: $store.topP, top_k: $store.topK, seed: $store.seed, max_text_tokens_per_segment: $store.maxTextTokensPerSegment, interval_silence: $store.intervalSilence, diffusion_steps: $store.diffusionSteps, cfg_rate: $store.cfgRate, guidance_scale: $store.guidanceScale, duration: $store.duration, audio_chunk_duration: $store.audioChunkDuration, audio_chunk_threshold: $store.audioChunkThreshold, max_tokens: $store.maxTokens, cfg_scale: $store.cfgScale, ddpm_steps: $store.ddpmSteps, max_mel_tokens: $store.maxMelTokens, repetition_penalty: $store.repetitionPenalty, nfe_step: $store.nfeStep, cfg_strength: $store.cfgStrength, target_rms: $store.targetRms, cross_fade_duration: $store.crossFadeDuration, sway_sampling_coef: $store.swaySamplingCoef, fix_duration: $store.fixDuration, remove_silence: $store.removeSilence, optimize_text_preview: $store.optimizeTextPreview }} onChange={(k, v) => { const st: Record<string, (x: unknown) => void> = { temperature: (x: unknown) => $store.temperature = x as number, top_p: (x: unknown) => $store.topP = x as number, top_k: (x: unknown) => $store.topK = x as number, seed: (x: unknown) => $store.seed = x === '' || x === null || x === undefined ? null : Number(x), max_text_tokens_per_segment: (x: unknown) => $store.maxTextTokensPerSegment = x as number, interval_silence: (x: unknown) => $store.intervalSilence = x as number, diffusion_steps: (x: unknown) => $store.diffusionSteps = x as number, cfg_rate: (x: unknown) => $store.cfgRate = x as number, guidance_scale: (x: unknown) => $store.guidanceScale = x as number, duration: (x: unknown) => $store.duration = x as number, audio_chunk_duration: (x: unknown) => $store.audioChunkDuration = x as number, audio_chunk_threshold: (x: unknown) => $store.audioChunkThreshold = x as number, max_tokens: (x: unknown) => $store.maxTokens = x as number, cfg_scale: (x: unknown) => $store.cfgScale = x === '' || x === null || x === undefined ? null : Number(x), ddpm_steps: (x: unknown) => $store.ddpmSteps = x === '' || x === null || x === undefined ? null : Number(x), max_mel_tokens: (x: unknown) => $store.maxMelTokens = x as number, repetition_penalty: (x: unknown) => $store.repetitionPenalty = x as number, nfe_step: (x: unknown) => $store.nfeStep = x as number, cfg_strength: (x: unknown) => $store.cfgStrength = x as number, target_rms: (x: unknown) => $store.targetRms = x as number, cross_fade_duration: (x: unknown) => $store.crossFadeDuration = x as number, sway_sampling_coef: (x: unknown) => $store.swaySamplingCoef = x as number, fix_duration: (x: unknown) => $store.fixDuration = x as number, remove_silence: (x: unknown) => $store.removeSilence = x as boolean, optimize_text_preview: (x: unknown) => $store.optimizeTextPreview = x as boolean }; st[k]?.(v); }} />{/if}
 		</div>{/if}
-		<TextInput bind:text={$store.text} engineId={$store.engineId} ontexttool={(mode: 'clean' | 'numbers' | 'split') => runTextTool(mode)} textToolBusy={$store.textToolBusy} onGenerate={generate} generateBusy={$store.busy} />
+		{#if !isSeedAudio}<TextInput bind:text={$store.text} engineId={$store.engineId} ontexttool={(mode: 'clean' | 'numbers' | 'split') => runTextTool(mode)} textToolBusy={$store.textToolBusy} onGenerate={generate} generateBusy={$store.busy} />{/if}
 		{#if $store.error}<div class="badge fail">{$store.error}</div>{/if}
 			<audio class="result-shared-audio" bind:this={$store.resultPreviewAudio} preload="none" onplaying={handleResultAudioPlaying} ontimeupdate={handleResultAudioTimeUpdate} onended={resetResultPlayback} onerror={handleResultAudioError}></audio>
+			{#if seedVoicePickerSlot}
+				<div class="gen-modal-backdrop"><div class="seed-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="seed-voice-picker-title">
+					<div class="dialog-head"><div><h3 id="seed-voice-picker-title">从音色库添加到 @音频{seedVoicePickerSlot}</h3><p class="muted">如果一个音色有多条样音，请明确选择其中一条。</p></div><button class="gen-icon-btn" type="button" aria-label="关闭" onclick={() => (seedVoicePickerSlot = null)}><X size={15} /></button></div>
+					<div class="seed-picker-list">{#each seedVoiceChoices as voice}<article><div><strong>{voice.name}</strong><span>{voice.reference_text || '没有参考台词'}</span></div><div class="seed-file-choices">{#each voice.reference_audio_ids as fileId}<button class="btn compact" type="button" disabled={!['self_voice','authorized','company_authorized'].includes(voice.license_status)} onclick={() => chooseSeedVoice(seedVoicePickerSlot!, voice, fileId)}>{fileId.slice(0, 10)} · 选择这条</button>{/each}</div>{#if !['self_voice','authorized','company_authorized'].includes(voice.license_status)}<small>授权状态不允许上传云端，请先到音色库更新授权。</small>{/if}</article>{/each}</div>
+					{#if !seedVoiceChoices.length}<div class="empty">音色库中还没有带参考音频的音色。</div>{/if}
+				</div></div>
+			{/if}
+			{#if seedSpeakerPickerSlot}
+				<div class="gen-modal-backdrop"><div class="seed-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="seed-speaker-picker-title">
+					<div class="dialog-head"><div><h3 id="seed-speaker-picker-title">选择云端音色到 @音频{seedSpeakerPickerSlot}</h3><p class="muted">可选已训练的豆包复刻音色，也可填写官方 speaker ID。</p></div><button class="gen-icon-btn" type="button" aria-label="关闭" onclick={() => (seedSpeakerPickerSlot = null)}><X size={15} /></button></div>
+					{#if seedCloudSpeakerChoices.length}<div class="seed-speaker-choices">{#each seedCloudSpeakerChoices as speaker}<button class="btn" type="button" onclick={() => chooseSeedSpeaker(seedSpeakerPickerSlot!, speaker.id, speaker.name)}><strong>{speaker.name}</strong><span>{speaker.id}</span></button>{/each}</div>{/if}
+					<div class="seed-speaker-manual"><label class="field"><span>speaker ID</span><input bind:value={seedSpeakerId} placeholder="例如：zh_female_vv_uranus_bigtts" /></label><label class="field"><span>显示名称（可选）</span><input bind:value={seedSpeakerName} placeholder="例如：温柔女声" /></label></div>
+					<div class="dialog-actions"><button class="btn" type="button" onclick={() => (seedSpeakerPickerSlot = null)}>取消</button><button class="btn primary" type="button" disabled={!seedSpeakerId.trim()} onclick={() => chooseSeedSpeaker(seedSpeakerPickerSlot!, seedSpeakerId, seedSpeakerName)}>添加音色</button></div>
+				</div></div>
+			{/if}
 			{#if $store.showLongformDialog && $store.pendingLongformPlan}<div class="gen-modal-backdrop"><div class="longform-dialog" role="dialog" aria-modal="true"><div class="dialog-head"><div><h3>长文本生成策略</h3><p class="muted">预计 {$store.pendingLongformPlan.segments.length} 段。{$store.pendingLongformPlan.planner_reason}</p></div><button class="gen-icon-btn" type="button" aria-label="关闭长文本策略弹窗" data-tooltip="关闭长文本策略弹窗" onclick={() => closeLongformDialog(null)}>×</button></div>{#if $store.pendingLongformPlan.warnings.length}<p class="dialog-warning">{$store.pendingLongformPlan.warnings[0]}</p>{/if}<div class="strategy-grid"><button class:active={$store.longformStrategy === 'split_merge'} type="button" onclick={() => { $store.longformStrategy = 'split_merge'; $store.longformMergeEnabled = true; $store.longformVerifyEnabled = true; }}><strong>分段生成并合并</strong><span>逐段生成，校对后自动合并。</span></button><button class:active={$store.longformStrategy === 'split_only'} type="button" onclick={() => { $store.longformStrategy = 'split_only'; $store.longformMergeEnabled = false; $store.longformVerifyEnabled = false; }}><strong>只分段生成</strong><span>保留每段结果，先人工复听。</span></button><button class:active={$store.longformStrategy === 'single'} type="button" disabled={longformSingleDisabled($store.pendingLongformPlan)} onclick={() => { $store.longformStrategy = 'single'; $store.longformMergeEnabled = false; $store.longformVerifyEnabled = false; }}><strong>{longformSingleDisabled($store.pendingLongformPlan) ? '单条生成已关闭' : '仍然单条生成'}</strong><span>{longformSingleDisabled($store.pendingLongformPlan) ? '文本超过当前引擎安全窗口，请分段生成。' : '最快开始，但容易超时或截断。'}</span></button></div><div class="dialog-options"><label class="check-row"><input type="checkbox" bind:checked={$store.longformVerifyEnabled} disabled={$store.longformStrategy === 'single'} /><span>生成后自动 ASR 校对</span></label><label class="field compact-field"><span>失败重试</span><input type="number" min="0" max="5" bind:value={$store.longformMaxRetries} disabled={$store.longformStrategy === 'single'} /></label></div><div class="dialog-preview">{#each $store.pendingLongformPlan.segments.slice(0, 4) as seg}<p><strong>{seg.index}</strong> {seg.text}</p>{/each}{#if $store.pendingLongformPlan.segments.length > 4}<p class="muted">还有 {$store.pendingLongformPlan.segments.length - 4} 段...</p>{/if}</div><div class="dialog-actions"><button class="btn" type="button" onclick={() => closeLongformDialog(null)}>取消</button><button class="btn primary" type="button" onclick={() => closeLongformDialog($store.longformStrategy)}>确认</button></div></div></div>{/if}
 			{#if voiceRegisterOpen}
 				<div class="gen-modal-backdrop">
@@ -1362,7 +1706,7 @@
 			</div>
 			{#if H.queueSummaryText(queueCounts, queueOrderedTasks, engineMap)}<div class="queue-insight"><Info size={14} /><span>{H.queueSummaryText(queueCounts, queueOrderedTasks, engineMap)}</span></div>{/if}
 			{#if visibleLongformTasks.length}<section class="longform-list"><div class="row section-subhead"><div><h3>长文本任务</h3><p class="muted">进行中的分段生成、校对、重试和合并父任务。</p></div></div>{#each visibleLongformTasks.slice(0, 6) as t}<article class={`longform-card ${t.status}`}><div class="longform-card-head"><div><strong>{H.longformTitle(t)}</strong><p class="muted">{H.longformStatusText(t)}</p></div><div class="row wrap longform-actions"><span class="badge">{Math.round(t.progress * 100)}%</span>{#if t.export_id}<a class="btn" href={H.longformDownloadUrl(t)}>下载合并音频</a>{/if}{#if t.status === 'failed'}<button class="btn" type="button" onclick={() => retryLongformTask(t)} disabled={$store.actionBusyTaskId === t.longform_task_id}><RotateCcw size={15} /> 重试失败段</button>{/if}<button class="gen-icon-btn mini" type="button" aria-label={longformTaskActionLabel(t)} data-tooltip={longformTaskActionTooltip(t)} onclick={() => handleLongformTaskAction(t)} disabled={$store.actionBusyTaskId === t.longform_task_id}>{#if H.statusIsActive(t.status)}<X size={14} />{:else}<Trash2 size={14} />{/if}</button></div></div><div class="progress-track"><div class="progress-fill" style={`width:${Math.max(3, Math.round(t.progress * 100))}%`}></div></div><div class="longform-segments">{#each t.segments as seg}<div class={`longform-segment ${seg.status}`}><span class="badge">{seg.index}</span><p>{seg.text}</p><span class="badge">{taskStatusLabel(seg.status)}</span>{#if seg.verification}<span class={`badge verify-${seg.verification.status}`}>{H.verificationStatusLabel(seg.verification.status)}</span>{/if}{#if seg.error_message}<span class="muted">{seg.error_message}</span>{/if}</div>{/each}</div>{#if t.error_message}<p class="muted error-line task-error-scroll" use:checkOverflow={t.error_message}>{t.error_message}</p>{/if}</article>{/each}</section>{/if}
-			{#if pagedTasks.length}<section class="result-records-block" class:has-longform-above={visibleLongformTasks.length > 0}><div class="result-grid" bind:this={$store.resultGridEl}>{#each renderedPagedTasks as t (t.task_id)}<article class={`card stack result-card engine-surface ${H.engineKind(t.engine_id, engineMap) === 'cloud' ? 'engine-cloud' : 'engine-local'}${$store.playingResultTaskId === t.task_id && ($store.resultAudioPlaying || resultAudioPendingTaskId === t.task_id) ? ' playing' : ''}`}><div class="result-head"><div class="title-row"><input type="checkbox" checked={$store.selectedTaskIds.includes(t.task_id)} disabled={!H.taskCanDelete(t)} onchange={(e) => toggleTaskSelection(t.task_id, (e.currentTarget as HTMLInputElement).checked)} /><strong class="result-title" title={H.displayTitle(t)}>{H.displayTitle(t)}</strong></div><span class="badge result-status" class:ok={t.status === 'success'} class:fail={t.status === 'failed'} class:warn={t.status === 'cancelled' || H.taskIsActive(t)}>{H.taskStatusPillLabel(t, queueCounts, queueOrderedTasks)}</span></div><div class="result-meta result-meta-primary"><span class="badge"><Mic size={11} /> {H.voiceBadgeLabel(t, voiceMap, engineMap)}</span><HoverCopyPopover label="台词" title="台词内容" copyText={H.displayTitle(t)}><button type="button" class="badge result-script-chip" aria-label="查看台词内容"><FileText size={13} /> 台词</button></HoverCopyPopover>{#if H.longformResultLabel(t)}<span class="badge longform-result-badge" class:merged={H.taskIsLongformExport(t)} title={H.longformResultTitle(t)}>{H.longformResultLabel(t)}</span>{/if}</div><div class="result-meta result-meta-secondary"><span class="badge engine"><Cpu size={11} /> {engineMap.get(t.engine_id)?.manifest.display_name ?? t.engine_id}</span><span class="badge badge-kind">{H.engineTypeLabel(t.engine_id, engineMap)}</span>{#if t.created_at}<span class="badge meta-pop" data-text={`生成时间：${H.formatTime(t.created_at)}`}>{H.formatTime(t.created_at)}</span>{/if}</div><div class="row result-info"><p class="muted result-subline">{H.taskTimingLine(t)}</p><div class="row wrap result-info-right">{#if t.result_duration_ms}<span class="badge meta-pop" data-text={`音频时长：${H.formatAudioDuration(t.result_duration_ms)}`}>{H.formatAudioDuration(t.result_duration_ms)}</span>{/if}{#if H.taskIsActive(t)}<button class="gen-icon-btn danger" aria-label="取消任务" data-tooltip={taskCancelTooltip(t)} onclick={() => cancelTask(t)} disabled={$store.actionBusyTaskId === t.task_id}><X size={14} /></button>{/if}<HoverCopyPopover label="参数" title="生成参数" copyText={H.taskParameterCopyText(t, engineMap, voiceMap)}><button type="button" class="param-pop compact" aria-label="查看生成参数"><SlidersHorizontal size={13} /></button></HoverCopyPopover></div></div>{#if H.taskIsActive(t)}<div class="progress-block"><div class="row progress-head"><span class="muted">{H.taskStageLabel(t, queueOrderedTasks)}</span><span class="badge">{H.progressLabel(t, queueOrderedTasks)}</span></div><div class="progress-track" class:waiting-track={H.taskIsWaiting(t)}><div class="progress-fill" class:waiting-fill={H.taskIsWaiting(t)} style={`width:${H.taskProgressWidth(t)}%`}></div></div><div class="row wrap progress-foot"><span class="muted">{#if H.taskIsWaiting(t)}已等待 {H.formatSeconds(H.waitingSeconds(t))}{:else}已运行 {H.elapsedLabel(t)}{/if}</span>{#if H.taskEtaLabel(t)}<span class="muted">{H.taskEtaLabel(t)}</span>{/if}</div>{#if H.taskRuntimeHint(t, queueCounts, queueOrderedTasks)}<p class="progress-hint">{H.taskRuntimeHint(t, queueCounts, queueOrderedTasks)}</p>{/if}</div>{/if}{#if t.result_id}{@const downloadName = H.resultDownloadNameForScope(t, $store.tasks, taskDownloadSequences[t.task_id])}<div class="result-audio-row"><WaveformResultPlayer task={t} audioUrl={resultAudioUrl(t)} peaksUrl={`/api/history/${encodeURIComponent(t.result_id)}/waveform`} downloadUrl={resultDownloadUrl(t, downloadName)} {downloadName} durationLabel={t.result_duration_ms ? H.formatAudioDuration(t.result_duration_ms) : '播放结果'} isPlaying={$store.playingResultTaskId === t.task_id && $store.resultAudioPlaying} isPending={resultAudioPendingTaskId === t.task_id} currentTime={$store.playingResultTaskId === t.task_id ? resultAudioCurrentTime : 0} onPlay={() => toggleResultPlayback(t)} onStop={() => toggleResultPlayback(t)} onSeek={(task, timeSeconds) => seekResultPlayback(task, timeSeconds)} /></div>{/if}{#if t.error_message}<p class="muted error-line task-error-scroll" use:checkOverflow={H.knownErrorMessage(t.error_message)}>{H.knownErrorMessage(t.error_message)}</p>{/if}<div class="result-footer" class:without-audio={!t.result_id}><div class="result-footer-status">{#if taskVerificationReport(t)}{@const r = taskVerificationReport(t)}<div class="verification-line {r.status}"><span class="dot"></span>{H.verificationStatusLabel(r.status)}<span class="coverage">覆盖率 {Math.round(r.coverage * 100)}%</span></div>{:else if taskVerificationPending(t)}<p class="muted verification-pending-line">自动校对中…</p>{:else if taskVerificationError(t)}<p class="muted error-line">{H.knownErrorMessage(taskVerificationError(t))}</p>{/if}</div><div class="row wrap result-card-actions">{#if t.status === 'failed'}<button class="gen-icon-btn" aria-label="重试任务" data-tooltip="使用原参数重新尝试生成" onclick={() => retryTask(t)} disabled={$store.actionBusyTaskId === t.task_id}><RotateCcw size={15} /></button>{/if}{#if H.taskCanDelete(t)}<button class="gen-icon-btn" aria-label="复用参数" data-tooltip="把这条记录的文本和参数带回上方生成区" onclick={() => reuse(t)} disabled={$store.actionBusyTaskId === t.task_id}><Repeat size={15} /></button>{/if}{#if !H.taskIsActive(t)}<button class="gen-icon-btn danger" aria-label="删除记录" data-tooltip="删除这条任务记录" onclick={() => deleteTaskRecord(t)} disabled={$store.actionBusyTaskId === t.task_id}><Trash2 size={15} /></button>{/if}</div></div></article>{/each}</div>{#if pageCount > 1}<div bind:this={recordsBottomPagerEl} class="pagination-bar"><button class="btn" onclick={() => $store.currentPage = 1} disabled={$store.currentPage <= 1}><ChevronsLeft size={15} /> 首页</button><button class="btn" onclick={() => taskPageJump(-1)} disabled={$store.currentPage <= 1}><ChevronLeft size={15} /> 上一页</button><span class="muted">第 {$store.currentPage} / {pageCount} 页</span><div class="page-jump"><span class="muted">跳至</span><input type="number" min="1" max={pageCount} bind:value={$store.pageJumpInput} onkeydown={(e) => e.key === 'Enter' && jumpToPage()} /><span class="muted">页</span></div><button class="btn" onclick={() => taskPageJump(1)} disabled={$store.currentPage >= pageCount}>下一页 <ChevronRight size={15} /></button><button class="btn" onclick={() => $store.currentPage = pageCount} disabled={$store.currentPage >= pageCount}>尾页 <ChevronsRight size={15} /></button></div>{/if}</section>{:else}<div class="empty">{#if recordsInitialized}当前筛选下没有任务记录。{:else}正在加载任务记录...{/if}</div>{/if}
+			{#if pagedTasks.length}<section class="result-records-block" class:has-longform-above={visibleLongformTasks.length > 0}><div class="result-grid" bind:this={$store.resultGridEl}>{#each renderedPagedTasks as t (t.task_id)}<article class={`card stack result-card engine-surface ${H.engineKind(t.engine_id, engineMap) === 'cloud' ? 'engine-cloud' : 'engine-local'}${$store.playingResultTaskId === t.task_id && ($store.resultAudioPlaying || resultAudioPendingTaskId === t.task_id) ? ' playing' : ''}`}><div class="result-head"><div class="title-row"><input type="checkbox" checked={$store.selectedTaskIds.includes(t.task_id)} disabled={!H.taskCanDelete(t)} onchange={(e) => toggleTaskSelection(t.task_id, (e.currentTarget as HTMLInputElement).checked)} /><strong class="result-title" title={H.displayTitle(t)}>{H.displayTitle(t)}</strong></div><span class="badge result-status" class:ok={t.status === 'success'} class:fail={t.status === 'failed'} class:warn={t.status === 'cancelled' || H.taskIsActive(t)}>{H.taskStatusPillLabel(t, queueCounts, queueOrderedTasks)}</span></div><div class="result-meta result-meta-primary"><span class="badge"><Mic size={11} /> {H.voiceBadgeLabel(t, voiceMap, engineMap)}</span><HoverCopyPopover label="台词" title="台词内容" copyText={H.displayTitle(t)}><button type="button" class="badge result-script-chip" aria-label="查看台词内容"><FileText size={13} /> 台词</button></HoverCopyPopover>{#if H.longformResultLabel(t)}<span class="badge longform-result-badge" class:merged={H.taskIsLongformExport(t)} title={H.longformResultTitle(t)}>{H.longformResultLabel(t)}</span>{/if}</div><div class="result-meta result-meta-secondary"><span class="badge engine"><Cpu size={11} /> {engineMap.get(t.engine_id)?.manifest.display_name ?? t.engine_id}</span><span class="badge badge-kind">{H.engineTypeLabel(t.engine_id, engineMap)}</span>{#if t.created_at}<span class="badge meta-pop" data-text={`生成时间：${H.formatTime(t.created_at)}`}>{H.formatTime(t.created_at)}</span>{/if}</div><div class="row result-info"><p class="muted result-subline">{H.taskTimingLine(t)}</p><div class="row wrap result-info-right">{#if t.result_duration_ms}<span class="badge meta-pop" data-text={`音频时长：${H.formatAudioDuration(t.result_duration_ms)}`}>{H.formatAudioDuration(t.result_duration_ms)}</span>{/if}{#if H.taskIsActive(t)}<button class="gen-icon-btn danger" aria-label="取消任务" data-tooltip={taskCancelTooltip(t)} onclick={() => cancelTask(t)} disabled={$store.actionBusyTaskId === t.task_id}><X size={14} /></button>{/if}<HoverCopyPopover label="参数" title="生成参数" copyText={H.taskParameterCopyText(t, engineMap, voiceMap)}><button type="button" class="param-pop compact" aria-label="查看生成参数"><SlidersHorizontal size={13} /></button></HoverCopyPopover></div></div>{#if H.taskIsActive(t)}<div class="progress-block"><div class="row progress-head"><span class="muted">{H.taskStageLabel(t, queueOrderedTasks)}</span><span class="badge">{H.progressLabel(t, queueOrderedTasks)}</span></div><div class="progress-track" class:waiting-track={H.taskIsWaiting(t)}><div class="progress-fill" class:waiting-fill={H.taskIsWaiting(t)} style={`width:${H.taskProgressWidth(t)}%`}></div></div><div class="row wrap progress-foot"><span class="muted">{#if H.taskIsWaiting(t)}已等待 {H.formatSeconds(H.waitingSeconds(t))}{:else}已运行 {H.elapsedLabel(t)}{/if}</span>{#if H.taskEtaLabel(t)}<span class="muted">{H.taskEtaLabel(t)}</span>{/if}</div>{#if H.taskRuntimeHint(t, queueCounts, queueOrderedTasks)}<p class="progress-hint">{H.taskRuntimeHint(t, queueCounts, queueOrderedTasks)}</p>{/if}</div>{/if}{#if t.result_id}{@const downloadName = H.resultDownloadNameForScope(t, $store.tasks, taskDownloadSequences[t.task_id])}<div class="result-audio-row"><WaveformResultPlayer task={t} audioUrl={resultAudioUrl(t)} peaksUrl={`/api/history/${encodeURIComponent(t.result_id)}/waveform`} downloadUrl={resultDownloadUrl(t, downloadName)} {downloadName} durationLabel={t.result_duration_ms ? H.formatAudioDuration(t.result_duration_ms) : '播放结果'} isPlaying={$store.playingResultTaskId === t.task_id && $store.resultAudioPlaying} isPending={resultAudioPendingTaskId === t.task_id} currentTime={$store.playingResultTaskId === t.task_id ? resultAudioCurrentTime : 0} onPlay={() => toggleResultPlayback(t)} onStop={() => toggleResultPlayback(t)} onSeek={(task, timeSeconds) => seekResultPlayback(task, timeSeconds)} /></div>{/if}{#if t.error_message}<p class="muted error-line task-error-scroll" use:checkOverflow={H.knownErrorMessage(t.error_message)}>{H.knownErrorMessage(t.error_message)}</p>{/if}<div class="result-footer" class:without-audio={!t.result_id}><div class="result-footer-status">{#if taskVerificationReport(t)}{@const r = taskVerificationReport(t)}<div class="verification-line {r.status}"><span class="dot"></span>{H.verificationStatusLabel(r.status)}{#if r.status !== 'skipped'}<span class="coverage">覆盖率 {Math.round(r.coverage * 100)}%</span>{/if}</div>{:else if taskVerificationPending(t)}<p class="muted verification-pending-line">自动校对中…</p>{:else if taskVerificationError(t)}<p class="muted error-line">{H.knownErrorMessage(taskVerificationError(t))}</p>{/if}</div><div class="row wrap result-card-actions">{#if t.status === 'failed'}<button class="gen-icon-btn" aria-label="重试任务" data-tooltip="使用原参数重新尝试生成" onclick={() => retryTask(t)} disabled={$store.actionBusyTaskId === t.task_id}><RotateCcw size={15} /></button>{/if}{#if H.taskCanDelete(t)}<button class="gen-icon-btn" aria-label="复用参数" data-tooltip="把这条记录的文本和参数带回上方生成区" onclick={() => reuse(t)} disabled={$store.actionBusyTaskId === t.task_id}><Repeat size={15} /></button>{/if}{#if !H.taskIsActive(t)}<button class="gen-icon-btn danger" aria-label="删除记录" data-tooltip="删除这条任务记录" onclick={() => deleteTaskRecord(t)} disabled={$store.actionBusyTaskId === t.task_id}><Trash2 size={15} /></button>{/if}</div></div></article>{/each}</div>{#if pageCount > 1}<div bind:this={recordsBottomPagerEl} class="pagination-bar"><button class="btn" onclick={() => $store.currentPage = 1} disabled={$store.currentPage <= 1}><ChevronsLeft size={15} /> 首页</button><button class="btn" onclick={() => taskPageJump(-1)} disabled={$store.currentPage <= 1}><ChevronLeft size={15} /> 上一页</button><span class="muted">第 {$store.currentPage} / {pageCount} 页</span><div class="page-jump"><span class="muted">跳至</span><input type="number" min="1" max={pageCount} bind:value={$store.pageJumpInput} onkeydown={(e) => e.key === 'Enter' && jumpToPage()} /><span class="muted">页</span></div><button class="btn" onclick={() => taskPageJump(1)} disabled={$store.currentPage >= pageCount}>下一页 <ChevronRight size={15} /></button><button class="btn" onclick={() => $store.currentPage = pageCount} disabled={$store.currentPage >= pageCount}>尾页 <ChevronsRight size={15} /></button></div>{/if}</section>{:else}<div class="empty">{#if recordsInitialized}当前筛选下没有任务记录。{:else}正在加载任务记录...{/if}</div>{/if}
 			</section>
 			</div>
 		</div>

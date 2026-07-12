@@ -51,6 +51,7 @@ export type GenerateStoreState = {
 	requestProjectId: string;
 	requestSegmentId: string;
 	engineId: string;
+	engineUiStateById: Record<string, unknown>;
 	voiceSource: VoiceSourceMode;
 	voiceId: string;
 	customVoiceFileName: string;
@@ -244,6 +245,7 @@ function createInitialState(): GenerateStoreState {
 		requestProjectId: '',
 		requestSegmentId: '',
 		engineId: 'indextts-v2',
+		engineUiStateById: {},
 		voiceSource: 'voice_library',
 		voiceId: '',
 		customVoiceFileName: '',

@@ -82,6 +82,24 @@ function qwen3Schema(): ParameterSchema[] {
 }
 
 describe('generate store custom reference voice requests', () => {
+	it('keeps model UI drafts isolated and intact while switching engines', () => {
+		const store = createGenerateStore();
+		const seedDraft = { mode: 'audio', prompt: '@音频1 测试' };
+		store.update((state) => ({
+			...state,
+			engines: [engineDetail('indextts-v2'), engineDetail('doubao-seed-audio-1.0')],
+			engineUiStateById: { 'doubao-seed-audio-1.0': seedDraft, 'future-engine': { prompt: '另一个模型' } }
+		}));
+
+		store.setEngine('doubao-seed-audio-1.0');
+		store.setEngine('indextts-v2');
+
+		const unsubscribe = store.subscribe((value) => {
+			expect(value.engineUiStateById['doubao-seed-audio-1.0']).toBe(seedDraft);
+			expect(value.engineUiStateById['future-engine']).toEqual({ prompt: '另一个模型' });
+		});
+		unsubscribe();
+	});
 	it('sends custom audio and transcript for every reference voice engine', () => {
 		for (const engineId of REFERENCE_VOICE_ENGINE_IDS) {
 			const store = createGenerateStore();

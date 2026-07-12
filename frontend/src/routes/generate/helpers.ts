@@ -243,7 +243,7 @@ export function taskRuntimeHint(task: GenerationTask, queueCounts: { processing:
 
 
 export function verificationStatusLabel(status: TTSVerificationResponse['status']) {
-	return { passed: '校对通过', warning: '需要复听', failed: '缺句风险', skipped: '未校对' }[status] ?? status;
+	return { passed: '校对通过', warning: '需要复听', failed: '缺句风险', skipped: '无需台词校对' }[status] ?? status;
 }
 
 export function numericParam(task: GenerationTask, key: string) { const v = paramValue(task, key); return typeof v === 'number' ? v : null; }

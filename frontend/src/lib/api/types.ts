@@ -545,6 +545,10 @@ export interface VideoLocalizationSubtitleImportRequest {
 export interface GenerateRequest {
 	text: string;
 	engine_id: string;
+	/** Additive engine envelope. Legacy fields remain during migration. */
+	input_mode?: string | null;
+	input_assets?: EngineInputAsset[];
+	engine_parameters?: Record<string, unknown>;
 	source?: string | null;
 	project_id?: string | null;
 	segment_id?: string | null;
@@ -597,6 +601,48 @@ export interface GenerateRequest {
 	cfg_scale?: number | null;
 	ddpm_steps?: number | null;
 	output_format: OutputFormat;
+}
+
+export type EngineInputAssetType = 'audio' | 'image' | 'speaker';
+export type EngineInputAssetSource = 'voice_library' | 'upload' | 'cloud_speaker' | 'preset';
+
+export interface EngineInputAsset {
+	asset_id: string;
+	type: EngineInputAssetType;
+	source: EngineInputAssetSource;
+	file_id?: string | null;
+	voice_id?: string | null;
+	speaker_id?: string | null;
+	display_name?: string | null;
+	ref_text?: string | null;
+	source_file_id?: string | null;
+	clip_file_id?: string | null;
+	trim_start_ms?: number | null;
+	trim_end_ms?: number | null;
+	duration_ms?: number | null;
+	mime_type?: string | null;
+	size_bytes?: number | null;
+	license_status?: string | null;
+}
+
+export interface EngineGenerateRequest {
+	text: string;
+	engine_id: string;
+	input_mode: 'text' | 'audio' | 'image';
+	input_assets: EngineInputAsset[];
+	engine_parameters: Record<string, unknown>;
+}
+
+export interface SeedAudioImageUploadResult {
+	file_id: string;
+	asset_type: 'seed_audio_image';
+	source: 'upload' | 'preset';
+	license_status: 'self_voice' | 'authorized' | 'company_authorized' | 'test_only';
+	original_name: string;
+	mime_type: string;
+	media_format: 'jpeg' | 'png' | 'webp';
+	size_bytes: number;
+	created_at: string;
 }
 
 export interface GenerateResponse {
@@ -913,6 +959,8 @@ export interface PresetTemplate {
 	scene: string;
 	description: string;
 	engine_id: string;
+	input_mode?: 'text' | 'audio' | 'image' | null;
+	input_assets?: EngineInputAsset[];
 	sample_text: string;
 	parameters: Record<string, unknown>;
 	source_test_id: string | null;
