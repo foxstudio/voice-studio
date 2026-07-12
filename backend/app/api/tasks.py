@@ -28,6 +28,10 @@ class TaskPageResponse(BaseModel):
     download_sequences: dict[str, int]
 
 
+class TaskRetryRequest(BaseModel):
+    confirm_cloud_replay: bool = False
+
+
 @router.get("", response_model=list[GenerationTask])
 async def list_tasks():
     return task_queue.list_tasks()
@@ -83,8 +87,14 @@ async def cancel_task(task_id: str):
 
 
 @router.post("/{task_id}/retry")
-async def retry_task(task_id: str):
-    return {"task_id": await task_queue.retry_task(task_id), "status": "queued"}
+async def retry_task(task_id: str, data: TaskRetryRequest | None = None):
+    return {
+        "task_id": await task_queue.retry_task(
+            task_id,
+            confirm_cloud_replay=bool(data and data.confirm_cloud_replay),
+        ),
+        "status": "queued",
+    }
 
 
 @router.delete("/{task_id}")

@@ -5,6 +5,7 @@ import hashlib
 import json
 import threading
 import time
+import uuid
 from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,9 @@ from typing import Any
 
 from fastapi import WebSocket
 
+from app.engines.registry import build_default_registry
+from app.engines.seed_audio.assets import SeedAudioAssetResolver
+from app.engines.seed_audio.client import urllib_json_transport
 from app.schemas.voice_studio import (
     ExportRecord,
     GenerateRequest,
@@ -39,6 +43,11 @@ _cancelled: set[str] = set()
 _queued_task_ids: set[str] = set()
 _clients: list[WebSocket] = []
 _clients_lock = threading.Lock()
+_adapter_registry = build_default_registry()
+_seed_audio_transport = urllib_json_transport
+_seed_audio_asset_resolver = SeedAudioAssetResolver()
+_seed_audio_allow_test_host = False
+_shutting_down = False
 
 _TERMINAL_STATUSES = {TaskStatus.success, TaskStatus.failed, TaskStatus.cancelled}
 _TERMINAL_STATUS_VALUES = {s.value for s in _TERMINAL_STATUSES}
@@ -161,17 +170,17 @@ def _sync_task_status_from_db(task: GenerationTask, row: dict[str, Any] | None =
 def _reconcile_stale_task(task_data: dict) -> GenerationTask:
     task = GenerationTask(**task_data)
     if task_data.get("cancel_requested"):
-        return task
+        return _refresh_seed_audio_verification(task)
     if task.status not in [TaskStatus.running, TaskStatus.postprocessing, TaskStatus.retrying]:
-        return task
+        return _refresh_seed_audio_verification(task)
     stale_after = _timeout_seconds_for(task.engine_id) + 180
     if _elapsed_since(task.started_at) <= stale_after:
-        return task
+        return _refresh_seed_audio_verification(task)
     task.status = TaskStatus.failed
     task.completed_at = now_iso()
     task.error_message = "任务超过模型常规超时窗口，已自动标记为失败。可复用参数重新生成。"
     _cancelled.discard(task.task_id)
-    return _save(task)
+    return _refresh_seed_audio_verification(_save(task))
 
 
 def list_tasks() -> list[GenerationTask]:
@@ -350,6 +359,35 @@ def _save_history_verification(result_id: str | None, report: TTSVerificationRes
     history_store.add(item)
 
 
+def _refresh_seed_audio_verification(task: GenerationTask) -> GenerationTask:
+    """Repair legacy Seed Audio coverage using the stored ASR text, without another ASR call."""
+    report = task.verification
+    if task.engine_id != text_verifier.SEED_AUDIO_ENGINE_ID or report is None:
+        return task
+    expected = text_verifier.verification_expected_text(task.input_text, engine_id=task.engine_id)
+    if report.expected_text == expected:
+        return task
+    if expected:
+        refreshed = text_verifier.verify_transcript(
+            expected_text=expected,
+            transcript_text=report.transcript_text,
+            result_id=task.result_id,
+            transcription_id=report.transcription_id,
+            asr_engine_id=report.asr_engine_id,
+        )
+    else:
+        refreshed = text_verifier.skipped_non_speech_report(
+            original_prompt=task.input_text,
+            result_id=task.result_id,
+            transcription_id=report.transcription_id,
+            asr_engine_id=report.asr_engine_id,
+        )
+    task.verification = refreshed
+    task.verification_error = None
+    _save_history_verification(task.result_id, refreshed)
+    return _save(task)
+
+
 def attach_verification(task_id: str, report: TTSVerificationResponse | None, error: str | None = None) -> GenerationTask | None:
     task = get_task(task_id)
     if not task:
@@ -384,6 +422,13 @@ def _verify_task_output(task: GenerationTask, *, asr_engine_id: str = "qwen3-asr
     audio_path = history_store.audio_path(task.result_id)
     if not audio_path:
         raise ValueError("结果音频不存在")
+    expected_text = text_verifier.verification_expected_text(task.input_text, engine_id=task.engine_id)
+    if task.engine_id == text_verifier.SEED_AUDIO_ENGINE_ID and not expected_text:
+        return text_verifier.skipped_non_speech_report(
+            original_prompt=task.input_text,
+            result_id=task.result_id,
+            asr_engine_id=asr_engine_id,
+        )
     language = _verification_language(task)
     suffix = audio_path.suffix.lower() or ".wav"
     # FLAC 等非 WAV/MP3 格式 → 临时转为 WAV 再送 ASR
@@ -417,7 +462,7 @@ def _verify_task_output(task: GenerationTask, *, asr_engine_id: str = "qwen3-asr
     record.has_source_audio = False
     db.upsert("transcriptions", record.transcription_id, record.model_dump(), "created_at")
     return text_verifier.verify_transcript(
-        expected_text=task.input_text,
+        expected_text=expected_text,
         transcript_text=record.text,
         result_id=task.result_id,
         transcription_id=record.transcription_id,
@@ -510,7 +555,8 @@ def remove_ws_client(ws: WebSocket) -> None:
 
 
 def start_worker() -> None:
-    global _queue, _worker_loop, _worker_task
+    global _queue, _worker_loop, _worker_task, _shutting_down
+    _shutting_down = False
     loop = asyncio.get_running_loop()
     with _lock:
         if _worker_task and not _worker_task.done() and _worker_loop is loop:
@@ -525,7 +571,8 @@ def start_worker() -> None:
 
 
 async def shutdown() -> None:
-    global _queue, _worker_loop, _worker_task
+    global _queue, _worker_loop, _worker_task, _shutting_down
+    _shutting_down = True
     task = _worker_task
     _queue = None
     _worker_loop = None
@@ -550,6 +597,8 @@ async def submit(
     longform_segment_index: int | None = None,
     longform_segment_count: int | None = None,
 ) -> str:
+    if engine_policy.is_single_generation_only(req.engine_id) and task_type != "single":
+        raise AppException(400, "SINGLE_GENERATION_ONLY", "Seed Audio 1.0 暂只支持单次生成")
     start_worker()
     task = GenerationTask(
         task_type=task_type,
@@ -738,10 +787,19 @@ def delete_task(task_id: str) -> dict:
     return {"task_id": task_id, "status": "deleted"}
 
 
-async def retry_task(task_id: str) -> str:
+async def retry_task(task_id: str, *, confirm_cloud_replay: bool = False) -> str:
     old = get_task(task_id)
     if not old:
         raise ValueError("Task not found")
+    if engine_policy.is_single_generation_only(old.engine_id):
+        if _task_is_active(old.status):
+            raise AppException(409, "TASK_ACTIVE", "Seed Audio 云端任务仍在执行，不能重复提交")
+        if (old.status == TaskStatus.cancelled or old.provider_state_uncertain) and not confirm_cloud_replay:
+            raise AppException(
+                409,
+                "CLOUD_REPLAY_CONFIRM_REQUIRED",
+                "原云端请求可能仍已产生费用；确认云端状态后才能重新生成",
+            )
     return await submit(
         GenerateRequest(**old.parameters),
         old.task_type,
@@ -784,6 +842,18 @@ def _recover_incomplete_tasks() -> list[str]:
         if row.get("cancel_requested"):
             continue
         if task.status in _TERMINAL_STATUSES or task.status not in _RECOVERABLE_STATUSES:
+            continue
+        if engine_policy.requires_manual_replay_after_start(task.engine_id) and task.status in {
+            TaskStatus.running,
+            TaskStatus.postprocessing,
+            TaskStatus.retrying,
+        }:
+            task.status = TaskStatus.failed
+            task.progress = min(task.progress, 0.99)
+            task.completed_at = now_iso()
+            task.provider_state_uncertain = True
+            task.error_message = "云端音频生成状态不明确，服务重启后不会自动重放，以免重复计费。请核对云端状态后重新提交。"
+            _save(task)
             continue
         if _is_mimo_tts(task.engine_id) and task.status in {TaskStatus.running, TaskStatus.postprocessing, TaskStatus.retrying}:
             marker = task.parameters.get("provider_request_id") or task.parameters.get("idempotency_marker")
@@ -893,7 +963,7 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
 def _postprocess_audio(task: GenerationTask, req: GenerateRequest, result: dict, audio_id: str) -> Path:
     """音频后处理：格式转换。纯函数，不碰状态。"""
     final_path = Path(result["output_path"])
-    if req.output_format != "wav":
+    if _adapter_registry.get(req.engine_id) is None and req.output_format != "wav":
         converted = settings_store.output_dir() / f"{audio_id}.{req.output_format}"
         final_path = audio_tools.copy_or_convert(final_path, converted, req.output_format)
     if not final_path.exists() or final_path.stat().st_size <= 0:
@@ -919,6 +989,11 @@ def _save_history(task: GenerationTask, req: GenerateRequest, final_path: Path, 
         output_path=str(final_path),
         duration_ms=result.get("duration_ms"),
         generation_time_ms=result.get("generation_time_ms"),
+        provider_request_id=result.get("provider_request_id"),
+        provider_log_id=result.get("provider_log_id"),
+        original_duration_ms=result.get("original_duration_ms"),
+        subtitle=result.get("subtitle"),
+        response_source=result.get("response_source"),
         parameter_snapshot=task.parameters,
     ))
     return hist
@@ -1004,9 +1079,45 @@ _RAMP_SECONDS = {
 }
 
 
-async def _execute_engine(task: GenerationTask, engine_id: str, kwargs: dict, wav_path: Path) -> tuple[dict, dict]:
+async def _execute_engine(task: GenerationTask, req: GenerateRequest, wav_path: Path) -> tuple[dict, dict]:
     """纯引擎调用。返回 (result, progress_state)。不碰任务状态。"""
     progress_state = {"last_sent_at": 0.0, "last_value": 0.24}
+    engine_id = req.engine_id
+    adapter = _adapter_registry.get(engine_id)
+    if adapter is not None:
+        settings = settings_store.get()
+        prepared_request, asset_summaries = await asyncio.to_thread(
+            adapter.resolve_generate_request,
+            req,
+            asset_resolver=_seed_audio_asset_resolver,
+            upload_confirmation_required=settings.doubao_upload_confirm,
+        )
+        if _task_is_protected_by_state(task):
+            raise RuntimeError("Generation cancelled")
+        request_id = task.provider_request_id or str(uuid.uuid4())
+        await _update_status(
+            task,
+            provider_request_id=request_id,
+            provider_state_uncertain=True,
+        )
+        result = await asyncio.to_thread(
+            adapter.execute,
+            req,
+            output_dir=settings_store.output_dir(),
+            output_name=task.task_id,
+            api_key=settings_store.doubao_api_key(),
+            base_url=settings.doubao_base_url,
+            timeout=_timeout_seconds_for(engine_id),
+            transport=_seed_audio_transport,
+            prepared_request=prepared_request,
+            asset_summaries=asset_summaries,
+            request_id=request_id,
+            allow_test_host=_seed_audio_allow_test_host,
+            cancel_check=lambda: _shutting_down or task.task_id in _cancelled,
+        )
+        return result, progress_state
+
+    kwargs = _kwargs(req, str(wav_path))
     ramp_seconds = _RAMP_SECONDS.get(engine_id, 180.0)
 
     def progress_tick(elapsed_seconds: float) -> None:
@@ -1038,23 +1149,33 @@ async def _process(task: GenerationTask) -> None:
         _sync_task_status_from_db(task)
         return
 
+    generated_path: Path | None = None
+    saved_history: HistoryItem | None = None
+    success_persisted = False
+
     # Stage 1: 任务规范化
     await _update_status(task, status=TaskStatus.running, started_at=now_iso(), progress=0.12)
     try:
         req = GenerateRequest(**task.parameters)
-        engine_registry.ensure_loaded(req.engine_id)
+        if _adapter_registry.get(req.engine_id) is None:
+            engine_registry.ensure_loaded(req.engine_id)
         await _update_status(task, progress=0.24)
         settings_store.ensure_directories()
         audio_id = task.task_id
         wav_path = settings_store.output_dir() / f"{audio_id}.wav"
 
         # Stage 2: 引擎执行
-        result, progress_state = await _execute_engine(task, req.engine_id, _kwargs(req, str(wav_path)), wav_path)
+        result, progress_state = await _execute_engine(task, req, wav_path)
+        generated_path = Path(result["output_path"])
+        asset_summaries = result.get("asset_summaries")
+        if isinstance(asset_summaries, list):
+            task.parameters["asset_summaries"] = asset_summaries
         new_status, error_msg = decide_task_state(task, engine_result=result, cancelled=task.task_id in _cancelled)
         if new_status is None:
             _sync_task_status_from_db(task)
             return
         if new_status == TaskStatus.cancelled:
+            _cleanup_seed_orphan(task, generated_path)
             await _update_status(task, status=new_status, error_message=error_msg)
             return
 
@@ -1062,17 +1183,35 @@ async def _process(task: GenerationTask) -> None:
         await _update_status(task, status=TaskStatus.postprocessing, progress=0.96)
         final_path = _postprocess_audio(task, req, result, audio_id)
 
-        # Stage 4: 资产登记 + 历史
-        await _update_status(task, status=TaskStatus.success, progress=1.0,
-                       result_audio_id=audio_id,
-                       result_duration_ms=result.get("duration_ms"),
-                       generation_time_ms=result.get("generation_time_ms"))
-        hist = _save_history(task, req, final_path, audio_id, result)
-        task.result_id = hist.result_id
-        _update_project_segment(task, audio_id, hist.result_id, SegmentStatus.completed)
-        _try_sync_video_localization_tts_result(task, hist)
+        # Stage 4: 先写历史，再提交 success 终态，避免成功任务没有结果记录。
+        saved_history = _save_history(task, req, final_path, audio_id, result)
+        await _update_status(
+            task,
+            status=TaskStatus.success,
+            progress=1.0,
+            result_audio_id=audio_id,
+            result_id=saved_history.result_id,
+            result_duration_ms=result.get("duration_ms"),
+            generation_time_ms=result.get("generation_time_ms"),
+            provider_request_id=result.get("provider_request_id"),
+            provider_log_id=result.get("provider_log_id"),
+            provider_state_uncertain=False,
+            original_duration_ms=result.get("original_duration_ms"),
+            subtitle=result.get("subtitle"),
+            response_source=result.get("response_source"),
+        )
+        success_persisted = True
+        _update_project_segment(task, audio_id, saved_history.result_id, SegmentStatus.completed)
+        _try_sync_video_localization_tts_result(task, saved_history)
 
     except Exception as exc:
+        if saved_history is not None and not success_persisted:
+            if generated_path is not None:
+                _cleanup_seed_orphan(task, generated_path)
+            history_store.delete(saved_history.result_id)
+            generated_path = None
+        elif generated_path is not None:
+            _cleanup_seed_orphan(task, generated_path)
         cancelled = task.task_id in _cancelled or str(exc) == "Generation cancelled"
         new_status, error_msg = decide_task_state(task, engine_error=exc, cancelled=cancelled)
         if new_status is None:
@@ -1086,3 +1225,15 @@ async def _process(task: GenerationTask) -> None:
     await _update_status(task, completed_at=now_iso())
     if task.status == TaskStatus.success and task.result_id and not (task.longform_task_id and task.task_type == "segment"):
         schedule_auto_verification(task.task_id)
+
+
+def _cleanup_seed_orphan(task: GenerationTask, path: Path) -> None:
+    if not engine_policy.is_single_generation_only(task.engine_id):
+        return
+    try:
+        resolved = path.expanduser().resolve(strict=False)
+        output_root = settings_store.output_dir().expanduser().resolve(strict=False)
+        if resolved.parent == output_root and resolved.stem == task.task_id:
+            resolved.unlink(missing_ok=True)
+    except OSError:
+        return

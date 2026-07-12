@@ -25,6 +25,58 @@ _VERIFICATION_CONTROL_TAG_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+SEED_AUDIO_ENGINE_ID = "doubao-seed-audio-1.0"
+_SEED_AUDIO_SPOKEN_RE = re.compile(r'“([^”]+)”|"([^"]+)"')
+_SEED_AUDIO_NON_SPOKEN_LINE_RE = re.compile(r"^(?:音效|音乐|配乐|背景|结尾)")
+
+
+def seed_audio_spoken_text(prompt_text: str) -> str:
+    """Return only explicit speech from a Seed Audio scene prompt.
+
+    Seed Audio prompts commonly mix dialogue with music, sound effects, voice
+    casting, emotion, and staging instructions. ASR can only verify the quoted
+    speech, so non-verbal instruction lines must not count as missing words.
+    """
+    spoken: list[str] = []
+    for raw_line in prompt_text.splitlines():
+        line = raw_line.strip()
+        if not line or _SEED_AUDIO_NON_SPOKEN_LINE_RE.match(line):
+            continue
+        for match in _SEED_AUDIO_SPOKEN_RE.finditer(line):
+            value = (match.group(1) or match.group(2) or "").strip()
+            if value:
+                spoken.append(value)
+    return "\n".join(spoken)
+
+
+def verification_expected_text(expected_text: str, *, engine_id: str | None = None) -> str:
+    if engine_id == SEED_AUDIO_ENGINE_ID:
+        return seed_audio_spoken_text(expected_text)
+    return expected_text.strip()
+
+
+def skipped_non_speech_report(
+    *,
+    original_prompt: str,
+    result_id: str | None = None,
+    transcription_id: str | None = None,
+    asr_engine_id: str | None = None,
+) -> TTSVerificationResponse:
+    return TTSVerificationResponse(
+        status="skipped",
+        coverage=0.0,
+        similarity=0.0,
+        expected_text="",
+        transcript_text="",
+        normalized_expected="",
+        normalized_transcript="",
+        warnings=["没有检测到明确需要发音的对白；纯音乐、环境音和音效内容不适用 ASR 覆盖率。"],
+        suggestions=["如需校对人声，请在生成描述中用中文双引号标出要说出的内容。"],
+        result_id=result_id,
+        transcription_id=transcription_id,
+        asr_engine_id=asr_engine_id,
+    )
+
 
 def verify_transcript(*, expected_text: str, transcript_text: str, result_id: str | None = None, transcription_id: str | None = None, asr_engine_id: str | None = None) -> TTSVerificationResponse:
     expected = expected_text.strip()

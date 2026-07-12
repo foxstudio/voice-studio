@@ -48,7 +48,18 @@ async def verify_tts_output(body: TTSVerificationRequest):
         item = history_store.get(body.result_id)
         if not item:
             raise AppException(404, "RESULT_NOT_FOUND", "Generation result not found")
-        expected_text = expected_text or item.input_text
+        expected_text = expected_text or text_verifier.verification_expected_text(
+            item.input_text,
+            engine_id=item.engine_id,
+        )
+        if item.engine_id == text_verifier.SEED_AUDIO_ENGINE_ID and not expected_text:
+            report = text_verifier.skipped_non_speech_report(
+                original_prompt=item.input_text,
+                result_id=body.result_id,
+                asr_engine_id=body.asr_engine_id,
+            )
+            task_queue.attach_verification_to_result(body.result_id, report)
+            return report
         if not transcript_text:
             audio_path = history_store.audio_path(body.result_id)
             if not audio_path:

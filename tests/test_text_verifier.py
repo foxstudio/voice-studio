@@ -76,6 +76,46 @@ def test_verifier_keeps_plain_english_pause_word():
     assert text_verifier.normalize_text(text_verifier.strip_verification_control_tags("Please say pause clearly.")) == "pleasesaypauseclearly"
 
 
+def test_seed_audio_coverage_uses_only_explicit_spoken_lines():
+    prompt = """低沉配乐铺底，雨声持续。
+
+旁白（沉稳）说道：“故事开始了。”
+
+音效（近景）有人喊着“抓住她”，随后金属声响起。
+
+男子（压低声音）问：“你听见了吗？”
+
+女子回答：“听见了。”
+
+结尾传来一声“砰”，音乐淡出。"""
+    expected = text_verifier.verification_expected_text(
+        prompt,
+        engine_id=text_verifier.SEED_AUDIO_ENGINE_ID,
+    )
+    assert expected == "故事开始了。\n你听见了吗？\n听见了。"
+
+    report = text_verifier.verify_transcript(
+        expected_text=expected,
+        transcript_text="故事开始了。你听见了吗？听见了。",
+    )
+    assert report.status == "passed"
+    assert report.coverage == 1.0
+
+
+def test_seed_audio_non_speech_prompt_is_not_treated_as_missing_dialogue():
+    prompt = "低沉配乐铺底，远处传来雷声，最后逐渐安静。"
+    expected = text_verifier.verification_expected_text(
+        prompt,
+        engine_id=text_verifier.SEED_AUDIO_ENGINE_ID,
+    )
+    assert expected == ""
+
+    report = text_verifier.skipped_non_speech_report(original_prompt=prompt)
+    assert report.status == "skipped"
+    assert report.coverage == 0.0
+    assert "不适用 ASR 覆盖率" in report.warnings[0]
+
+
 def test_tts_verification_endpoint_accepts_transcript_text_without_asr():
     client = TestClient(app)
     response = client.post(
