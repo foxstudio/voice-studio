@@ -59,6 +59,37 @@ export interface EngineSpeaker {
 	gender: string;
 	description: string;
 	label: string;
+	age?: string;
+	resource_id?: string;
+	languages?: Array<string | { code?: string; language?: string; text?: string; flag?: string }>;
+	emotions?: Array<string | { value?: string; label?: string; icon?: string }>;
+	categories?: string[];
+	normal_labels?: string[];
+	special_labels?: string[];
+	avatar_url?: string;
+	trial_url?: string;
+	short_trial_url?: string;
+	preview_text?: string;
+	catalog_source?: 'official' | 'cache' | 'bundled' | string;
+	catalog_updated_at?: string;
+	catalog_stale?: boolean;
+	authorization_status?: 'unknown' | 'verified' | 'denied' | string;
+	deprecated?: boolean;
+}
+
+export interface DoubaoSpeakerCatalogStatus {
+	source?: 'official' | 'cache' | 'bundled' | string;
+	total?: number;
+	count?: number;
+	complete?: boolean;
+	stale?: boolean;
+	last_synced_at?: string | null;
+	fetched_at?: string | null;
+	ttl_seconds?: number;
+	last_error?: string | null;
+	sync_available?: boolean;
+	credentials_configured?: boolean;
+	message?: string | null;
 }
 
 export interface AppSettings {
@@ -82,6 +113,8 @@ export interface AppSettings {
 	mimo_voiceclone_confirm_upload: boolean;
 	doubao_base_url: string;
 	doubao_api_key_configured: boolean;
+	volcengine_access_key_id_configured: boolean;
+	volcengine_secret_access_key_configured: boolean;
 	doubao_default_tts_resource_id: string;
 	doubao_default_icl_resource_id: string;
 	doubao_upload_confirm: boolean;

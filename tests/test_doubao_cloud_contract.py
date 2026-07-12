@@ -19,6 +19,8 @@ import pytest  # noqa: E402
 
 def _client(tmp_path: Path, monkeypatch) -> TestClient:
     monkeypatch.delenv("VOLCENGINE_API_KEY", raising=False)
+    monkeypatch.delenv("VOLCENGINE_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("VOLCENGINE_SECRET_ACCESS_KEY", raising=False)
     database.set_db_path(tmp_path / "voice_studio.db")
     settings_store.update(
         AppSettings(
@@ -62,6 +64,58 @@ def test_doubao_env_key_is_detected_without_persisting_secret(tmp_path: Path, mo
     settings = client.get("/api/settings").json()
     assert settings["doubao_api_key_configured"] is True
     assert settings_store.doubao_api_key() == "env-doubao-key"
+
+
+def test_volcengine_directory_credentials_are_write_only_and_can_be_cleared(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    initial = client.get("/api/settings").json()
+    assert initial["volcengine_access_key_id_configured"] is False
+    assert initial["volcengine_secret_access_key_configured"] is False
+    assert "volcengine_access_key_id" not in initial
+    assert "volcengine_secret_access_key" not in initial
+
+    saved = client.patch(
+        "/api/settings/volcengine-directory-secret",
+        json={"access_key_id": "  test-ak  ", "secret_access_key": "  test-sk  "},
+    ).json()
+    assert saved["volcengine_access_key_id_configured"] is True
+    assert saved["volcengine_secret_access_key_configured"] is True
+    assert "volcengine_access_key_id" not in saved
+    assert "volcengine_secret_access_key" not in saved
+    assert settings_store.volcengine_access_key_id() == "test-ak"
+    assert settings_store.volcengine_secret_access_key() == "test-sk"
+
+    cleared_ak = client.patch(
+        "/api/settings/volcengine-directory-secret",
+        json={"clear_access_key_id": True},
+    ).json()
+    assert cleared_ak["volcengine_access_key_id_configured"] is False
+    assert cleared_ak["volcengine_secret_access_key_configured"] is True
+    assert settings_store.volcengine_access_key_id() is None
+    assert settings_store.volcengine_secret_access_key() == "test-sk"
+
+    cleared_sk = client.patch(
+        "/api/settings/volcengine-directory-secret",
+        json={"clear_secret_access_key": True},
+    ).json()
+    assert cleared_sk["volcengine_access_key_id_configured"] is False
+    assert cleared_sk["volcengine_secret_access_key_configured"] is False
+    assert settings_store.volcengine_secret_access_key() is None
+
+
+def test_volcengine_directory_credentials_detect_standard_environment_variables(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    monkeypatch.setenv("VOLCENGINE_ACCESS_KEY_ID", "env-ak")
+    monkeypatch.setenv("VOLCENGINE_SECRET_ACCESS_KEY", "env-sk")
+
+    settings = client.get("/api/settings").json()
+    assert settings["volcengine_access_key_id_configured"] is True
+    assert settings["volcengine_secret_access_key_configured"] is True
+    assert "volcengine_access_key_id" not in settings
+    assert "volcengine_secret_access_key" not in settings
+    assert settings_store.volcengine_access_key_id() == "env-ak"
+    assert settings_store.volcengine_secret_access_key() == "env-sk"
 
 
 def test_doubao_client_headers_masking_and_voice_summary():

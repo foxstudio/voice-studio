@@ -9,6 +9,7 @@ import type {
 	EngineDetail,
 	EngineGenerateRequest,
 	EngineSpeaker,
+	DoubaoSpeakerCatalogStatus,
 	ExportRecord,
 	EvaluationReport,
 	EngineAudioDiagnosis,
@@ -64,6 +65,12 @@ export const Api = {
 	saveSettings: (settings: AppSettings) => api.patch<AppSettings>('/settings', settings),
 	saveMimoSecret: (body: { api_key?: string | null; clear?: boolean }) => api.patch<AppSettings>('/settings/mimo-secret', body),
 	saveDoubaoSecret: (body: { api_key?: string | null; clear?: boolean }) => api.patch<AppSettings>('/settings/doubao-secret', body),
+	saveVolcengineDirectorySecret: (body: {
+		access_key_id?: string | null;
+		secret_access_key?: string | null;
+		clear_access_key_id?: boolean;
+		clear_secret_access_key?: boolean;
+	}) => api.patch<AppSettings>('/settings/volcengine-directory-secret', body),
 	settingsStorage: () => api.get<StorageAudit>('/settings/storage'),
 	cleanupSettingsStorage: (targets: string[]) => api.post<StorageCleanupResponse>('/settings/storage/cleanup', { targets }),
 	openSettingsStorageLocation: (key: string) => api.post<StorageOpenResponse>('/settings/storage/open', { key }),
@@ -76,6 +83,9 @@ export const Api = {
 		const suffix = search.toString() ? `?${search}` : '';
 		return api.get<EngineSpeaker[]>(`/engines/${id}/speakers${suffix}`);
 	},
+	doubaoSpeakerCatalogStatus: () => api.get<DoubaoSpeakerCatalogStatus>('/engines/doubao-tts-preset/speaker-catalog/status'),
+	syncDoubaoSpeakerCatalog: () => api.post<DoubaoSpeakerCatalogStatus>('/engines/doubao-tts-preset/speaker-catalog/sync'),
+	doubaoSpeakerPreviewUrl: (speakerId: string) => `/api/engines/doubao-tts-preset/speakers/${encodeURIComponent(speakerId)}/preview`,
 	startEngine: (id: string) => api.post<EngineDetail>(`/engines/${id}/start`),
 	stopEngine: (id: string) => api.post<EngineDetail>(`/engines/${id}/stop`),
 	healthEngine: (id: string) => api.post<Record<string, unknown>>(`/engines/${id}/health-check`),

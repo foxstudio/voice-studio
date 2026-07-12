@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Api } from '$lib/api';
-	import type { VoiceAsset } from '$lib/api/types';
+	import type { EngineSpeaker, VoiceAsset } from '$lib/api/types';
+	import DoubaoVoiceCatalogDrawer from '$lib/components/DoubaoVoiceCatalogDrawer.svelte';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
 	import { ArrowRight, Check, ClipboardCopy, CloudUpload, Database, FileText, FileAudio, Heart, Pencil, Pause, Plus, RefreshCw, Search, ShieldCheck, Trash2, Upload, Volume2, X } from 'lucide-svelte';
 	import { licenseLabel } from '$lib/labels';
@@ -41,6 +42,11 @@
 	let batchSerProgress = $state({ active: false, current: 0, total: 0 });
 	let showVoiceModal = $state(false);
 	let copiedId = $state("");
+	let libraryView: 'mine' | 'doubao-official' = $state('mine');
+	let doubaoOfficialSpeakers: EngineSpeaker[] = $state([]);
+	let doubaoOfficialLoading = $state(false);
+	let doubaoOfficialLoaded = $state(false);
+	let selectedDoubaoOfficialId = $state('');
 
 	function checkOverflow(node: HTMLElement, _text: string) {
 		let frame = 0;
@@ -83,6 +89,28 @@
 
 	async function refresh() {
 		await loadInitial();
+	}
+
+	async function loadDoubaoOfficialSpeakers() {
+		if (doubaoOfficialLoading) return;
+		doubaoOfficialLoading = true;
+		try {
+			doubaoOfficialSpeakers = await Api.engineSpeakers('doubao-tts-preset', { limit: 500 });
+			doubaoOfficialLoaded = true;
+			if (!selectedDoubaoOfficialId && doubaoOfficialSpeakers[0]) selectedDoubaoOfficialId = doubaoOfficialSpeakers[0].speaker_id;
+		} finally {
+			doubaoOfficialLoading = false;
+		}
+	}
+
+	function openLibraryView(view: 'mine' | 'doubao-official') {
+		libraryView = view;
+		if (view === 'doubao-official' && !doubaoOfficialLoaded) void loadDoubaoOfficialSpeakers();
+	}
+
+	function useDoubaoOfficialSpeaker(speakerId: string) {
+		selectedDoubaoOfficialId = speakerId;
+		window.location.href = `/generate?engine=doubao-tts-preset&speaker_id=${encodeURIComponent(speakerId)}`;
 	}
 
 	async function toggleVoicePlayback(voice: VoiceAsset) {
@@ -511,6 +539,7 @@
 				<HelpDrawer title="音色管理" sections={help} />
 			</div>
 			<div class="page-title-actions">
+				{#if libraryView === 'mine'}
 				<button class="btn-add-voice" onclick={() => { resetForm(); showVoiceModal = true; }}><Plus size={13} /> 新增声音</button>
 				{#if batchAsrProgress.active}
 					<span class="batch-indicator asr">
@@ -532,11 +561,17 @@
 						<Heart size={13} /> 批量情绪识别
 					</button>
 				{/if}
+				{/if}
 			</div>
 		</div>
+		<nav class="library-view-tabs" aria-label="音色库类型">
+			<button class:active={libraryView === 'mine'} type="button" onclick={() => openLibraryView('mine')}><Database size={14} /> 我的音色</button>
+			<button class:active={libraryView === 'doubao-official'} type="button" onclick={() => openLibraryView('doubao-official')}><Volume2 size={14} /> 豆包官方音色</button>
+		</nav>
 
 	<div class="workbench">
 		<section class="stack">
+			{#if libraryView === 'mine'}
 			<section class="panel stack library-toolbar">
 				<div class="toolbar-grid voice-toolbar">
 					<label class="field">
@@ -744,6 +779,22 @@
 			<div class="end-of-list">— 已加载全部 {filteredVoices.length} 个音色 —</div>
 		{/if}
 		</section>
+			{:else}
+				<section class="doubao-official-library">
+					<div class="doubao-official-intro">
+						<div><span>云端预置目录</span><strong>豆包语音 TTS 2.0 官方音色</strong><p>目录会缓存在本地；这里的音色只能试听、收藏和用于合成，不会混入可编辑的本地参考音色。</p></div>
+						<a class="btn icon-text" href="/settings">目录同步设置</a>
+					</div>
+					<DoubaoVoiceCatalogDrawer
+						mode="embedded"
+						speakers={doubaoOfficialSpeakers}
+						loading={doubaoOfficialLoading}
+						bind:value={selectedDoubaoOfficialId}
+						onChange={useDoubaoOfficialSpeaker}
+						onRefresh={loadDoubaoOfficialSpeakers}
+					/>
+				</section>
+			{/if}
 		</section>
 			{#if showVoiceModal}
 			<div
@@ -905,6 +956,71 @@
 			display: flex;
 			align-items: center;
 			gap: 8px;
+		}
+		.library-view-tabs {
+			display: inline-flex;
+			align-items: center;
+			gap: 3px;
+			width: fit-content;
+			margin-bottom: 10px;
+			padding: 3px;
+			border: 1px solid var(--line);
+			border-radius: 9px;
+			background: #10141a;
+		}
+		.library-view-tabs button {
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			height: 31px;
+			padding: 0 12px;
+			border: 1px solid transparent;
+			border-radius: 7px;
+			background: transparent;
+			color: var(--muted);
+			font-size: 12px;
+			cursor: pointer;
+		}
+		.library-view-tabs button:hover,
+		.library-view-tabs button:focus-visible {
+			color: var(--text);
+			outline: none;
+		}
+		.library-view-tabs button.active {
+			border-color: rgba(95, 160, 230, 0.3);
+			background: rgba(78, 151, 231, 0.13);
+			color: #b9dafd;
+		}
+		.doubao-official-library {
+			display: grid;
+			gap: 10px;
+		}
+		.doubao-official-intro {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 14px;
+			padding: 11px 13px;
+			border: 1px solid rgba(78, 151, 231, 0.2);
+			border-radius: 9px;
+			background: rgba(78, 151, 231, 0.045);
+		}
+		.doubao-official-intro > div {
+			display: grid;
+			gap: 2px;
+		}
+		.doubao-official-intro span {
+			color: #7faee0;
+			font-size: 10px;
+			letter-spacing: 0.08em;
+		}
+		.doubao-official-intro strong {
+			font-size: 14px;
+		}
+		.doubao-official-intro p {
+			margin: 0;
+			color: var(--muted);
+			font-size: 11px;
 		}
 		.toolbar-count {
 			display: block;
@@ -1465,6 +1581,21 @@
 	}
 
 	@media (max-width: 720px) {
+		.library-view-tabs {
+			display: flex;
+			width: 100%;
+		}
+
+		.library-view-tabs button {
+			flex: 1 1 0;
+			justify-content: center;
+		}
+
+		.doubao-official-intro {
+			align-items: flex-start;
+			flex-direction: column;
+		}
+
 		.voice-overview,
 		.toolbar-grid,
 		.voice-toolbar {

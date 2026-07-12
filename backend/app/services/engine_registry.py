@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import Any, Callable
 
 from app.schemas.voice_studio import EngineDetail, EngineSpeaker, EngineStatus
-from app.services import cosyvoice_worker, engine_health, engine_manifests, engine_provider, engine_runner, f5_worker
+from app.services import cosyvoice_worker, doubao_speaker_catalog_store, engine_health, engine_manifests, engine_provider, engine_runner, f5_worker
 
 _engine_state_lock = threading.Lock()
 
@@ -19,25 +19,7 @@ def _speaker_option_to_detail(option: dict[str, str]) -> EngineSpeaker:
 
 
 def _doubao_speaker_catalog() -> list[EngineSpeaker]:
-    from app.services import doubao_client
-
-    speakers: list[EngineSpeaker] = []
-    for item in doubao_client.DOUBAO_TTS_PRESET_SPEAKERS:
-        voice_id = str(item["voice_id"])
-        label = str(item["label"])
-        raw_gender = str(item.get("gender") or "").lower()
-        gender = {"female": "F", "male": "M"}.get(raw_gender, "")
-        name = label.split(" 2.0", 1)[0].strip() or voice_id
-        speakers.append(
-            EngineSpeaker(
-                speaker_id=voice_id,
-                name=name,
-                gender=gender,
-                description="内置 TTS 2.0 兜底目录；账号授权状态以实际生成为准",
-                label=label,
-            )
-        )
-    return speakers
+    return doubao_speaker_catalog_store.list_speakers()
 
 
 def _filter_speakers(
@@ -55,7 +37,18 @@ def _filter_speakers(
             for speaker in speakers
             if query
             in " ".join(
-                [speaker.speaker_id, speaker.name, speaker.gender, speaker.description, speaker.label]
+                [
+                    speaker.speaker_id,
+                    speaker.name,
+                    speaker.gender,
+                    speaker.description,
+                    speaker.label,
+                    *speaker.languages,
+                    *speaker.emotions,
+                    *speaker.categories,
+                    *speaker.normal_labels,
+                    *speaker.special_labels,
+                ]
             ).lower()
         ]
     return speakers[:limit]

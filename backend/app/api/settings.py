@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.errors import AppException
-from app.schemas.voice_studio import AppSettings, DoubaoSecretUpdate, MimoSecretUpdate
+from app.schemas.voice_studio import AppSettings, DoubaoSecretUpdate, MimoSecretUpdate, VolcengineDirectorySecretUpdate
 from app.services import settings_store
 
 router = APIRouter()
@@ -85,6 +85,16 @@ async def update_mimo_secret(data: MimoSecretUpdate):
 @router.patch("/doubao-secret", response_model=AppSettings)
 async def update_doubao_secret(data: DoubaoSecretUpdate):
     return settings_store.update_doubao_api_key(data.api_key, data.clear)
+
+
+@router.patch("/volcengine-directory-secret", response_model=AppSettings)
+async def update_volcengine_directory_secret(data: VolcengineDirectorySecretUpdate):
+    return settings_store.update_volcengine_directory_credentials(
+        data.access_key_id,
+        data.secret_access_key,
+        clear_access_key_id=data.clear_access_key_id,
+        clear_secret_access_key=data.clear_secret_access_key,
+    )
 
 
 @router.get("/storage", response_model=StorageAuditResponse)

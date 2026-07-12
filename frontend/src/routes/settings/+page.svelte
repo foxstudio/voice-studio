@@ -18,6 +18,10 @@
 	let clearMimoKey = $state(false);
 	let doubaoApiKey = $state('');
 	let clearDoubaoKey = $state(false);
+	let volcengineAccessKeyId = $state('');
+	let volcengineSecretAccessKey = $state('');
+	let clearVolcengineAccessKeyId = $state(false);
+	let clearVolcengineSecretAccessKey = $state(false);
 
 	const ttsEngines = $derived(engines.filter((engine) => !engine.manifest.capabilities.includes('speech_recognition')));
 	const cleanupLocations = $derived((storageAudit?.locations ?? []).filter((location) => location.cleanup_key));
@@ -51,6 +55,23 @@
 			settings = await Api.saveDoubaoSecret({ api_key: doubaoApiKey.trim() || null, clear: clearDoubaoKey });
 			doubaoApiKey = '';
 			clearDoubaoKey = false;
+		}
+		if (
+			volcengineAccessKeyId.trim() ||
+			volcengineSecretAccessKey.trim() ||
+			clearVolcengineAccessKeyId ||
+			clearVolcengineSecretAccessKey
+		) {
+			settings = await Api.saveVolcengineDirectorySecret({
+				access_key_id: volcengineAccessKeyId.trim() || null,
+				secret_access_key: volcengineSecretAccessKey.trim() || null,
+				clear_access_key_id: clearVolcengineAccessKeyId,
+				clear_secret_access_key: clearVolcengineSecretAccessKey
+			});
+			volcengineAccessKeyId = '';
+			volcengineSecretAccessKey = '';
+			clearVolcengineAccessKeyId = false;
+			clearVolcengineSecretAccessKey = false;
 		}
 		saved = '已保存';
 		setTimeout(() => (saved = ''), 1600);
@@ -253,6 +274,41 @@
 				</div>
 				<label class="check-row" for="doubao-clear"><input id="doubao-clear" type="checkbox" bind:checked={clearDoubaoKey} /> 清除已保存的豆包 API Key</label>
 				<p class="muted">默认入口为 https://openspeech.bytedance.com；环境变量 VOLCENGINE_API_KEY 也会被识别为已配置。</p>
+				<div class="section-title">
+					<h3>官方音色目录同步专用</h3>
+					<span
+						class="badge"
+						class:ok={settings.volcengine_access_key_id_configured && settings.volcengine_secret_access_key_configured}
+						class:warn={!settings.volcengine_access_key_id_configured || !settings.volcengine_secret_access_key_configured}
+					>
+						{settings.volcengine_access_key_id_configured && settings.volcengine_secret_access_key_configured ? 'AK/SK 已配置' : 'AK/SK 未完整配置'}
+					</span>
+				</div>
+				<p class="muted">仅用于调用火山引擎 ListSpeakers 同步官方音色目录；不会替代上方豆包 X-Api-Key，也不会回显凭据。</p>
+				<div class="field">
+					<label for="volcengine-access-key-id">Volcengine Access Key ID（不会回显）</label>
+					<input
+						id="volcengine-access-key-id"
+						type="password"
+						bind:value={volcengineAccessKeyId}
+						placeholder={settings.volcengine_access_key_id_configured ? '已配置；填写新值可覆盖' : '未配置'}
+					/>
+				</div>
+				<label class="check-row" for="volcengine-clear-access-key-id">
+					<input id="volcengine-clear-access-key-id" type="checkbox" bind:checked={clearVolcengineAccessKeyId} /> 清除已保存的 Access Key ID
+				</label>
+				<div class="field">
+					<label for="volcengine-secret-access-key">Volcengine Secret Access Key（不会回显）</label>
+					<input
+						id="volcengine-secret-access-key"
+						type="password"
+						bind:value={volcengineSecretAccessKey}
+						placeholder={settings.volcengine_secret_access_key_configured ? '已配置；填写新值可覆盖' : '未配置'}
+					/>
+				</div>
+				<label class="check-row" for="volcengine-clear-secret-access-key">
+					<input id="volcengine-clear-secret-access-key" type="checkbox" bind:checked={clearVolcengineSecretAccessKey} /> 清除已保存的 Secret Access Key
+				</label>
 			</section>
 
 			<section class="panel stack directories-panel">

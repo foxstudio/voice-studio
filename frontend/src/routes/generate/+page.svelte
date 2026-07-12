@@ -13,6 +13,7 @@
 	import WaveformResultPlayer from './components/WaveformResultPlayer.svelte';
 	import Slider from '$lib/components/shared/Slider.svelte';
 	import Tooltip from '$lib/components/shared/Tooltip.svelte';
+	import DoubaoVoiceCatalogDrawer from '$lib/components/DoubaoVoiceCatalogDrawer.svelte';
 	import { generateStore } from '$lib/stores/generate';
 	import * as H from './helpers';
 	import type { LongformStrategy, PresetDraft } from '$lib/stores/generate';
@@ -184,9 +185,14 @@
 	const visibleLongformTasks = $derived($store.longformTasks.filter(t => t.status !== 'success'));
 	const queueOrderedTasks = $derived.by(() => $store.tasks.filter(t => H.taskIsActive(t)).sort((a, b) => a.created_at.localeCompare(b.created_at) || a.task_id.localeCompare(b.task_id)));
 	const queueCounts = $derived.by(() => ({ processing: taskSummary.processing, waiting: taskSummary.waiting }));
+	const doubaoRecentSpeakerIds = $derived.by(() => [...new Set($store.tasks
+		.filter((task) => task.engine_id === 'doubao-tts-preset' && task.status === 'success')
+		.sort((left, right) => right.created_at.localeCompare(left.created_at))
+		.map((task) => String(task.parameters?.speaker_id || ''))
+		.filter(Boolean))].slice(0, 12));
 	const taskEngineOptions = $derived(['all', ...new Set($store.engines.map(e => e.manifest.engine_id))]);
 	const hasSearchableSpeakerCatalog = $derived(isEmotiVoice || isDoubaoPreset);
-	const activeSpeakerCatalogKey = $derived(`${$store.engineId}|${$store.speakerQuery.trim()}|${$store.speakerGenderFilter}`);
+	const activeSpeakerCatalogKey = $derived(`${$store.engineId}|${isDoubaoPreset ? '' : $store.speakerQuery.trim()}|${isDoubaoPreset ? 'all' : $store.speakerGenderFilter}`);
 	const speakerCatalogIsCurrent = $derived(hasSearchableSpeakerCatalog && $store.speakerCatalogKey === activeSpeakerCatalogKey);
 	const speakerChoices = $derived(speakerCatalogIsCurrent ? $store.speakerCatalog.map(s => ({ label: s.label, value: s.speaker_id })) : selected?.manifest.parameter_schema.find(p => p.key === 'speaker_id')?.options ?? []);
 	const promptOptions = $derived(selected?.manifest.parameter_schema.find(p => p.key === 'prompt')?.options ?? []);
@@ -201,7 +207,7 @@
 	const visibleVoiceOptions = $derived(isDoubaoClone ? doubaoCloneVoices : $store.voices);
 	const styleInstructionPlaceholder = $derived(isDoubao ? '例如：语速慢一点，语气更惊讶，句尾带一点感叹。' : (isQwen3TTS ? '例如：语气温柔，语速稍慢，像在讲解课程' : '例如：语速稍慢，语气温柔，像知识视频旁白。'));
 	const hasMoreParams = $derived(
-		activeParamKeys.has('speaker_id') ||
+		(activeParamKeys.has('speaker_id') && !isDoubaoPreset) ||
 		activeParamKeys.has('prompt') ||
 		isMimoPreset ||
 		activeParamKeys.has('language') ||
@@ -845,14 +851,19 @@
 		composerDataPromise = (async () => {
 			const [e, v, p, st] = await Promise.all([Api.engines(), Api.voices({ offset: 0, limit: 2000 }), Api.presets(), Api.settings()]);
 			$store.engines = e; $store.voices = v; $store.presets = p; $store.settings = st;
-			const params = new URLSearchParams(location.search); const vId = params.get('voice');
+			const params = new URLSearchParams(location.search); const vId = params.get('voice'); const requestedEngineId = params.get('engine'); const requestedSpeakerId = params.get('speaker_id');
 			const reuseRaw = sessionStorage.getItem('voice-studio-history-reuse');
 			const handoffRaw = sessionStorage.getItem('voice-studio-video-localization-handoff');
 			if (!$store.initialized) {
-				const def = e.find(en => en.manifest.engine_id === st.default_engine_id && !en.manifest.capabilities.includes('speech_recognition'));
-				$store.engineId = def?.manifest.engine_id || $store.engineId; $store.voiceId = vId || st.default_voice_id || ''; $store.language = st.default_language || $store.language; $store.showSplitPreview = params.get('tools') === 'text';
+				const requestedEngine = e.find(en => en.manifest.engine_id === requestedEngineId && !en.manifest.capabilities.includes('speech_recognition'));
+				const def = requestedEngine ?? e.find(en => en.manifest.engine_id === st.default_engine_id && !en.manifest.capabilities.includes('speech_recognition'));
+				store.setEngine(def?.manifest.engine_id || $store.engineId); $store.voiceId = vId || st.default_voice_id || ''; $store.speakerId = requestedSpeakerId || $store.speakerId; $store.language = st.default_language || $store.language; $store.showSplitPreview = params.get('tools') === 'text';
 				$store.initialized = true;
-			} else if (vId) $store.voiceId = vId;
+			} else {
+				if (requestedEngineId && e.some(en => en.manifest.engine_id === requestedEngineId && !en.manifest.capabilities.includes('speech_recognition'))) store.setEngine(requestedEngineId);
+				if (vId) $store.voiceId = vId;
+				if (requestedSpeakerId) $store.speakerId = requestedSpeakerId;
+			}
 			if (reuseRaw) {
 				videoLocalizationHandoff = parseVideoLocalizationHandoff(handoffRaw);
 				try {
@@ -928,7 +939,8 @@
 		};
 		taskSocket.onerror = () => taskSocket?.close();
 	}
-	async function loadSpeakerCatalog(engine: string, query: string, gender: 'all' | 'F' | 'M') { if (!['emotivoice', 'doubao-tts-preset'].includes(engine)) { $store.speakerCatalog = []; return; } const key = `${engine}|${query}|${gender}`; $store.speakerCatalogKey = key; $store.speakerCatalogLoading = true; try { const items = await Api.engineSpeakers(engine, { q: query, gender, limit: query ? 120 : 40 }); if ($store.speakerCatalogKey !== key) return; $store.speakerCatalog = items; if (!$store.speakerId && items[0]) $store.speakerId = items[0].speaker_id; } catch { if ($store.speakerCatalogKey === key) { $store.speakerCatalog = []; $store.speakerCatalogKey = ''; $store.speakerCatalogLoading = false; } } finally { if ($store.speakerCatalogKey === key) $store.speakerCatalogLoading = false; } }
+	async function loadSpeakerCatalog(engine: string, query: string, gender: 'all' | 'F' | 'M') { if (!['emotivoice', 'doubao-tts-preset'].includes(engine)) { $store.speakerCatalog = []; return; } const catalogQuery = engine === 'doubao-tts-preset' ? '' : query; const catalogGender = engine === 'doubao-tts-preset' ? 'all' : gender; const key = `${engine}|${catalogQuery}|${catalogGender}`; $store.speakerCatalogKey = key; $store.speakerCatalogLoading = true; try { const items = await Api.engineSpeakers(engine, { q: catalogQuery, gender: catalogGender, limit: engine === 'doubao-tts-preset' ? 500 : (catalogQuery ? 120 : 40) }); if ($store.speakerCatalogKey !== key) return; $store.speakerCatalog = items; if (!$store.speakerId && items[0]) $store.speakerId = items[0].speaker_id; } catch { if ($store.speakerCatalogKey === key) { $store.speakerCatalog = []; $store.speakerCatalogKey = ''; $store.speakerCatalogLoading = false; } } finally { if ($store.speakerCatalogKey === key) $store.speakerCatalogLoading = false; } }
+	async function refreshDoubaoSpeakerCatalog() { await loadSpeakerCatalog('doubao-tts-preset', '', 'all'); }
 	function prepareLongformPlan(plan: GeneratePlanResponse) { $store.lastGeneratePlan = plan; $store.textSegments = plan.segments.map(s => s.text); $store.showSplitPreview = plan.segments.length > 1; $store.splitPreviewCollapsed = false; }
 	function requestLongformStrategy(plan: GeneratePlanResponse): Promise<LongformStrategy | null> { prepareLongformPlan(plan); if (!plan.requires_user_confirmation) return Promise.resolve('single'); $store.pendingLongformPlan = plan; $store.longformStrategy = 'split_merge'; $store.longformVerifyEnabled = true; $store.longformMergeEnabled = true; $store.longformMaxRetries = 2; $store.showLongformDialog = true; return new Promise<LongformStrategy | null>(r => { $store.pendingLongformResolve = r; }); }
 	function longformSingleDisabled(plan: GeneratePlanResponse | null) { return plan?.mode === 'longform_strongly_recommended'; }
@@ -1408,7 +1420,7 @@
 		store.setEngine($store.engineId);
 	});
 	$effect(() => { if (!hasMoreParams && $store.showMoreParams) $store.showMoreParams = false; });
-	$effect(() => { const eid = $store.engineId; const q = $store.speakerQuery.trim(); const g = $store.speakerGenderFilter; const key = `${eid}|${q}|${g}`; if (key === _speakerCatalogRequestKey) return; _speakerCatalogRequestKey = key; if (_speakerCatalogTimer) clearTimeout(_speakerCatalogTimer); _speakerCatalogTimer = setTimeout(() => { untrack(() => { void loadSpeakerCatalog(eid, q, g); }); }, 150); });
+	$effect(() => { const eid = $store.engineId; const q = eid === 'doubao-tts-preset' ? '' : $store.speakerQuery.trim(); const g = eid === 'doubao-tts-preset' ? 'all' : $store.speakerGenderFilter; const key = `${eid}|${q}|${g}`; if (key === _speakerCatalogRequestKey) return; _speakerCatalogRequestKey = key; if (_speakerCatalogTimer) clearTimeout(_speakerCatalogTimer); _speakerCatalogTimer = setTimeout(() => { untrack(() => { void loadSpeakerCatalog(eid, q, g); }); }, 150); });
 	$effect(() => { if (!$store.initialized) return; if (!usesReferenceVoice) { if ($store.voiceId) untrack(() => { $store.voiceId = ''; }); if ($store.voiceSource !== 'voice_library') untrack(() => { $store.voiceSource = 'voice_library'; }); return; } if (isDoubaoClone && $store.voiceSource !== 'voice_library') untrack(() => { $store.voiceSource = 'voice_library'; }); if ($store.voiceSource === 'reference_audio' && $store.voiceId) untrack(() => { $store.voiceId = ''; }); if ($store.voiceSource === 'voice_library' && $store.voiceId && !visibleVoiceOptions.some(v => v.voice_id === $store.voiceId)) untrack(() => { $store.voiceId = ''; }); });
 	let _lastPreviewVoiceId = $state('');
 	$effect(() => { const vid = `${$store.voiceSource}|${$store.voiceId}|${$store.customVoicePreviewUrl}`; if (vid !== _lastPreviewVoiceId) { _lastPreviewVoiceId = vid; untrack(() => stopVoicePreview()); } });
@@ -1463,6 +1475,7 @@
 		{#if $store.showPresetEditor}<div class="preset-editor"><div class="row gen-section-head"><div><h3>{$store.editingPresetId ? '编辑自定义预设' : '保存当前为预设'}</h3><p class="muted">绑定引擎：{selected?.manifest.display_name ?? $store.engineId}</p></div><button class="gen-icon-btn mini" type="button" aria-label="关闭预设编辑器" data-tooltip="关闭预设编辑器" onclick={() => ($store.showPresetEditor = false)}>X</button></div><div class="preset-editor-grid"><label class="field"><span>名称</span><input bind:value={$store.presetDraft.name} placeholder="例如：课程慢讲" /></label><label class="field"><span>场景</span><input bind:value={$store.presetDraft.scene} placeholder="例如：教程 / 长文旁白" /></label><label class="field wide"><span>描述</span><input bind:value={$store.presetDraft.description} placeholder="简短说明" /></label><label class="field"><span>标签</span><input bind:value={$store.presetDraft.tags} placeholder="慢讲，课程" /></label><label class="field wide"><span>示例文本</span><textarea bind:value={$store.presetDraft.sample_text} placeholder="可选"></textarea></label></div><div class="row wrap"><button class="btn primary compact" type="button" onclick={savePreset} disabled={$store.presetBusy || !$store.presetDraft.name.trim()}><Save size={14} /> {$store.presetBusy ? '保存中' : '保存预设'}</button><button class="btn compact" type="button" onclick={() => ($store.showPresetEditor = false)}>取消</button></div></div>{/if}
 		<div class="param-inline-row">
 			<label class="param-inline engine-param-inline"><span>引擎</span><EngineSelector engines={ttsEngines} bind:value={$store.engineId} /></label>
+			{#if isDoubaoPreset}<DoubaoVoiceCatalogDrawer speakers={speakerCatalogIsCurrent ? $store.speakerCatalog : []} bind:value={$store.speakerId} loading={$store.speakerCatalogLoading} recentIds={doubaoRecentSpeakerIds} onRefresh={refreshDoubaoSpeakerCatalog} />{/if}
 			{#if isSeedAudio}
 				<SeedAudioInlineControls
 					state={seedAudioState}
@@ -1599,7 +1612,7 @@
 				</section>
 			{/if}
 		{#if !isSeedAudio && $store.showMoreParams && hasMoreParams}<div class="more-params-panel" class:doubao-tts-params={isDoubao} class:doubao-preset-params={isDoubaoPreset} class:doubao-clone-params={isDoubaoClone}>
-			{#if activeParamKeys.has('speaker_id')}
+			{#if activeParamKeys.has('speaker_id') && !isDoubaoPreset}
 				<div class="field param-field" class:span-wide={hasSearchableSpeakerCatalog} class:doubao-speaker-field={isDoubaoPreset} class:field-muted={isQwen3TTS && !qwen3PresetRoute}>
 					<label class="param-label" for="spk">{isQwen3TTS ? '预置音色' : '音色'}</label>
 					<div class="param-control">

@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 
 from app.errors import AppException
 from app.schemas.voice_studio import EngineAudioDiagnosisRequest, EngineDetail, EngineSpeaker
-from app.services import audio_tools, engine_registry, settings_store, voice_store
+from app.services import audio_tools, doubao_speaker_catalog_store, engine_registry, settings_store, voice_store
 
 router = APIRouter()
 
@@ -36,6 +36,30 @@ async def list_speakers(
     if not engine_registry.get_engine(engine_id):
         raise AppException(404, "ENGINE_NOT_FOUND", "Engine not found")
     return engine_registry.list_speakers(engine_id, query=q, gender=gender, limit=limit)
+
+
+@router.get("/doubao-tts-preset/speaker-catalog/status")
+async def get_doubao_speaker_catalog_status():
+    return doubao_speaker_catalog_store.catalog_status()
+
+
+@router.post("/doubao-tts-preset/speaker-catalog/sync")
+async def sync_doubao_speaker_catalog():
+    try:
+        return await asyncio.to_thread(doubao_speaker_catalog_store.sync_catalog)
+    except doubao_speaker_catalog_store.DoubaoCatalogCredentialsRequired as exc:
+        raise AppException(400, "DOUBAO_CATALOG_CREDENTIALS_REQUIRED", str(exc)) from exc
+    except doubao_speaker_catalog_store.DoubaoSpeakerCatalogError as exc:
+        raise AppException(502, "DOUBAO_CATALOG_SYNC_FAILED", str(exc)) from exc
+
+
+@router.get("/doubao-tts-preset/speakers/{speaker_id}/preview")
+async def get_doubao_speaker_preview(speaker_id: str):
+    try:
+        path, content_type = await asyncio.to_thread(doubao_speaker_catalog_store.get_preview, speaker_id)
+    except doubao_speaker_catalog_store.DoubaoSpeakerPreviewUnavailable as exc:
+        raise AppException(404, "DOUBAO_SPEAKER_PREVIEW_UNAVAILABLE", str(exc)) from exc
+    return FileResponse(path, media_type=content_type, headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.post("/{engine_id}/start", response_model=EngineDetail)

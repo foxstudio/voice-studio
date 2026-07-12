@@ -156,6 +156,22 @@ class EngineSpeaker(BaseModel):
     gender: str = ""
     description: str = ""
     label: str
+    age: str = ""
+    languages: list[str] = Field(default_factory=list)
+    emotions: list[str] = Field(default_factory=list)
+    categories: list[str] = Field(default_factory=list)
+    normal_labels: list[str] = Field(default_factory=list)
+    special_labels: list[str] = Field(default_factory=list)
+    trial_url: str | None = None
+    short_trial_url: str | None = None
+    preview_text: str = ""
+    avatar_url: str | None = None
+    resource_id: str | None = None
+    catalog_source: str = "bundled"
+    catalog_updated_at: str | None = None
+    catalog_stale: bool = True
+    authorization_status: str = "unknown"
+    deprecated: bool = False
 
 
 class EngineDetail(BaseModel):
@@ -184,6 +200,8 @@ class AppSettings(BaseModel):
     mimo_voiceclone_confirm_upload: bool = True
     doubao_base_url: str = "https://openspeech.bytedance.com"
     doubao_api_key_configured: bool = False
+    volcengine_access_key_id_configured: bool = False
+    volcengine_secret_access_key_configured: bool = False
     doubao_default_tts_resource_id: str = "seed-tts-2.0"
     doubao_default_icl_resource_id: str = "seed-icl-2.0"
     doubao_upload_confirm: bool = True
@@ -218,6 +236,13 @@ class MimoSecretUpdate(BaseModel):
 class DoubaoSecretUpdate(BaseModel):
     api_key: str | None = None
     clear: bool = False
+
+
+class VolcengineDirectorySecretUpdate(BaseModel):
+    access_key_id: str | None = None
+    secret_access_key: str | None = None
+    clear_access_key_id: bool = False
+    clear_secret_access_key: bool = False
 
 
 class DoubaoVoiceCloneTrainRequest(BaseModel):

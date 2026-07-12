@@ -27,9 +27,17 @@ def get() -> AppSettings:
             values[key] = value
     values.pop("mimo_api_key", None)
     values.pop("doubao_api_key", None)
+    values.pop("volcengine_access_key_id", None)
+    values.pop("volcengine_secret_access_key", None)
     settings = AppSettings(**values)
     settings.mimo_api_key_configured = bool(raw.get("mimo_api_key"))
     settings.doubao_api_key_configured = bool(raw.get("doubao_api_key") or os.environ.get("VOLCENGINE_API_KEY"))
+    settings.volcengine_access_key_id_configured = bool(
+        raw.get("volcengine_access_key_id") or os.environ.get("VOLCENGINE_ACCESS_KEY_ID")
+    )
+    settings.volcengine_secret_access_key_configured = bool(
+        raw.get("volcengine_secret_access_key") or os.environ.get("VOLCENGINE_SECRET_ACCESS_KEY")
+    )
     return settings
 
 
@@ -37,6 +45,8 @@ def update(settings: AppSettings) -> AppSettings:
     data = settings.model_dump()
     data.pop("mimo_api_key_configured", None)
     data.pop("doubao_api_key_configured", None)
+    data.pop("volcengine_access_key_id_configured", None)
+    data.pop("volcengine_secret_access_key_configured", None)
     for key, value in data.items():
         db.save_setting(key, json.dumps(value, ensure_ascii=False))
     ensure_directories(settings)
@@ -69,6 +79,42 @@ def update_doubao_api_key(api_key: str | None, clear: bool = False) -> AppSettin
 def doubao_api_key() -> str | None:
     value = db.get_settings_rows().get("doubao_api_key")
     return value or os.environ.get("VOLCENGINE_API_KEY") or None
+
+
+def update_volcengine_directory_credentials(
+    access_key_id: str | None,
+    secret_access_key: str | None,
+    *,
+    clear_access_key_id: bool = False,
+    clear_secret_access_key: bool = False,
+) -> AppSettings:
+    if clear_access_key_id:
+        db.save_setting("volcengine_access_key_id", "")
+    elif access_key_id is not None and access_key_id.strip():
+        db.save_setting("volcengine_access_key_id", access_key_id.strip())
+
+    if clear_secret_access_key:
+        db.save_setting("volcengine_secret_access_key", "")
+    elif secret_access_key is not None and secret_access_key.strip():
+        db.save_setting("volcengine_secret_access_key", secret_access_key.strip())
+
+    return get()
+
+
+def volcengine_access_key_id() -> str | None:
+    return (
+        db.get_settings_rows().get("volcengine_access_key_id")
+        or os.environ.get("VOLCENGINE_ACCESS_KEY_ID")
+        or None
+    )
+
+
+def volcengine_secret_access_key() -> str | None:
+    return (
+        db.get_settings_rows().get("volcengine_secret_access_key")
+        or os.environ.get("VOLCENGINE_SECRET_ACCESS_KEY")
+        or None
+    )
 
 
 def ensure_directories(settings: AppSettings | None = None) -> None:
