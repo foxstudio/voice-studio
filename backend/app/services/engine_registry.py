@@ -18,6 +18,49 @@ def _speaker_option_to_detail(option: dict[str, str]) -> EngineSpeaker:
     return EngineSpeaker(speaker_id=value, name=name or value, label=label)
 
 
+def _doubao_speaker_catalog() -> list[EngineSpeaker]:
+    from app.services import doubao_client
+
+    speakers: list[EngineSpeaker] = []
+    for item in doubao_client.DOUBAO_TTS_PRESET_SPEAKERS:
+        voice_id = str(item["voice_id"])
+        label = str(item["label"])
+        raw_gender = str(item.get("gender") or "").lower()
+        gender = {"female": "F", "male": "M"}.get(raw_gender, "")
+        name = label.split(" 2.0", 1)[0].strip() or voice_id
+        speakers.append(
+            EngineSpeaker(
+                speaker_id=voice_id,
+                name=name,
+                gender=gender,
+                description="内置 TTS 2.0 兜底目录；账号授权状态以实际生成为准",
+                label=label,
+            )
+        )
+    return speakers
+
+
+def _filter_speakers(
+    speakers: list[EngineSpeaker],
+    *,
+    query: str,
+    gender: str,
+    limit: int,
+) -> list[EngineSpeaker]:
+    if gender in {"F", "M"}:
+        speakers = [speaker for speaker in speakers if speaker.gender.upper() == gender]
+    if query:
+        speakers = [
+            speaker
+            for speaker in speakers
+            if query
+            in " ".join(
+                [speaker.speaker_id, speaker.name, speaker.gender, speaker.description, speaker.label]
+            ).lower()
+        ]
+    return speakers[:limit]
+
+
 @lru_cache(maxsize=1)
 def _emotivoice_speaker_catalog() -> list[EngineSpeaker]:
     try:
@@ -61,16 +104,20 @@ def list_speakers(engine_id: str, query: str = "", gender: str = "all", limit: i
     normalized_gender = gender.strip().upper()
 
     if engine_id == "emotivoice":
-        speakers = _emotivoice_speaker_catalog()
-        if normalized_gender in {"F", "M"}:
-            speakers = [speaker for speaker in speakers if speaker.gender.upper() == normalized_gender]
-        if normalized_query:
-            speakers = [
-                speaker
-                for speaker in speakers
-                if normalized_query in " ".join([speaker.speaker_id, speaker.name, speaker.gender, speaker.description, speaker.label]).lower()
-            ]
-        return speakers[:limit]
+        return _filter_speakers(
+            _emotivoice_speaker_catalog(),
+            query=normalized_query,
+            gender=normalized_gender,
+            limit=limit,
+        )
+
+    if engine_id == "doubao-tts-preset":
+        return _filter_speakers(
+            _doubao_speaker_catalog(),
+            query=normalized_query,
+            gender=normalized_gender,
+            limit=limit,
+        )
 
     detail = get_engine(engine_id)
     if not detail:

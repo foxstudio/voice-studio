@@ -169,6 +169,40 @@ describe('generate store custom reference voice requests', () => {
 		expect(request.seed).toBe(0);
 	});
 
+	it('round-trips Doubao TTS pitch rate only when the engine declares it', () => {
+		const store = createGenerateStore();
+		const schema = [
+			parameter({ key: 'speaker_id', label: '音色', type: 'select', default: 'speaker-1' }),
+			parameter({ key: 'pitch_rate', label: '音调', type: 'slider', default: 0, min: -12, max: 12, step: 1, level: 'advanced' })
+		];
+		store.update((state) => ({
+			...state,
+			engines: [engineDetail('doubao-tts-preset', schema)],
+			engineId: 'doubao-tts-preset',
+			text: '测试文本',
+			pitchRate: 5
+		}));
+
+		const request = store.toRequest();
+		expect(request.pitch_rate).toBe(5);
+
+		store.fromRequest({ ...request, pitch_rate: -4 });
+		const unsubscribe = store.subscribe((value) => expect(value.pitchRate).toBe(-4));
+		unsubscribe();
+	});
+
+	it('does not add Doubao pitch rate to unrelated engine requests', () => {
+		const store = createGenerateStore();
+		store.update((state) => ({
+			...state,
+			engines: [engineDetail('indextts-v2')],
+			engineId: 'indextts-v2',
+			pitchRate: 7
+		}));
+
+		expect(store.toRequest().pitch_rate).toBeUndefined();
+	});
+
 	it('keeps Qwen3 preset, voice design, library, and custom voice routes mutually exclusive', () => {
 		const store = createGenerateStore();
 

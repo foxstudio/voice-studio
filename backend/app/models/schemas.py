@@ -455,6 +455,7 @@ class GenerateRequest(BaseModel):
     remove_silence: bool = False
     emo_alpha: float = Field(default=0.6, ge=0, le=1)
     speed: float = Field(default=1.0, ge=0.5, le=3.0)
+    pitch_rate: int | None = Field(default=None, ge=-12, le=12)
     temperature: float = Field(default=0.8, ge=0.1, le=2.0)
     top_p: float = Field(default=0.8, ge=0.0, le=1.0)
     top_k: int = Field(default=30, ge=1, le=100)

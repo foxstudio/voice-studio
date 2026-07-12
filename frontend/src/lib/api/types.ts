@@ -582,6 +582,7 @@ export interface GenerateRequest {
 	remove_silence: boolean;
 	emo_alpha: number;
 	speed: number;
+	pitch_rate?: number | null;
 	temperature: number;
 	top_p: number;
 	top_k: number;

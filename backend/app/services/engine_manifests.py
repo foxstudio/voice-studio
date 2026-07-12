@@ -486,6 +486,7 @@ ENGINES: dict[str, EngineDetail] = {
                     description="选择与 seed-tts-2.0 资源匹配的官方音色",
                 ),
                 ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="映射到豆包 speech_rate，1.0 为正常语速"),
+                ParameterSchema(key="pitch_rate", label="音调", type="slider", default=0, min=-12, max=12, step=1, level="advanced", description="映射到豆包 pitch_rate，0 为原始音调"),
                 ParameterSchema(
                     key="style_instruction",
                     label="语音指令",
@@ -518,6 +519,7 @@ ENGINES: dict[str, EngineDetail] = {
             privacy_level="cloud_required",
             parameter_schema=[
                 ParameterSchema(key="speed", label="语速", type="slider", default=1.0, min=0.5, max=2.0, step=0.05, description="映射到豆包 speech_rate，1.0 为正常语速"),
+                ParameterSchema(key="pitch_rate", label="音调", type="slider", default=0, min=-12, max=12, step=1, level="advanced", description="映射到豆包 pitch_rate，0 为原始音调"),
                 ParameterSchema(
                     key="style_instruction",
                     label="语音指令",

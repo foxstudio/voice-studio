@@ -14,6 +14,7 @@ from app.main import app  # noqa: E402
 from app.models.exceptions import AppException  # noqa: E402
 from app.schemas.voice_studio import AppSettings, GenerateRequest, VoiceAsset  # noqa: E402
 from app.services import database, doubao_client, engine_request_builder, settings_store  # noqa: E402
+import pytest  # noqa: E402
 
 
 def _client(tmp_path: Path, monkeypatch) -> TestClient:
@@ -108,6 +109,7 @@ def test_doubao_tts_payload_and_chunk_parser():
         speaker="zh_female_vv_uranus_bigtts",
         audio_format="mp3",
         speed=1.12,
+        pitch_rate=-3,
         style_instruction="自然、清晰。",
     )
     assert payload == {
@@ -119,6 +121,7 @@ def test_doubao_tts_payload_and_chunk_parser():
                 "format": "mp3",
                 "sample_rate": 24000,
                 "speech_rate": 12,
+                "pitch_rate": -3,
             },
             "additions": '{"context_texts": ["自然、清晰。"]}',
         },
@@ -126,6 +129,9 @@ def test_doubao_tts_payload_and_chunk_parser():
 
     frames = doubao_client.iter_concatenated_json('{"data":"YQ=="}{"code":20000000,"message":"ok"}')
     assert frames == [{"data": "YQ=="}, {"code": 20000000, "message": "ok"}]
+
+    with pytest.raises(doubao_client.DoubaoAPIError, match="不支持输出格式"):
+        doubao_client.build_tts_payload(text="测试", speaker="speaker", audio_format="flac")
 
 
 def test_doubao_voice_clone_payload(tmp_path: Path):
@@ -339,9 +345,36 @@ def test_doubao_engine_manifest_is_registered(tmp_path: Path, monkeypatch):
         "zh_female_vv_uranus_bigtts",
         "zh_female_xiaohe_uranus_bigtts",
     }
+    pitch = next(param for param in manifest["parameter_schema"] if param["key"] == "pitch_rate")
+    assert (pitch["min"], pitch["max"], pitch["default"]) == (-12, 12, 0)
 
     clone_manifest = by_id["doubao-tts-voiceclone"]
     assert clone_manifest["engine_type"] == "cloud"
     assert "voice_clone" in clone_manifest["capabilities"]
     assert "natural_language_control" in clone_manifest["capabilities"]
     assert not any(param["key"] == "speaker_id" for param in clone_manifest["parameter_schema"])
+    clone_pitch = next(param for param in clone_manifest["parameter_schema"] if param["key"] == "pitch_rate")
+    assert (clone_pitch["min"], clone_pitch["max"], clone_pitch["default"]) == (-12, 12, 0)
+
+
+def test_doubao_speaker_catalog_supports_search_gender_and_custom_ids(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    settings_store.update_doubao_api_key("test-doubao-key")
+
+    all_items = client.get("/api/engines/doubao-tts-preset/speakers").json()
+    assert len(all_items) == len(doubao_client.DOUBAO_TTS_PRESET_SPEAKERS)
+    assert all(item["speaker_id"] and item["label"] for item in all_items)
+
+    female = client.get("/api/engines/doubao-tts-preset/speakers", params={"gender": "F"}).json()
+    assert female and all(item["gender"] == "F" for item in female)
+
+    searched = client.get("/api/engines/doubao-tts-preset/speakers", params={"q": "vivi"}).json()
+    assert [item["speaker_id"] for item in searched] == ["zh_female_vv_uranus_bigtts"]
+
+    custom = GenerateRequest(
+        text="测试自定义官方音色 ID",
+        engine_id="doubao-tts-preset",
+        speaker_id="account_authorized_voice_type",
+    )
+    kwargs = engine_request_builder.build_doubao_tts_single_kwargs(custom, str(tmp_path / "out.wav"))
+    assert kwargs["speaker"] == "account_authorized_voice_type"

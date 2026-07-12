@@ -88,6 +88,7 @@ export type GenerateStoreState = {
 	voicePrompt: string;
 	emoAlpha: number;
 	speed: number;
+	pitchRate: number;
 	nfeStep: number;
 	cfgStrength: number;
 	targetRms: number;
@@ -282,6 +283,7 @@ function createInitialState(): GenerateStoreState {
 		voicePrompt: '',
 		emoAlpha: INDEX_TTS_DEFAULTS.emoAlpha,
 		speed: INDEX_TTS_DEFAULTS.speed,
+		pitchRate: 0,
 		nfeStep: F5_DEFAULTS.nfeStep,
 		cfgStrength: F5_DEFAULTS.cfgStrength,
 		targetRms: F5_DEFAULTS.targetRms,
@@ -376,6 +378,7 @@ function getEngineDefaults(state: GenerateStoreState, engineId: string) {
 		emotion: INDEX_TTS_DEFAULTS.emotion,
 		emoAlpha: INDEX_TTS_DEFAULTS.emoAlpha,
 		speed: INDEX_TTS_DEFAULTS.speed,
+		pitchRate: Number(parameterDefault('pitch_rate', 0)),
 		temperature: Number(parameterDefault('temperature', isMimoEngine(engineId) ? MIMO_DEFAULTS.temperature : engineId === 'confucius4-mlx-int8' ? CONFUCIUS4_DEFAULTS.temperature : INDEX_TTS_DEFAULTS.temperature)),
 		topP: Number(parameterDefault('top_p', isMimoEngine(engineId) ? MIMO_DEFAULTS.topP : CONFUCIUS4_DEFAULTS.topP)),
 		topK: Number(parameterDefault('top_k', CONFUCIUS4_DEFAULTS.topK)),
@@ -469,6 +472,7 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 		remove_silence: state.removeSilence,
 		emo_alpha: state.emoAlpha,
 		speed: state.speed,
+		pitch_rate: activeParamKeys.has('pitch_rate') ? state.pitchRate : undefined,
 		temperature: state.temperature,
 		top_p: state.topP,
 		top_k: state.topK,
@@ -543,6 +547,7 @@ function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<
 		removeSilence: req.remove_silence ?? F5_DEFAULTS.removeSilence,
 		emoAlpha: req.emo_alpha ?? INDEX_TTS_DEFAULTS.emoAlpha,
 		speed: req.speed ?? INDEX_TTS_DEFAULTS.speed,
+		pitchRate: req.pitch_rate ?? engineDefaults.pitchRate,
 		temperature: req.temperature ?? engineDefaults.temperature,
 		topP: req.top_p ?? engineDefaults.topP,
 		topK: req.top_k ?? engineDefaults.topK,

@@ -13,6 +13,7 @@ from typing import Any
 DEFAULT_BASE_URL = "https://openspeech.bytedance.com"
 DEFAULT_TTS_RESOURCE_ID = "seed-tts-2.0"
 DEFAULT_ICL_RESOURCE_ID = "seed-icl-2.0"
+SUPPORTED_TTS_AUDIO_FORMATS = frozenset({"wav", "mp3", "pcm", "ogg_opus"})
 DOUBAO_VOICE_CLONE_LANGUAGE_CODES = {
     "zh": 0,
     "zh-cn": 0,
@@ -187,6 +188,10 @@ def build_tts_payload(
     enable_subtitle: bool = False,
     user_id: str = "voice-studio",
 ) -> dict[str, Any]:
+    audio_format = str(audio_format).strip().lower()
+    if audio_format not in SUPPORTED_TTS_AUDIO_FORMATS:
+        supported = ", ".join(sorted(SUPPORTED_TTS_AUDIO_FORMATS))
+        raise DoubaoAPIError(f"豆包 TTS 不支持输出格式：{audio_format or '(empty)'}；支持格式：{supported}")
     audio_params: dict[str, Any] = {
         "format": audio_format,
         "sample_rate": sample_rate,
@@ -225,6 +230,7 @@ def generate_tts_unidirectional_http(
     audio_format: str = "mp3",
     sample_rate: int = 24000,
     speed: float | None = None,
+    pitch_rate: int | None = None,
     style_instruction: str | None = None,
     timeout: int = 120,
 ) -> dict[str, Any]:
@@ -234,6 +240,7 @@ def generate_tts_unidirectional_http(
         audio_format=audio_format,
         sample_rate=sample_rate,
         speed=speed,
+        pitch_rate=pitch_rate,
         style_instruction=style_instruction,
     )
     headers, request_id = build_headers(api_key=api_key, resource_id=resource_id)

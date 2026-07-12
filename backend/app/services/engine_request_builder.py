@@ -37,6 +37,7 @@ def build_doubao_tts_single_kwargs(req: GenerateRequest, output_path: str, *, vo
         "speaker": speaker,
         "style_instruction": req.style_instruction,
         "speed": req.speed,
+        "pitch_rate": req.pitch_rate,
     }
 
 
@@ -67,6 +68,7 @@ def build_doubao_tts_batch_common_kwargs(req: BatchGenerateRequest, *, voice: Vo
         "speaker": speaker,
         "style_instruction": values.get("style_instruction"),
         "speed": values.get("speed"),
+        "pitch_rate": values.get("pitch_rate"),
     }
 
 

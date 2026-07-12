@@ -287,10 +287,14 @@ def run_mimo_tts(**kwargs):
 
 def _build_doubao_kwargs(**kwargs):
     output_path = kwargs.pop("output_path")
-    fmt = Path(output_path).suffix.lstrip(".") or "mp3"
+    target_path = Path(output_path)
+    requested_format = target_path.suffix.lower().lstrip(".") or "mp3"
+    provider_format = requested_format if requested_format in {"wav", "mp3", "pcm", "ogg_opus"} else "wav"
+    provider_output_path = target_path if provider_format == requested_format else target_path.with_suffix(".doubao-tmp.wav")
     return {
-        "output_path": output_path,
-        "audio_format": fmt,
+        "output_path": str(provider_output_path),
+        "target_output_path": str(target_path),
+        "audio_format": provider_format,
         "base_url": kwargs.get("base_url", ""),
         "api_key": kwargs.get("api_key", ""),
         "text": kwargs["text"],
@@ -298,6 +302,7 @@ def _build_doubao_kwargs(**kwargs):
         "resource_id": kwargs.get("resource_id") or "seed-tts-2.0",
         "style_instruction": kwargs.get("style_instruction"),
         "speed": kwargs.get("speed"),
+        "pitch_rate": kwargs.get("pitch_rate"),
     }
 
 
@@ -305,12 +310,23 @@ def run_doubao_tts(**kwargs):
     from app.services import doubao_client
 
     params = _build_doubao_kwargs(**kwargs)
+    target_output_path = params.pop("target_output_path")
+    provider_output_path = params["output_path"]
     start = time.perf_counter()
-    result = doubao_client.generate_tts_unidirectional_http(**params)
-    meta = _audio_meta(params["output_path"], 24000)
+    try:
+        result = doubao_client.generate_tts_unidirectional_http(**params)
+        if provider_output_path != target_output_path:
+            audio_tools.copy_or_convert(provider_output_path, target_output_path, Path(target_output_path).suffix.lstrip(".") or "wav")
+        meta = _audio_meta(target_output_path, 24000)
+    finally:
+        if provider_output_path != target_output_path:
+            try:
+                Path(provider_output_path).unlink()
+            except OSError:
+                pass
     meta.update(
         {
-            "output_path": result["output_path"],
+            "output_path": target_output_path,
             "generation_time_ms": int((time.perf_counter() - start) * 1000),
             "provider_request_id": result.get("request_id"),
             "provider_logid": result.get("logid"),

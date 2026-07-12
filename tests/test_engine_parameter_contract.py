@@ -13,7 +13,7 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.schemas.voice_studio import AppSettings, BatchSegmentInput, BatchGenerateRequest, GenerateRequest, VoiceAssetCreate, VoiceFile
-from app.services import audio_tools, batch_queue, database, inference_runner, task_queue, voice_store
+from app.services import audio_tools, batch_inference_runner, batch_queue, database, doubao_client, inference_runner, task_queue, voice_store
 
 
 def _ref_file(tmp_path: Path) -> str:
@@ -717,6 +717,7 @@ def test_doubao_preset_profile_is_normalized_between_single_and_batch(tmp_path, 
         "speaker_id": "zh_female_xiaohe_uranus_bigtts",
         "style_instruction": "自然、清晰，像课程旁白。",
         "speed": 1.12,
+        "pitch_rate": -4,
     }
     single = GenerateRequest(
         text="测试文本",
@@ -740,6 +741,69 @@ def test_doubao_preset_profile_is_normalized_between_single_and_batch(tmp_path, 
         assert data["speaker"] == "zh_female_xiaohe_uranus_bigtts"
         assert data["style_instruction"] == params["style_instruction"]
         assert data["speed"] == params["speed"]
+        assert data["pitch_rate"] == params["pitch_rate"]
+
+
+def test_doubao_pitch_rate_range_is_validated():
+    GenerateRequest(text="测试", engine_id="doubao-tts-preset", pitch_rate=-12)
+    GenerateRequest(text="测试", engine_id="doubao-tts-preset", pitch_rate=12)
+    with pytest.raises(ValueError):
+        GenerateRequest(text="测试", engine_id="doubao-tts-preset", pitch_rate=-13)
+    with pytest.raises(ValueError):
+        GenerateRequest(text="测试", engine_id="doubao-tts-preset", pitch_rate=13)
+
+
+def test_doubao_single_and_batch_flac_use_wav_then_convert(tmp_path, monkeypatch):
+    provider_calls: list[dict] = []
+    conversions: list[tuple[Path, Path, str]] = []
+
+    def fake_generate_tts(**kwargs):
+        provider_calls.append(kwargs)
+        Path(kwargs["output_path"]).write_bytes(b"provider-wav")
+        return {"output_path": kwargs["output_path"], "request_id": "request-1", "logid": "log-1"}
+
+    def fake_convert(src, dest, fmt):
+        src_path, dest_path = Path(src), Path(dest)
+        conversions.append((src_path, dest_path, fmt))
+        dest_path.write_bytes(b"local-flac")
+        return dest_path
+
+    monkeypatch.setattr(doubao_client, "generate_tts_unidirectional_http", fake_generate_tts)
+    monkeypatch.setattr(audio_tools, "copy_or_convert", fake_convert)
+
+    single_out = tmp_path / "single.flac"
+    single_meta = inference_runner.run_doubao_tts(
+        base_url="https://openspeech.bytedance.com",
+        api_key="token",
+        text="单条",
+        output_path=str(single_out),
+        speaker="speaker",
+        pitch_rate=5,
+    )
+    batch_out = tmp_path / "batch.flac"
+    batch_results = batch_inference_runner.run_doubao_tts(
+        {
+            "common": {
+                "base_url": "https://openspeech.bytedance.com",
+                "api_key": "token",
+                "speaker": "speaker",
+                "pitch_rate": -2,
+            },
+            "segments": [{"segment_id": "segment-1", "text": "批量", "output_path": str(batch_out), "parameters": {}}],
+        }
+    )
+
+    assert single_meta["output_path"] == str(single_out)
+    assert batch_results[0]["status"] == "success"
+    assert batch_results[0]["output_path"] == str(batch_out)
+    assert [call["audio_format"] for call in provider_calls] == ["wav", "wav"]
+    assert [call["pitch_rate"] for call in provider_calls] == [5, -2]
+    assert all(Path(call["output_path"]).suffix == ".wav" for call in provider_calls)
+    assert [item[2] for item in conversions] == ["flac", "flac"]
+    assert single_out.read_bytes() == b"local-flac"
+    assert batch_out.read_bytes() == b"local-flac"
+    assert not (tmp_path / "single.doubao-tmp.wav").exists()
+    assert not (tmp_path / "batch.doubao-tmp.wav").exists()
 
 
 def test_mimo_top_level_style_instruction_is_normalized_between_single_and_batch(tmp_path, monkeypatch):
