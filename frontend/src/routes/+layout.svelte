@@ -88,7 +88,7 @@
 				</button>
 				<span class="badge" class:ok={status === 'ok'} class:fail={status === 'offline'}>接口 {status === 'ok' ? '正常' : status === 'offline' ? '离线' : '检查中'}</span>
 				{#each Object.entries(engines) as [id, state]}
-					<span class="badge" class:ok={state === 'loaded'}>{id}: {engineStatusLabel(state)}</span>
+					<span class="badge engine-status-badge" class:ok={state === 'loaded'} title={`${id}: ${engineStatusLabel(state)}`}>{id}: {engineStatusLabel(state)}</span>
 				{/each}
 			</div>
 			<span class="muted">本地语音工作台</span>
