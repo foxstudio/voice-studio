@@ -2991,6 +2991,140 @@
 		min-height: 68px;
 		resize: vertical;
 	}
+
+	.more-params-panel.doubao-tts-params {
+		gap: 10px 14px;
+		align-items: stretch;
+	}
+
+	.more-params-panel.doubao-preset-params {
+		grid-template-columns: minmax(520px, 1.35fr) minmax(340px, 0.65fr);
+		grid-template-areas:
+			"speaker instruction"
+			"speaker pitch";
+	}
+
+	.more-params-panel.doubao-clone-params {
+		grid-template-columns: minmax(420px, 1.25fr) minmax(300px, 0.75fr);
+		grid-template-areas: "instruction pitch";
+	}
+
+	.more-params-panel.doubao-tts-params .doubao-speaker-field {
+		grid-area: speaker;
+		max-width: none;
+	}
+
+	.more-params-panel.doubao-tts-params .doubao-style-field {
+		grid-area: instruction;
+		max-width: none;
+		padding-left: 14px;
+		border-left: 1px solid var(--line);
+	}
+
+	.more-params-panel.doubao-tts-params .doubao-style-field .param-control,
+	.more-params-panel.doubao-tts-params .doubao-style-field textarea {
+		height: 100%;
+	}
+
+	.more-params-panel.doubao-tts-params .doubao-style-field textarea {
+		min-height: 72px;
+		max-height: 112px;
+	}
+
+	.more-params-panel.doubao-tts-params .doubao-pitch-field {
+		grid-area: pitch;
+		max-width: none;
+		padding: 10px 0 2px 14px;
+		border-left: 1px solid var(--line);
+		border-top: 1px dashed color-mix(in srgb, var(--line) 78%, transparent);
+	}
+
+	.doubao-speaker-options {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(142px, 1fr));
+		gap: 6px;
+		margin-top: 7px;
+	}
+
+	.doubao-speaker-options button {
+		min-width: 0;
+		min-height: 48px;
+		padding: 7px 9px;
+		border: 1px solid var(--line);
+		border-radius: 7px;
+		background: color-mix(in srgb, var(--panel) 76%, transparent);
+		color: var(--text);
+		text-align: left;
+		cursor: pointer;
+		transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+	}
+
+	.doubao-speaker-options button:hover {
+		border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+		background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+	}
+
+	.doubao-speaker-options button:focus-visible {
+		outline: 2px solid color-mix(in srgb, var(--accent) 68%, transparent);
+		outline-offset: 1px;
+	}
+
+	.doubao-speaker-options button.active {
+		border-color: color-mix(in srgb, var(--accent) 72%, var(--line));
+		background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+		box-shadow: inset 3px 0 0 var(--accent);
+	}
+
+	.doubao-speaker-options strong,
+	.doubao-speaker-options span {
+		display: block;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.doubao-speaker-options strong {
+		font-size: 12px;
+		font-weight: 650;
+	}
+
+	.doubao-speaker-options span {
+		margin-top: 3px;
+		color: var(--muted);
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+		font-size: 9.5px;
+	}
+
+	.doubao-speaker-empty {
+		grid-column: 1 / -1;
+		padding: 12px;
+		border: 1px dashed var(--line);
+		border-radius: 7px;
+		color: var(--muted);
+		font-size: 11px;
+		text-align: center;
+	}
+
+	.doubao-speaker-id-row {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: 8px;
+		align-items: center;
+		margin-top: 7px;
+	}
+
+	.doubao-speaker-id-row > span {
+		color: var(--muted);
+		font-size: 10.5px;
+		white-space: nowrap;
+	}
+
+	.doubao-speaker-id-row input {
+		min-width: 0;
+		height: 30px;
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+		font-size: 11px;
+	}
 	.advanced-divider {
 		border-top: 1px dashed var(--line);
 		margin: 6px 0 0;
@@ -3338,5 +3472,48 @@
 		.more-params-panel .span-textarea,
 		.more-params-panel .span-wide {
 			grid-column: 1 / -1;
+		}
+	}
+
+	@media (max-width: 1100px) {
+		.more-params-panel.doubao-preset-params {
+			grid-template-columns: minmax(400px, 1.15fr) minmax(280px, 0.85fr);
+		}
+
+		.doubao-speaker-options {
+			grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+		}
+	}
+
+	@media (max-width: 760px) {
+		.more-params-panel.doubao-preset-params {
+			grid-template-columns: 1fr;
+			grid-template-areas:
+				"speaker"
+				"instruction"
+				"pitch";
+		}
+
+		.more-params-panel.doubao-clone-params {
+			grid-template-columns: 1fr;
+			grid-template-areas:
+				"instruction"
+				"pitch";
+		}
+
+		.more-params-panel.doubao-tts-params .doubao-style-field,
+		.more-params-panel.doubao-tts-params .doubao-pitch-field {
+			padding-left: 0;
+			border-left: 0;
+		}
+	}
+
+	@media (max-width: 520px) {
+		.doubao-speaker-options {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
+		.doubao-speaker-id-row {
+			grid-template-columns: 1fr;
 		}
 	}
