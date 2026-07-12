@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from app.domains.video_localization.quality_gate import evaluate_quality_gate
+from app.domains.video_localization import media_assets
 from app.domains.video_localization import project_manifest
 from app.domains.video_localization.schemas import VideoLocalizationDraft
 from app.services import project_store
@@ -18,7 +19,13 @@ def get(project_id: str) -> VideoLocalizationDraft | None:
     raw = project.parameters.get(VIDEO_LOCALIZATION_KEY)
     if isinstance(raw, dict) and raw:
         try:
-            return VideoLocalizationDraft(**raw)
+            rebased = media_assets.rebase_project_paths(project_id, raw)
+            draft = VideoLocalizationDraft(**rebased)
+            if rebased != raw:
+                project.parameters = {**project.parameters, VIDEO_LOCALIZATION_KEY: draft.model_dump(mode="json")}
+                project_store.save_project(project)
+                project_manifest.write_project_snapshot(project, draft)
+            return draft
         except (ValueError, TypeError):
             pass
     return project_manifest.read_project_snapshot(project_id) or VideoLocalizationDraft()

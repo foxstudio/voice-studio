@@ -87,11 +87,9 @@ def prepare_project_rename(project: Any, next_name: str) -> Any:
     old_dir = media_assets.project_video_localization_dir(project.project_id)
     new_dir_name = media_assets.project_dir_name(project.project_id, name)
     new_dir = media_assets.project_video_localization_dir_for_name(project.project_id, name)
-    old_project_root = old_dir.parent
-    new_project_root = new_dir.parent
 
-    if old_project_root != new_project_root and old_project_root.exists():
-        _move_project_root(old_project_root, new_project_root)
+    if old_dir != new_dir and old_dir.exists():
+        _move_project_root(old_dir, new_dir)
 
     project.parameters = {
         **project.parameters,
@@ -128,7 +126,19 @@ def separate_source_audio(project_id: str) -> VideoLocalizationDraft | None:
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    return save_video_localization(project_id, source_pipeline.with_separated_source_audio(project_id, draft))
+    next_draft = source_pipeline.with_separated_source_audio(project_id, draft)
+    new_paths = [next_draft.stems.vocals_clean_path, next_draft.stems.background_path]
+    previous_paths = {draft.stems.vocals_clean_path, draft.stems.background_path}
+    try:
+        saved = save_video_localization(project_id, next_draft)
+    except Exception:
+        for value in new_paths:
+            if value and value not in previous_paths:
+                Path(value).unlink(missing_ok=True)
+        raise
+    if saved:
+        media_assets.cleanup_unreferenced_stems(project_id, [saved.stems.vocals_clean_path, saved.stems.background_path])
+    return saved
 
 
 def transcribe_english_source_audio(project_id: str, engine_id: str = "faster-whisper-turbo") -> VideoLocalizationDraft | None:
@@ -261,6 +271,10 @@ def sync_single_tts_result(
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    source_path = Path(output_path)
+    if source_path.exists():
+        adopted_path = media_assets.adopt_tts_audio(project_id, source_path, cue_id, task_id or result_id)
+        output_path = str(adopted_path)
     return save_video_localization(
         project_id,
         tts_orchestration.sync_single_result(

@@ -17,6 +17,8 @@ from app.services import audio_tools, settings_store
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 PROJECT_DIR_NAME_KEY = "video_localization_dir_name"
+LEGACY_DIR_NAME = "video_localization"
+MIGRATION_CONFLICT_DIR = "migration-conflicts"
 
 
 async def save_uploaded_video(project_id: str, file: UploadFile) -> tuple[Path, bytes]:
@@ -39,12 +41,15 @@ async def save_uploaded_video(project_id: str, file: UploadFile) -> tuple[Path, 
 
 def project_video_localization_dir(project_id: str) -> Path:
     settings_store.ensure_directories()
-    return settings_store.expand_path(settings_store.get().project_dir) / _stored_project_dir_name(project_id) / "video_localization"
+    projects_root = settings_store.expand_path(settings_store.get().project_dir)
+    destination = projects_root / _stored_project_dir_name(project_id)
+    _migrate_legacy_project_layout(projects_root, project_id, destination)
+    return destination
 
 
 def project_video_localization_dir_for_name(project_id: str, project_name: str) -> Path:
     settings_store.ensure_directories()
-    return settings_store.expand_path(settings_store.get().project_dir) / project_dir_name(project_id, project_name) / "video_localization"
+    return settings_store.expand_path(settings_store.get().project_dir) / project_dir_name(project_id, project_name)
 
 
 def project_dir_name(project_id: str, project_name: str) -> str:
@@ -67,7 +72,121 @@ def _stored_project_dir_name(project_id: str) -> str:
     if not project:
         return project_id
     value = project.parameters.get(PROJECT_DIR_NAME_KEY)
-    return str(value).strip() if value else project_id
+    if value:
+        return str(value).strip()
+    directory_name = project_dir_name(project_id, project.name)
+    project.parameters = {**project.parameters, PROJECT_DIR_NAME_KEY: directory_name}
+    project_store.save_project(project)
+    return directory_name
+
+
+def legacy_project_roots(project_id: str) -> list[Path]:
+    projects_root = settings_store.expand_path(settings_store.get().project_dir)
+    destination = projects_root / _stored_project_dir_name(project_id)
+    candidates = [destination / LEGACY_DIR_NAME, projects_root / project_id / LEGACY_DIR_NAME]
+    if destination != projects_root / project_id:
+        candidates.append(projects_root / project_id)
+    unique: list[Path] = []
+    for candidate in candidates:
+        if candidate != destination and candidate not in unique:
+            unique.append(candidate)
+    return unique
+
+
+def rebase_project_paths(project_id: str, value: Any) -> Any:
+    destination = project_video_localization_dir(project_id)
+    prefixes = sorted((path for path in legacy_project_roots(project_id) if path != destination), key=lambda path: len(str(path)), reverse=True)
+    return _replace_path_prefixes(value, prefixes, destination)
+
+
+def cleanup_unreferenced_stems(project_id: str, referenced_paths: list[str | None]) -> list[Path]:
+    stems_dir = project_video_localization_dir(project_id) / "stems"
+    if not stems_dir.exists():
+        return []
+    referenced = {Path(value).resolve() for value in referenced_paths if value}
+    removed: list[Path] = []
+    for path in stems_dir.iterdir():
+        if not path.is_file() or path.resolve() in referenced:
+            continue
+        path.unlink(missing_ok=True)
+        removed.append(path)
+    return removed
+
+
+def adopt_tts_audio(project_id: str, source_path: Path, cue_id: str, identity: str) -> Path:
+    root = project_video_localization_dir(project_id).resolve()
+    source = source_path.resolve()
+    try:
+        source.relative_to(root)
+        return source
+    except ValueError:
+        pass
+    suffix = source.suffix.lower() or ".wav"
+    destination_dir = root / "tts" / _safe_identifier(cue_id)
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination = destination_dir / f"{_safe_identifier(identity)}{suffix}"
+    if destination.exists():
+        return destination
+    temporary = destination.with_suffix(f"{destination.suffix}.tmp")
+    temporary.unlink(missing_ok=True)
+    shutil.copy2(source, temporary)
+    temporary.replace(destination)
+    return destination
+
+
+def _migrate_legacy_project_layout(projects_root: Path, project_id: str, destination: Path) -> None:
+    sources = [destination / LEGACY_DIR_NAME, projects_root / project_id / LEGACY_DIR_NAME]
+    legacy_flat_root = projects_root / project_id
+    if destination != legacy_flat_root and legacy_flat_root.exists() and not (legacy_flat_root / LEGACY_DIR_NAME).exists():
+        sources.append(legacy_flat_root)
+    for source in sources:
+        if not source.exists() or source == destination:
+            continue
+        destination.mkdir(parents=True, exist_ok=True)
+        _merge_legacy_tree(source, destination)
+        _remove_empty_parents(source, projects_root)
+
+
+def _merge_legacy_tree(source: Path, destination: Path) -> None:
+    for child in list(source.iterdir()):
+        target = destination / child.name
+        if not target.exists():
+            shutil.move(str(child), str(target))
+            continue
+        if child.is_dir() and target.is_dir():
+            _merge_legacy_tree(child, target)
+            try:
+                child.rmdir()
+            except OSError:
+                pass
+            continue
+        conflict_root = destination / MIGRATION_CONFLICT_DIR / LEGACY_DIR_NAME
+        conflict_root.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(child), str(unique_path(conflict_root / child.name)))
+
+
+def _remove_empty_parents(path: Path, stop: Path) -> None:
+    current = path
+    while current != stop and current.exists():
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        current = current.parent
+
+
+def _replace_path_prefixes(value: Any, old_roots: list[Path], new_root: Path) -> Any:
+    if isinstance(value, str):
+        for old_root in old_roots:
+            old_prefix = str(old_root)
+            if value == old_prefix or value.startswith(f"{old_prefix}{os.sep}"):
+                return f"{new_root}{value[len(old_prefix):]}"
+        return value
+    if isinstance(value, list):
+        return [_replace_path_prefixes(item, old_roots, new_root) for item in value]
+    if isinstance(value, dict):
+        return {key: _replace_path_prefixes(item, old_roots, new_root) for key, item in value.items()}
+    return value
 
 
 def open_project_video_localization_dir(project_id: str) -> dict[str, str]:

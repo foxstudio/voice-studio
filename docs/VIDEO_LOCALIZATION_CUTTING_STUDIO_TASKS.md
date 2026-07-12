@@ -362,10 +362,10 @@
     - ffprobe 验证包含 video stream
     - ffprobe 验证包含 audio stream
   - [x] 真实服务保存项目快照：
-    - `/Users/foxmacstudio/VoiceStudio/projects/1c0e4438050e/video_localization/project.json`
-    - `/Users/foxmacstudio/VoiceStudio/projects/1c0e4438050e/video_localization/autosave/20260709-110412-737076-project.json`
+    - `/Users/foxmacstudio/VoiceStudio/projects/<项目名称>--<project_id>/project.json`
+    - `/Users/foxmacstudio/VoiceStudio/projects/<项目名称>--<project_id>/autosave/<时间戳>-project.json`
   - [x] 真实服务保存当前选区为项目音色：
-    - `/Users/foxmacstudio/VoiceStudio/projects/1c0e4438050e/video_localization/references/ref_speaker_01_cue_0001.wav`
+    - `/Users/foxmacstudio/VoiceStudio/projects/<项目名称>--<project_id>/references/ref_speaker_01_cue_0001.wav`
 
 验收标准：
 
@@ -429,6 +429,17 @@
 - [x] 全页悬浮说明收敛为单一 Tooltip：首次悬停延迟出现，在相邻控件间移动时立即切换，离开控件区后重置延迟。
 - [x] 音量支持水平拖动、正增益、双击归零和单击小型行内精确输入；拖动步长 `0.1 dB`，手动输入支持两位小数，默认显示一位小数。
 - [x] 增加轨道默认值、音量边界与 M / S 互斥测试；前端静态检查通过。
+
+## 批次 14：项目存储扁平化与可迁移归档
+
+- [x] 项目目录从 `<项目>/video_localization/*` 扁平化为 `<项目>/*`，去掉无实际用途的单子目录层级。
+- [x] 新项目目录统一使用 `<项目名称>--<project_id>`，项目重命名同步移动根目录并改写数据库路径。
+- [x] 旧版 `<project_id>/video_localization/*` 首次访问时自动迁移到新根；新旧内容冲突时保留新文件，旧文件进入迁移冲突保留区。
+- [x] `project.json` 和 `autosave/` 内的项目附件路径改用 `project://` 相对路径，恢复时按当前项目根解析。
+- [x] 单条快速 TTS 成功后复制到项目 `tts/<cue_id>/`，cue、候选和配音 clip 统一引用项目内副本；全局历史输出保留。
+- [x] 人声/背景重新分离成功后只保留当前引用版本；保存冲突或失败时删除本次孤立输出，避免重复文件持续堆积。
+- [x] 保留数据库作为运行时索引和任务状态源，同时让项目快照具备脱离旧绝对目录恢复附件路径的能力。
+- [x] 增加旧目录迁移、相对路径快照恢复、单条 TTS 收编和重复 stems 清理回归测试。
 
 ## 历史：第一轮开工范围（已完成）
 

@@ -43,6 +43,16 @@ def _client(tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
+def _project_root(project_id: str) -> Path:
+    return media_assets.project_video_localization_dir(project_id)
+
+
+def _portable_path(root: Path, value: str) -> Path:
+    assert value.startswith("project://")
+    relative = value.removeprefix("project://")
+    return root if relative in {"", "."} else root / relative
+
+
 def test_video_localization_draft_round_trips_in_project_parameters(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "本土化测试", "description": ""}).json()
@@ -151,7 +161,7 @@ def test_video_localization_save_writes_project_manifest_and_autosave(tmp_path: 
     )
 
     assert response.status_code == 200
-    root = tmp_path / "projects" / project["project_id"] / "video_localization"
+    root = _project_root(project["project_id"])
     manifest_path = root / "project.json"
     assert manifest_path.exists()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -159,11 +169,13 @@ def test_video_localization_save_writes_project_manifest_and_autosave(tmp_path: 
     assert manifest["project_id"] == project["project_id"]
     assert manifest["project_name"] == "可恢复项目"
     assert manifest["storage"]["primary_state"] == "voice_studio_db.projects.parameters.video_localization"
+    assert manifest["storage"]["root"] == "project://."
+    assert manifest["storage"]["portability"] == {"status": "portable", "external_paths": []}
     assert manifest["draft"]["ui_state"]["timeline_zoom"] == 1.6
     assert manifest["draft"]["cues"][0]["cue_id"] == "cue_0001"
     assert set(manifest["storage"]["directories"]) >= {"source", "audio", "stems", "references", "tts", "exports", "autosave"}
     for path in manifest["storage"]["directories"].values():
-        assert Path(path).exists()
+        assert _portable_path(root, path).exists()
     autosaves = sorted((root / "autosave").glob("*-project.json"))
     assert len(autosaves) == 1
     assert json.loads(autosaves[0].read_text(encoding="utf-8"))["draft"]["source_media"]["filename"] == "source.mp4"
@@ -192,6 +204,47 @@ def test_video_localization_recovers_from_project_snapshot_when_database_draft_i
     assert recovered.status_code == 200
     assert recovered.json()["source_media"]["filename"] == "recover.mp4"
     assert recovered.json()["cues"][0]["cue_id"] == "cue_recovered"
+
+
+def test_video_localization_migrates_legacy_nested_project_and_rebases_paths(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "旧目录迁移", "description": ""}).json()
+    legacy_root = tmp_path / "projects" / project["project_id"] / "video_localization"
+    legacy_video = legacy_root / "source" / "legacy.mp4"
+    legacy_video.parent.mkdir(parents=True, exist_ok=True)
+    legacy_video.write_bytes(b"legacy-video")
+    legacy_manifest = {
+        "schema_version": 1,
+        "kind": "video_localization_project",
+        "project_id": project["project_id"],
+        "project_name": "旧目录迁移",
+        "draft": {
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "legacy.mp4", "video_path": str(legacy_video), "duration_ms": 1200},
+        },
+    }
+    (legacy_root / "project.json").write_text(json.dumps(legacy_manifest, ensure_ascii=False), encoding="utf-8")
+    legacy_autosave = legacy_root / "autosave" / "20260101-000000-000000-project.json"
+    legacy_autosave.parent.mkdir(parents=True, exist_ok=True)
+    legacy_autosave.write_text(json.dumps(legacy_manifest, ensure_ascii=False), encoding="utf-8")
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization")
+
+    assert response.status_code == 200
+    migrated_root = _project_root(project["project_id"])
+    migrated_video = migrated_root / "source" / "legacy.mp4"
+    assert Path(response.json()["source_media"]["video_path"]) == migrated_video
+    assert migrated_video.read_bytes() == b"legacy-video"
+    assert not (tmp_path / "projects" / project["project_id"]).exists()
+    assert migrated_root.name.endswith(f"--{project['project_id']}")
+
+    saved = client.put(f"/api/projects/{project['project_id']}/video-localization", json=response.json())
+    assert saved.status_code == 200
+    portable_manifest = json.loads((migrated_root / "project.json").read_text(encoding="utf-8"))
+    assert portable_manifest["draft"]["source_media"]["video_path"] == "project://source/legacy.mp4"
+    migrated_autosave = migrated_root / "autosave" / legacy_autosave.name
+    assert json.loads(migrated_autosave.read_text(encoding="utf-8"))["draft"]["source_media"]["video_path"] == "project://source/legacy.mp4"
 
 
 def test_video_localization_empty_draft_has_contract_defaults(tmp_path: Path):
@@ -288,7 +341,7 @@ def test_video_localization_import_srt_rejects_invalid_payload(tmp_path: Path):
 def test_video_localization_reset_clears_draft_and_project_assets(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "重置草稿", "description": ""}).json()
-    project_dir = tmp_path / "projects" / project["project_id"] / "video_localization"
+    project_dir = _project_root(project["project_id"])
     source_dir = project_dir / "source"
     stems_dir = project_dir / "stems"
     refs_dir = project_dir / "references"
@@ -672,7 +725,7 @@ def test_video_localization_project_rename_moves_storage_and_paths(tmp_path: Pat
     ).json()
     old_video_path = Path(imported["source_media"]["video_path"])
     old_root = old_video_path.parents[1]
-    assert old_root.name == "video_localization"
+    assert old_root.name.endswith(f"--{project['project_id']}")
     assert "旧项目名" in str(old_root)
 
     updated = client.patch(f"/api/projects/{project['project_id']}", json={"name": "新项目名"}).json()
@@ -685,7 +738,7 @@ def test_video_localization_project_rename_moves_storage_and_paths(tmp_path: Pat
     assert new_video_path.read_bytes() == b"fake-video-bytes"
     assert "新项目名" in str(new_video_path)
     assert str(new_video_path) != str(old_video_path)
-    assert not old_root.parent.exists()
+    assert not old_root.exists()
 
 
 def test_video_localization_source_video_can_be_played_after_import(tmp_path: Path):
@@ -705,10 +758,10 @@ def test_video_localization_source_video_can_be_played_after_import(tmp_path: Pa
 def test_video_localization_source_audio_endpoint_falls_back_to_original_stem(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "源音回退", "description": ""}).json()
-    original_audio = tmp_path / "projects" / project["project_id"] / "video_localization" / "audio" / "fallback.wav"
+    original_audio = _project_root(project["project_id"]) / "audio" / "fallback.wav"
     original_audio.parent.mkdir(parents=True, exist_ok=True)
     original_audio.write_bytes(b"fallback-audio")
-    missing_audio = tmp_path / "projects" / project["project_id"] / "video_localization" / "audio" / "missing.wav"
+    missing_audio = _project_root(project["project_id"]) / "audio" / "missing.wav"
 
     client.put(
         f"/api/projects/{project['project_id']}/video-localization",
@@ -866,7 +919,7 @@ def test_video_localization_retry_failed_operation_creates_new_operation(tmp_pat
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "重试后台任务", "description": ""}).json()
     monkeypatch.setattr(video_localization_operation_queue, "_enqueue", lambda operation_id: None)
-    video_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "source" / "demo.mp4"
+    video_path = _project_root(project["project_id"]) / "source" / "demo.mp4"
     video_path.parent.mkdir(parents=True, exist_ok=True)
     video_path.write_bytes(b"fake-video")
     operation = VideoLocalizationOperation(
@@ -912,7 +965,7 @@ def test_video_localization_retry_failed_operation_creates_new_operation(tmp_pat
 def test_video_localization_running_cancel_keeps_cancelled_after_late_exception(tmp_path: Path, monkeypatch):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "运行中取消", "description": ""}).json()
-    video_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "source" / "demo.mp4"
+    video_path = _project_root(project["project_id"]) / "source" / "demo.mp4"
     video_path.parent.mkdir(parents=True, exist_ok=True)
     video_path.write_bytes(b"fake-video")
     operation = VideoLocalizationOperation(project_id=project["project_id"], kind="source_audio", status="queued", label="抽取源音轨")
@@ -954,9 +1007,14 @@ def test_video_localization_separate_source_audio_requires_source_audio(tmp_path
 def test_video_localization_separate_source_audio_updates_stems(tmp_path: Path, monkeypatch):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "分离人声", "description": ""}).json()
-    audio_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "audio" / "source.wav"
+    audio_path = _project_root(project["project_id"]) / "audio" / "source.wav"
     audio_path.parent.mkdir(parents=True, exist_ok=True)
     audio_path.write_bytes(b"fake-wav")
+    stale_vocals = _project_root(project["project_id"]) / "stems" / "source-vocals-clean-old.wav"
+    stale_background = _project_root(project["project_id"]) / "stems" / "source-background-old.wav"
+    stale_vocals.parent.mkdir(parents=True, exist_ok=True)
+    stale_vocals.write_bytes(b"old-vocals")
+    stale_background.write_bytes(b"old-background")
     client.put(
         f"/api/projects/{project['project_id']}/video-localization",
         json={
@@ -992,6 +1050,8 @@ def test_video_localization_separate_source_audio_updates_stems(tmp_path: Path, 
     assert body["stems"]["background_path"].endswith("source-background.wav")
     assert body["stems"]["original_audio_path"] == str(audio_path)
     assert body["stems"]["quality_flags"] == ["needs_reference_review"]
+    assert not stale_vocals.exists()
+    assert not stale_background.exists()
 
     vocals = client.get(f"/api/projects/{project['project_id']}/video-localization/stems/vocals/audio")
     background = client.get(f"/api/projects/{project['project_id']}/video-localization/stems/background/audio")
@@ -1050,7 +1110,7 @@ def test_video_localization_english_asr_requires_source_audio(tmp_path: Path):
 def test_video_localization_english_asr_creates_cue_draft(tmp_path: Path, monkeypatch):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "英文转录", "description": ""}).json()
-    audio_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "audio" / "source.wav"
+    audio_path = _project_root(project["project_id"]) / "audio" / "source.wav"
     audio_path.parent.mkdir(parents=True, exist_ok=True)
     audio_path.write_bytes(b"fake-wav")
     client.put(
@@ -1105,7 +1165,7 @@ def test_video_localization_reference_candidates_require_clean_vocals(tmp_path: 
 def test_video_localization_reference_candidates_from_clean_vocals(tmp_path: Path, monkeypatch):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "参考音候选", "description": ""}).json()
-    vocals_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "stems" / "vocals.wav"
+    vocals_path = _project_root(project["project_id"]) / "stems" / "vocals.wav"
     vocals_path.parent.mkdir(parents=True, exist_ok=True)
     vocals_path.write_bytes(b"vocals")
     client.put(
@@ -1157,7 +1217,7 @@ def test_video_localization_reference_candidates_from_clean_vocals(tmp_path: Pat
 def test_video_localization_reference_clip_can_save_current_selection_metadata(tmp_path: Path, monkeypatch):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "当前选区音色", "description": ""}).json()
-    vocals_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "stems" / "vocals.wav"
+    vocals_path = _project_root(project["project_id"]) / "stems" / "vocals.wav"
     vocals_path.parent.mkdir(parents=True, exist_ok=True)
     vocals_path.write_bytes(b"vocals")
     client.put(
@@ -1226,7 +1286,7 @@ def test_video_localization_reference_clip_can_save_current_selection_metadata(t
 def test_video_localization_reference_clip_uses_independent_audio_selection(tmp_path: Path, monkeypatch):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "自由选区音色", "description": ""}).json()
-    vocals_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "stems" / "vocals.wav"
+    vocals_path = _project_root(project["project_id"]) / "stems" / "vocals.wav"
     video_path = tmp_path / "source.mp4"
     vocals_path.parent.mkdir(parents=True, exist_ok=True)
     vocals_path.write_bytes(b"vocals")
@@ -1295,7 +1355,7 @@ def test_video_localization_reference_clip_uses_independent_audio_selection(tmp_
 def test_video_localization_delete_reference_clip_unbinds_cues_and_speakers(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "删除项目音色", "description": ""}).json()
-    reference_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "references" / "ref_001.wav"
+    reference_path = _project_root(project["project_id"]) / "references" / "ref_001.wav"
     reference_path.parent.mkdir(parents=True, exist_ok=True)
     reference_path.write_bytes(b"reference")
     client.put(
@@ -1322,7 +1382,7 @@ def test_video_localization_delete_reference_clip_unbinds_cues_and_speakers(tmp_
 def test_video_localization_async_reference_clip_operation_updates_draft(tmp_path: Path, monkeypatch):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "异步参考音候选", "description": ""}).json()
-    vocals_path = tmp_path / "projects" / project["project_id"] / "video_localization" / "stems" / "vocals.wav"
+    vocals_path = _project_root(project["project_id"]) / "stems" / "vocals.wav"
     vocals_path.parent.mkdir(parents=True, exist_ok=True)
     vocals_path.write_bytes(b"vocals")
     client.put(
@@ -2233,18 +2293,24 @@ def test_video_localization_single_tts_generation_syncs_from_task_queue(tmp_path
 
     response = client.get(f"/api/projects/{project['project_id']}/video-localization")
     cue = response.json()["cues"][0]
+    adopted_path = _project_root(project["project_id"]) / "tts" / "cue_0001" / "task-video-single.wav"
     assert cue["tts_result_id"] == "result-video-single"
-    assert cue["tts_audio_path"] == str(output_path)
+    assert cue["tts_audio_path"] == str(adopted_path)
+    assert adopted_path.read_bytes() == b"single-audio"
+    assert output_path.exists()
     assert cue["generated_duration_ms"] == 2300
     candidate = response.json()["generated_candidates"][0]
     assert candidate["result_id"] == "result-video-single"
-    assert candidate["audio_path"] == str(output_path)
+    assert candidate["audio_path"] == str(adopted_path)
     assert candidate["duration_ms"] == 2300
     assert candidate["status"] == "success"
     clip = response.json()["timeline_clips"][0]
-    assert clip["audio_path"] == str(output_path)
+    assert clip["audio_path"] == str(adopted_path)
     assert clip["source_end_ms"] == 2300
     assert clip["status"] == "ready"
+
+    task_queue._sync_video_localization_tts_result(task, hist)
+    assert list(adopted_path.parent.glob("task-video-single*.wav")) == [adopted_path]
 
 
 def test_video_localization_candidate_can_be_previewed_and_applied(tmp_path: Path):
