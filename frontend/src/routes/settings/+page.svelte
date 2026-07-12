@@ -2,7 +2,7 @@
 	import { Api } from '$lib/api';
 	import type { AppSettings, EngineDetail, StorageAudit, StorageLocation, VoiceAsset } from '$lib/api/types';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
-	import { Database, FolderOpen, HardDrive, RefreshCw, Save, Trash2 } from 'lucide-svelte';
+	import { Database, ExternalLink, FolderOpen, HardDrive, RefreshCw, Save, Trash2 } from 'lucide-svelte';
 	import { onMount } from 'svelte';
 
 	let settings = $state<AppSettings | null>(null);
@@ -269,8 +269,15 @@
 					<input id="doubao-upload-confirm" type="checkbox" bind:checked={settings.doubao_upload_confirm} /> 豆包音色训练/ASR 上传前提醒
 				</label>
 				<div class="field">
-					<label for="doubao-key">API Key（不会回显）</label>
+					<div class="credential-label">
+						<label for="doubao-key">API Key（不会回显）</label>
+						<span class="credential-links">
+							<a href="https://console.volcengine.com/speech/new/overview?projectName=default" target="_blank" rel="noreferrer">登录获取 <ExternalLink size={12} /></a>
+							<a href="https://docs.volcengine.com/docs/6561/1167802?lang=zh" target="_blank" rel="noreferrer">官方说明</a>
+						</span>
+					</div>
 					<input id="doubao-key" type="password" bind:value={doubaoApiKey} placeholder={settings.doubao_api_key_configured ? '已配置；填写新 key 可覆盖' : '未配置'} />
+					<small>登录后进入“API Key 管理”，新建或复制用于豆包语音调用的 API Key。</small>
 				</div>
 				<label class="check-row" for="doubao-clear"><input id="doubao-clear" type="checkbox" bind:checked={clearDoubaoKey} /> 清除已保存的豆包 API Key</label>
 				<p class="muted">默认入口为 https://openspeech.bytedance.com；环境变量 VOLCENGINE_API_KEY 也会被识别为已配置。</p>
@@ -284,7 +291,13 @@
 						{settings.volcengine_access_key_id_configured && settings.volcengine_secret_access_key_configured ? 'AK/SK 已配置' : 'AK/SK 未完整配置'}
 					</span>
 				</div>
-				<p class="muted">仅用于调用火山引擎 ListSpeakers 同步官方音色目录；不会替代上方豆包 X-Api-Key，也不会回显凭据。</p>
+				<div class="credential-guide">
+					<p class="muted">仅用于调用火山引擎 ListSpeakers 同步官方音色目录；不会替代上方豆包 X-Api-Key，也不会回显凭据。</p>
+					<span class="credential-links">
+						<a href="https://console.volcengine.com/iam/keymanage/" target="_blank" rel="noreferrer">登录创建 AK/SK <ExternalLink size={12} /></a>
+						<a href="https://www.volcengine.com/docs/6291/65568?lang=zh" target="_blank" rel="noreferrer">官方说明</a>
+					</span>
+				</div>
 				<div class="field">
 					<label for="volcengine-access-key-id">Volcengine Access Key ID（不会回显）</label>
 					<input
@@ -438,6 +451,53 @@
 		gap: 8px;
 		color: var(--text);
 		font-size: 13px;
+	}
+
+	.credential-label,
+	.credential-guide,
+	.credential-links,
+	.credential-links a {
+		display: flex;
+		align-items: center;
+	}
+
+	.credential-label,
+	.credential-guide {
+		justify-content: space-between;
+		gap: 10px;
+	}
+
+	.credential-guide {
+		align-items: flex-start;
+	}
+
+	.credential-guide p {
+		margin: 0;
+	}
+
+	.credential-links {
+		flex: none;
+		gap: 10px;
+		font-size: 11px;
+	}
+
+	.credential-links a {
+		gap: 3px;
+		color: #91c4ff;
+		text-decoration: none;
+		white-space: nowrap;
+	}
+
+	.credential-links a:hover {
+		color: #c5e1ff;
+		text-decoration: underline;
+		text-underline-offset: 3px;
+	}
+
+	.credential-links a:focus-visible {
+		outline: 2px solid #5aa7ff;
+		outline-offset: 3px;
+		border-radius: 3px;
 	}
 
 	.field small {
@@ -613,6 +673,12 @@
 			grid-template-columns: repeat(2, minmax(120px, 1fr));
 			justify-items: start;
 			min-width: 0;
+		}
+
+		.credential-label,
+		.credential-guide {
+			align-items: flex-start;
+			flex-direction: column;
 		}
 	}
 </style>
