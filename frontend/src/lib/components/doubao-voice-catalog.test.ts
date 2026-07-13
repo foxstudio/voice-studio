@@ -3,6 +3,7 @@ import type { EngineSpeaker } from '$lib/api/types';
 import {
 	EMPTY_DOUBAO_FILTERS,
 	buildDoubaoCatalogFacets,
+	buildDoubaoContextualFacets,
 	buildQuickSpeakers,
 	doubaoCatalogTabCounts,
 	filterDoubaoSpeakers,
@@ -15,14 +16,14 @@ function speaker(id: string, name: string, overrides: Partial<EngineSpeaker> = {
 }
 
 const speakers = [
-	speaker('vivi', 'Vivi 2.0', { gender: '女', age: '青年', languages: [{ code: 'zh-cn' }], emotions: [{ value: 'happy', label: '开心' }], normal_labels: ['热门'], categories: ['视频配音'] }),
+	speaker('vivi', 'Vivi 2.0', { gender: '女', age: '青年', languages: [{ code: 'zh-cn' }], emotions: [{ value: 'happy', label: '开心' }], special_labels: ['豆包同款'], categories: ['视频配音'] }),
 	speaker('yunzhou', '云舟 2.0', { gender: 'male', age: '青年', languages: ['zh-cn'], special_labels: ['抖音同款'], categories: ['知识旁白'] }),
 	speaker('xiaotian', '小天 2.0', { gender: 'M', age: '少年', languages: ['zh-cn'], categories: ['角色'] }),
 	speaker('pei', '佩奇猪 2.0', { gender: 'female', age: '儿童', languages: ['zh-cn'], emotions: ['angry'], categories: ['角色'] })
 ];
 
 describe('doubao voice catalog filtering', () => {
-	it('treats recommended as official hot/recommended labels instead of all voices', () => {
+	it('treats the featured tab as official special-label voices instead of all voices', () => {
 		const result = filterDoubaoSpeakers(speakers, { ...EMPTY_DOUBAO_FILTERS }, 'recommended', [], []);
 		expect(result.map((item) => item.speaker_id)).toEqual(['vivi', 'yunzhou']);
 	});
@@ -41,6 +42,15 @@ describe('doubao voice catalog filtering', () => {
 	it('orders favorites and recents by persisted preference order', () => {
 		expect(filterDoubaoSpeakers(speakers, { ...EMPTY_DOUBAO_FILTERS }, 'favorites', ['pei', 'vivi'], []).map((item) => item.speaker_id)).toEqual(['pei', 'vivi']);
 		expect(filterDoubaoSpeakers(speakers, { ...EMPTY_DOUBAO_FILTERS }, 'recent', [], ['xiaotian', 'yunzhou']).map((item) => item.speaker_id)).toEqual(['xiaotian', 'yunzhou']);
+	});
+
+	it('keeps the official-special tab empty when the catalog has no special labels', () => {
+		const unlabeledRecommendations = [
+			speaker('new', '新品音色', { normal_labels: ['新品'] }),
+			speaker('plain', '普通音色')
+		];
+		expect(filterDoubaoSpeakers(unlabeledRecommendations, { ...EMPTY_DOUBAO_FILTERS }, 'recommended', [], [])).toHaveLength(0);
+		expect(doubaoCatalogTabCounts(unlabeledRecommendations, [], []).recommended).toBe(0);
 	});
 });
 
@@ -74,7 +84,10 @@ describe('doubao official catalog metadata', () => {
 			{ value: 'angry', label: 'angry', count: 1 }
 		]);
 		expect(facets.categories.some((item) => item.value === '抖音同款')).toBe(false);
-		expect(facets.specialLabels).toEqual([{ value: '抖音同款', label: '抖音同款', count: 1 }]);
+		expect(facets.specialLabels).toEqual([
+			{ value: '豆包同款', label: '豆包同款', count: 1 },
+			{ value: '抖音同款', label: '抖音同款', count: 1 }
+		]);
 		expect(facets.categories.every((item) => item.count > 0)).toBe(true);
 	});
 
@@ -93,6 +106,96 @@ describe('doubao official catalog metadata', () => {
 			recent: 1,
 			all: 4
 		});
+	});
+
+	it('counts facet options inside the active tab instead of the full catalog', () => {
+		const contextualSpeakers = [
+			speaker('featured-old', '精选长辈', { gender: 'F', age: '老年', languages: ['zh'], categories: ['有声阅读'], special_labels: ['豆包同款'] }),
+			speaker('featured-young', '精选青年', { gender: 'M', age: '青年', languages: ['zh'], categories: ['视频配音'], special_labels: ['抖音同款'] }),
+			speaker('regular-old', '普通长辈', { gender: 'F', age: '老年', languages: ['zh'], categories: ['有声阅读'] }),
+			speaker('regular-young', '普通青年', { gender: 'M', age: '青年', languages: ['en'], categories: ['教学场景'] })
+		];
+
+		const recommended = buildDoubaoContextualFacets(contextualSpeakers, { ...EMPTY_DOUBAO_FILTERS }, 'recommended', [], []);
+		const all = buildDoubaoContextualFacets(contextualSpeakers, { ...EMPTY_DOUBAO_FILTERS }, 'all', [], []);
+
+		expect(recommended.totals.ages).toBe(2);
+		expect(recommended.options.ages).toEqual([
+			{ value: '老年', label: '老年', count: 1 },
+			{ value: '青年', label: '青年', count: 1 }
+		]);
+		expect(all.totals.ages).toBe(4);
+		expect(all.options.ages).toEqual([
+			{ value: '老年', label: '老年', count: 2 },
+			{ value: '青年', label: '青年', count: 2 }
+		]);
+	});
+
+	it('lets each facet exclude itself while respecting the other selected filters', () => {
+		const contextualSpeakers = [
+			speaker('featured-old', '精选长辈', { gender: 'F', age: '老年', languages: ['zh'], categories: ['有声阅读'], special_labels: ['豆包同款'] }),
+			speaker('featured-young', '精选青年', { gender: 'M', age: '青年', languages: ['zh'], categories: ['视频配音'], special_labels: ['抖音同款'] }),
+			speaker('regular-old', '普通长辈', { gender: 'F', age: '老年', languages: ['zh'], categories: ['有声阅读'] })
+		];
+		const context = buildDoubaoContextualFacets(
+			contextualSpeakers,
+			{ ...EMPTY_DOUBAO_FILTERS, age: '老年' },
+			'recommended',
+			[],
+			[]
+		);
+
+		expect(context.totals.ages).toBe(2);
+		expect(context.options.ages.map((item) => [item.value, item.count])).toEqual([['老年', 1], ['青年', 1]]);
+		expect(context.totals.genders).toBe(1);
+		expect(context.options.genders).toEqual([{ value: 'F', label: '女声', count: 1 }]);
+		expect(context.totals.languages).toBe(1);
+		expect(context.options.languages).toEqual([{ value: 'zh', label: 'zh', count: 1 }]);
+		expect(context.totals.categories).toBe(1);
+		expect(context.options.categories).toEqual([{ value: '有声阅读', label: '有声阅读', count: 1 }]);
+		expect(context.totals.specialLabels).toBe(1);
+		expect(context.options.specialLabels).toEqual([{ value: '豆包同款', label: '豆包同款', count: 1 }]);
+	});
+
+	it('keeps a selected zero-result option visible instead of silently clearing it', () => {
+		const context = buildDoubaoContextualFacets(
+			speakers,
+			{ ...EMPTY_DOUBAO_FILTERS, query: 'Vivi', age: '儿童' },
+			'all',
+			[],
+			[]
+		);
+
+		expect(context.totals.ages).toBe(1);
+		expect(context.options.ages).toEqual([
+			{ value: '青年', label: '青年', count: 1 },
+			{ value: '儿童', label: '儿童', count: 0 }
+		]);
+	});
+
+	it('counts favorites, recents and search results within their active context', () => {
+		const favoriteContext = buildDoubaoContextualFacets(
+			speakers,
+			{ ...EMPTY_DOUBAO_FILTERS },
+			'favorites',
+			['pei', 'vivi'],
+			[]
+		);
+		const recentSearchContext = buildDoubaoContextualFacets(
+			speakers,
+			{ ...EMPTY_DOUBAO_FILTERS, query: '云舟' },
+			'recent',
+			[],
+			['xiaotian', 'yunzhou']
+		);
+
+		expect(favoriteContext.totals.ages).toBe(2);
+		expect(favoriteContext.options.ages).toEqual([
+			{ value: '儿童', label: '儿童', count: 1 },
+			{ value: '青年', label: '青年', count: 1 }
+		]);
+		expect(recentSearchContext.totals.genders).toBe(1);
+		expect(recentSearchContext.options.genders).toEqual([{ value: 'M', label: '男声', count: 1 }]);
 	});
 });
 

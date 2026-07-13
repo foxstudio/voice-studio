@@ -19,6 +19,20 @@ export type DoubaoCatalogFacets = {
 
 export type DoubaoCatalogTabCounts = Record<DoubaoCatalogTab, number>;
 
+export type DoubaoCatalogFacetTotals = {
+	genders: number;
+	ages: number;
+	languages: number;
+	emotions: number;
+	categories: number;
+	specialLabels: number;
+};
+
+export type DoubaoContextualFacets = {
+	options: DoubaoCatalogFacets;
+	totals: DoubaoCatalogFacetTotals;
+};
+
 export type DoubaoVoiceFilters = {
 	query: string;
 	gender: string;
@@ -75,9 +89,8 @@ export function filterDoubaoSpeakers(
 	const favoriteSet = new Set(favoriteIds);
 	const recentSet = new Set(recentIds);
 	const query = filters.query.trim().toLowerCase();
-	const recommended = speakers.filter(isOfficiallyFeatured);
-	const hasRecommendationMetadata = speakers.some((speaker) => (speaker.normal_labels?.length ?? 0) > 0 || (speaker.special_labels?.length ?? 0) > 0);
-	const source = tab === 'recommended' && hasRecommendationMetadata ? recommended : speakers;
+	const recommended = speakers.filter(hasOfficialSpecialLabel);
+	const source = tab === 'recommended' ? recommended : speakers;
 	const filtered = source.filter((speaker) => {
 		if (tab === 'favorites' && !favoriteSet.has(speaker.speaker_id)) return false;
 		if (tab === 'recent' && !recentSet.has(speaker.speaker_id)) return false;
@@ -102,7 +115,7 @@ export function buildQuickSpeakers(
 	limit = 6
 ): EngineSpeaker[] {
 	const byId = new Map(speakers.map((speaker) => [speaker.speaker_id, speaker]));
-	const recommendedIds = speakers.filter(isOfficiallyFeatured).map((speaker) => speaker.speaker_id);
+	const recommendedIds = speakers.filter(hasOfficialSpecialLabel).map((speaker) => speaker.speaker_id);
 	const orderedIds = uniqueStrings([selectedId, ...favoriteIds, ...recentIds, ...recommendedIds, ...speakers.map((speaker) => speaker.speaker_id)]);
 	return orderedIds.map((id) => byId.get(id)).filter((speaker): speaker is EngineSpeaker => Boolean(speaker)).slice(0, limit);
 }
@@ -118,24 +131,58 @@ export function buildDoubaoCatalogFacets(speakers: EngineSpeaker[]): DoubaoCatal
 	};
 }
 
+export function buildDoubaoContextualFacets(
+	speakers: EngineSpeaker[],
+	filters: DoubaoVoiceFilters,
+	tab: DoubaoCatalogTab,
+	favoriteIds: string[],
+	recentIds: string[]
+): DoubaoContextualFacets {
+	const catalogFacets = buildDoubaoCatalogFacets(speakers);
+	const genderSpeakers = filterDoubaoSpeakers(speakers, { ...filters, gender: 'all' }, tab, favoriteIds, recentIds);
+	const ageSpeakers = filterDoubaoSpeakers(speakers, { ...filters, age: 'all' }, tab, favoriteIds, recentIds);
+	const languageSpeakers = filterDoubaoSpeakers(speakers, { ...filters, language: 'all' }, tab, favoriteIds, recentIds);
+	const emotionSpeakers = filterDoubaoSpeakers(speakers, { ...filters, emotion: 'all' }, tab, favoriteIds, recentIds);
+	const categorySpeakers = filterDoubaoSpeakers(speakers, { ...filters, category: 'all' }, tab, favoriteIds, recentIds);
+	const specialLabelSpeakers = filterDoubaoSpeakers(speakers, { ...filters, specialLabel: 'all' }, tab, favoriteIds, recentIds);
+
+	return {
+		options: {
+			genders: retainSelectedFacet(buildDoubaoCatalogFacets(genderSpeakers).genders, catalogFacets.genders, filters.gender),
+			ages: retainSelectedFacet(buildDoubaoCatalogFacets(ageSpeakers).ages, catalogFacets.ages, filters.age),
+			languages: retainSelectedFacet(buildDoubaoCatalogFacets(languageSpeakers).languages, catalogFacets.languages, filters.language),
+			emotions: retainSelectedFacet(buildDoubaoCatalogFacets(emotionSpeakers).emotions, catalogFacets.emotions, filters.emotion),
+			categories: retainSelectedFacet(buildDoubaoCatalogFacets(categorySpeakers).categories, catalogFacets.categories, filters.category),
+			specialLabels: retainSelectedFacet(buildDoubaoCatalogFacets(specialLabelSpeakers).specialLabels, catalogFacets.specialLabels, filters.specialLabel)
+		},
+		totals: {
+			genders: uniqueSpeakerCount(genderSpeakers),
+			ages: uniqueSpeakerCount(ageSpeakers),
+			languages: uniqueSpeakerCount(languageSpeakers),
+			emotions: uniqueSpeakerCount(emotionSpeakers),
+			categories: uniqueSpeakerCount(categorySpeakers),
+			specialLabels: uniqueSpeakerCount(specialLabelSpeakers)
+		}
+	};
+}
+
 export function doubaoCatalogTabCounts(
 	speakers: EngineSpeaker[],
 	favoriteIds: string[],
 	recentIds: string[]
 ): DoubaoCatalogTabCounts {
 	const speakerIds = new Set(speakers.map((speaker) => speaker.speaker_id));
-	const hasRecommendationMetadata = speakers.some((speaker) => (speaker.normal_labels?.length ?? 0) > 0 || (speaker.special_labels?.length ?? 0) > 0);
-	const recommendedCount = hasRecommendationMetadata ? new Set(speakers.filter(isOfficiallyFeatured).map((speaker) => speaker.speaker_id)).size : speakerIds.size;
+	const recommendedIds = new Set(speakers.filter(hasOfficialSpecialLabel).map((speaker) => speaker.speaker_id));
 	return {
-		recommended: recommendedCount,
+		recommended: recommendedIds.size,
 		favorites: uniqueStrings(favoriteIds).filter((id) => speakerIds.has(id)).length,
 		recent: uniqueStrings(recentIds).filter((id) => speakerIds.has(id)).length,
 		all: speakerIds.size
 	};
 }
 
-export function isOfficiallyFeatured(speaker: EngineSpeaker): boolean {
-	return (speaker.special_labels?.length ?? 0) > 0 || (speaker.normal_labels ?? []).some((label) => /(热门|推荐|精选)/.test(label));
+export function hasOfficialSpecialLabel(speaker: EngineSpeaker): boolean {
+	return (speaker.special_labels?.length ?? 0) > 0;
 }
 
 export function mergeRecentIds(current: string[], incoming: string[], limit = 12): string[] {
@@ -166,4 +213,15 @@ function countValues(values: string[], labelFor: (value: string) => string = (va
 		counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
 	}
 	return [...counts.entries()].map(([value, count]) => ({ value, label: labelFor(value), count }));
+}
+
+function uniqueSpeakerCount(speakers: EngineSpeaker[]): number {
+	return new Set(speakers.map((speaker) => speaker.speaker_id)).size;
+}
+
+function retainSelectedFacet(options: DoubaoFacetOption[], catalogOptions: DoubaoFacetOption[], selected: string): DoubaoFacetOption[] {
+	if (selected === 'all' || options.some((option) => option.value === selected)) return options;
+	const selectedOption = catalogOptions.find((option) => option.value === selected);
+	if (!selectedOption) return options;
+	return [...options, { ...selectedOption, count: 0 }];
 }

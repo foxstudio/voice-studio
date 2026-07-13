@@ -6,6 +6,7 @@
 	import { onDestroy, onMount, tick } from 'svelte';
 	import {
 		buildDoubaoCatalogFacets,
+		buildDoubaoContextualFacets,
 		doubaoCatalogTabCounts,
 		EMPTY_DOUBAO_FILTERS,
 		filterDoubaoSpeakers,
@@ -65,7 +66,10 @@
 	const currentSpeaker = $derived(byId.get(value) ?? fallbackSpeaker(value));
 	const allRecentIds = $derived(mergeRecentIds(persistedRecentIds, recentIds));
 	const visibleSpeakers = $derived(filterDoubaoSpeakers(speakers, filters, tab, favoriteIds, allRecentIds));
-	const filterOptions = $derived(buildDoubaoCatalogFacets(speakers));
+	const catalogFacets = $derived(buildDoubaoCatalogFacets(speakers));
+	const contextualFacets = $derived(buildDoubaoContextualFacets(speakers, filters, tab, favoriteIds, allRecentIds));
+	const filterOptions = $derived(contextualFacets.options);
+	const filterTotals = $derived(contextualFacets.totals);
 	const tabCounts = $derived(doubaoCatalogTabCounts(speakers, favoriteIds, allRecentIds));
 	const hasActiveFilters = $derived(Object.entries(filters).some(([key, item]) => key === 'query' ? Boolean(String(item).trim()) : item !== 'all'));
 
@@ -95,15 +99,19 @@
 	});
 
 	$effect(() => {
+		if (speakers.length > 0 && tab === 'recommended' && tabCounts.recommended === 0) tab = 'all';
+	});
+
+	$effect(() => {
 		const next = { ...filters };
 		let changed = false;
 		for (const [key, options] of [
-			['gender', filterOptions.genders],
-			['age', filterOptions.ages],
-			['language', filterOptions.languages],
-			['emotion', filterOptions.emotions],
-			['category', filterOptions.categories],
-			['specialLabel', filterOptions.specialLabels]
+			['gender', catalogFacets.genders],
+			['age', catalogFacets.ages],
+			['language', catalogFacets.languages],
+			['emotion', catalogFacets.emotions],
+			['category', catalogFacets.categories],
+			['specialLabel', catalogFacets.specialLabels]
 		] as const) {
 			if (next[key] !== 'all' && !options.some((option) => option.value === next[key])) {
 				next[key] = 'all';
@@ -291,7 +299,7 @@
 		if (syncing) return '正在同步官方目录';
 		if (statusError) return statusError;
 		if (!catalogStatus) return `本地目录 · ${speakers.length} 个音色`;
-		const source = catalogStatus.source === 'official' ? '官方目录' : catalogStatus.source === 'cache' ? '本地缓存' : '内置目录';
+		const source = catalogStatus.source === 'official' ? '官方目录' : catalogStatus.source === 'cache' ? '官方接口缓存' : '内置目录';
 		return `${source} · ${catalogStatus.total ?? speakers.length} 个${catalogStatus.stale ? ' · 可能不是最新' : ''}`;
 	}
 </script>
@@ -340,19 +348,19 @@
 			</div>
 
 			<nav class="doubao-tabs" aria-label="音色目录分组">
-				<button class:active={tab === 'recommended'} type="button" onclick={() => (tab = 'recommended')}><Sparkles size={13} />推荐 <span>{tabCounts.recommended}</span></button>
+				<button class:active={tab === 'recommended'} type="button" data-tooltip="按官方接口返回的抖音、豆包、剪映等同款标签筛选" onclick={() => (tab = 'recommended')}><Sparkles size={13} />官方同款 <span>{tabCounts.recommended}</span></button>
 				<button class:active={tab === 'favorites'} type="button" onclick={() => (tab = 'favorites')}><Heart size={13} />收藏 <span>{tabCounts.favorites}</span></button>
 				<button class:active={tab === 'recent'} type="button" onclick={() => (tab = 'recent')}><Clock3 size={13} />最近 <span>{tabCounts.recent}</span></button>
 				<button class:active={tab === 'all'} type="button" onclick={() => (tab = 'all')}><Library size={13} />全部 <span>{tabCounts.all}</span></button>
 			</nav>
 
 			<div class="doubao-filter-grid">
-				{#if filterOptions.genders.length}<label><span>性别</span><select bind:value={filters.gender}><option value="all">全部（{tabCounts.all}）</option>{#each filterOptions.genders as item}<option value={item.value}>{item.label}（{item.count}）</option>{/each}</select></label>{/if}
-				{#if filterOptions.ages.length}<label><span>年龄</span><select bind:value={filters.age}><option value="all">全部（{tabCounts.all}）</option>{#each filterOptions.ages as item}<option value={item.value}>{item.label}（{item.count}）</option>{/each}</select></label>{/if}
-				{#if filterOptions.languages.length}<label><span>语言</span><select bind:value={filters.language}><option value="all">全部（{tabCounts.all}）</option>{#each filterOptions.languages as item}<option value={item.value}>{item.label}（{item.count}）</option>{/each}</select></label>{/if}
-				{#if filterOptions.emotions.length}<label><span>情绪</span><select bind:value={filters.emotion}><option value="all">全部（{tabCounts.all}）</option>{#each filterOptions.emotions as item}<option value={item.value}>{item.label}（{item.count}）</option>{/each}</select></label>{/if}
-				{#if filterOptions.categories.length}<label><span>分类</span><select bind:value={filters.category}><option value="all">全部（{tabCounts.all}）</option>{#each filterOptions.categories as item}<option value={item.value}>{item.label}（{item.count}）</option>{/each}</select></label>{/if}
-				{#if filterOptions.specialLabels.length}<label><span>同款标签</span><select bind:value={filters.specialLabel}><option value="all">全部（{tabCounts.all}）</option>{#each filterOptions.specialLabels as item}<option value={item.value}>{item.label}（{item.count}）</option>{/each}</select></label>{/if}
+				{#if filterOptions.genders.length}<label><span>性别</span><select bind:value={filters.gender}><option value="all">全部（{filterTotals.genders}）</option>{#each filterOptions.genders as item}<option value={item.value}>{item.label}（{item.count}）</option>{/each}</select></label>{/if}
+				{#if filterOptions.ages.length}<label><span>年龄</span><select bind:value={filters.age}><option value="all">全部（{filterTotals.ages}）</option>{#each filterOptions.ages as item}<option value={item.value}>{item.label}（{item.count}）</option>{/each}</select></label>{/if}
+				{#if filterOptions.languages.length}<label><span>语言</span><select bind:value={filters.language}><option value="all">全部（{filterTotals.languages}）</option>{#each filterOptions.languages as item}<option value={item.value}>{item.label}（{item.count}）</option>{/each}</select></label>{/if}
+				{#if filterOptions.emotions.length}<label><span>情绪</span><select bind:value={filters.emotion}><option value="all">全部（{filterTotals.emotions}）</option>{#each filterOptions.emotions as item}<option value={item.value}>{item.label}（{item.count}）</option>{/each}</select></label>{/if}
+				{#if filterOptions.categories.length}<label><span>分类</span><select bind:value={filters.category}><option value="all">全部（{filterTotals.categories}）</option>{#each filterOptions.categories as item}<option value={item.value}>{item.label}（{item.count}）</option>{/each}</select></label>{/if}
+				{#if filterOptions.specialLabels.length}<label><span>同款标签</span><select bind:value={filters.specialLabel}><option value="all">全部（{filterTotals.specialLabels}）</option>{#each filterOptions.specialLabels as item}<option value={item.value}>{item.label}（{item.count}）</option>{/each}</select></label>{/if}
 			</div>
 
 			<div class="doubao-results-meta"><span>{loading ? '读取中' : `${visibleSpeakers.length} 个音色`}</span>{#if hasActiveFilters}<button type="button" onclick={clearFilters}>清除筛选</button>{/if}</div>
