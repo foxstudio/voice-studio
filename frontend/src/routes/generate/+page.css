@@ -3031,18 +3031,9 @@
 	.doubao-switch-row {
 		display: flex;
 		align-items: center;
-		gap: 8px 12px;
+		gap: 10px 16px;
 		flex-wrap: wrap;
 		min-height: 28px;
-	}
-
-	.doubao-switch-row label {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		white-space: nowrap;
-		color: var(--text);
-		font-size: 11px;
 	}
 
 	.doubao-speaker-options {

@@ -235,7 +235,6 @@
 				{#if previewingId === currentSpeaker?.speaker_id}<Pause size={13} />{:else}<Play size={13} />{/if}
 			</button>
 		</div>
-		<button class="doubao-more-action" type="button" onclick={openDrawer}>更多音色 <span>{speakers.length || '·'}</span></button>
 	</div>
 	{#if currentSpeaker && previewErrorId === currentSpeaker.speaker_id}<small class="doubao-inline-preview-error">当前音色暂无可用试听，不影响直接生成。</small>{/if}
 </div>{/if}
@@ -345,13 +344,10 @@
 	.doubao-voice-orb.playing span:nth-child(2) { animation-delay: -.3s; }
 	.doubao-voice-orb.playing span:nth-child(3) { animation-delay: -.5s; }
 	.doubao-voice-orb.large { width: 36px; height: 36px; flex-basis: 36px; }
-	.doubao-icon-action, .doubao-more-action, .doubao-use-action, .doubao-tabs button, .doubao-results-meta button, .doubao-empty button, .doubao-manual-toggle, .doubao-manual-entry div button { border: 1px solid var(--line); background: #131820; color: #cfd9e6; }
+	.doubao-icon-action, .doubao-use-action, .doubao-tabs button, .doubao-results-meta button, .doubao-empty button, .doubao-manual-toggle, .doubao-manual-entry div button { border: 1px solid var(--line); background: #131820; color: #cfd9e6; }
 	.doubao-icon-action { width: 30px; height: 30px; padding: 0; display: inline-grid; place-items: center; border-radius: 7px; flex: 0 0 30px; }
 	.doubao-icon-action:hover, .doubao-icon-action:focus-visible, .doubao-icon-action.active { color: #a9d5ff; border-color: rgba(113, 173, 241, .52); background: #172331; outline: none; }
 	.doubao-icon-action.favorite.active { color: #f1a9b8; border-color: rgba(230, 118, 147, .44); background: rgba(166, 55, 90, .16); }
-	.doubao-more-action { height: 28px; min-height: 28px; padding: 0 9px; border-radius: 7px; white-space: nowrap; font-size: 12px; background: var(--panel-2); }
-	.doubao-more-action:hover, .doubao-more-action:focus-visible { border-color: #46515f; color: var(--text); outline: none; }
-	.doubao-more-action span { color: #7faee0; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
 	.doubao-inline-preview-error { display: block; margin: 4px 0 0 35px; color: #b99a70; font-size: 9px; }
 	audio { display: none; }
 	.doubao-drawer-backdrop { position: fixed; inset: 0; z-index: 130; display: flex; justify-content: flex-end; background: rgba(2, 5, 9, .68); backdrop-filter: blur(3px); }
