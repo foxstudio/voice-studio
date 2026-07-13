@@ -370,7 +370,7 @@
 					{#each [1, 2, 3, 4] as item}<div class="doubao-card-skeleton" aria-hidden="true"><span></span><span></span></div>{/each}
 				{:else}
 					{#each visibleSpeakers as speaker (speaker.speaker_id)}
-						<article class="doubao-voice-card" class:selected={value === speaker.speaker_id} class:denied={speaker.authorization_status === 'denied'}>
+						<article class="doubao-voice-card" class:selected={value === speaker.speaker_id} class:previewing={previewingId === speaker.speaker_id} class:denied={speaker.authorization_status === 'denied'}>
 							<div class="doubao-card-main">
 								<span class="doubao-voice-orb large" class:playing={previewingId === speaker.speaker_id}><span></span><span></span><span></span></span>
 								<div class="doubao-card-copy">
@@ -470,8 +470,11 @@
 	.doubao-results-meta { display: flex; align-items: center; justify-content: space-between; min-height: 20px; color: #718091; font-size: 10px; }
 	.doubao-results-meta button { border: 0; background: transparent; color: #82b7e8; font-size: 10px; }
 	.doubao-catalog-list { min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 6px; padding-right: 2px; }
-	.doubao-voice-card { display: grid; grid-template-columns: minmax(0, 1fr) 28px; column-gap: 8px; padding: 9px; border: 1px solid rgba(117, 144, 175, .18); border-radius: 9px; background: rgba(17, 23, 30, .88); transition: border-color 120ms ease, background 120ms ease; }
+	.doubao-voice-card { display: grid; grid-template-columns: minmax(0, 1fr) 28px; column-gap: 8px; padding: 9px; border: 1px solid rgba(117, 144, 175, .18); border-radius: 9px; background: rgba(17, 23, 30, .88); transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease; }
 	.doubao-voice-card:hover, .doubao-voice-card.selected { border-color: rgba(103, 172, 239, .42); background: #121d28; }
+	.doubao-voice-card.previewing { border-color: rgba(91, 177, 255, .82); background: linear-gradient(100deg, rgba(27, 72, 112, .48), rgba(18, 34, 48, .96) 48%, rgba(15, 26, 36, .96)); box-shadow: inset 3px 0 0 #56b2ff, 0 0 0 1px rgba(79, 165, 244, .15), 0 8px 24px rgba(0, 91, 171, .14); }
+	.doubao-voice-card.previewing .doubao-voice-orb { border-color: rgba(100, 196, 255, .88); background: radial-gradient(circle at 35% 30%, #326b97, #101d29 68%); box-shadow: 0 0 0 4px rgba(72, 173, 255, .12), 0 0 16px rgba(58, 169, 255, .34); animation: doubao-orb-pulse 1.15s ease-in-out infinite alternate; }
+	.doubao-voice-card.previewing .doubao-card-title strong { color: #f3f9ff; }
 	.doubao-voice-card.denied { opacity: .68; }
 	.doubao-card-main { min-width: 0; display: flex; align-items: flex-start; gap: 8px; }
 	.doubao-card-copy { min-width: 0; flex: 1; }
@@ -503,6 +506,7 @@
 	@keyframes doubao-drawer-in { from { transform: translateX(24px); opacity: .75; } }
 	@keyframes doubao-spin { to { transform: rotate(360deg); } }
 	@keyframes doubao-status-pulse { to { opacity: .52; transform: scale(.82); } }
+	@keyframes doubao-orb-pulse { to { box-shadow: 0 0 0 6px rgba(72, 173, 255, .06), 0 0 22px rgba(58, 169, 255, .48); } }
 	@keyframes doubao-shimmer { to { background-position: -200% 0; } }
 	@keyframes doubao-level { to { height: 4px; opacity: .45; } }
 	@media (max-width: 720px) {
@@ -522,6 +526,6 @@
 		.doubao-card-id { margin-left: 38px; }
 	}
 	@media (prefers-reduced-motion: reduce) {
-		.doubao-catalog-drawer, .doubao-drawer-head p.syncing::before, .doubao-voice-orb.playing span, .doubao-card-skeleton span, :global(.spinning) { animation: none; }
+		.doubao-catalog-drawer, .doubao-drawer-head p.syncing::before, .doubao-voice-card.previewing .doubao-voice-orb, .doubao-voice-orb.playing span, .doubao-card-skeleton span, :global(.spinning) { animation: none; }
 	}
 </style>
