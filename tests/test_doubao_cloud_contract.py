@@ -12,8 +12,8 @@ if str(BACKEND) not in sys.path:
 
 from app.main import app  # noqa: E402
 from app.models.exceptions import AppException  # noqa: E402
-from app.schemas.voice_studio import AppSettings, GenerateRequest, VoiceAsset  # noqa: E402
-from app.services import database, doubao_client, engine_request_builder, settings_store  # noqa: E402
+from app.schemas.voice_studio import AppSettings, EngineSpeaker, GenerateRequest, VoiceAsset  # noqa: E402
+from app.services import database, doubao_client, engine_registry, engine_request_builder, settings_store  # noqa: E402
 import pytest  # noqa: E402
 
 
@@ -457,3 +457,17 @@ def test_doubao_speaker_catalog_supports_search_gender_and_custom_ids(tmp_path: 
     )
     kwargs = engine_request_builder.build_doubao_tts_single_kwargs(custom, str(tmp_path / "out.wav"))
     assert kwargs["speaker"] == "account_authorized_voice_type"
+
+
+def test_doubao_speaker_catalog_is_not_truncated_at_five_hundred(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    speakers = [
+        EngineSpeaker(speaker_id=f"voice-{index}", name=f"音色 {index}", label=f"音色 {index}")
+        for index in range(600)
+    ]
+    monkeypatch.setattr(engine_registry, "_doubao_speaker_catalog", lambda: speakers)
+
+    response = client.get("/api/engines/doubao-tts-preset/speakers", params={"limit": 600})
+
+    assert response.status_code == 200
+    assert len(response.json()) == 600

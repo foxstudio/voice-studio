@@ -31,7 +31,7 @@ async def list_speakers(
     engine_id: str,
     q: str = Query("", max_length=80),
     gender: str = Query("all", pattern="^(all|F|M|f|m)$"),
-    limit: int = Query(80, ge=1, le=500),
+    limit: int = Query(80, ge=1, le=5000),
 ):
     if not engine_registry.get_engine(engine_id):
         raise AppException(404, "ENGINE_NOT_FOUND", "Engine not found")

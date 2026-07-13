@@ -92,7 +92,7 @@ def _emotivoice_speaker_catalog() -> list[EngineSpeaker]:
 
 def list_speakers(engine_id: str, query: str = "", gender: str = "all", limit: int = 80) -> list[EngineSpeaker]:
     engine_id = _resolve_engine_id(engine_id)
-    limit = max(1, min(limit, 500))
+    limit = max(1, min(limit, 5000))
     normalized_query = query.strip().lower()
     normalized_gender = gender.strip().upper()
 
