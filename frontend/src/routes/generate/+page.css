@@ -2993,37 +2993,14 @@
 	}
 
 	.more-params-panel.doubao-tts-params {
+		grid-template-columns: repeat(12, minmax(0, 1fr));
 		gap: 10px 14px;
-		align-items: stretch;
-	}
-
-	.more-params-panel.doubao-preset-params {
-		grid-template-columns: minmax(520px, 1.35fr) minmax(340px, 0.65fr);
-		grid-template-areas:
-			"speaker instruction"
-			"speaker pitch";
-	}
-
-	.more-params-panel.doubao-clone-params {
-		grid-template-columns: minmax(420px, 1.25fr) minmax(300px, 0.75fr);
-		grid-template-areas: "instruction pitch";
-	}
-
-	.more-params-panel.doubao-tts-params .doubao-speaker-field {
-		grid-area: speaker;
-		max-width: none;
+		align-items: start;
 	}
 
 	.more-params-panel.doubao-tts-params .doubao-style-field {
-		grid-area: instruction;
+		grid-column: span 6;
 		max-width: none;
-		padding-left: 14px;
-		border-left: 1px solid var(--line);
-	}
-
-	.more-params-panel.doubao-tts-params .doubao-style-field .param-control,
-	.more-params-panel.doubao-tts-params .doubao-style-field textarea {
-		height: 100%;
 	}
 
 	.more-params-panel.doubao-tts-params .doubao-style-field textarea {
@@ -3031,12 +3008,41 @@
 		max-height: 112px;
 	}
 
+	.more-params-panel.doubao-tts-params .doubao-loudness-field,
 	.more-params-panel.doubao-tts-params .doubao-pitch-field {
-		grid-area: pitch;
+		grid-column: span 3;
 		max-width: none;
-		padding: 10px 0 2px 14px;
-		border-left: 1px solid var(--line);
-		border-top: 1px dashed color-mix(in srgb, var(--line) 78%, transparent);
+		padding-top: 2px;
+	}
+
+	.more-params-panel.doubao-tts-params .doubao-sample-rate-field,
+	.more-params-panel.doubao-tts-params .doubao-bit-rate-field,
+	.more-params-panel.doubao-tts-params .doubao-silence-field,
+	.more-params-panel.doubao-tts-params .doubao-output-switches {
+		grid-column: span 3;
+		max-width: none;
+	}
+
+	.more-params-panel.doubao-tts-params .doubao-silence-field input {
+		width: 100%;
+		min-height: 28px;
+	}
+
+	.doubao-switch-row {
+		display: flex;
+		align-items: center;
+		gap: 8px 12px;
+		flex-wrap: wrap;
+		min-height: 28px;
+	}
+
+	.doubao-switch-row label {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		white-space: nowrap;
+		color: var(--text);
+		font-size: 11px;
 	}
 
 	.doubao-speaker-options {
@@ -3476,8 +3482,13 @@
 	}
 
 	@media (max-width: 1100px) {
-		.more-params-panel.doubao-preset-params {
-			grid-template-columns: minmax(400px, 1.15fr) minmax(280px, 0.85fr);
+		.more-params-panel.doubao-tts-params .doubao-style-field {
+			grid-column: span 12;
+		}
+
+		.more-params-panel.doubao-tts-params .doubao-loudness-field,
+		.more-params-panel.doubao-tts-params .doubao-pitch-field {
+			grid-column: span 6;
 		}
 
 		.doubao-speaker-options {
@@ -3486,25 +3497,18 @@
 	}
 
 	@media (max-width: 760px) {
-		.more-params-panel.doubao-preset-params {
+		.more-params-panel.doubao-tts-params {
 			grid-template-columns: 1fr;
-			grid-template-areas:
-				"speaker"
-				"instruction"
-				"pitch";
-		}
-
-		.more-params-panel.doubao-clone-params {
-			grid-template-columns: 1fr;
-			grid-template-areas:
-				"instruction"
-				"pitch";
 		}
 
 		.more-params-panel.doubao-tts-params .doubao-style-field,
-		.more-params-panel.doubao-tts-params .doubao-pitch-field {
-			padding-left: 0;
-			border-left: 0;
+		.more-params-panel.doubao-tts-params .doubao-loudness-field,
+		.more-params-panel.doubao-tts-params .doubao-pitch-field,
+		.more-params-panel.doubao-tts-params .doubao-sample-rate-field,
+		.more-params-panel.doubao-tts-params .doubao-bit-rate-field,
+		.more-params-panel.doubao-tts-params .doubao-silence-field,
+		.more-params-panel.doubao-tts-params .doubao-output-switches {
+			grid-column: 1 / -1;
 		}
 	}
 

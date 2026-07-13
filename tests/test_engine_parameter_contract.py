@@ -718,6 +718,12 @@ def test_doubao_preset_profile_is_normalized_between_single_and_batch(tmp_path, 
         "style_instruction": "自然、清晰，像课程旁白。",
         "speed": 1.12,
         "pitch_rate": -4,
+        "sample_rate": 48000,
+        "bit_rate": 160000,
+        "loudness_rate": 20,
+        "enable_subtitle": True,
+        "silence_duration": 800,
+        "aigc_watermark": True,
     }
     single = GenerateRequest(
         text="测试文本",
@@ -742,6 +748,12 @@ def test_doubao_preset_profile_is_normalized_between_single_and_batch(tmp_path, 
         assert data["style_instruction"] == params["style_instruction"]
         assert data["speed"] == params["speed"]
         assert data["pitch_rate"] == params["pitch_rate"]
+        assert data["sample_rate"] == params["sample_rate"]
+        assert data["bit_rate"] == params["bit_rate"]
+        assert data["loudness_rate"] == params["loudness_rate"]
+        assert data["enable_subtitle"] is True
+        assert data["silence_duration"] == params["silence_duration"]
+        assert data["aigc_watermark"] is True
 
 
 def test_doubao_pitch_rate_range_is_validated():
@@ -751,6 +763,21 @@ def test_doubao_pitch_rate_range_is_validated():
         GenerateRequest(text="测试", engine_id="doubao-tts-preset", pitch_rate=-13)
     with pytest.raises(ValueError):
         GenerateRequest(text="测试", engine_id="doubao-tts-preset", pitch_rate=13)
+
+
+def test_doubao_official_audio_parameter_ranges_are_validated():
+    for sample_rate in [8000, 16000, 22050, 24000, 32000, 44100, 48000]:
+        GenerateRequest(text="测试", engine_id="doubao-tts-preset", sample_rate=sample_rate)
+    with pytest.raises(ValueError):
+        GenerateRequest(text="测试", engine_id="doubao-tts-preset", sample_rate=12000)
+    GenerateRequest(text="测试", engine_id="doubao-tts-preset", bit_rate=64000, loudness_rate=-50, silence_duration=0)
+    GenerateRequest(text="测试", engine_id="doubao-tts-preset", bit_rate=160000, loudness_rate=100, silence_duration=30000)
+    with pytest.raises(ValueError):
+        GenerateRequest(text="测试", engine_id="doubao-tts-preset", bit_rate=160001)
+    with pytest.raises(ValueError):
+        GenerateRequest(text="测试", engine_id="doubao-tts-preset", loudness_rate=-51)
+    with pytest.raises(ValueError):
+        GenerateRequest(text="测试", engine_id="doubao-tts-preset", silence_duration=30001)
 
 
 def test_doubao_single_and_batch_flac_use_wav_then_convert(tmp_path, monkeypatch):

@@ -162,9 +162,15 @@ def test_doubao_tts_payload_and_chunk_parser():
         text="测试一句话。",
         speaker="zh_female_vv_uranus_bigtts",
         audio_format="mp3",
+        sample_rate=48000,
+        bit_rate=160000,
         speed=1.12,
+        loudness_rate=25,
         pitch_rate=-3,
         style_instruction="自然、清晰。",
+        enable_subtitle=True,
+        silence_duration=600,
+        aigc_watermark=True,
     )
     assert payload == {
         "user": {"uid": "voice-studio"},
@@ -173,11 +179,13 @@ def test_doubao_tts_payload_and_chunk_parser():
             "speaker": "zh_female_vv_uranus_bigtts",
             "audio_params": {
                 "format": "mp3",
-                "sample_rate": 24000,
+                "sample_rate": 48000,
+                "bit_rate": 160000,
                 "speech_rate": 12,
-                "pitch_rate": -3,
+                "loudness_rate": 25,
+                "enable_subtitle": True,
             },
-            "additions": '{"context_texts": ["自然、清晰。"]}',
+            "additions": '{"context_texts": ["自然、清晰。"], "post_process": {"pitch": -3}, "silence_duration": 600, "aigc_watermark": true}',
         },
     }
 
@@ -364,7 +372,7 @@ def test_doubao_voiceclone_generation_uses_external_speaker_and_rejects_raw_refe
 
     assert kwargs["speaker"] == "voice_studio_ready"
     assert kwargs["resource_id"] == "seed-icl-2.0"
-    assert kwargs["style_instruction"] == "自然清晰。"
+    assert kwargs["style_instruction"] is None
 
     raw_reference_req = req.model_copy(update={"reference_audio_path": str(tmp_path / "raw.wav")})
     try:
@@ -405,10 +413,17 @@ def test_doubao_engine_manifest_is_registered(tmp_path: Path, monkeypatch):
     clone_manifest = by_id["doubao-tts-voiceclone"]
     assert clone_manifest["engine_type"] == "cloud"
     assert "voice_clone" in clone_manifest["capabilities"]
-    assert "natural_language_control" in clone_manifest["capabilities"]
+    assert "natural_language_control" not in clone_manifest["capabilities"]
+    assert not any(param["key"] == "style_instruction" for param in clone_manifest["parameter_schema"])
     assert not any(param["key"] == "speaker_id" for param in clone_manifest["parameter_schema"])
     clone_pitch = next(param for param in clone_manifest["parameter_schema"] if param["key"] == "pitch_rate")
     assert (clone_pitch["min"], clone_pitch["max"], clone_pitch["default"]) == (-12, 12, 0)
+
+    params = {param["key"]: param for param in manifest["parameter_schema"]}
+    assert [option["value"] for option in params["sample_rate"]["options"]] == [8000, 16000, 22050, 24000, 32000, 44100, 48000]
+    assert (params["loudness_rate"]["min"], params["loudness_rate"]["max"]) == (-50, 100)
+    assert params["enable_subtitle"]["default"] is False
+    assert (params["silence_duration"]["min"], params["silence_duration"]["max"]) == (0, 30000)
 
 
 def test_doubao_speaker_catalog_supports_search_gender_and_custom_ids(tmp_path: Path, monkeypatch):

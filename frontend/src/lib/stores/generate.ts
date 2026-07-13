@@ -89,6 +89,12 @@ export type GenerateStoreState = {
 	emoAlpha: number;
 	speed: number;
 	pitchRate: number;
+	doubaoSampleRate: 8000 | 16000 | 22050 | 24000 | 32000 | 44100 | 48000;
+	doubaoBitRate: number;
+	doubaoLoudnessRate: number;
+	doubaoEnableSubtitle: boolean;
+	doubaoSilenceDuration: number;
+	doubaoAigcWatermark: boolean;
 	nfeStep: number;
 	cfgStrength: number;
 	targetRms: number;
@@ -284,6 +290,12 @@ function createInitialState(): GenerateStoreState {
 		emoAlpha: INDEX_TTS_DEFAULTS.emoAlpha,
 		speed: INDEX_TTS_DEFAULTS.speed,
 		pitchRate: 0,
+		doubaoSampleRate: 24000,
+		doubaoBitRate: 128000,
+		doubaoLoudnessRate: 0,
+		doubaoEnableSubtitle: false,
+		doubaoSilenceDuration: 0,
+		doubaoAigcWatermark: false,
 		nfeStep: F5_DEFAULTS.nfeStep,
 		cfgStrength: F5_DEFAULTS.cfgStrength,
 		targetRms: F5_DEFAULTS.targetRms,
@@ -379,6 +391,12 @@ function getEngineDefaults(state: GenerateStoreState, engineId: string) {
 		emoAlpha: INDEX_TTS_DEFAULTS.emoAlpha,
 		speed: INDEX_TTS_DEFAULTS.speed,
 		pitchRate: Number(parameterDefault('pitch_rate', 0)),
+		doubaoSampleRate: Number(parameterDefault('sample_rate', 24000)) as GenerateStoreState['doubaoSampleRate'],
+		doubaoBitRate: Number(parameterDefault('bit_rate', 128000)),
+		doubaoLoudnessRate: Number(parameterDefault('loudness_rate', 0)),
+		doubaoEnableSubtitle: Boolean(parameterDefault('enable_subtitle', false)),
+		doubaoSilenceDuration: Number(parameterDefault('silence_duration', 0)),
+		doubaoAigcWatermark: Boolean(parameterDefault('aigc_watermark', false)),
 		temperature: Number(parameterDefault('temperature', isMimoEngine(engineId) ? MIMO_DEFAULTS.temperature : engineId === 'confucius4-mlx-int8' ? CONFUCIUS4_DEFAULTS.temperature : INDEX_TTS_DEFAULTS.temperature)),
 		topP: Number(parameterDefault('top_p', isMimoEngine(engineId) ? MIMO_DEFAULTS.topP : CONFUCIUS4_DEFAULTS.topP)),
 		topK: Number(parameterDefault('top_k', CONFUCIUS4_DEFAULTS.topK)),
@@ -473,6 +491,12 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 		emo_alpha: state.emoAlpha,
 		speed: state.speed,
 		pitch_rate: activeParamKeys.has('pitch_rate') ? state.pitchRate : undefined,
+		sample_rate: activeParamKeys.has('sample_rate') ? state.doubaoSampleRate : undefined,
+		bit_rate: activeParamKeys.has('bit_rate') ? state.doubaoBitRate : undefined,
+		loudness_rate: activeParamKeys.has('loudness_rate') ? state.doubaoLoudnessRate : undefined,
+		enable_subtitle: activeParamKeys.has('enable_subtitle') ? state.doubaoEnableSubtitle : false,
+		silence_duration: activeParamKeys.has('silence_duration') ? state.doubaoSilenceDuration : 0,
+		aigc_watermark: activeParamKeys.has('aigc_watermark') ? state.doubaoAigcWatermark : false,
 		temperature: state.temperature,
 		top_p: state.topP,
 		top_k: state.topK,
@@ -548,6 +572,12 @@ function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<
 		emoAlpha: req.emo_alpha ?? INDEX_TTS_DEFAULTS.emoAlpha,
 		speed: req.speed ?? INDEX_TTS_DEFAULTS.speed,
 		pitchRate: req.pitch_rate ?? engineDefaults.pitchRate,
+		doubaoSampleRate: (req.sample_rate ?? engineDefaults.doubaoSampleRate) as GenerateStoreState['doubaoSampleRate'],
+		doubaoBitRate: req.bit_rate ?? engineDefaults.doubaoBitRate,
+		doubaoLoudnessRate: req.loudness_rate ?? engineDefaults.doubaoLoudnessRate,
+		doubaoEnableSubtitle: req.enable_subtitle ?? engineDefaults.doubaoEnableSubtitle,
+		doubaoSilenceDuration: req.silence_duration ?? engineDefaults.doubaoSilenceDuration,
+		doubaoAigcWatermark: req.aigc_watermark ?? engineDefaults.doubaoAigcWatermark,
 		temperature: req.temperature ?? engineDefaults.temperature,
 		topP: req.top_p ?? engineDefaults.topP,
 		topK: req.top_k ?? engineDefaults.topK,

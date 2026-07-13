@@ -481,6 +481,12 @@ class GenerateRequest(BaseModel):
     emo_alpha: float = Field(default=0.6, ge=0, le=1)
     speed: float = Field(default=1.0, ge=0.5, le=3.0)
     pitch_rate: int | None = Field(default=None, ge=-12, le=12)
+    sample_rate: Literal[8000, 16000, 22050, 24000, 32000, 44100, 48000] | None = None
+    bit_rate: int | None = Field(default=None, ge=64000, le=160000)
+    loudness_rate: int | None = Field(default=None, ge=-50, le=100)
+    enable_subtitle: bool = False
+    silence_duration: int = Field(default=0, ge=0, le=30000)
+    aigc_watermark: bool = False
     temperature: float = Field(default=0.8, ge=0.1, le=2.0)
     top_p: float = Field(default=0.8, ge=0.0, le=1.0)
     top_k: int = Field(default=30, ge=1, le=100)

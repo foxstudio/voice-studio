@@ -35,9 +35,15 @@ def build_doubao_tts_single_kwargs(req: GenerateRequest, output_path: str, *, vo
         "api_key": api_key,
         "resource_id": resource_id or doubao_client.DEFAULT_TTS_RESOURCE_ID,
         "speaker": speaker,
-        "style_instruction": req.style_instruction,
+        "style_instruction": req.style_instruction if req.engine_id == "doubao-tts-preset" else None,
         "speed": req.speed,
+        "sample_rate": req.sample_rate or 24000,
+        "bit_rate": req.bit_rate,
+        "loudness_rate": req.loudness_rate,
         "pitch_rate": req.pitch_rate,
+        "enable_subtitle": req.enable_subtitle if req.engine_id == "doubao-tts-preset" else False,
+        "silence_duration": req.silence_duration,
+        "aigc_watermark": req.aigc_watermark,
     }
 
 
@@ -66,9 +72,15 @@ def build_doubao_tts_batch_common_kwargs(req: BatchGenerateRequest, *, voice: Vo
         "api_key": api_key,
         "resource_id": resource_id or doubao_client.DEFAULT_TTS_RESOURCE_ID,
         "speaker": speaker,
-        "style_instruction": values.get("style_instruction"),
+        "style_instruction": values.get("style_instruction") if req.engine_id == "doubao-tts-preset" else None,
         "speed": values.get("speed"),
+        "sample_rate": values.get("sample_rate") or 24000,
+        "bit_rate": values.get("bit_rate"),
+        "loudness_rate": values.get("loudness_rate"),
         "pitch_rate": values.get("pitch_rate"),
+        "enable_subtitle": bool(values.get("enable_subtitle")) if req.engine_id == "doubao-tts-preset" else False,
+        "silence_duration": values.get("silence_duration") or 0,
+        "aigc_watermark": bool(values.get("aigc_watermark")),
     }
 
 

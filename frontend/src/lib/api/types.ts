@@ -616,6 +616,12 @@ export interface GenerateRequest {
 	emo_alpha: number;
 	speed: number;
 	pitch_rate?: number | null;
+	sample_rate?: 8000 | 16000 | 22050 | 24000 | 32000 | 44100 | 48000 | null;
+	bit_rate?: number | null;
+	loudness_rate?: number | null;
+	enable_subtitle?: boolean;
+	silence_duration?: number;
+	aigc_watermark?: boolean;
 	temperature: number;
 	top_p: number;
 	top_k: number;

@@ -963,7 +963,11 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
 def _postprocess_audio(task: GenerationTask, req: GenerateRequest, result: dict, audio_id: str) -> Path:
     """音频后处理：格式转换。纯函数，不碰状态。"""
     final_path = Path(result["output_path"])
-    if _adapter_registry.get(req.engine_id) is None and req.output_format != "wav":
+    if (
+        _adapter_registry.get(req.engine_id) is None
+        and req.output_format != "wav"
+        and final_path.suffix.lower() != f".{req.output_format}"
+    ):
         converted = settings_store.output_dir() / f"{audio_id}.{req.output_format}"
         final_path = audio_tools.copy_or_convert(final_path, converted, req.output_format)
     if not final_path.exists() or final_path.stat().st_size <= 0:
@@ -1162,7 +1166,8 @@ async def _process(task: GenerationTask) -> None:
         await _update_status(task, progress=0.24)
         settings_store.ensure_directories()
         audio_id = task.task_id
-        wav_path = settings_store.output_dir() / f"{audio_id}.wav"
+        direct_cloud_format = req.output_format if req.engine_id in {"doubao-tts-preset", "doubao-tts-voiceclone"} and req.output_format in {"wav", "mp3"} else "wav"
+        wav_path = settings_store.output_dir() / f"{audio_id}.{direct_cloud_format}"
 
         # Stage 2: 引擎执行
         result, progress_state = await _execute_engine(task, req, wav_path)

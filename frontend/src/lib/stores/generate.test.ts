@@ -169,25 +169,51 @@ describe('generate store custom reference voice requests', () => {
 		expect(request.seed).toBe(0);
 	});
 
-	it('round-trips Doubao TTS pitch rate only when the engine declares it', () => {
+	it('round-trips the official Doubao TTS audio parameters only when declared', () => {
 		const store = createGenerateStore();
 		const schema = [
 			parameter({ key: 'speaker_id', label: '音色', type: 'select', default: 'speaker-1' }),
-			parameter({ key: 'pitch_rate', label: '音调', type: 'slider', default: 0, min: -12, max: 12, step: 1, level: 'advanced' })
+			parameter({ key: 'pitch_rate', label: '音调', type: 'slider', default: 0, min: -12, max: 12, step: 1, level: 'advanced' }),
+			parameter({ key: 'sample_rate', label: '采样率', type: 'select', default: 24000, level: 'advanced' }),
+			parameter({ key: 'bit_rate', label: '码率', type: 'select', default: 128000, level: 'advanced' }),
+			parameter({ key: 'loudness_rate', label: '音量', type: 'slider', default: 0, level: 'advanced' }),
+			parameter({ key: 'enable_subtitle', label: '时间戳', type: 'toggle', default: false, level: 'advanced' }),
+			parameter({ key: 'silence_duration', label: '结尾静音', type: 'number', default: 0, level: 'advanced' }),
+			parameter({ key: 'aigc_watermark', label: 'AIGC 标识', type: 'toggle', default: false, level: 'advanced' })
 		];
 		store.update((state) => ({
 			...state,
 			engines: [engineDetail('doubao-tts-preset', schema)],
 			engineId: 'doubao-tts-preset',
 			text: '测试文本',
-			pitchRate: 5
+			pitchRate: 5,
+			doubaoSampleRate: 48000,
+			doubaoBitRate: 160000,
+			doubaoLoudnessRate: 25,
+			doubaoEnableSubtitle: true,
+			doubaoSilenceDuration: 700,
+			doubaoAigcWatermark: true
 		}));
 
 		const request = store.toRequest();
 		expect(request.pitch_rate).toBe(5);
+		expect(request.sample_rate).toBe(48000);
+		expect(request.bit_rate).toBe(160000);
+		expect(request.loudness_rate).toBe(25);
+		expect(request.enable_subtitle).toBe(true);
+		expect(request.silence_duration).toBe(700);
+		expect(request.aigc_watermark).toBe(true);
 
-		store.fromRequest({ ...request, pitch_rate: -4 });
-		const unsubscribe = store.subscribe((value) => expect(value.pitchRate).toBe(-4));
+		store.fromRequest({ ...request, pitch_rate: -4, sample_rate: 16000, bit_rate: 96000, loudness_rate: -20, enable_subtitle: false, silence_duration: 200, aigc_watermark: false });
+		const unsubscribe = store.subscribe((value) => {
+			expect(value.pitchRate).toBe(-4);
+			expect(value.doubaoSampleRate).toBe(16000);
+			expect(value.doubaoBitRate).toBe(96000);
+			expect(value.doubaoLoudnessRate).toBe(-20);
+			expect(value.doubaoEnableSubtitle).toBe(false);
+			expect(value.doubaoSilenceDuration).toBe(200);
+			expect(value.doubaoAigcWatermark).toBe(false);
+		});
 		unsubscribe();
 	});
 

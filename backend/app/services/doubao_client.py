@@ -77,6 +77,7 @@ class DoubaoTTSResult:
     final_message: str | None
     chunk_count: int
     audio_bytes: int
+    subtitle: dict[str, Any] | None = None
 
 
 def masked_identifier(value: str | None) -> str:
@@ -181,11 +182,14 @@ def build_tts_payload(
     speaker: str,
     audio_format: str = "mp3",
     sample_rate: int = 24000,
+    bit_rate: int | None = None,
     speed: float | None = None,
     loudness_rate: int | None = None,
     pitch_rate: int | None = None,
     style_instruction: str | None = None,
     enable_subtitle: bool = False,
+    silence_duration: int = 0,
+    aigc_watermark: bool = False,
     user_id: str = "voice-studio",
 ) -> dict[str, Any]:
     audio_format = str(audio_format).strip().lower()
@@ -196,12 +200,12 @@ def build_tts_payload(
         "format": audio_format,
         "sample_rate": sample_rate,
     }
+    if bit_rate is not None and audio_format == "mp3":
+        audio_params["bit_rate"] = max(64000, min(160000, int(bit_rate)))
     if speed is not None:
         audio_params["speech_rate"] = max(-50, min(100, int(round((float(speed) - 1.0) * 100))))
     if loudness_rate is not None:
         audio_params["loudness_rate"] = max(-50, min(100, int(loudness_rate)))
-    if pitch_rate is not None:
-        audio_params["pitch_rate"] = max(-12, min(12, int(pitch_rate)))
     if enable_subtitle:
         audio_params["enable_subtitle"] = True
 
@@ -210,8 +214,17 @@ def build_tts_payload(
         "speaker": speaker,
         "audio_params": audio_params,
     }
+    additions: dict[str, Any] = {}
     if style_instruction and style_instruction.strip():
-        req_params["additions"] = json.dumps({"context_texts": [style_instruction.strip()]}, ensure_ascii=False)
+        additions["context_texts"] = [style_instruction.strip()]
+    if pitch_rate is not None:
+        additions["post_process"] = {"pitch": max(-12, min(12, int(pitch_rate)))}
+    if silence_duration:
+        additions["silence_duration"] = max(0, min(30000, int(silence_duration)))
+    if aigc_watermark:
+        additions["aigc_watermark"] = True
+    if additions:
+        req_params["additions"] = json.dumps(additions, ensure_ascii=False)
 
     return {
         "user": {"uid": user_id},
@@ -229,9 +242,14 @@ def generate_tts_unidirectional_http(
     resource_id: str = DEFAULT_TTS_RESOURCE_ID,
     audio_format: str = "mp3",
     sample_rate: int = 24000,
+    bit_rate: int | None = None,
     speed: float | None = None,
+    loudness_rate: int | None = None,
     pitch_rate: int | None = None,
     style_instruction: str | None = None,
+    enable_subtitle: bool = False,
+    silence_duration: int = 0,
+    aigc_watermark: bool = False,
     timeout: int = 120,
 ) -> dict[str, Any]:
     body = build_tts_payload(
@@ -239,9 +257,14 @@ def generate_tts_unidirectional_http(
         speaker=speaker,
         audio_format=audio_format,
         sample_rate=sample_rate,
+        bit_rate=bit_rate,
         speed=speed,
+        loudness_rate=loudness_rate,
         pitch_rate=pitch_rate,
         style_instruction=style_instruction,
+        enable_subtitle=enable_subtitle,
+        silence_duration=silence_duration,
+        aigc_watermark=aigc_watermark,
     )
     headers, request_id = build_headers(api_key=api_key, resource_id=resource_id)
     url = base_url.rstrip("/") + "/api/v3/tts/unidirectional"
@@ -269,11 +292,15 @@ def generate_tts_unidirectional_http(
 
     frames = iter_concatenated_json(raw)
     chunks: list[bytes] = []
+    subtitle_sentences: list[dict[str, Any]] = []
     final: dict[str, Any] | None = None
     for frame in frames:
         data = frame.get("data")
         if isinstance(data, str) and data:
             chunks.append(base64.b64decode(data))
+        sentence = frame.get("sentence")
+        if isinstance(sentence, dict):
+            subtitle_sentences.append(sentence)
         code = frame.get("code")
         if code is not None:
             final = frame
@@ -298,6 +325,7 @@ def generate_tts_unidirectional_http(
         final_message=final.get("message") if final else None,
         chunk_count=len(chunks),
         audio_bytes=len(audio),
+        subtitle={"source": "doubao", "sentences": subtitle_sentences} if subtitle_sentences else None,
     )
     return result.__dict__
 
