@@ -217,6 +217,26 @@ describe('generate store custom reference voice requests', () => {
 		unsubscribe();
 	});
 
+	it('uses high-quality Doubao defaults while preserving explicit historical values', () => {
+		const store = createGenerateStore();
+		const schema = [
+			parameter({ key: 'speaker_id', label: '音色', type: 'select', default: 'speaker-1' }),
+			parameter({ key: 'sample_rate', label: '采样率', type: 'select', default: 48000, level: 'advanced' }),
+			parameter({ key: 'bit_rate', label: '码率', type: 'select', default: 160000, level: 'advanced' })
+		];
+		store.update((state) => ({ ...state, engines: [engineDetail('doubao-tts-preset', schema)] }));
+		store.setEngine('doubao-tts-preset');
+
+		let request = store.toRequest();
+		expect(request.sample_rate).toBe(48000);
+		expect(request.bit_rate).toBe(160000);
+
+		store.fromRequest({ ...request, sample_rate: 24000, bit_rate: 128000 });
+		request = store.toRequest();
+		expect(request.sample_rate).toBe(24000);
+		expect(request.bit_rate).toBe(128000);
+	});
+
 	it('does not add Doubao pitch rate to unrelated engine requests', () => {
 		const store = createGenerateStore();
 		store.update((state) => ({

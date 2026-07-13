@@ -206,6 +206,11 @@ const CONFUCIUS4_DEFAULTS = {
 	seed: 0
 };
 
+export const DOUBAO_TTS_DEFAULTS = {
+	sampleRate: 48000 as const,
+	bitRate: 160000
+};
+
 const DEFAULT_PRESET_DRAFT: PresetDraft = {
 	name: '',
 	scene: '',
@@ -290,8 +295,8 @@ function createInitialState(): GenerateStoreState {
 		emoAlpha: INDEX_TTS_DEFAULTS.emoAlpha,
 		speed: INDEX_TTS_DEFAULTS.speed,
 		pitchRate: 0,
-		doubaoSampleRate: 24000,
-		doubaoBitRate: 128000,
+		doubaoSampleRate: DOUBAO_TTS_DEFAULTS.sampleRate,
+		doubaoBitRate: DOUBAO_TTS_DEFAULTS.bitRate,
 		doubaoLoudnessRate: 0,
 		doubaoEnableSubtitle: false,
 		doubaoSilenceDuration: 0,
@@ -391,8 +396,8 @@ function getEngineDefaults(state: GenerateStoreState, engineId: string) {
 		emoAlpha: INDEX_TTS_DEFAULTS.emoAlpha,
 		speed: INDEX_TTS_DEFAULTS.speed,
 		pitchRate: Number(parameterDefault('pitch_rate', 0)),
-		doubaoSampleRate: Number(parameterDefault('sample_rate', 24000)) as GenerateStoreState['doubaoSampleRate'],
-		doubaoBitRate: Number(parameterDefault('bit_rate', 128000)),
+		doubaoSampleRate: Number(parameterDefault('sample_rate', DOUBAO_TTS_DEFAULTS.sampleRate)) as GenerateStoreState['doubaoSampleRate'],
+		doubaoBitRate: Number(parameterDefault('bit_rate', DOUBAO_TTS_DEFAULTS.bitRate)),
 		doubaoLoudnessRate: Number(parameterDefault('loudness_rate', 0)),
 		doubaoEnableSubtitle: Boolean(parameterDefault('enable_subtitle', false)),
 		doubaoSilenceDuration: Number(parameterDefault('silence_duration', 0)),

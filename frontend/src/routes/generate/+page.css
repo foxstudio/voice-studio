@@ -3004,8 +3004,13 @@
 	}
 
 	.more-params-panel.doubao-tts-params .doubao-style-field textarea {
-		min-height: 72px;
+		height: 28px;
+		min-height: 28px;
 		max-height: 112px;
+		padding-top: 4px;
+		padding-bottom: 4px;
+		line-height: 18px;
+		resize: vertical;
 	}
 
 	.more-params-panel.doubao-tts-params .doubao-loudness-field,
@@ -3034,6 +3039,12 @@
 		gap: 10px 16px;
 		flex-wrap: wrap;
 		min-height: 28px;
+	}
+
+	.doubao-output-switches > .param-label {
+		color: var(--muted);
+		font-size: 12px;
+		font-weight: 400;
 	}
 
 	.doubao-speaker-options {

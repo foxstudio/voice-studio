@@ -2,10 +2,11 @@
 	type Props = {
 		checked?: boolean;
 		label?: string;
+		compact?: boolean;
 		onChange?: (checked: boolean) => void;
 	};
 
-	let { checked = $bindable(false), label = '', onChange = () => {} }: Props = $props();
+	let { checked = $bindable(false), label = '', compact = false, onChange = () => {} }: Props = $props();
 
 	function toggle() {
 		checked = !checked;
@@ -13,7 +14,7 @@
 	}
 </script>
 
-<button class="toggle" class:checked type="button" role="switch" aria-checked={checked} onclick={toggle}>
+<button class="toggle" class:checked class:compact type="button" role="switch" aria-checked={checked} onclick={toggle}>
 	<span class="track"><span class="thumb"></span></span>
 	{#if label}<span class="label">{label}</span>{/if}
 </button>
@@ -62,5 +63,29 @@
 	.label {
 		font-size: 13px;
 		color: var(--text);
+	}
+
+	.toggle.compact {
+		gap: 6px;
+	}
+
+	.toggle.compact .track {
+		width: 30px;
+		height: 18px;
+	}
+
+	.toggle.compact .thumb {
+		width: 12px;
+		height: 12px;
+	}
+
+	.toggle.compact.checked .thumb {
+		transform: translateX(12px);
+	}
+
+	.toggle.compact .label {
+		color: var(--muted);
+		font-size: 11px;
+		font-weight: 400;
 	}
 </style>

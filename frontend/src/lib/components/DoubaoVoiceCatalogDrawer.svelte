@@ -226,7 +226,7 @@
 
 {#if mode === 'drawer'}<div class="doubao-speaker-picker">
 	<div class="doubao-speaker-current">
-		<span class="doubao-speaker-label">音色</span>
+		<span class="doubao-speaker-label">音色 <span class="doubao-speaker-count" aria-label={`${speakers.length} 个音色`}>{speakers.length || '—'}</span></span>
 		<div class="doubao-current-control">
 			<button class="doubao-current-card" type="button" onclick={openDrawer} aria-label="打开豆包官方音色目录" title={currentSpeaker?.speaker_id || '选择豆包官方音色'}>
 				<span class="doubao-current-copy"><strong>{currentSpeaker?.name || '选择官方音色'}</strong>{#if currentSpeaker?.speaker_id}<small>{currentSpeaker.speaker_id}</small>{/if}</span>
@@ -325,7 +325,8 @@
 <style>
 	.doubao-speaker-picker { flex: 0 1 auto; min-width: 0; }
 	.doubao-speaker-current { display: flex; align-items: center; gap: 6px; min-width: 0; }
-	.doubao-speaker-label { color: var(--muted); font-size: 12px; white-space: nowrap; }
+	.doubao-speaker-label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+	.doubao-speaker-count { min-width: 22px; height: 16px; display: inline-flex; align-items: center; justify-content: center; padding: 0 5px; border: 1px solid rgba(116, 151, 190, .22); border-radius: 999px; background: #111820; color: #7faee0; font: 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
 	.doubao-current-control { width: 300px; min-width: 220px; height: 28px; display: flex; align-items: stretch; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: #101215; transition: border-color 120ms ease, box-shadow 120ms ease; }
 	.doubao-current-control:hover, .doubao-current-control:focus-within { border-color: #46515f; box-shadow: 0 0 0 2px rgba(80, 147, 224, .09); }
 	.doubao-current-card { flex: 1 1 auto; min-width: 0; height: 26px; display: flex; align-items: center; padding: 0 8px; border: 0; border-radius: 0; color: var(--text); background: transparent; text-align: left; }

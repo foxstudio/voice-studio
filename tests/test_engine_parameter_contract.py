@@ -756,6 +756,21 @@ def test_doubao_preset_profile_is_normalized_between_single_and_batch(tmp_path, 
         assert data["aigc_watermark"] is True
 
 
+def test_doubao_tts_uses_high_quality_defaults_for_single_and_batch(tmp_path, monkeypatch):
+    _enable_doubao(monkeypatch)
+    single = GenerateRequest(text="测试文本", engine_id="doubao-tts-preset", output_format="mp3")
+    single_kwargs = task_queue._kwargs(single, str(tmp_path / "doubao-default-single.mp3"))
+    batch_req = BatchGenerateRequest(
+        engine_id="doubao-tts-preset",
+        segments=[BatchSegmentInput(text="测试文本")],
+    )
+    batch_kwargs = _batch_payload(batch_req, tmp_path)
+
+    for data in [single_kwargs, batch_kwargs]:
+        assert data["sample_rate"] == 48000
+        assert data["bit_rate"] == 160000
+
+
 def test_doubao_pitch_rate_range_is_validated():
     GenerateRequest(text="测试", engine_id="doubao-tts-preset", pitch_rate=-12)
     GenerateRequest(text="测试", engine_id="doubao-tts-preset", pitch_rate=12)

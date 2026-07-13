@@ -189,6 +189,13 @@ def test_doubao_tts_payload_and_chunk_parser():
         },
     }
 
+    default_mp3 = doubao_client.build_tts_payload(text="默认质量。", speaker="zh_female_vv_uranus_bigtts")
+    assert default_mp3["req_params"]["audio_params"]["sample_rate"] == 48000
+    assert default_mp3["req_params"]["audio_params"]["bit_rate"] == 160000
+    default_wav = doubao_client.build_tts_payload(text="默认质量。", speaker="zh_female_vv_uranus_bigtts", audio_format="wav")
+    assert default_wav["req_params"]["audio_params"]["sample_rate"] == 48000
+    assert "bit_rate" not in default_wav["req_params"]["audio_params"]
+
     frames = doubao_client.iter_concatenated_json('{"data":"YQ=="}{"code":20000000,"message":"ok"}')
     assert frames == [{"data": "YQ=="}, {"code": 20000000, "message": "ok"}]
 
@@ -421,6 +428,9 @@ def test_doubao_engine_manifest_is_registered(tmp_path: Path, monkeypatch):
 
     params = {param["key"]: param for param in manifest["parameter_schema"]}
     assert [option["value"] for option in params["sample_rate"]["options"]] == [8000, 16000, 22050, 24000, 32000, 44100, 48000]
+    assert manifest["sample_rate"] == 48000
+    assert params["sample_rate"]["default"] == 48000
+    assert params["bit_rate"]["default"] == 160000
     assert (params["loudness_rate"]["min"], params["loudness_rate"]["max"]) == (-50, 100)
     assert params["enable_subtitle"]["default"] is False
     assert (params["silence_duration"]["min"], params["silence_duration"]["max"]) == (0, 30000)

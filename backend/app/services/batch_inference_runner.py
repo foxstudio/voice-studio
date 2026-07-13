@@ -214,8 +214,8 @@ def run_doubao_tts(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 resource_id=kwargs.get("resource_id") or "seed-tts-2.0",
                 style_instruction=kwargs.get("style_instruction"),
                 speed=kwargs.get("speed"),
-                sample_rate=kwargs.get("sample_rate") or 24000,
-                bit_rate=kwargs.get("bit_rate"),
+                sample_rate=kwargs.get("sample_rate") or doubao_client.DEFAULT_TTS_SAMPLE_RATE,
+                bit_rate=kwargs.get("bit_rate") or doubao_client.DEFAULT_TTS_BIT_RATE,
                 loudness_rate=kwargs.get("loudness_rate"),
                 pitch_rate=kwargs.get("pitch_rate"),
                 enable_subtitle=bool(kwargs.get("enable_subtitle")),
@@ -227,7 +227,7 @@ def run_doubao_tts(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 from app.services import audio_tools
 
                 audio_tools.copy_or_convert(provider_out, out, requested_format)
-            meta = _audio_meta(str(out), int(kwargs.get("sample_rate") or 24000))
+            meta = _audio_meta(str(out), int(kwargs.get("sample_rate") or doubao_client.DEFAULT_TTS_SAMPLE_RATE))
             meta.update({"output_path": str(out), "generation_time_ms": int((time.perf_counter() - started) * 1000)})
             results.append({"segment_id": segment["segment_id"], "status": "success", **meta})
         except Exception as exc:

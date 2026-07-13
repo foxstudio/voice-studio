@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
-from app.services import audio_tools, confucius4_paths, qwen3_tts_paths
+from app.services import audio_tools, confucius4_paths, doubao_client, qwen3_tts_paths
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -302,8 +302,8 @@ def _build_doubao_kwargs(**kwargs):
         "resource_id": kwargs.get("resource_id") or "seed-tts-2.0",
         "style_instruction": kwargs.get("style_instruction"),
         "speed": kwargs.get("speed"),
-        "sample_rate": kwargs.get("sample_rate") or 24000,
-        "bit_rate": kwargs.get("bit_rate"),
+        "sample_rate": kwargs.get("sample_rate") or doubao_client.DEFAULT_TTS_SAMPLE_RATE,
+        "bit_rate": kwargs.get("bit_rate") or doubao_client.DEFAULT_TTS_BIT_RATE,
         "loudness_rate": kwargs.get("loudness_rate"),
         "pitch_rate": kwargs.get("pitch_rate"),
         "enable_subtitle": bool(kwargs.get("enable_subtitle")),
@@ -313,8 +313,6 @@ def _build_doubao_kwargs(**kwargs):
 
 
 def run_doubao_tts(**kwargs):
-    from app.services import doubao_client
-
     params = _build_doubao_kwargs(**kwargs)
     target_output_path = params.pop("target_output_path")
     provider_output_path = params["output_path"]
@@ -323,7 +321,7 @@ def run_doubao_tts(**kwargs):
         result = doubao_client.generate_tts_unidirectional_http(**params)
         if provider_output_path != target_output_path:
             audio_tools.copy_or_convert(provider_output_path, target_output_path, Path(target_output_path).suffix.lstrip(".") or "wav")
-        meta = _audio_meta(target_output_path, int(params.get("sample_rate") or 24000))
+        meta = _audio_meta(target_output_path, int(params.get("sample_rate") or doubao_client.DEFAULT_TTS_SAMPLE_RATE))
     finally:
         if provider_output_path != target_output_path:
             try:

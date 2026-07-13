@@ -13,6 +13,8 @@ from typing import Any
 DEFAULT_BASE_URL = "https://openspeech.bytedance.com"
 DEFAULT_TTS_RESOURCE_ID = "seed-tts-2.0"
 DEFAULT_ICL_RESOURCE_ID = "seed-icl-2.0"
+DEFAULT_TTS_SAMPLE_RATE = 48000
+DEFAULT_TTS_BIT_RATE = 160000
 SUPPORTED_TTS_AUDIO_FORMATS = frozenset({"wav", "mp3", "pcm", "ogg_opus"})
 DOUBAO_VOICE_CLONE_LANGUAGE_CODES = {
     "zh": 0,
@@ -181,8 +183,8 @@ def build_tts_payload(
     text: str,
     speaker: str,
     audio_format: str = "mp3",
-    sample_rate: int = 24000,
-    bit_rate: int | None = None,
+    sample_rate: int = DEFAULT_TTS_SAMPLE_RATE,
+    bit_rate: int | None = DEFAULT_TTS_BIT_RATE,
     speed: float | None = None,
     loudness_rate: int | None = None,
     pitch_rate: int | None = None,
@@ -241,8 +243,8 @@ def generate_tts_unidirectional_http(
     speaker: str,
     resource_id: str = DEFAULT_TTS_RESOURCE_ID,
     audio_format: str = "mp3",
-    sample_rate: int = 24000,
-    bit_rate: int | None = None,
+    sample_rate: int = DEFAULT_TTS_SAMPLE_RATE,
+    bit_rate: int | None = DEFAULT_TTS_BIT_RATE,
     speed: float | None = None,
     loudness_rate: int | None = None,
     pitch_rate: int | None = None,
