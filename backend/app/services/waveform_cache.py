@@ -32,6 +32,18 @@ def waveform_peaks(path: Path, *, result_id: str, bins: int = 320) -> dict[str, 
     return payload
 
 
+def delete_result_cache(result_id: str) -> int:
+    cache_dir = settings_store.cache_dir() / "waveforms"
+    if not cache_dir.exists() or cache_dir.is_symlink():
+        return 0
+    removed = 0
+    for path in cache_dir.glob(f"{result_id}-*.json"):
+        if path.is_file() and not path.is_symlink():
+            path.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
 def _read_peaks(path: Path, bins: int) -> dict[str, object]:
     with sf.SoundFile(str(path)) as audio:
         frame_count = max(0, int(audio.frames))

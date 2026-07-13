@@ -32,6 +32,8 @@ tests/              自动化测试，给开发者和 CI 验证项目是否被�
 
 运行时数据默认放在 `~/VoiceStudio`。项目根目录的 `models/` 用于本地模型权重，但已被 `.gitignore` 忽略，不会提交到仓库。
 
+本地数据的保留、自动清理、模型与引擎目录规则见 [Voice Studio 本地数据与模型规则](docs/VOICE_STUDIO_DATA_POLICY.md)。
+
 ## 快速开始
 
 ### 前置要求

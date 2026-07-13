@@ -20,7 +20,8 @@ if str(BACKEND) not in sys.path:
 from app.api import seed_audio_assets  # noqa: E402
 from app.engines.seed_audio.assets import SeedAudioAssetResolver  # noqa: E402
 from app.errors import AppException  # noqa: E402
-from app.services import database, seed_asset_store  # noqa: E402
+from app.schemas.voice_studio import AppSettings  # noqa: E402
+from app.services import database, seed_asset_store, settings_store  # noqa: E402
 
 
 def _image_bytes(image_format: str) -> bytes:
@@ -298,6 +299,9 @@ def test_orphan_audit_is_conservative_and_cleanup_is_explicit(client):
     queued = seed_asset_store.register_image(
         content=PNG, original_name="queued.png", media_format="png", license_status="authorized"
     )
+    failed = seed_asset_store.register_image(
+        content=PNG, original_name="failed.png", media_format="png", license_status="authorized"
+    )
     historical = seed_asset_store.register_image(
         content=PNG, original_name="history.png", media_format="png", license_status="authorized"
     )
@@ -305,7 +309,10 @@ def test_orphan_audit_is_conservative_and_cleanup_is_explicit(client):
         content=PNG, original_name="preset.png", media_format="png", license_status="authorized"
     )
     future = datetime.now() + timedelta(days=2)
-    task_rows = [{"status": "queued", "parameters": {"input_assets": [{"file_id": queued.file_id}]}}]
+    task_rows = [
+        {"status": "queued", "parameters": {"input_assets": [{"file_id": queued.file_id}]}},
+        {"status": "failed", "parameters": {"input_assets": [{"file_id": failed.file_id}]}},
+    ]
     history_rows = [{"parameters": {"input_assets": [{"source_file_id": historical.file_id}]}}]
 
     candidates = seed_asset_store.audit_orphaned_assets(
@@ -319,7 +326,7 @@ def test_orphan_audit_is_conservative_and_cleanup_is_explicit(client):
     )
     assert deleted == [orphan.file_id]
     assert not Path(orphan.path).exists()
-    assert Path(queued.path).exists() and Path(historical.path).exists() and Path(preset.path).exists()
+    assert all(Path(asset.path).exists() for asset in (queued, failed, historical, preset))
     assert (tmp_path / "managed-seed-assets").exists()
 
 
@@ -375,3 +382,105 @@ def test_main_app_registers_seed_asset_routes():
     paths = {route.path for route in app.routes}
     assert "/api/seed-audio/assets/image" in paths
     assert "/api/seed-audio/assets/{file_id}" in paths
+
+
+def test_default_asset_dir_uses_runtime_assets_layout(tmp_path, monkeypatch):
+    settings = AppSettings(data_dir=str(tmp_path))
+    monkeypatch.setattr(settings_store, "get", lambda: settings)
+
+    assert seed_asset_store.asset_dir() == tmp_path / "assets" / "seed-audio" / "images"
+    assert seed_asset_store.legacy_asset_dir() == tmp_path / "seed_audio" / "assets"
+
+
+def test_legacy_asset_is_migrated_on_read_and_remains_deletable(client, monkeypatch):
+    _test_client, tmp_path = client
+    current_root = tmp_path / "managed-seed-assets"
+    legacy_root = tmp_path / "legacy-seed-assets"
+    monkeypatch.setattr(seed_asset_store, "legacy_asset_dir", lambda: legacy_root)
+    legacy_root.mkdir()
+    legacy_path = legacy_root / "legacy-image.png"
+    legacy_path.write_bytes(PNG)
+    record = {
+        "file_id": "legacy-image",
+        "asset_type": "seed_audio_image",
+        "source": "upload",
+        "license_status": "authorized",
+        "original_name": "legacy.png",
+        "path": str(legacy_path),
+        "mime_type": "image/png",
+        "media_format": "png",
+        "size_bytes": len(PNG),
+        "created_at": "2026-01-01T00:00:00",
+    }
+    with database.conn() as connection:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS seed_assets (file_id TEXT PRIMARY KEY, data TEXT NOT NULL, created_at TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO seed_assets (file_id, data, created_at) VALUES (?, ?, ?)",
+            (record["file_id"], json.dumps(record), record["created_at"]),
+        )
+
+    migrated = seed_asset_store.get_asset(record["file_id"])
+
+    assert migrated is not None
+    assert Path(migrated.path) == current_root / "legacy-image.png"
+    assert Path(migrated.path).read_bytes() == PNG
+    assert not legacy_path.exists()
+    assert seed_asset_store.delete_asset(record["file_id"]) is True
+    assert not Path(migrated.path).exists()
+
+
+def test_register_refuses_symlinked_asset_root(client, monkeypatch):
+    _test_client, tmp_path = client
+    outside = tmp_path / "outside-assets"
+    outside.mkdir()
+    linked = tmp_path / "linked-assets"
+    linked.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(seed_asset_store, "asset_dir", lambda: linked)
+
+    with pytest.raises(seed_asset_store.SeedAssetStoreError, match="符号链接"):
+        seed_asset_store.register_image(
+            content=PNG,
+            original_name="image.png",
+            media_format="png",
+            license_status="authorized",
+        )
+
+    assert list(outside.iterdir()) == []
+
+
+def test_delete_refuses_symlinked_legacy_root(client, monkeypatch):
+    _test_client, tmp_path = client
+    outside = tmp_path / "outside-legacy"
+    outside.mkdir()
+    linked = tmp_path / "linked-legacy"
+    linked.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(seed_asset_store, "legacy_asset_dir", lambda: linked)
+    legacy_path = outside / "linked-legacy.png"
+    legacy_path.write_bytes(PNG)
+    record = {
+        "file_id": "linked-legacy",
+        "asset_type": "seed_audio_image",
+        "source": "upload",
+        "license_status": "authorized",
+        "original_name": "legacy.png",
+        "path": str(linked / legacy_path.name),
+        "mime_type": "image/png",
+        "media_format": "png",
+        "size_bytes": len(PNG),
+        "created_at": "2026-01-01T00:00:00",
+    }
+    with database.conn() as connection:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS seed_assets (file_id TEXT PRIMARY KEY, data TEXT NOT NULL, created_at TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO seed_assets (file_id, data, created_at) VALUES (?, ?, ?)",
+            (record["file_id"], json.dumps(record), record["created_at"]),
+        )
+
+    with pytest.raises(seed_asset_store.SeedAssetStoreError, match="受管理目录以外"):
+        seed_asset_store.delete_asset(record["file_id"])
+
+    assert legacy_path.read_bytes() == PNG

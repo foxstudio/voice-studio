@@ -33,7 +33,7 @@ from app.schemas.voice_studio import (
     TTSVerificationResponse,
     now_iso,
 )
-from app.services import asr_service, audio_tools, database as db, engine_policy, engine_registry, engine_request_builder, history_store, project_store, settings_store, text_verifier, voice_store
+from app.services import asr_service, audio_tools, custom_reference_store, database as db, engine_policy, engine_registry, engine_request_builder, history_store, project_store, settings_store, text_verifier, voice_store
 
 _queue: asyncio.Queue[str] | None = None
 _worker_task: asyncio.Task[None] | None = None
@@ -780,9 +780,15 @@ def delete_task(task_id: str) -> dict:
         return {"task_id": task_id, "status": "not_found"}
     if _task_is_active(task.status):
         return {"task_id": task_id, "status": "active_task"}
+    managed_paths = custom_reference_store.managed_paths_in(task.parameters)
     if task.result_id:
+        history = history_store.get(task.result_id)
+        if history:
+            managed_paths.update(custom_reference_store.managed_paths_in(history.parameter_snapshot))
         history_store.delete(task.result_id)
     db.delete_one("tasks", "task_id", task_id)
+    for path in managed_paths:
+        custom_reference_store.delete_if_unreferenced(path)
     _cancelled.discard(task_id)
     return {"task_id": task_id, "status": "deleted"}
 

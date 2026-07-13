@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
-from app.services import audio_tools, confucius4_paths, doubao_client, qwen3_tts_paths
+from app.services import audio_tools, confucius4_paths, doubao_client, engine_runtime_paths, qwen3_tts_paths
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -27,10 +27,10 @@ logger = logging.getLogger(__name__)
 _model_cache: dict = {}
 _model_cache_lock = threading.Lock()
 DEFAULT_EXTERNAL_ROOTS = {
-    "emotivoice": Path("/Users/foxmacstudio/Projects/tts-engine-lab/EmotiVoice"),
-    "f5-tts": Path("/Users/foxmacstudio/Projects/tts-engine-lab/F5-TTS"),
-    "cosyvoice-sft": Path("/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice"),
-    "cosyvoice-zero-shot": Path("/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice"),
+    "emotivoice": engine_runtime_paths.managed_engine_root("emotivoice"),
+    "f5-tts": engine_runtime_paths.managed_engine_root("f5-tts"),
+    "cosyvoice-sft": engine_runtime_paths.managed_engine_root("cosyvoice-sft"),
+    "cosyvoice-zero-shot": engine_runtime_paths.managed_engine_root("cosyvoice-zero-shot"),
     "qwen3-tts-mlx-0.6b": qwen3_tts_paths.DEFAULT_ROOT,
 }
 
@@ -53,23 +53,7 @@ def _audio_meta(path: str, sample_rate: int) -> dict:
 
 
 def _external_root(engine_id: str) -> Path:
-    env_names = {
-        "emotivoice": "VOICE_STUDIO_EMOTIVOICE_ROOT",
-        "f5-tts": "VOICE_STUDIO_F5_TTS_ROOT",
-        "cosyvoice-sft": "VOICE_STUDIO_COSYVOICE_ROOT",
-        "cosyvoice-zero-shot": "VOICE_STUDIO_COSYVOICE_ROOT",
-        "qwen3-tts-mlx-0.6b": "VOICE_STUDIO_QWEN3_TTS_ROOT",
-    }
-    env_value = os.environ.get(env_names[engine_id])
-    if env_value:
-        return Path(env_value).expanduser()
-    fallback = DEFAULT_EXTERNAL_ROOTS.get(engine_id)
-    if fallback and fallback.exists():
-        return fallback
-    raise RuntimeError(
-        f"Environment variable {env_names[engine_id]} is not set. "
-        f"Please set it to the root directory of the {engine_id} engine."
-    )
+    return engine_runtime_paths.resolve_engine_root(engine_id)
 
 
 def _external_python(root: Path) -> str:

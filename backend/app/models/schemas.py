@@ -181,7 +181,7 @@ class EngineDetail(BaseModel):
 
 class AppSettings(BaseModel):
     data_dir: str = Field(default_factory=default_data_dir)
-    model_dir: str = "models"
+    model_dir: str = Field(default_factory=lambda: default_data_subdir("models"))
     voice_dir: str = Field(default_factory=lambda: default_data_subdir("voices"))
     output_dir: str = Field(default_factory=lambda: default_data_subdir("outputs"))
     export_dir: str = Field(default_factory=lambda: default_data_subdir("exports"))

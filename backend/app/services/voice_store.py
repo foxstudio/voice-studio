@@ -7,7 +7,7 @@ from fastapi import UploadFile
 
 from app.errors import AppException
 from app.schemas.voice_studio import LicenseStatus, VoiceAsset, VoiceAssetCreate, VoiceAssetUpdate, VoiceEngineBinding, VoiceFile, now_iso
-from app.services import audio_tools, database as db, settings_store, voice_aliases
+from app.services import audio_tools, custom_reference_store, database as db, settings_store, voice_aliases
 
 
 def list_voices(offset: int = 0, limit: int = 100) -> list[VoiceAsset]:
@@ -36,6 +36,8 @@ def save_voice(voice: VoiceAsset) -> VoiceAsset:
 
 
 def create_voice(data: VoiceAssetCreate) -> VoiceAsset:
+    for file_id in data.reference_audio_ids:
+        custom_reference_store.promote_voice_file(file_id)
     return save_voice(VoiceAsset(**data.model_dump()))
 
 
@@ -43,6 +45,9 @@ def update_voice(voice_id: str, data: VoiceAssetUpdate) -> VoiceAsset | None:
     old = get_voice(voice_id)
     if not old:
         return None
+    if data.reference_audio_ids is not None:
+        for file_id in data.reference_audio_ids:
+            custom_reference_store.promote_voice_file(file_id)
     merged = old.model_dump()
     merged.update(data.model_dump(exclude_unset=True))
     merged["voice_id"] = voice_id
@@ -88,8 +93,16 @@ def clear_external_binding(voice_id: str, *, provider: str | None = None) -> Voi
 def delete_voice(voice_id: str) -> None:
     voice = get_voice(voice_id)
     if voice:
+        other_references = {
+            file_id
+            for other in list_voices(offset=0, limit=100000)
+            if other.voice_id != voice_id
+            for file_id in other.reference_audio_ids
+        }
         voice_dir = settings_store.voice_dir().resolve()
         for file_id in voice.reference_audio_ids:
+            if file_id in other_references:
+                continue
             vf = get_file(file_id)
             if vf:
                 file_path = Path(vf.path).resolve()
@@ -119,7 +132,7 @@ async def upload_audio(file: UploadFile) -> dict:
     settings_store.ensure_directories()
     suffix = Path(file.filename or "voice.wav").suffix or ".wav"
     vf = VoiceFile(original_name=file.filename or "voice.wav", path="")
-    path = settings_store.voice_dir() / f"{vf.file_id}{suffix.lower()}"
+    path = custom_reference_store.allocate_path(vf.file_id, suffix)
     content = await file.read()
     path.write_bytes(content)
     vf.path = str(path)
@@ -160,7 +173,7 @@ def create_audio_clip(file_id: str, start_ms: int, end_ms: int) -> dict:
 
     stem = Path(source.original_name or source_path.name).stem or "reference"
     vf = VoiceFile(original_name=f"{stem}_clip_{start_ms}-{end_ms}ms.wav", path="")
-    path = settings_store.voice_dir() / f"{vf.file_id}.wav"
+    path = custom_reference_store.allocate_path(vf.file_id, ".wav")
     try:
         audio_tools.crop_file(source_path, path, start_ms, end_ms, "wav")
         meta = audio_tools.probe_audio(path)

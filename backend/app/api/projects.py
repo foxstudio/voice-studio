@@ -54,7 +54,10 @@ async def update_project(project_id: str, data: ProjectUpdate):
 
 @router.delete("/{project_id}")
 async def delete_project(project_id: str):
-    project_store.delete_project(project_id)
+    from app.domains.video_localization import service as video_localization_service
+
+    if not video_localization_service.delete_project(project_id):
+        raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
     return {"status": "deleted"}
 
 

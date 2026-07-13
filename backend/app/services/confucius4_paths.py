@@ -8,8 +8,9 @@ from app.services.paths import PROJECT_ROOT, expand_path
 ENGINE_ID = "confucius4-mlx-int8"
 MODEL_ENV = "VOICE_STUDIO_CONFUCIUS4_MODEL_DIR"
 RUNTIME_ENV = "VOICE_STUDIO_CONFUCIUS4_MLX_AUDIO_ROOT"
-DEFAULT_MODEL_DIR = Path("/Users/foxmacstudio/VoiceStudio/models/confucius4-mlx-int8")
-DEFAULT_RUNTIME_ROOT = Path("/Users/foxmacstudio/VoiceStudio/engines/mlx-audio-confucius4")
+DEFAULT_DATA_ROOT = Path(os.environ.get("VOICE_STUDIO_DATA_DIR", "~/VoiceStudio")).expanduser()
+DEFAULT_MODEL_DIR = DEFAULT_DATA_ROOT / "models" / ENGINE_ID
+DEFAULT_RUNTIME_ROOT = DEFAULT_DATA_ROOT / "engines" / "mlx-audio-confucius4"
 
 REQUIRED_MODEL_FILES = [
     "config.json",

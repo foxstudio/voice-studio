@@ -9,7 +9,7 @@
 | 引擎 ID | `qwen3-tts-mlx-0.6b` |
 | 运行方式 | 本地外部子进程 |
 | 模型 | `mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit` 和 `mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit` |
-| 项目根目录 | `/Users/foxmacstudio/Projects/tts-engine-lab/qwen3-tts-apple-silicon` |
+| 推荐运行时目录 | `~/VoiceStudio/engines/qwen3-tts-mlx`（可为软链接） |
 | 采样率 | 24000 Hz |
 | 状态 | 实验接入，适合短句 Pilot 和音色比较 |
 

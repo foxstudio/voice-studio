@@ -242,6 +242,26 @@ def test_video_localization_sync_recovers_local_package_and_is_idempotent(tmp_pa
     assert operation["error_code"] == "PROJECT_INDEX_RECOVERED"
 
 
+def test_delete_project_api_removes_local_package_so_sync_cannot_restore_it(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "待删除本土化项目", "description": ""}).json()
+    saved = client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={"source_media": {"filename": "delete-me.mp4", "duration_ms": 1200}},
+    )
+    assert saved.status_code == 200
+    root = _project_root(project["project_id"])
+    assert root.exists()
+
+    deleted = client.delete(f"/api/projects/{project['project_id']}")
+    synced = client.post("/api/projects/video-localization/sync-projects")
+
+    assert deleted.status_code == 200
+    assert not root.exists()
+    assert project_store.get_project(project["project_id"]) is None
+    assert project["project_id"] not in {item["project_id"] for item in synced.json()}
+
+
 def test_video_localization_sync_hides_missing_directory_without_deleting_database_project(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "目录被删除", "description": ""}).json()

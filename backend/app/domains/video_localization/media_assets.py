@@ -213,6 +213,22 @@ def clear_project_video_localization_dir(project_id: str) -> None:
         shutil.rmtree(path)
 
 
+def delete_project_video_localization_dir(project_id: str) -> None:
+    root = projects_root_dir().resolve()
+    path = project_video_localization_dir(project_id)
+    if path.is_symlink():
+        raise AppException(409, "VIDEO_LOCALIZATION_PROJECT_SYMLINK", "拒绝删除符号链接形式的项目目录")
+    resolved = path.resolve(strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise AppException(409, "VIDEO_LOCALIZATION_PROJECT_PATH_INVALID", "项目目录不在受管理的项目根目录中") from exc
+    if resolved == root:
+        raise AppException(409, "VIDEO_LOCALIZATION_PROJECT_PATH_INVALID", "拒绝删除项目根目录")
+    if resolved.exists():
+        shutil.rmtree(resolved)
+
+
 def safe_filename(filename: str) -> str:
     name = Path(filename).name.strip() or "source.mp4"
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(name).stem).strip("._-") or "source"

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.schemas.voice_studio import HistoryItem
-from app.services import database as db
+from app.services import custom_reference_store, database as db, waveform_cache
 
 
 def add(item: HistoryItem) -> HistoryItem:
@@ -23,11 +23,15 @@ def get(result_id: str) -> HistoryItem | None:
 
 def delete(result_id: str) -> None:
     item = get(result_id)
+    managed_paths = custom_reference_store.managed_paths_in(item.parameter_snapshot) if item else set()
     if item and item.output_path:
         path = Path(item.output_path)
         if path.exists():
             path.unlink(missing_ok=True)
+    waveform_cache.delete_result_cache(result_id)
     db.delete_one("history", "result_id", result_id)
+    for path in managed_paths:
+        custom_reference_store.delete_if_unreferenced(path)
 
 
 def audio_path(result_id: str) -> Path | None:

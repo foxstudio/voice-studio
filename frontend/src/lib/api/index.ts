@@ -7,6 +7,7 @@ import type {
 	DoubaoCloudVoiceListResponse,
 	DoubaoVoiceCloneResponse,
 	EngineDetail,
+	EngineInstallation,
 	EngineGenerateRequest,
 	EngineSpeaker,
 	DoubaoSpeakerCatalogStatus,
@@ -75,6 +76,7 @@ export const Api = {
 	cleanupSettingsStorage: (targets: string[]) => api.post<StorageCleanupResponse>('/settings/storage/cleanup', { targets }),
 	openSettingsStorageLocation: (key: string) => api.post<StorageOpenResponse>('/settings/storage/open', { key }),
 	engines: () => api.get<EngineDetail[]>('/engines'),
+	engineInstallations: () => api.get<EngineInstallation[]>('/engines/installations'),
 	engineSpeakers: (id: string, params: { q?: string; gender?: 'all' | 'F' | 'M'; limit?: number } = {}) => {
 		const search = new URLSearchParams();
 		if (params.q) search.set('q', params.q);

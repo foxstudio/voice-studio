@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from contextlib import asynccontextmanager
 
@@ -11,15 +12,20 @@ from fastapi.responses import JSONResponse
 from app.api import asr, audio_tools, batches, community_voice_packs, engines, evaluations, exports, generate, history, longform, presets, projects, seed_audio_assets, ser, settings, tasks, text_tools, video_localization, voice_seeds, voices
 from app.domains.video_localization import operation_queue as video_localization_operation_queue
 from app.errors import AppException
-from app.services import asr_tasks, batch_queue, engine_registry, longform_queue, qwen_forced_aligner, settings_store, task_queue
+from app.services import asr_tasks, batch_queue, engine_registry, longform_queue, qwen_forced_aligner, settings_store, storage_maintenance, task_queue
 
 START = time.monotonic()
 APP_VERSION = "1.2.0"
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings_store.ensure_directories()
+    try:
+        storage_maintenance.run_startup_maintenance()
+    except Exception:
+        logger.exception("Startup storage maintenance failed")
     task_queue.start_worker()
     longform_queue.start_worker()
     video_localization_operation_queue.start_worker()

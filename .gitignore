@@ -85,6 +85,9 @@ logs/
 # Development artifacts
 voice_studio_prd_package_*/
 voice_studio_frontend_png_*/
+/backups/
+/backup/
+/manifests/
 
 # Benchmark outputs
 test_outputs/

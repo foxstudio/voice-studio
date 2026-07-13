@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 
 from app.errors import AppException
 from app.schemas.voice_studio import EngineAudioDiagnosisRequest, EngineDetail, EngineSpeaker
-from app.services import audio_tools, doubao_speaker_catalog_store, engine_registry, settings_store, voice_store
+from app.services import audio_tools, doubao_speaker_catalog_store, engine_registry, model_catalog, settings_store, voice_store
 
 router = APIRouter()
 
@@ -16,6 +16,11 @@ router = APIRouter()
 @router.get("", response_model=list[EngineDetail])
 async def list_engines():
     return engine_registry.list_engines()
+
+
+@router.get("/installations")
+async def list_engine_installations():
+    return model_catalog.list_installations()
 
 
 @router.get("/{engine_id}", response_model=EngineDetail)

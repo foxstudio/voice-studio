@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Api } from '$lib/api';
 	import { ApiError } from '$lib/api/client';
-	import type { EngineAudioDiagnosis, EngineDetail, VoiceAsset } from '$lib/api/types';
-	import { Activity, Play, RotateCcw, Search, Square, Volume2 } from 'lucide-svelte';
+	import type { EngineAudioDiagnosis, EngineDetail, EngineInstallation, VoiceAsset } from '$lib/api/types';
+	import { Activity, ExternalLink, FolderSymlink, Play, RotateCcw, Search, Square, Volume2 } from 'lucide-svelte';
 	import { capabilityLabel, engineStatusLabel } from '$lib/labels';
 
 	type EngineCheckCard = {
@@ -12,6 +12,7 @@
 	};
 
 	let engines = $state<EngineDetail[]>([]);
+	let installations = $state<EngineInstallation[]>([]);
 	let voices = $state<VoiceAsset[]>([]);
 	let message = $state('');
 	let voiceId = $state('');
@@ -47,6 +48,7 @@
 		cloud: engines.filter((engine) => engine.manifest.engine_type === 'cloud').length,
 		loaded: engines.filter((engine) => engine.state.status === 'loaded').length
 	}));
+	const installationMap = $derived(new Map(installations.map((item) => [item.engine_id, item])));
 
 	const engineDescriptionExtras: Record<string, string> = {
 		'indextts-v2': '当前主力中文口播引擎：8 种情绪、长文本、S2Mel/BigVGAN2。',
@@ -166,7 +168,11 @@
 	}
 
 	async function refresh() {
-		[engines, voices] = await Promise.all([Api.engines(), Api.voices({ offset: 0, limit: 2000 })]);
+		[engines, voices, installations] = await Promise.all([
+			Api.engines(),
+			Api.voices({ offset: 0, limit: 2000 }),
+			Api.engineInstallations()
+		]);
 	}
 	$effect(() => { refresh(); });
 
@@ -245,9 +251,10 @@
 			</div>
 		</div>
 	</section>
-	<section class="grid">
-			{#each visibleEngines as engine}
-				<article class={`card stack engine-surface ${engine.manifest.engine_type === 'cloud' ? 'engine-cloud' : 'engine-local'}`}>
+		<section class="grid">
+				{#each visibleEngines as engine}
+					{@const installation = installationMap.get(engine.manifest.engine_id)}
+					<article class={`card stack engine-surface ${engine.manifest.engine_type === 'cloud' ? 'engine-cloud' : 'engine-local'}`}>
 				<div class="row engine-card-head">
 					<h2>{engine.manifest.display_name}</h2>
 					<span class="badge" class:ok={engine.state.status === 'loaded'} class:fail={engine.state.status === 'error'}>{engineStatusLabel(engine.state.status)}</span>
@@ -255,10 +262,17 @@
 				<div class="description-pop" use:descriptionTooltip={engineDescription(engine)}>
 					<p class="muted clamp-text">{engineDescription(engine)}</p>
 				</div>
-				<div class="row compact-tags feature-tags">
+					<div class="row compact-tags feature-tags">
 					{#each engineTags(engine) as tag, index}<span class="badge" class:badge-kind={index === 0}>{tag}</span>{/each}
-				</div>
-					<div class="row compact-actions">
+					</div>
+					{#if installation}
+						<div class="installation-line">
+							<span class="badge" class:ok={installation.installed}>{installation.installed ? '已发现本地文件' : '需要安装'}</span>
+							<span class="installation-path" title={installation.preferred_path ?? ''}><FolderSymlink size={13} /> {installation.preferred_path}</span>
+							<a class="btn mini-btn" href={installation.source_url} target="_blank" rel="noreferrer" data-tooltip={`${installation.source_label}。${installation.license_note}`}><ExternalLink size={13} /> 官方来源</a>
+						</div>
+					{/if}
+						<div class="row compact-actions">
 						{#if engine.state.status === 'loaded'}<button class="btn mini-btn" onclick={() => stop(engine.manifest.engine_id)}><Square size={13} /> 停止</button>{:else}<button class="btn primary mini-btn" onclick={() => start(engine.manifest.engine_id)}><Play size={13} /> 启动</button>{/if}
 						<button class="btn mini-btn" disabled={checking[engine.manifest.engine_id]} onclick={() => check(engine.manifest.engine_id)}><Activity size={13} /> {checking[engine.manifest.engine_id] ? '检查中' : '环境检查'}</button>
 						{#if !engine.manifest.capabilities.includes('speech_recognition')}<button class="btn mini-btn" disabled={diagnosing[engine.manifest.engine_id]} onclick={() => diagnose(engine.manifest.engine_id)}><Volume2 size={13} /> {diagnosing[engine.manifest.engine_id] ? '试听中' : '生成试听'}</button>{/if}
@@ -306,6 +320,26 @@
 	.engine-toolbar-panel {
 		margin-bottom: 14px;
 		padding: 10px;
+	}
+
+	.installation-line {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 8px;
+		min-height: 30px;
+	}
+
+	.installation-path {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-size: 12px;
+		color: var(--muted);
 	}
 
 	.toolbar-grid {

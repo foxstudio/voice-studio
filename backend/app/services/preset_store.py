@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.schemas.voice_studio import PresetTemplate, PresetTemplateUpsert, new_id, now_iso
-from app.services import database, qwen3_tts_paths
+from app.services import custom_reference_store, database, qwen3_tts_paths
 
 
 _COMMON = {
@@ -429,7 +429,11 @@ def save_preset(payload: PresetTemplateUpsert) -> PresetTemplate:
 def delete_preset(preset_id: str) -> bool:
     if is_builtin(preset_id):
         raise ValueError("BUILTIN_PRESET_READONLY")
-    if not database.get_one("presets", "preset_id", preset_id):
+    row = database.get_one("presets", "preset_id", preset_id)
+    if not row:
         return False
+    managed_paths = custom_reference_store.managed_paths_in(row)
     database.delete_one("presets", "preset_id", preset_id)
+    for path in managed_paths:
+        custom_reference_store.delete_if_unreferenced(path)
     return True

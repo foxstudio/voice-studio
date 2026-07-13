@@ -119,9 +119,28 @@ def volcengine_secret_access_key() -> str | None:
 
 def ensure_directories(settings: AppSettings | None = None) -> None:
     s = settings or get()
-    for value in [s.voice_dir, s.output_dir, s.export_dir, s.project_dir, s.cache_dir, s.log_dir]:
-        expand_path(value).mkdir(parents=True, exist_ok=True)
-    expand_path(s.data_dir).mkdir(parents=True, exist_ok=True)
+    for value, base in [
+        (s.model_dir, PROJECT_ROOT),
+        (s.voice_dir, None),
+        (s.output_dir, None),
+        (s.export_dir, None),
+        (s.project_dir, None),
+        (s.cache_dir, None),
+        (s.log_dir, None),
+    ]:
+        expand_path(value, base).mkdir(parents=True, exist_ok=True)
+    data_root = expand_path(s.data_dir)
+    cache_root = expand_path(s.cache_dir)
+    for path in [
+        data_root,
+        data_root / "assets",
+        data_root / "assets" / "seed-audio" / "images",
+        data_root / "assets" / "reference-audio" / "custom",
+        cache_root / "waveforms",
+        cache_root / "qwen-align",
+        cache_root / "provider-catalogs",
+    ]:
+        path.mkdir(parents=True, exist_ok=True)
 
 
 def model_path(engine_id: str) -> Path:
@@ -135,16 +154,87 @@ def model_candidates(engine_id: str) -> list[Path]:
     s = get()
     base = expand_path(s.model_dir, PROJECT_ROOT)
     if engine_id == "indextts-v2":
-        return [base / "mlx-indexTTS-2.0"]
+        data_models = expand_path(os.environ.get("VOICE_STUDIO_DATA_DIR", "~/VoiceStudio")) / "models"
+        return _dedupe_paths(
+            [
+                base / "mlx-indexTTS-2.0",
+                data_models / "mlx-indexTTS-2.0",
+                PROJECT_ROOT / "models" / "mlx-indexTTS-2.0",
+            ]
+        )
     if engine_id == confucius4_paths.ENGINE_ID:
         return confucius4_paths.model_candidates(base)
     if engine_id == "qwen3-asr-mlx":
-        return [
-            base / "qwen3-asr-mlx",
-            base / "mlx-community_Qwen3-ASR-1.7B-8bit",
-            expand_path("~/Documents/Voxt Modles/mlx-audio/mlx-community_Qwen3-ASR-1.7B-8bit"),
-        ]
+        candidates: list[Path] = []
+        if configured := os.environ.get("VOICE_STUDIO_QWEN3_ASR_MODEL_DIR"):
+            candidates.append(expand_path(configured))
+        data_root = expand_path(os.environ.get("VOICE_STUDIO_DATA_DIR", "~/VoiceStudio"))
+        repo_models = PROJECT_ROOT / "models"
+        candidates.extend(
+            [
+                data_root / "models" / "qwen3-asr-mlx",
+                base / "qwen3-asr-mlx",
+                base / "mlx-community_Qwen3-ASR-1.7B-8bit",
+                repo_models / "qwen3-asr-mlx",
+                repo_models / "mlx-community_Qwen3-ASR-1.7B-8bit",
+                *_huggingface_snapshots(("models--mlx-community--Qwen3-ASR-1.7B-8bit", "models--*--*Qwen3*ASR*")),
+            ]
+        )
+        return _dedupe_paths(candidates)
+    if engine_id == "faster-whisper-turbo":
+        snapshots = _huggingface_snapshots(
+            ("models--mobiuslabsgmbh--faster-whisper-large-v3-turbo",),
+            latest_only=True,
+        )
+        return [*snapshots, base / engine_id]
     return [base / engine_id]
+
+
+def _huggingface_snapshots(repo_patterns: tuple[str, ...], *, latest_only: bool = False) -> list[Path]:
+    hub_dir = _huggingface_hub_dir()
+    snapshots: list[Path] = []
+    seen: set[str] = set()
+    for pattern in repo_patterns:
+        try:
+            repositories = hub_dir.glob(pattern)
+            for repository in repositories:
+                snapshot_root = repository / "snapshots"
+                if not snapshot_root.is_dir():
+                    continue
+                for snapshot in snapshot_root.iterdir():
+                    if snapshot.is_dir() and str(snapshot) not in seen:
+                        seen.add(str(snapshot))
+                        snapshots.append(snapshot)
+        except OSError:
+            continue
+
+    def modified_at(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return -1
+
+    snapshots.sort(key=lambda path: (modified_at(path), str(path)), reverse=True)
+    return snapshots[:1] if latest_only else snapshots
+
+
+def _huggingface_hub_dir() -> Path:
+    if configured := os.environ.get("HF_HUB_CACHE"):
+        return expand_path(configured)
+    if configured := os.environ.get("HF_HOME"):
+        return expand_path(configured) / "hub"
+    return expand_path("~/.cache/huggingface/hub")
+
+
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    result: list[Path] = []
+    for path in paths:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            result.append(path)
+    return result
 
 
 def voice_dir() -> Path:
@@ -170,6 +260,8 @@ def log_dir() -> Path:
 def _dir_stats(path: Path, max_entries: int = 20000) -> dict[str, Any]:
     if not path.exists():
         return {"exists": False, "size_bytes": 0, "file_count": 0, "truncated": False}
+    if path.is_symlink():
+        return {"exists": True, "size_bytes": 0, "file_count": 0, "truncated": True}
     if path.is_file():
         return {"exists": True, "size_bytes": path.stat().st_size, "file_count": 1, "truncated": False}
 
@@ -232,6 +324,10 @@ def storage_audit() -> dict[str, Any]:
     s = get()
     paths = {
         "data_dir": expand_path(s.data_dir),
+        "assets": expand_path(s.data_dir) / "assets",
+        "seed_audio_images": expand_path(s.data_dir) / "assets" / "seed-audio" / "images",
+        "custom_reference_audio": expand_path(s.data_dir) / "assets" / "reference-audio" / "custom",
+        "legacy_seed_audio_assets": expand_path(s.data_dir) / "seed_audio" / "assets",
         "model_dir": expand_path(s.model_dir, PROJECT_ROOT),
         "voice_dir": expand_path(s.voice_dir),
         "output_dir": expand_path(s.output_dir),
@@ -241,10 +337,14 @@ def storage_audit() -> dict[str, Any]:
         "log_dir": expand_path(s.log_dir),
     }
     locations = [
-        _location("data_dir", "数据根目录", paths["data_dir"], category="配置", description="默认承载配置、数据库和各类数据子目录。"),
-        _location("database", "本地数据库", db.DB_PATH, category="配置", description="保存设置、任务、历史、音色、ASR 和项目索引。"),
-        _location("model_dir", "模型目录", paths["model_dir"], category="模型", description="本地模型权重和引擎依赖目录，通常不建议自动清理。"),
-        _location("voice_dir", "音色库音频", paths["voice_dir"], category="音色", description="上传、导入、注册到音色库的参考音频文件。"),
+        _location("data_dir", "数据根目录", paths["data_dir"], category="配置", description="默认承载配置、数据库、持久素材和运行时缓存。"),
+        _location("database", "本地数据库", db.DB_PATH, category="配置", description="保存设置、任务、历史、持久音色、ASR 和项目索引。"),
+        _location("assets", "受管素材", paths["assets"], category="素材", description="应用统一管理的输入素材根目录；不同子目录按各自引用关系保留或回收。"),
+        _location("seed_audio_images", "Seed Audio 图片", paths["seed_audio_images"], category="受管素材", description="任务或历史仍引用时保留；未使用上传超过 7 天后回收，内置预设图片长期保留。"),
+        _location("custom_reference_audio", "自定义参考音频", paths["custom_reference_audio"], category="受管临时素材", description="生成记录、长文本、批处理、预设或音色库仍引用时保留；无引用超过 7 天后自动回收。"),
+        _location("legacy_seed_audio_assets", "旧版 Seed Audio 素材", paths["legacy_seed_audio_assets"], category="素材", description="旧版本保存的参考图片；仍可读取和删除，不参与自动缓存清理。"),
+        _location("model_dir", "模型目录", paths["model_dir"], category="模型", description="本地模型权重目录，不参与自动清理；引擎运行时代码单独放在 engines。"),
+        _location("voice_dir", "持久音色音频", paths["voice_dir"], category="音色", description="已注册到音色库的参考音频；属于持久数据，不会自动清理。"),
         _location("output_dir", "生成输出", paths["output_dir"], category="生成", description="单条生成、长文本分段和最终音频结果。"),
         _location("batch_outputs", "批处理输出", paths["output_dir"] / "batches", category="生成", description="批量合成任务默认输出目录。"),
         _location(
@@ -259,25 +359,39 @@ def storage_audit() -> dict[str, Any]:
         ),
         _location("export_dir", "导出结果", paths["export_dir"], category="导出", description="合并导出、打包导出和音频工具导出的结果。"),
         _location("project_dir", "项目目录", paths["project_dir"], category="项目", description="视频/长项目相关资产目录。"),
-        _location("cache_dir", "缓存根目录", paths["cache_dir"], category="缓存", description="ASR 源音频、对齐日志和其他可复用缓存的根目录。"),
+        _location("cache_dir", "缓存根目录", paths["cache_dir"], category="缓存", description="仅 waveforms、qwen-align、provider-catalogs 会按 TTL 和容量自动治理；其他子目录会保留。"),
         _location(
             "asr_uploads",
             "ASR 源音频",
             paths["cache_dir"] / "asr_uploads",
-            category="缓存",
+            category="持久数据",
             description="ASR 识别上传的源音频；删除后历史转写仍在，但无法再补时间戳。",
-            cleanup_key="asr_uploads",
-            cleanup_label="清理 ASR 源音频",
-            cleanup_risk="high",
+            cleanup_risk=None,
+        ),
+        _location(
+            "waveforms",
+            "波形缓存",
+            paths["cache_dir"] / "waveforms",
+            category="可重建缓存",
+            description="从生成音频重建的波形峰值；低风险，受自动缓存治理。",
+            cleanup_risk="low",
         ),
         _location(
             "qwen_align",
             "Qwen 对齐日志",
             paths["cache_dir"] / "qwen-align",
-            category="缓存",
-            description="强制对齐 worker 日志和临时记录。",
+            category="可重建缓存",
+            description="强制对齐 worker 日志和临时记录；低风险，受自动缓存治理。",
             cleanup_key="qwen_align",
             cleanup_label="清理对齐缓存",
+            cleanup_risk="low",
+        ),
+        _location(
+            "provider_catalogs",
+            "服务商目录缓存",
+            paths["cache_dir"] / "provider-catalogs",
+            category="可重建缓存",
+            description="云服务商音色目录与预览缓存；低风险，受自动缓存治理。",
             cleanup_risk="low",
         ),
         _location(
@@ -291,12 +405,22 @@ def storage_audit() -> dict[str, Any]:
             cleanup_risk="medium",
         ),
     ]
-    total_bytes = sum(item["size_bytes"] or 0 for item in locations if item["key"] in {"voice_dir", "output_dir", "export_dir", "project_dir", "cache_dir", "log_dir"})
+    total_bytes = sum(item["size_bytes"] or 0 for item in locations if item["key"] in {"assets", "legacy_seed_audio_assets", "voice_dir", "output_dir", "export_dir", "project_dir", "cache_dir", "log_dir"})
     flows = [
         {
-            "name": "自定义音色拖拽上传",
+            "name": "Seed Audio 参考图片",
+            "path": str(paths["seed_audio_images"] / "<file_id>.<jpg|png|webp>"),
+            "description": "新上传图片进入统一持久素材目录；旧版素材在读取时兼容迁移。",
+        },
+        {
+            "name": "自定义参考音频上传",
+            "path": str(paths["custom_reference_audio"] / "<file_id>.<ext>"),
+            "description": "生成页上传和裁切的参考音频先进入持久素材目录，并按任务、历史和音色引用管理。",
+        },
+        {
+            "name": "自定义音色注册",
             "path": str(paths["voice_dir"] / "<file_id>.<ext>"),
-            "description": "注册音色库或生成页自定义音色确认后，参考音频会进入音色库目录。",
+            "description": "注册到音色库后，参考音频移动到持久音色目录。",
         },
         {
             "name": "自定义音色 ASR",
@@ -349,12 +473,20 @@ def _cleanup_targets() -> dict[str, Path]:
         "diagnostics": output_dir() / "diagnostics",
         "qwen_align": cache_dir() / "qwen-align",
         "logs": log_dir(),
-        "asr_uploads": cache_dir() / "asr_uploads",
     }
 
 
 def _clear_path_contents(path: Path) -> dict[str, Any]:
     before = _dir_stats(path)
+    if path.is_symlink():
+        return {
+            "path": str(path),
+            "before_bytes": before["size_bytes"],
+            "after_bytes": before["size_bytes"],
+            "removed_bytes": 0,
+            "before_files": before["file_count"],
+            "after_files": before["file_count"],
+        }
     if path.exists():
         if path.is_file():
             path.unlink()

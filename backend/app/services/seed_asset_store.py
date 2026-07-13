@@ -44,6 +44,10 @@ class SeedImageAsset(BaseModel):
 
 
 def asset_dir() -> Path:
+    return expand_path(settings_store.get().data_dir) / "assets" / "seed-audio" / "images"
+
+
+def legacy_asset_dir() -> Path:
     return expand_path(settings_store.get().data_dir) / "seed_audio" / "assets"
 
 
@@ -97,6 +101,8 @@ def _register_image(
         raise SeedAssetStoreError("SEED_IMAGE_FORMAT_MISMATCH", "图片内容与登记格式不一致")
     root = asset_dir()
     root.mkdir(parents=True, exist_ok=True)
+    if root.is_symlink():
+        raise SeedAssetStoreError("ASSET_PATH_NOT_MANAGED", "拒绝写入符号链接素材目录")
     extension = "jpg" if media_format == "jpeg" else media_format
     mime_type = "image/jpeg" if media_format == "jpeg" else f"image/{media_format}"
 
@@ -133,7 +139,9 @@ def get_asset(file_id: str) -> SeedImageAsset | None:
     _ensure_table()
     with db.conn() as connection:
         row = connection.execute("SELECT data FROM seed_assets WHERE file_id = ?", (file_id,)).fetchone()
-    return SeedImageAsset(**json.loads(row["data"])) if row else None
+    if not row:
+        return None
+    return _migrate_legacy_asset(SeedImageAsset(**json.loads(row["data"])))
 
 
 def delete_asset(file_id: str) -> bool:
@@ -142,12 +150,12 @@ def delete_asset(file_id: str) -> bool:
     asset = get_asset(file_id)
     if asset is None:
         return False
-    path = Path(asset.path).expanduser().resolve(strict=False)
-    root = asset_dir().expanduser().resolve(strict=False)
-    try:
-        path.relative_to(root)
-    except ValueError as exc:
-        raise SeedAssetStoreError("ASSET_PATH_NOT_MANAGED", "拒绝删除受管理目录以外的文件") from exc
+    raw_path = Path(asset.path).expanduser()
+    if raw_path.is_symlink():
+        raise SeedAssetStoreError("ASSET_PATH_NOT_MANAGED", "拒绝删除符号链接素材")
+    path = raw_path.resolve(strict=False)
+    if _managed_root(path) is None:
+        raise SeedAssetStoreError("ASSET_PATH_NOT_MANAGED", "拒绝删除受管理目录以外的文件")
     if path.name != f"{asset.file_id}.{'jpg' if asset.media_format == 'jpeg' else asset.media_format}":
         raise SeedAssetStoreError("ASSET_PATH_NOT_MANAGED", "素材路径与标识不匹配")
 
@@ -155,6 +163,58 @@ def delete_asset(file_id: str) -> bool:
     with db.conn() as connection:
         connection.execute("DELETE FROM seed_assets WHERE file_id = ?", (file_id,))
     return True
+
+
+def _migrate_legacy_asset(asset: SeedImageAsset) -> SeedImageAsset:
+    """Move a valid legacy file to the current managed root on first access."""
+
+    raw_path = Path(asset.path).expanduser()
+    if raw_path.is_symlink() or not raw_path.is_file():
+        return asset
+    path = raw_path.resolve(strict=False)
+    legacy_dir = legacy_asset_dir().expanduser()
+    if legacy_dir.is_symlink():
+        return asset
+    legacy_root = legacy_dir.resolve(strict=False)
+    if path.parent != legacy_root:
+        return asset
+    expected_name = f"{asset.file_id}.{'jpg' if asset.media_format == 'jpeg' else asset.media_format}"
+    if path.name != expected_name:
+        return asset
+
+    root = asset_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    if root.is_symlink():
+        return asset
+    destination = root / expected_name
+    if destination.exists() or destination.is_symlink():
+        return asset
+    try:
+        path.replace(destination)
+        migrated = asset.model_copy(update={"path": str(destination)})
+        with db.conn() as connection:
+            connection.execute(
+                "UPDATE seed_assets SET data = ? WHERE file_id = ?",
+                (json.dumps(migrated.model_dump(), ensure_ascii=False), migrated.file_id),
+            )
+        return migrated
+    except Exception:
+        if destination.exists() and not path.exists():
+            try:
+                destination.replace(path)
+            except OSError:
+                pass
+        return asset
+
+
+def _managed_root(path: Path) -> Path | None:
+    for candidate in (asset_dir(), legacy_asset_dir()):
+        if candidate.is_symlink():
+            continue
+        root = candidate.expanduser().resolve(strict=False)
+        if path.parent == root:
+            return root
+    return None
 
 
 def list_assets() -> list[SeedImageAsset]:
@@ -169,16 +229,14 @@ def referenced_file_ids(
     task_rows: Iterable[dict] | None = None,
     history_rows: Iterable[dict] | None = None,
 ) -> set[str]:
-    """Collect IDs referenced by active work or durable history parameters."""
+    """Collect IDs referenced by retained tasks or durable history parameters."""
 
     if task_rows is None:
         task_rows = db.list_all("tasks", "created_at", limit=-1)
     if history_rows is None:
         history_rows = db.list_all("history", "created_at", limit=-1)
-    active_statuses = {"pending", "queued", "running", "postprocessing", "retrying"}
-    active_tasks = [row for row in task_rows if str(row.get("status", "")) in active_statuses]
     referenced: set[str] = set()
-    for row in [*active_tasks, *history_rows]:
+    for row in [*task_rows, *history_rows]:
         _collect_file_ids(row, referenced)
     return referenced
 

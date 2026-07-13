@@ -4,14 +4,15 @@ import os
 from pathlib import Path
 from typing import Any
 
-from app.services import confucius4_paths, engine_manifests, engine_policy, faster_whisper_asr, qwen3_tts_paths, qwen_mlx_asr, settings_store
+from app.services import confucius4_paths, engine_manifests, engine_policy, engine_runtime_paths, faster_whisper_asr, qwen3_tts_paths, qwen_mlx_asr, settings_store
 
 
 DEFAULT_EXTERNAL_ROOTS = {
-    "emotivoice": Path("/Users/foxmacstudio/Projects/tts-engine-lab/EmotiVoice"),
-    "f5-tts": Path("/Users/foxmacstudio/Projects/tts-engine-lab/F5-TTS"),
-    "cosyvoice-sft": Path("/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice"),
-    "cosyvoice-zero-shot": Path("/Users/foxmacstudio/Projects/tts-engine-lab/CosyVoice"),
+    engine_id: next(
+        (path for path in engine_runtime_paths.engine_root_candidates(engine_id) if path.exists()),
+        engine_runtime_paths.managed_engine_root(engine_id),
+    )
+    for engine_id in ["emotivoice", "f5-tts", "cosyvoice-sft", "cosyvoice-zero-shot"]
 }
 
 
@@ -20,21 +21,15 @@ def mlx_audio_runtime_available() -> tuple[bool, str | None]:
 
 
 def external_engine_root(engine_id: str) -> Path:
-    env_names = {
-        "emotivoice": "VOICE_STUDIO_EMOTIVOICE_ROOT",
-        "f5-tts": "VOICE_STUDIO_F5_TTS_ROOT",
-        "cosyvoice-sft": "VOICE_STUDIO_COSYVOICE_ROOT",
-        "cosyvoice-zero-shot": "VOICE_STUDIO_COSYVOICE_ROOT",
-    }
-    env_value = os.environ.get(env_names[engine_id])
-    if env_value:
+    env_name = engine_runtime_paths.ENGINE_LAYOUT[engine_id][0]
+    if env_value := os.environ.get(env_name):
         return Path(env_value).expanduser()
     fallback = DEFAULT_EXTERNAL_ROOTS.get(engine_id)
     if fallback and fallback.exists():
-        return fallback
+        return fallback.resolve()
     raise RuntimeError(
-        f"Environment variable {env_names[engine_id]} is not set. "
-        f"Please set it to the root directory of the {engine_id} engine."
+        f"{engine_id} runtime is not installed. Put it at "
+        f"{engine_runtime_paths.managed_engine_root(engine_id)} or set {env_name}."
     )
 
 

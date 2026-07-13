@@ -21,7 +21,7 @@ from app.schemas.voice_studio import (
     TranscriptionRecord,
     now_iso,
 )
-from app.services import asr_service, database as db, export_store, history_store, task_queue, text_planner, text_verifier
+from app.services import asr_service, custom_reference_store, database as db, export_store, history_store, task_queue, text_planner, text_verifier
 
 _queue: asyncio.Queue[str] | None = None
 _worker_task: asyncio.Task[None] | None = None
@@ -199,7 +199,10 @@ def dismiss_longform(longform_task_id: str) -> dict:
         if seg.status not in _TERMINAL_STATUSES:
             seg.status = TaskStatus.cancelled
             seg.error_message = "用户关闭"
+    managed_paths = custom_reference_store.managed_paths_in(task.model_dump())
     db.delete_one("longform_tasks", "longform_task_id", longform_task_id)
+    for path in managed_paths:
+        custom_reference_store.delete_if_unreferenced(path)
     _notify_clients()
     return {"longform_task_id": longform_task_id, "status": "dismissed"}
 

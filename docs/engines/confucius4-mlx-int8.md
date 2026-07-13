@@ -9,8 +9,8 @@
 | 引擎 ID | `confucius4-mlx-int8` |
 | 开发者 | NetEase Youdao / MLX runtime by Hert4 |
 | 模型 | `beyoru/Confucius4-TTS-mlx-int8` |
-| 本地模型目录 | `/Users/foxmacstudio/VoiceStudio/models/confucius4-mlx-int8` |
-| 本地运行时目录 | `/Users/foxmacstudio/VoiceStudio/engines/mlx-audio-confucius4` |
+| 本地模型目录 | `~/VoiceStudio/models/confucius4-mlx-int8` |
+| 本地运行时目录 | `~/VoiceStudio/engines/mlx-audio-confucius4` |
 | 环境变量覆盖 | `VOICE_STUDIO_CONFUCIUS4_MODEL_DIR`, `VOICE_STUDIO_CONFUCIUS4_MLX_AUDIO_ROOT` |
 | 采样率 | 22050 Hz |
 

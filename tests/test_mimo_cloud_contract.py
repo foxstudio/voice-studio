@@ -290,7 +290,7 @@ def test_asr_transcribe_endpoint_dispatches_faster_whisper_turbo(tmp_path: Path,
     def fake_turbo_transcribe(*, audio_path: str, language: str, model_path: str):
         assert audio_path.endswith(".wav")
         assert language == "en"
-        assert Path(model_path).name == "faster-whisper-turbo"
+        assert Path(model_path) == settings_store.model_path("faster-whisper-turbo")
         return {
             "text": "We shipped the first localization pass.",
             "segments": [

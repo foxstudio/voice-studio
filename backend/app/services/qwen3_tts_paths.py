@@ -3,9 +3,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from app.services import engine_runtime_paths
+
 ENGINE_ID = "qwen3-tts-mlx-0.6b"
 
-DEFAULT_ROOT = Path("/Users/foxmacstudio/Projects/tts-engine-lab/qwen3-tts-apple-silicon")
+DEFAULT_ROOT = engine_runtime_paths.managed_engine_root(ENGINE_ID)
 CUSTOM_MODEL_DIR = "Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit"
 BASE_MODEL_DIR = "Qwen3-TTS-12Hz-0.6B-Base-8bit"
 VOICE_DESIGN_MODEL_DIR = "Qwen3-TTS-12Hz-0.6B-VoiceDesign-8bit"
@@ -25,7 +27,7 @@ REQUIRED_MODEL_FILES = [
 
 
 def root() -> Path:
-    return Path(os.environ.get("VOICE_STUDIO_QWEN3_TTS_ROOT", str(DEFAULT_ROOT))).expanduser()
+    return engine_runtime_paths.resolve_engine_root(ENGINE_ID, require_existing=False)
 
 
 def model_dir(kind: str = "custom") -> Path:

@@ -450,7 +450,7 @@ def main() -> int:
         output = (
             Path(args.output).expanduser()
             if args.output
-            else data_dir / "manifests" / f"voice-studio-data-audit-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+            else data_dir / "reports" / "audits" / f"voice-studio-data-audit-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
         )
         manifest_path = output.expanduser().resolve(strict=False)
         manifest_path.parent.mkdir(parents=True, exist_ok=True)

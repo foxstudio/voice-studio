@@ -53,6 +53,25 @@ export interface EngineDetail {
 	};
 }
 
+export interface EngineInstallation {
+	engine_id: string;
+	source_url: string;
+	source_label: string;
+	install_kind: string;
+	license_note: string;
+	preferred_path: string | null;
+	installed: boolean;
+	installation_status: string;
+	discovered_paths: Array<{
+		path: string;
+		exists: boolean;
+		is_symlink: boolean;
+		resolved_path: string | null;
+	}>;
+	automatic_download_supported: boolean;
+	reuse_note: string;
+}
+
 export interface EngineSpeaker {
 	speaker_id: string;
 	name: string;

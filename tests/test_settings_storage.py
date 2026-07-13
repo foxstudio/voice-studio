@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -40,9 +41,24 @@ def test_storage_audit_lists_generation_artifacts(tmp_path, monkeypatch):
     keys = {item["key"] for item in audit["locations"]}
     flow_names = {item["name"] for item in audit["flows"]}
 
-    assert {"voice_dir", "output_dir", "asr_uploads", "diagnostics", "log_dir"} <= keys
-    assert {"自定义音色 ASR", "单条/长文本生成", "引擎诊断"} <= flow_names
+    assert {"assets", "seed_audio_images", "custom_reference_audio", "voice_dir", "output_dir", "asr_uploads", "diagnostics", "log_dir"} <= keys
+    assert {"自定义参考音频上传", "自定义音色注册", "自定义音色 ASR", "单条/长文本生成", "引擎诊断"} <= flow_names
     assert audit["total_bytes"] >= len(b"audio") + len(b"source")
+
+
+def test_ensure_directories_creates_runtime_asset_and_governed_cache_roots(tmp_path):
+    settings = _settings_for(tmp_path)
+
+    settings_store.ensure_directories(settings)
+
+    expected = {
+        tmp_path / "assets" / "seed-audio" / "images",
+        tmp_path / "assets" / "reference-audio" / "custom",
+        tmp_path / "cache" / "waveforms",
+        tmp_path / "cache" / "qwen-align",
+        tmp_path / "cache" / "provider-catalogs",
+    }
+    assert all(path.is_dir() for path in expected)
 
 
 def test_cleanup_storage_only_allows_whitelisted_targets(tmp_path, monkeypatch):
@@ -84,3 +100,49 @@ def test_open_storage_location_uses_audited_location_keys(tmp_path, monkeypatch)
         assert "Unknown storage location" in str(exc)
     else:
         raise AssertionError("arbitrary paths should not be openable")
+
+
+def test_faster_whisper_candidates_prefer_latest_existing_hf_snapshot(tmp_path, monkeypatch):
+    settings = _settings_for(tmp_path)
+    monkeypatch.setattr(settings_store, "get", lambda: settings)
+    hf_home = tmp_path / "hf"
+    snapshots = hf_home / "hub" / "models--mobiuslabsgmbh--faster-whisper-large-v3-turbo" / "snapshots"
+    older = snapshots / "older-snapshot"
+    newer = snapshots / "newer-snapshot"
+    older.mkdir(parents=True)
+    newer.mkdir()
+    os.utime(older, (100, 100))
+    os.utime(newer, (200, 200))
+    monkeypatch.setenv("HF_HOME", str(hf_home))
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+
+    candidates = settings_store.model_candidates("faster-whisper-turbo")
+
+    assert candidates == [newer, tmp_path / "models" / "faster-whisper-turbo"]
+
+
+def test_qwen_asr_candidates_are_portable_and_discover_hf_cache(tmp_path, monkeypatch):
+    settings = _settings_for(tmp_path)
+    monkeypatch.setattr(settings_store, "get", lambda: settings)
+    data_root = tmp_path / "runtime-data"
+    configured = tmp_path / "configured-qwen"
+    hf_home = tmp_path / "hf"
+    snapshot = hf_home / "hub" / "models--mlx-community--Qwen3-ASR-1.7B-8bit" / "snapshots" / "snapshot-a"
+    snapshot.mkdir(parents=True)
+    monkeypatch.setenv("VOICE_STUDIO_QWEN3_ASR_MODEL_DIR", str(configured))
+    monkeypatch.setenv("VOICE_STUDIO_DATA_DIR", str(data_root))
+    monkeypatch.setenv("HF_HOME", str(hf_home))
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+
+    candidates = settings_store.model_candidates("qwen3-asr-mlx")
+
+    assert candidates == [
+        configured,
+        data_root / "models" / "qwen3-asr-mlx",
+        tmp_path / "models" / "qwen3-asr-mlx",
+        tmp_path / "models" / "mlx-community_Qwen3-ASR-1.7B-8bit",
+        settings_store.PROJECT_ROOT / "models" / "qwen3-asr-mlx",
+        settings_store.PROJECT_ROOT / "models" / "mlx-community_Qwen3-ASR-1.7B-8bit",
+        snapshot,
+    ]
+    assert all("/Users/foxmacstudio/Documents/Voxt Modles" not in str(path) for path in candidates)
