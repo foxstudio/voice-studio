@@ -6,7 +6,6 @@
 	import { onDestroy, onMount, tick } from 'svelte';
 	import {
 		EMPTY_DOUBAO_FILTERS,
-		buildQuickSpeakers,
 		emotionValue,
 		filterDoubaoSpeakers,
 		languageCode,
@@ -59,7 +58,6 @@
 	const byId = $derived(new Map(speakers.map((speaker) => [speaker.speaker_id, speaker])));
 	const currentSpeaker = $derived(byId.get(value) ?? fallbackSpeaker(value));
 	const allRecentIds = $derived(mergeRecentIds(persistedRecentIds, recentIds));
-	const quickSpeakers = $derived(buildQuickSpeakers(speakers, value, favoriteIds, allRecentIds, 6));
 	const visibleSpeakers = $derived(filterDoubaoSpeakers(speakers, filters, tab, favoriteIds, allRecentIds));
 	const filterOptions = $derived({
 		ages: uniqueStrings(speakers.map((speaker) => speaker.age)),
@@ -229,24 +227,16 @@
 {#if mode === 'drawer'}<div class="doubao-speaker-picker">
 	<div class="doubao-speaker-current">
 		<span class="doubao-speaker-label">音色</span>
-		<button class="doubao-current-card" type="button" onclick={openDrawer} aria-label="打开豆包官方音色目录">
-			<span class="doubao-voice-orb" class:playing={previewingId === currentSpeaker?.speaker_id}><span></span><span></span><span></span></span>
-			<span class="doubao-current-copy"><strong>{currentSpeaker?.name || '选择官方音色'}</strong><small>{currentSpeaker?.speaker_id || '从豆包目录中选择'}</small></span>
-		</button>
-		<button class="doubao-icon-action" class:active={previewingId === currentSpeaker?.speaker_id} type="button" aria-label={previewingId === currentSpeaker?.speaker_id ? '暂停试听当前音色' : '试听当前音色'} disabled={!currentSpeaker} onclick={() => currentSpeaker && togglePreview(currentSpeaker)}>
-			{#if previewingId === currentSpeaker?.speaker_id}<Pause size={14} />{:else}<Play size={14} />{/if}
-		</button>
+		<div class="doubao-current-control">
+			<button class="doubao-current-card" type="button" onclick={openDrawer} aria-label="打开豆包官方音色目录" title={currentSpeaker?.speaker_id || '选择豆包官方音色'}>
+				<span class="doubao-current-copy"><strong>{currentSpeaker?.name || '选择官方音色'}</strong>{#if currentSpeaker?.speaker_id}<small>{currentSpeaker.speaker_id}</small>{/if}</span>
+			</button>
+			<button class="doubao-inline-preview-action" class:active={previewingId === currentSpeaker?.speaker_id} type="button" aria-label={previewingId === currentSpeaker?.speaker_id ? '暂停试听当前音色' : '试听当前音色'} disabled={!currentSpeaker} onclick={() => currentSpeaker && togglePreview(currentSpeaker)}>
+				{#if previewingId === currentSpeaker?.speaker_id}<Pause size={13} />{:else}<Play size={13} />{/if}
+			</button>
+		</div>
 		<button class="doubao-more-action" type="button" onclick={openDrawer}>更多音色 <span>{speakers.length || '·'}</span></button>
 	</div>
-
-	{#if quickSpeakers.length}
-		<div class="doubao-quick-rail" aria-label="常用豆包音色">
-			<span>常用</span>
-			{#each quickSpeakers as speaker (speaker.speaker_id)}
-				<button class:active={value === speaker.speaker_id} type="button" title={speaker.speaker_id} onclick={() => choose(speaker.speaker_id)}>{speaker.name}</button>
-			{/each}
-		</div>
-	{/if}
 	{#if currentSpeaker && previewErrorId === currentSpeaker.speaker_id}<small class="doubao-inline-preview-error">当前音色暂无可用试听，不影响直接生成。</small>{/if}
 </div>{/if}
 
@@ -334,15 +324,20 @@
 {/if}
 
 <style>
-	.doubao-speaker-picker { flex: 1 1 520px; min-width: min(100%, 420px); display: grid; gap: 7px; }
+	.doubao-speaker-picker { flex: 0 1 auto; min-width: 0; }
 	.doubao-speaker-current { display: flex; align-items: center; gap: 6px; min-width: 0; }
 	.doubao-speaker-label { color: var(--muted); font-size: 12px; white-space: nowrap; }
-	.doubao-current-card { min-width: 220px; max-width: 330px; height: 38px; display: flex; align-items: center; gap: 8px; padding: 4px 9px; border: 1px solid rgba(113, 164, 226, .28); border-radius: 8px; color: var(--text); background: linear-gradient(110deg, #101820, #11151b 62%); text-align: left; }
-	.doubao-current-card:hover, .doubao-current-card:focus-visible { border-color: rgba(121, 183, 255, .62); box-shadow: 0 0 0 2px rgba(80, 147, 224, .12); outline: none; }
-	.doubao-current-copy { min-width: 0; display: grid; gap: 1px; }
+	.doubao-current-control { width: 300px; min-width: 220px; height: 28px; display: flex; align-items: stretch; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: #101215; transition: border-color 120ms ease, box-shadow 120ms ease; }
+	.doubao-current-control:hover, .doubao-current-control:focus-within { border-color: #46515f; box-shadow: 0 0 0 2px rgba(80, 147, 224, .09); }
+	.doubao-current-card { flex: 1 1 auto; min-width: 0; height: 26px; display: flex; align-items: center; padding: 0 8px; border: 0; border-radius: 0; color: var(--text); background: transparent; text-align: left; }
+	.doubao-current-card:focus-visible { outline: 2px solid rgba(90, 167, 255, .72); outline-offset: -2px; }
+	.doubao-current-copy { min-width: 0; width: 100%; display: flex; align-items: baseline; gap: 8px; }
 	.doubao-current-copy strong, .doubao-current-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.doubao-current-copy strong { font-size: 12px; font-weight: 650; }
-	.doubao-current-copy small { color: #7f8b99; font: 9.5px ui-monospace, SFMono-Regular, Menlo, monospace; }
+	.doubao-current-copy strong { flex: 0 0 auto; max-width: 120px; font-size: 12px; font-weight: 500; }
+	.doubao-current-copy small { min-width: 0; color: #707b89; font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
+	.doubao-inline-preview-action { width: 30px; flex: 0 0 30px; display: inline-grid; place-items: center; padding: 0; border: 0; border-left: 1px solid var(--line); border-radius: 0; color: #9aa7b6; background: transparent; }
+	.doubao-inline-preview-action:hover, .doubao-inline-preview-action:focus-visible, .doubao-inline-preview-action.active { color: #beddff; background: #17202b; outline: none; }
+	.doubao-inline-preview-action:disabled { color: #59616c; cursor: not-allowed; }
 	.doubao-voice-orb { width: 25px; height: 25px; flex: 0 0 25px; border: 1px solid rgba(112, 178, 255, .35); border-radius: 50%; background: radial-gradient(circle at 35% 30%, #263e58, #10161d 65%); display: flex; align-items: center; justify-content: center; gap: 2px; }
 	.doubao-voice-orb span { width: 2px; height: 7px; border-radius: 2px; background: #8dc7ff; opacity: .72; }
 	.doubao-voice-orb span:nth-child(2) { height: 12px; background: #8ce0c0; }
@@ -350,17 +345,14 @@
 	.doubao-voice-orb.playing span:nth-child(2) { animation-delay: -.3s; }
 	.doubao-voice-orb.playing span:nth-child(3) { animation-delay: -.5s; }
 	.doubao-voice-orb.large { width: 36px; height: 36px; flex-basis: 36px; }
-	.doubao-icon-action, .doubao-more-action, .doubao-use-action, .doubao-tabs button, .doubao-quick-rail button, .doubao-results-meta button, .doubao-empty button, .doubao-manual-toggle, .doubao-manual-entry div button { border: 1px solid var(--line); background: #131820; color: #cfd9e6; }
+	.doubao-icon-action, .doubao-more-action, .doubao-use-action, .doubao-tabs button, .doubao-results-meta button, .doubao-empty button, .doubao-manual-toggle, .doubao-manual-entry div button { border: 1px solid var(--line); background: #131820; color: #cfd9e6; }
 	.doubao-icon-action { width: 30px; height: 30px; padding: 0; display: inline-grid; place-items: center; border-radius: 7px; flex: 0 0 30px; }
 	.doubao-icon-action:hover, .doubao-icon-action:focus-visible, .doubao-icon-action.active { color: #a9d5ff; border-color: rgba(113, 173, 241, .52); background: #172331; outline: none; }
 	.doubao-icon-action.favorite.active { color: #f1a9b8; border-color: rgba(230, 118, 147, .44); background: rgba(166, 55, 90, .16); }
-	.doubao-more-action { height: 30px; padding: 0 9px; border-radius: 7px; white-space: nowrap; font-size: 11px; }
+	.doubao-more-action { height: 28px; min-height: 28px; padding: 0 9px; border-radius: 7px; white-space: nowrap; font-size: 12px; background: var(--panel-2); }
+	.doubao-more-action:hover, .doubao-more-action:focus-visible { border-color: #46515f; color: var(--text); outline: none; }
 	.doubao-more-action span { color: #7faee0; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
-	.doubao-quick-rail { display: flex; align-items: center; gap: 5px; overflow: hidden; min-width: 0; padding-left: 35px; }
-	.doubao-quick-rail > span { color: #697687; font-size: 10px; }
-	.doubao-quick-rail button { min-width: 0; max-width: 110px; height: 24px; border-radius: 999px; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9aa7b6; font-size: 10px; }
-	.doubao-quick-rail button:hover, .doubao-quick-rail button.active { border-color: rgba(89, 166, 242, .46); color: #beddff; background: rgba(41, 103, 163, .16); }
-	.doubao-inline-preview-error { padding-left: 35px; color: #b99a70; font-size: 9px; }
+	.doubao-inline-preview-error { display: block; margin: 4px 0 0 35px; color: #b99a70; font-size: 9px; }
 	audio { display: none; }
 	.doubao-drawer-backdrop { position: fixed; inset: 0; z-index: 130; display: flex; justify-content: flex-end; background: rgba(2, 5, 9, .68); backdrop-filter: blur(3px); }
 	.doubao-catalog-drawer { width: min(540px, 92vw); height: 100%; display: grid; grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto; gap: 12px; padding: 20px; overflow: hidden; border-left: 1px solid rgba(119, 165, 216, .24); background: linear-gradient(160deg, #111820 0%, #0c1015 48%, #0c0f13 100%); box-shadow: -24px 0 70px rgba(0, 0, 0, .55); animation: doubao-drawer-in 160ms ease-out; }
@@ -425,9 +417,7 @@
 	@media (max-width: 720px) {
 		.doubao-speaker-picker { min-width: 100%; flex-basis: 100%; }
 		.doubao-speaker-current { flex-wrap: wrap; }
-		.doubao-current-card { flex: 1 1 220px; max-width: none; }
-		.doubao-quick-rail { padding-left: 0; overflow-x: auto; }
-		.doubao-quick-rail button { flex: 0 0 auto; }
+		.doubao-current-control { flex: 1 1 220px; width: auto; }
 		.doubao-catalog-drawer { width: 100vw; max-width: none; padding: 16px 14px; border-left: 0; }
 		.doubao-catalog-drawer.embedded { width: 100%; height: 720px; min-height: 520px; border: 1px solid rgba(119, 165, 216, .24); }
 		.doubao-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
