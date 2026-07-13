@@ -87,6 +87,7 @@
 	let projectNameDraft = $state('');
 	let projectNameSaving = $state(false);
 	let projectMenuOpen = $state(false);
+	let projectMenuSyncing = $state(false);
 	let extractingAudio = $state(false);
 	let separatingStems = $state(false);
 	let transcribingAsr = $state(false);
@@ -219,11 +220,12 @@
 		loading = true;
 		error = '';
 		try {
-			projects = await Api.projects();
+			projects = await Api.syncVideoLocalizationProjects();
 			const urlProjectId = new URLSearchParams(window.location.search).get('project_id');
 			const fallbackProject = projects.find(projectHasVideoLocalizationSource) ?? projects[0];
 			projectId = (urlProjectId && projects.some((project) => project.project_id === urlProjectId) ? urlProjectId : fallbackProject?.project_id) ?? '';
 			if (projectId) await loadDraft(projectId);
+			else if (urlProjectId) clearProjectIdFromUrl();
 		} catch (e) {
 			error = (e as Error).message || '加载项目失败';
 		} finally {
@@ -317,15 +319,75 @@
 			projectMenuOpen = false;
 			return;
 		}
+		if (!(await flushPendingAutosave())) return;
+		clearProjectRuntimeState();
 		projectId = nextProjectId;
 		editingProjectName = false;
 		projectMenuOpen = false;
 		await loadDraft(projectId);
 	}
 
-	function toggleProjectMenu(event: MouseEvent) {
+	async function toggleProjectMenu(event: MouseEvent) {
 		event.stopPropagation();
-		projectMenuOpen = !projectMenuOpen;
+		if (projectMenuOpen) {
+			projectMenuOpen = false;
+			return;
+		}
+		projectMenuOpen = true;
+		projectMenuSyncing = true;
+		error = '';
+		try {
+			projects = await Api.syncVideoLocalizationProjects();
+			if (projectId && !projects.some((project) => project.project_id === projectId)) {
+				cancelPendingAutosave();
+				clearProjectRuntimeState();
+				projectId = projects[0]?.project_id ?? '';
+				if (projectId) await loadDraft(projectId);
+				else clearProjectIdFromUrl();
+				message = '原项目目录已不存在，已从历史列表隐藏';
+				setTimeout(() => (message = ''), 2200);
+			}
+		} catch (e) {
+			error = (e as Error).message || '同步本地项目失败';
+		} finally {
+			projectMenuSyncing = false;
+		}
+	}
+
+	async function flushPendingAutosave() {
+		if (autoSaveTimer) {
+			clearTimeout(autoSaveTimer);
+			autoSaveTimer = null;
+		}
+		if (autoSaveStatus === 'dirty') await runDraftAutosave();
+		return autoSaveStatus !== 'failed';
+	}
+
+	function cancelPendingAutosave() {
+		if (autoSaveTimer) clearTimeout(autoSaveTimer);
+		autoSaveTimer = null;
+		autoSaveScope = null;
+		pendingUiStatePatch = {};
+		autoSaveStatus = 'idle';
+	}
+
+	function clearProjectRuntimeState() {
+		if (previewPlaying) previewPlaybackController?.playPause();
+		draft = null;
+		draftOnlyCueIds = [];
+		selectedCueId = '';
+		selectedVoiceId = '';
+		selectedRecipeId = '';
+		operations = [];
+		batches = [];
+		previewTimeMs = 0;
+		stopOperationPolling();
+	}
+
+	function clearProjectIdFromUrl() {
+		const url = new URL(window.location.href);
+		url.searchParams.delete('project_id');
+		window.history.replaceState({}, '', url);
 	}
 
 	function closeProjectMenuFromPage(event: PointerEvent) {
@@ -1854,11 +1916,14 @@
 							<h1>{selectedProject?.name || draft?.source_media.filename || '未命名本土化项目'}</h1>
 							<button type="button" aria-label="修改项目名称" data-tooltip="修改名称：项目目录会随新名称同步调整。" onclick={startProjectNameEdit} disabled={!selectedProject || importing}><Pencil size={12} /></button>
 							<div class="project-switcher">
-								<button class="project-history-toggle" class:active={projectMenuOpen} type="button" aria-label="切换历史项目" aria-expanded={projectMenuOpen} data-tooltip="切换项目：查看并打开以前保存的视频本土化项目。" onclick={toggleProjectMenu} disabled={loading || !projects.length}><ChevronDown size={13} /></button>
+								<button class="project-history-toggle" class:active={projectMenuOpen} type="button" aria-label="切换历史项目" aria-expanded={projectMenuOpen} data-tooltip="切换项目：同步本地项目目录并打开已有的视频本土化项目。" onclick={toggleProjectMenu} disabled={loading}><ChevronDown size={13} /></button>
 								{#if projectMenuOpen}
 									<div class="project-menu" role="menu" aria-label="历史项目">
-										<div class="project-menu-head"><strong>历史项目</strong><span>{projects.length}</span></div>
+										<div class="project-menu-head"><strong>历史项目</strong><span>{projectMenuSyncing ? '同步中' : projects.length}</span></div>
 										<div class="project-menu-list">
+											{#if !projectMenuSyncing && !projects.length}
+												<div class="project-menu-empty">本地没有可用项目</div>
+											{/if}
 											{#each projects as project}
 												<button class:active={project.project_id === projectId} type="button" role="menuitem" onclick={() => selectProject(project.project_id)}>
 													<span>{project.name}</span>
@@ -2287,6 +2352,13 @@
 		max-height: 300px;
 		overflow-y: auto;
 		padding: 4px;
+	}
+
+	.project-menu-empty {
+		padding: 18px 10px;
+		color: #7f8d96;
+		font-size: 10px;
+		text-align: center;
 	}
 
 	.project-menu-list button {

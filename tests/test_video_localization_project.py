@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import sys
 import time
 import zipfile
@@ -204,6 +205,116 @@ def test_video_localization_recovers_from_project_snapshot_when_database_draft_i
     assert recovered.status_code == 200
     assert recovered.json()["source_media"]["filename"] == "recover.mp4"
     assert recovered.json()["cues"][0]["cue_id"] == "cue_recovered"
+
+
+def test_video_localization_sync_recovers_local_package_and_is_idempotent(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "本地恢复项目", "description": ""}).json()
+    saved = client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "source_media": {"filename": "recover.mp4", "duration_ms": 1200},
+            "operations": [
+                {
+                    "operation_id": "operation_pending",
+                    "project_id": project["project_id"],
+                    "kind": "english_asr",
+                    "status": "running",
+                }
+            ],
+        },
+    )
+    assert saved.status_code == 200
+    root = _project_root(project["project_id"])
+    project_store.delete_project(project["project_id"])
+
+    first = client.post("/api/projects/video-localization/sync-projects")
+    second = client.post("/api/projects/video-localization/sync-projects")
+
+    assert first.status_code == 200
+    assert [item["project_id"] for item in first.json()] == [project["project_id"]]
+    assert [item["project_id"] for item in second.json()] == [project["project_id"]]
+    recovered = project_store.get_project(project["project_id"])
+    assert recovered is not None
+    assert recovered.parameters[media_assets.PROJECT_DIR_NAME_KEY] == root.name
+    operation = recovered.parameters["video_localization"]["operations"][0]
+    assert operation["status"] == "failed"
+    assert operation["error_code"] == "PROJECT_INDEX_RECOVERED"
+
+
+def test_video_localization_sync_hides_missing_directory_without_deleting_database_project(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "目录被删除", "description": ""}).json()
+    saved = client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={"source_media": {"filename": "deleted.mp4", "duration_ms": 1200}},
+    )
+    assert saved.status_code == 200
+    shutil.rmtree(_project_root(project["project_id"]))
+
+    synced = client.post("/api/projects/video-localization/sync-projects")
+
+    assert synced.status_code == 200
+    assert synced.json() == []
+    assert project_store.get_project(project["project_id"]) is not None
+    opened = client.post(f"/api/projects/{project['project_id']}/video-localization/open-directory")
+    assert opened.status_code == 410
+    assert opened.json()["error"]["code"] == "VIDEO_LOCALIZATION_PROJECT_DIRECTORY_MISSING"
+    assert not _project_root(project["project_id"]).exists()
+
+
+def test_video_localization_sync_does_not_overwrite_existing_database_draft(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "磁盘名称", "description": ""}).json()
+    saved = client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={"source_media": {"filename": "disk.mp4", "duration_ms": 1200}},
+    )
+    assert saved.status_code == 200
+    stored = project_store.get_project(project["project_id"])
+    assert stored is not None
+    stored.name = "数据库名称"
+    stored.parameters["video_localization"]["source_media"]["filename"] = "database.mp4"
+    project_store.save_project(stored)
+
+    synced = client.post("/api/projects/video-localization/sync-projects")
+
+    assert synced.status_code == 200
+    assert synced.json()[0]["name"] == "数据库名称"
+    current = project_store.get_project(project["project_id"])
+    assert current is not None
+    assert current.parameters["video_localization"]["source_media"]["filename"] == "database.mp4"
+
+
+def test_video_localization_sync_rejects_unsafe_or_duplicate_packages(tmp_path: Path):
+    client = _client(tmp_path)
+    projects_root = tmp_path / "projects"
+    unsafe_root = projects_root / "unsafe-package"
+    unsafe_root.mkdir(parents=True)
+    unsafe_manifest = {
+        "kind": "video_localization_project",
+        "project_id": "unsafe123456",
+        "project_name": "不安全项目",
+        "draft": {"source_media": {"filename": "unsafe.mp4", "video_path": "project://../outside.mp4"}},
+    }
+    (unsafe_root / "project.json").write_text(json.dumps(unsafe_manifest, ensure_ascii=False), encoding="utf-8")
+    for directory_name in ("duplicate-a", "duplicate-b"):
+        root = projects_root / directory_name
+        root.mkdir()
+        manifest = {
+            "kind": "video_localization_project",
+            "project_id": "duplicate123",
+            "project_name": "重复项目",
+            "draft": {"source_media": {"filename": "duplicate.mp4"}},
+        }
+        (root / "project.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    synced = client.post("/api/projects/video-localization/sync-projects")
+
+    assert synced.status_code == 200
+    assert synced.json() == []
+    assert project_store.get_project("unsafe123456") is None
+    assert project_store.get_project("duplicate123") is None
 
 
 def test_video_localization_migrates_legacy_nested_project_and_rebases_paths(tmp_path: Path):

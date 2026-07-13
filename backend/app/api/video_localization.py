@@ -18,9 +18,15 @@ from app.domains.video_localization.schemas import (
     VideoLocalizationSpeakerUpdate,
     VideoLocalizationSubtitleImportRequest,
 )
+from app.schemas.voice_studio import Project
 from app.services import batch_queue
 
 router = APIRouter()
+
+
+@router.post("/video-localization/sync-projects", response_model=list[Project])
+async def sync_video_localization_projects():
+    return video_localization_service.sync_local_projects()
 
 
 @router.get("/{project_id}/video-localization", response_model=VideoLocalizationDraft)

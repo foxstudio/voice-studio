@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,8 @@ from app.domains.video_localization.schemas import VideoLocalizationDraft, now_i
 
 AUTOSAVE_KEEP_LIMIT = 24
 PROJECT_PATH_PREFIX = "project://"
+PROJECT_MANIFEST_MAX_BYTES = 16 * 1024 * 1024
+PROJECT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{5,127}$")
 
 
 def write_project_snapshot(project: Any, draft: VideoLocalizationDraft) -> dict[str, Any]:
@@ -64,6 +67,63 @@ def read_project_snapshot(project_id: str) -> VideoLocalizationDraft | None:
     return None
 
 
+def discover_project_packages() -> list[dict[str, Any]]:
+    """Return valid first-level video-localization packages from project storage."""
+    projects_root = media_assets.projects_root_dir()
+    if not projects_root.exists():
+        return []
+    try:
+        candidates = [path for path in projects_root.iterdir() if path.is_dir() and not path.is_symlink()][:1000]
+    except OSError:
+        return []
+    candidates.sort(key=_manifest_mtime, reverse=True)
+    packages: list[dict[str, Any]] = []
+    for root in candidates:
+        package = read_project_package(root)
+        if package:
+            packages.append(package)
+    duplicate_ids = {
+        package["project_id"]
+        for package in packages
+        if sum(item["project_id"] == package["project_id"] for item in packages) > 1
+    }
+    return [package for package in packages if package["project_id"] not in duplicate_ids]
+
+
+def read_project_package(root: Path) -> dict[str, Any] | None:
+    manifest_path = root / "project.json"
+    try:
+        if not manifest_path.is_file() or manifest_path.stat().st_size > PROJECT_MANIFEST_MAX_BYTES:
+            return None
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("kind") != "video_localization_project":
+            return None
+        project_id = str(payload.get("project_id") or "").strip()
+        project_name = str(payload.get("project_name") or "").strip()
+        if not PROJECT_ID_PATTERN.fullmatch(project_id) or not project_name:
+            return None
+        decoded = _decode_project_paths(payload, root)
+        draft_payload = decoded.get("draft")
+        if not isinstance(draft_payload, dict) or _external_paths(draft_payload, root):
+            return None
+        draft = VideoLocalizationDraft(**draft_payload)
+    except (OSError, ValueError, TypeError, RecursionError):
+        return None
+    return {
+        "project_id": project_id,
+        "project_name": project_name,
+        "directory_name": root.name,
+        "draft": _normalize_recovered_operations(draft),
+    }
+
+
+def _manifest_mtime(root: Path) -> float:
+    try:
+        return (root / "project.json").stat().st_mtime
+    except OSError:
+        return 0
+
+
 def ensure_project_layout(project_id: str) -> dict[str, Path]:
     root = media_assets.project_video_localization_dir(project_id)
     directories = {
@@ -109,7 +169,16 @@ def _encode_project_paths(value: Any, root: Path) -> Any:
 def _decode_project_paths(value: Any, root: Path) -> Any:
     if isinstance(value, str) and value.startswith(PROJECT_PATH_PREFIX):
         relative = value[len(PROJECT_PATH_PREFIX):]
-        return str(root if relative in {"", "."} else root / relative)
+        if relative in {"", "."}:
+            return str(root.resolve())
+        if "\\" in relative or Path(relative).is_absolute():
+            raise ValueError("Unsafe project-relative path")
+        resolved = (root / relative).resolve()
+        try:
+            resolved.relative_to(root.resolve())
+        except ValueError as exc:
+            raise ValueError("Project-relative path escapes project root") from exc
+        return str(resolved)
     if isinstance(value, list):
         return [_decode_project_paths(item, root) for item in value]
     if isinstance(value, dict):
@@ -140,6 +209,26 @@ def _external_paths(value: Any, root: Path) -> list[str]:
 
     visit(value)
     return sorted(paths)
+
+
+def _normalize_recovered_operations(draft: VideoLocalizationDraft) -> VideoLocalizationDraft:
+    operations = []
+    for operation in draft.operations:
+        if operation.status not in {"queued", "running"}:
+            operations.append(operation)
+            continue
+        operations.append(
+            operation.model_copy(
+                update={
+                    "status": "failed",
+                    "error_code": "PROJECT_INDEX_RECOVERED",
+                    "error_message": "项目索引已从本地恢复，请手动重试未完成任务。",
+                    "cancel_requested": False,
+                    "completed_at": now_iso(),
+                }
+            )
+        )
+    return draft.model_copy(update={"operations": operations})
 
 
 def _normalize_existing_autosaves(project_id: str, root: Path, autosave_dir: Path) -> None:

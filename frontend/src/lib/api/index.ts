@@ -158,6 +158,7 @@ export const Api = {
 	communityVoicePacks: () => api.get<CommunityVoicePack[]>('/community-voice-packs'),
 	importCommunityVoicePack: (pack_id: string, candidate_ids: string[] = []) => api.post<CommunityVoicePack>('/community-voice-packs/import', { pack_id, candidate_ids }),
 	projects: () => api.get<Project[]>('/projects'),
+	syncVideoLocalizationProjects: () => api.post<Project[]>('/projects/video-localization/sync-projects'),
 	createProject: (name: string, description = '', default_engine_id: string | null = 'indextts-v2') => api.post<Project>('/projects', { name, description, default_engine_id }),
 	updateProject: (id: string, patch: ProjectUpdate) => api.patch<Project>(`/projects/${id}`, patch),
 	deleteProject: (id: string) => api.delete<{ status: string }>(`/projects/${id}`),

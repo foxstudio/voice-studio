@@ -20,6 +20,7 @@ from app.domains.video_localization import subtitles
 from app.domains.video_localization import tts_orchestration
 from app.domains.video_localization import tts_pipeline
 from app.errors import AppException
+from app.schemas.voice_studio import Project
 from app.domains.video_localization.schemas import (
     BatchGenerateRequest,
     VideoLocalizationCueUpdate,
@@ -38,6 +39,38 @@ VIDEO_LOCALIZATION_KEY = draft_store.VIDEO_LOCALIZATION_KEY
 
 def get_video_localization(project_id: str) -> VideoLocalizationDraft | None:
     return draft_store.get(project_id)
+
+
+def sync_local_projects() -> list[Project]:
+    """Reconcile the localization project menu with valid project packages on disk."""
+    synced: list[Project] = []
+    for package in project_manifest.discover_project_packages():
+        project_id = package["project_id"]
+        project = project_store.get_project(project_id)
+        if project is None:
+            project = Project(
+                project_id=project_id,
+                name=package["project_name"],
+                description="本地视频本土化项目",
+                parameters={
+                    media_assets.PROJECT_DIR_NAME_KEY: package["directory_name"],
+                    VIDEO_LOCALIZATION_KEY: package["draft"].model_dump(mode="json"),
+                },
+            )
+            synced.append(project_store.save_project(project))
+            continue
+
+        next_parameters = dict(project.parameters)
+        changed = next_parameters.get(media_assets.PROJECT_DIR_NAME_KEY) != package["directory_name"]
+        next_parameters[media_assets.PROJECT_DIR_NAME_KEY] = package["directory_name"]
+        if not isinstance(next_parameters.get(VIDEO_LOCALIZATION_KEY), dict):
+            next_parameters[VIDEO_LOCALIZATION_KEY] = package["draft"].model_dump(mode="json")
+            changed = True
+        if changed:
+            project.parameters = next_parameters
+            project = project_store.save_project(project)
+        synced.append(project)
+    return synced
 
 
 def save_video_localization(project_id: str, draft: VideoLocalizationDraft) -> VideoLocalizationDraft | None:

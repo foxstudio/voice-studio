@@ -41,7 +41,7 @@ async def save_uploaded_video(project_id: str, file: UploadFile) -> tuple[Path, 
 
 def project_video_localization_dir(project_id: str) -> Path:
     settings_store.ensure_directories()
-    projects_root = settings_store.expand_path(settings_store.get().project_dir)
+    projects_root = projects_root_dir()
     destination = projects_root / _stored_project_dir_name(project_id)
     _migrate_legacy_project_layout(projects_root, project_id, destination)
     return destination
@@ -49,7 +49,12 @@ def project_video_localization_dir(project_id: str) -> Path:
 
 def project_video_localization_dir_for_name(project_id: str, project_name: str) -> Path:
     settings_store.ensure_directories()
-    return settings_store.expand_path(settings_store.get().project_dir) / project_dir_name(project_id, project_name)
+    return projects_root_dir() / project_dir_name(project_id, project_name)
+
+
+def projects_root_dir() -> Path:
+    settings_store.ensure_directories()
+    return settings_store.expand_path(settings_store.get().project_dir)
 
 
 def project_dir_name(project_id: str, project_name: str) -> str:
@@ -191,7 +196,8 @@ def _replace_path_prefixes(value: Any, old_roots: list[Path], new_root: Path) ->
 
 def open_project_video_localization_dir(project_id: str) -> dict[str, str]:
     path = project_video_localization_dir(project_id)
-    path.mkdir(parents=True, exist_ok=True)
+    if not path.is_dir():
+        raise AppException(410, "VIDEO_LOCALIZATION_PROJECT_DIRECTORY_MISSING", "项目目录已不存在，请刷新历史项目列表")
     if sys.platform == "darwin":
         subprocess.Popen(["open", str(path)])
     elif os.name == "nt":
