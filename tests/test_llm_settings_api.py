@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,19 +28,18 @@ def _profile_payload(**overrides):
         "model_id": "chat-model",
         "enabled": True,
         "api_key": "  local-secret  ",
-        "make_default": True,
     }
     payload.update(overrides)
     return payload
 
 
-def test_llm_profile_secret_is_write_only_and_default_is_maintained(tmp_path: Path):
+def test_llm_profile_secret_is_write_only_and_default_requires_verified_model(tmp_path: Path):
     client = _client(tmp_path)
 
     saved = client.put("/api/settings/llm-profiles/work", json=_profile_payload())
     assert saved.status_code == 200
     body = saved.json()
-    assert body["default_profile_id"] == "work"
+    assert body["default_profile_id"] is None
     assert body["profiles"] == [
         {
             "profile_id": "work",
@@ -49,18 +49,25 @@ def test_llm_profile_secret_is_write_only_and_default_is_maintained(tmp_path: Pa
             "model_id": "chat-model",
             "enabled": True,
             "api_key_configured": True,
+            "model_test_verified": False,
         }
     ]
     assert "local-secret" not in saved.text
     assert settings_store.llm_api_key("work") == "local-secret"
+    with pytest.raises(ValueError, match="测试模型"):
+        settings_store.set_default_llm_profile("work")
+
+    verified = settings_store.mark_llm_profile_verified("work")
+    assert verified.profiles[0].model_test_verified is True
+    assert settings_store.set_default_llm_profile("work").default_profile_id == "work"
 
     client.put(
         "/api/settings/llm-profiles/backup",
-        json=_profile_payload(name="备用模型", base_url="http://localhost:11434/v1", api_key=None, make_default=False),
+        json=_profile_payload(name="备用模型", base_url="http://localhost:11434/v1", api_key=None),
     )
     deleted = client.delete("/api/settings/llm-profiles/work")
     assert deleted.status_code == 200
-    assert deleted.json()["default_profile_id"] == "backup"
+    assert deleted.json()["default_profile_id"] is None
     assert settings_store.llm_api_key("work") is None
 
 
@@ -70,7 +77,7 @@ def test_llm_profile_key_can_be_replaced_or_cleared_without_echo(tmp_path: Path)
 
     unchanged = client.put(
         "/api/settings/llm-profiles/work",
-        json=_profile_payload(api_key=None, make_default=False),
+        json=_profile_payload(api_key=None),
     )
     assert unchanged.json()["profiles"][0]["api_key_configured"] is True
     assert settings_store.llm_api_key("work") == "local-secret"
@@ -96,16 +103,15 @@ def test_llm_models_and_connection_use_saved_profile(tmp_path: Path, monkeypatch
         ]
 
     monkeypatch.setattr(llm_provider, "list_models", fake_list_models)
-    monkeypatch.setattr(
-        llm_provider,
-        "test_connection",
-        lambda **kwargs: {
-            "ok": True,
-            "message": "连接成功，获取到 2 个模型",
-            "model_count": 2,
-            "models": fake_list_models(**kwargs),
-        },
-    )
+    completion_calls = []
+
+    def fake_complete_json(system_prompt, user_payload, **kwargs):
+        completion_calls.append((system_prompt, user_payload, kwargs))
+        return {"ok": True}
+
+    from app.services import llm_runtime
+
+    monkeypatch.setattr(llm_runtime, "complete_json", fake_complete_json)
 
     models = client.post("/api/settings/llm-profiles/work/models")
     assert models.status_code == 200
@@ -116,11 +122,64 @@ def test_llm_models_and_connection_use_saved_profile(tmp_path: Path, monkeypatch
     assert tested.json() == {
         "profile_id": "work",
         "status": "connected",
-        "models_count": 2,
+        "models_count": None,
         "selected_model_available": True,
-        "message": "连接成功，获取到 2 个模型",
+        "tested_model_id": "chat-model",
+        "response_verified": True,
+        "billing_effect": "minimal",
+        "message": "模型 chat-model 响应正常；本次为最小生成测试，已产生少量用量",
     }
-    assert all(call[:2] == ("https://llm.example.com/v1", "local-secret") for call in calls)
+    assert calls == [("https://llm.example.com/v1", "local-secret", 10)]
+    assert completion_calls[0][1] == {"ping": "pong"}
+    assert completion_calls[0][2] == {
+        "profile_id": "work",
+        "temperature": 0.0,
+        "max_tokens": 256,
+        "timeout": 45,
+    }
+    assert settings_store.llm_profile("work").model_test_verified is True
+
+
+def test_only_successfully_tested_profile_can_be_default_and_changes_revoke_it(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    client.put("/api/settings/llm-profiles/work", json=_profile_payload())
+
+    rejected = client.post("/api/settings/llm-profiles/work/default")
+    assert rejected.status_code == 409
+    assert rejected.json()["error"]["code"] == "LLM_PROFILE_NOT_VERIFIED"
+
+    from app.services import llm_runtime
+
+    monkeypatch.setattr(llm_runtime, "complete_json", lambda *args, **kwargs: {"ok": True})
+    assert client.post("/api/settings/llm-profiles/work/test").status_code == 200
+    selected = client.post("/api/settings/llm-profiles/work/default")
+    assert selected.status_code == 200
+    assert selected.json()["default_profile_id"] == "work"
+
+    changed = client.put(
+        "/api/settings/llm-profiles/work",
+        json=_profile_payload(model_id="different-model", api_key=None),
+    )
+    assert changed.status_code == 200
+    assert changed.json()["default_profile_id"] is None
+    assert changed.json()["profiles"][0]["model_test_verified"] is False
+    assert client.post("/api/settings/llm-profiles/work/default").status_code == 409
+
+
+def test_llm_model_test_rejects_missing_model_and_invalid_reply(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    client.put("/api/settings/llm-profiles/work", json=_profile_payload(model_id=""))
+    missing = client.post("/api/settings/llm-profiles/work/test")
+    assert missing.status_code == 400
+    assert missing.json()["error"]["code"] == "LLM_MODEL_NOT_CONFIGURED"
+
+    client.put("/api/settings/llm-profiles/work", json=_profile_payload())
+    from app.services import llm_runtime
+
+    monkeypatch.setattr(llm_runtime, "complete_json", lambda *args, **kwargs: {"ok": False})
+    invalid = client.post("/api/settings/llm-profiles/work/test")
+    assert invalid.status_code == 502
+    assert invalid.json()["error"]["code"] == "LLM_MODEL_TEST_INVALID_RESPONSE"
 
 
 def test_llm_api_reports_missing_profile_and_chinese_provider_error(tmp_path: Path, monkeypatch):

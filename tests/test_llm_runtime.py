@@ -101,6 +101,34 @@ def test_complete_json_posts_openai_request_and_returns_object(monkeypatch):
     assert headers["content-type"] == "application/json"
 
 
+def test_complete_json_falls_back_when_provider_rejects_json_object(monkeypatch):
+    _configure(monkeypatch)
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(request)
+        if len(requests) == 1:
+            error_body = json.dumps(
+                {
+                    "error": {
+                        "message": "Provider returned error",
+                        "metadata": {
+                            "raw": "Model does not support 'json_object' response format."
+                        },
+                    }
+                }
+            ).encode()
+            raise urllib.error.HTTPError(request.full_url, 400, "failed", {}, io.BytesIO(error_body))
+        return FakeResponse(_completion('{"ok":true}'))
+
+    monkeypatch.setattr(llm_runtime.urllib.request, "urlopen", fake_urlopen)
+
+    assert llm_runtime.complete_json("system", {}) == {"ok": True}
+    assert len(requests) == 2
+    assert json.loads(requests[0].data)["response_format"] == {"type": "json_object"}
+    assert "response_format" not in json.loads(requests[1].data)
+
+
 def test_resolve_profile_uses_default_and_normalizes_url(monkeypatch):
     _configure(monkeypatch)
     resolved = llm_runtime.resolve_profile()

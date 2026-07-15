@@ -89,6 +89,8 @@ export const Api = {
 		api.put<LlmProviderListResponse>(`/settings/llm-profiles/${encodeURIComponent(id)}`, body),
 	deleteLlmProfile: (id: string) =>
 		api.delete<LlmProviderListResponse>(`/settings/llm-profiles/${encodeURIComponent(id)}`),
+	setDefaultLlmProfile: (id: string) =>
+		api.post<LlmProviderListResponse>(`/settings/llm-profiles/${encodeURIComponent(id)}/default`),
 	llmProfileModels: (id: string) =>
 		api.post<LlmModelListResponse>(`/settings/llm-profiles/${encodeURIComponent(id)}/models`),
 	testLlmProfile: (id: string) =>

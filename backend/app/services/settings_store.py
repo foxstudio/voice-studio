@@ -87,6 +87,18 @@ def update_llm_profile(profile_id: str, data: LlmProviderProfileUpsert) -> LlmPr
     return settings_llm.update_profile(profile_id, data)
 
 
+def mark_llm_profile_verified(profile_id: str) -> LlmProviderListResponse:
+    return settings_llm.mark_profile_verified(profile_id)
+
+
+def clear_llm_profile_verification(profile_id: str) -> LlmProviderListResponse:
+    return settings_llm.clear_profile_verification(profile_id)
+
+
+def set_default_llm_profile(profile_id: str) -> LlmProviderListResponse:
+    return settings_llm.set_default_profile(profile_id)
+
+
 def delete_llm_profile(profile_id: str) -> LlmProviderListResponse:
     return settings_llm.delete_profile(profile_id)
 

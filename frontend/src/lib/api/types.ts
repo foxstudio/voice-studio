@@ -162,6 +162,7 @@ export interface LlmProviderProfile {
 	model_id: string;
 	enabled: boolean;
 	api_key_configured: boolean;
+	model_test_verified: boolean;
 }
 
 export interface LlmProviderProfileUpsert {
@@ -172,7 +173,6 @@ export interface LlmProviderProfileUpsert {
 	enabled: boolean;
 	api_key?: string;
 	clear_api_key?: boolean;
-	make_default?: boolean;
 }
 
 export interface LlmProviderListResponse {
@@ -193,8 +193,11 @@ export interface LlmModelListResponse {
 export interface LlmConnectionTestResponse {
 	profile_id: string;
 	status: 'connected';
-	models_count: number;
+	models_count: number | null;
 	selected_model_available: boolean | null;
+	tested_model_id: string | null;
+	response_verified: boolean;
+	billing_effect: 'none' | 'minimal';
 	message: string;
 }
 

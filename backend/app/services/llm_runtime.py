@@ -154,22 +154,33 @@ def complete_json(
         "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
     }
-    encoded_body = json.dumps(request_body, ensure_ascii=False, allow_nan=False).encode("utf-8")
     headers = llm_provider.build_auth_headers(profile.api_key)
     headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(
-        profile.base_url + "/chat/completions",
+    request = _completion_request(profile.base_url, request_body, headers)
+    try:
+        raw = _send_with_retries(request, timeout)
+    except LlmRuntimeError as exc:
+        if exc.code != "llm_json_object_unsupported":
+            raise
+        fallback_body = dict(request_body)
+        fallback_body.pop("response_format", None)
+        raw = _send_with_retries(_completion_request(profile.base_url, fallback_body, headers), timeout)
+    return _parse_completion(raw, allow_array=allow_array)
+
+
+def _completion_request(base_url: str, request_body: dict[str, Any], headers: dict[str, str]) -> urllib.request.Request:
+    encoded_body = json.dumps(request_body, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    return urllib.request.Request(
+        base_url + "/chat/completions",
         data=encoded_body,
         headers=headers,
         method="POST",
     )
 
-    raw = _send_with_retries(request, timeout)
-    return _parse_completion(raw, allow_array=allow_array)
-
 
 def _send_with_retries(request: urllib.request.Request, timeout: float) -> bytes:
     for attempt in range(MAX_RETRIES + 1):
+        error_body = b""
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 status_code = int(getattr(response, "status", 200))
@@ -178,6 +189,7 @@ def _send_with_retries(request: urllib.request.Request, timeout: float) -> bytes
                 return _read_limited(response)
         except urllib.error.HTTPError as exc:
             status_code = int(exc.code)
+            error_body = _read_error_body(exc)
             exc.close()
         except _ResponseStatusError as exc:
             status_code = exc.status_code
@@ -209,7 +221,7 @@ def _send_with_retries(request: urllib.request.Request, timeout: float) -> bytes
         if status_code in RETRYABLE_STATUS_CODES and attempt < MAX_RETRIES:
             time.sleep(RETRY_DELAYS[attempt])
             continue
-        raise _http_error(status_code)
+        raise _http_error(status_code, error_body)
 
     raise AssertionError("unreachable")
 
@@ -233,7 +245,26 @@ def _read_limited(response: BinaryIO) -> bytes:
     return raw
 
 
-def _http_error(status_code: int) -> LlmRuntimeError:
+def _read_error_body(response: BinaryIO) -> bytes:
+    try:
+        raw = response.read(64 * 1024)
+    except (OSError, TypeError, ValueError):
+        return b""
+    return raw if isinstance(raw, bytes) else b""
+
+
+def _http_error(status_code: int, error_body: bytes = b"") -> LlmRuntimeError:
+    normalized_error = error_body.decode("utf-8", "ignore").casefold()
+    if (
+        status_code == 400
+        and "json_object" in normalized_error
+        and "does not support" in normalized_error
+    ):
+        return LlmRuntimeError(
+            "当前模型不支持 JSON Object 响应格式，已尝试兼容模式",
+            code="llm_json_object_unsupported",
+            status_code=400,
+        )
     if status_code in {401, 403}:
         return LlmRuntimeError(
             "语言模型服务鉴权失败，请检查 API Key",

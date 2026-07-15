@@ -245,6 +245,7 @@ class LlmProviderProfile(BaseModel):
     model_id: str = Field(default="", max_length=200)
     enabled: bool = True
     api_key_configured: bool = False
+    model_test_verified: bool = False
 
     @field_validator("name", "base_url", "model_id")
     @classmethod
@@ -260,7 +261,6 @@ class LlmProviderProfileUpsert(BaseModel):
     enabled: bool = True
     api_key: str | None = None
     clear_api_key: bool = False
-    make_default: bool = False
 
     @field_validator("name", "base_url", "model_id")
     @classmethod
@@ -286,8 +286,11 @@ class LlmModelListResponse(BaseModel):
 class LlmConnectionTestResponse(BaseModel):
     profile_id: str
     status: Literal["connected"] = "connected"
-    models_count: int = 0
+    models_count: int | None = None
     selected_model_available: bool | None = None
+    tested_model_id: str | None = None
+    response_verified: bool = False
+    billing_effect: Literal["none", "minimal"] = "none"
     message: str
 
 

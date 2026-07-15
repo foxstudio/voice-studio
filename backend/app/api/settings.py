@@ -19,7 +19,7 @@ from app.schemas.voice_studio import (
     MimoSecretUpdate,
     VolcengineDirectorySecretUpdate,
 )
-from app.services import cloud_connection_tests, llm_provider, settings_store
+from app.services import cloud_connection_tests, llm_provider, llm_runtime, settings_store
 
 router = APIRouter()
 
@@ -169,6 +169,15 @@ async def remove_llm_profile(profile_id: str):
     return settings_store.delete_llm_profile(profile_id)
 
 
+@router.post("/llm-profiles/{profile_id}/default", response_model=LlmProviderListResponse)
+async def set_default_llm_profile(profile_id: str):
+    _llm_profile_or_404(profile_id)
+    try:
+        return settings_store.set_default_llm_profile(profile_id)
+    except ValueError as exc:
+        raise AppException(409, "LLM_PROFILE_NOT_VERIFIED", str(exc)) from exc
+
+
 @router.post("/llm-profiles/{profile_id}/models", response_model=LlmModelListResponse)
 async def get_llm_models(profile_id: str):
     profile = _llm_profile_or_404(profile_id)
@@ -188,23 +197,34 @@ async def get_llm_models(profile_id: str):
 @router.post("/llm-profiles/{profile_id}/test", response_model=LlmConnectionTestResponse)
 async def test_llm_profile(profile_id: str):
     profile = _llm_profile_or_404(profile_id)
+    if not profile.model_id.strip():
+        raise AppException(400, "LLM_MODEL_NOT_CONFIGURED", "请先填写或选择要测试的模型 ID")
+    was_default = settings_store.llm_profiles().default_profile_id == profile_id
+    settings_store.clear_llm_profile_verification(profile_id)
     try:
-        result = llm_provider.test_connection(
-            base_url=profile.base_url,
-            api_key=settings_store.llm_api_key(profile_id),
+        result = llm_runtime.complete_json(
+            '这是模型连接测试。无论收到什么内容，只返回 JSON：{"ok":true}，不要添加其他字段。',
+            {"ping": "pong"},
+            profile_id=profile_id,
+            temperature=0.0,
+            max_tokens=256,
+            timeout=45,
         )
-    except llm_provider.LLMProviderError as exc:
-        _raise_llm_provider_error(exc)
-    model_ids = {item["id"] for item in result["models"]}
-    selected_available = profile.model_id in model_ids if profile.model_id else None
-    message = result["message"]
-    if selected_available is False:
-        message += "；当前填写的模型 ID 不在服务返回列表中，仍可手动保存使用"
+    except llm_runtime.LlmRuntimeError as exc:
+        raise AppException(exc.status_code, "LLM_MODEL_TEST_FAILED", str(exc)) from exc
+    if result.get("ok") is not True:
+        raise AppException(502, "LLM_MODEL_TEST_INVALID_RESPONSE", "模型已响应，但没有按测试要求返回正确结果")
+    settings_store.mark_llm_profile_verified(profile_id)
+    if was_default:
+        settings_store.set_default_llm_profile(profile_id)
     return LlmConnectionTestResponse(
         profile_id=profile_id,
-        models_count=result["model_count"],
-        selected_model_available=selected_available,
-        message=message,
+        models_count=None,
+        selected_model_available=True,
+        tested_model_id=profile.model_id,
+        response_verified=True,
+        billing_effect="minimal",
+        message=f"模型 {profile.model_id} 响应正常；本次为最小生成测试，已产生少量用量",
     )
 
 
