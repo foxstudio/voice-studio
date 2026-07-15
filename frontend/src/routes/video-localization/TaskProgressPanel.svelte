@@ -383,10 +383,12 @@
 		height: 24px;
 		display: grid;
 		place-items: center;
+		padding: 0;
 		border: 1px solid rgba(212, 108, 105, 0.34);
 		border-radius: 5px;
 		background: rgba(112, 45, 44, 0.12);
 		color: #e3a19e;
+		line-height: 0;
 		cursor: pointer;
 	}
 	.task-stop:disabled { opacity: 0.42; cursor: not-allowed; }

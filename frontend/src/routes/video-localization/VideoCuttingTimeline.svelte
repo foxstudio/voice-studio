@@ -1885,6 +1885,12 @@
 		white-space: nowrap;
 	}
 
+	.tool-btn.icon-tool,
+	.primary-tool.icon-tool {
+		padding: 0;
+		line-height: 0;
+	}
+
 	.primary-tool {
 		border-color: rgba(87, 208, 200, 0.8);
 		background: #143b39;
