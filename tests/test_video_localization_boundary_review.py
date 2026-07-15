@@ -363,7 +363,7 @@ def test_truncated_reasoning_batch_splits_without_discarding_valid_boundaries(mo
     assert batch_sizes.count(1) == 4
 
 
-def test_repeated_timeout_splits_batch_without_discarding_valid_boundaries(monkeypatch):
+def test_repeated_timeout_stops_without_recursive_call_amplification(monkeypatch):
     from app.services import llm_runtime
 
     candidates = [
@@ -382,18 +382,7 @@ def test_repeated_timeout_splits_batch_without_discarding_valid_boundaries(monke
     def complete_json(**kwargs):
         batch = kwargs["user_payload"]["candidates"]
         batch_sizes.append(len(batch))
-        if len(batch) > 1:
-            raise llm_runtime.LlmRuntimeError("timeout", code="llm_timeout", status_code=504)
-        return {
-            "boundaries": [
-                {
-                    "boundary_id": batch[0]["boundary_id"],
-                    "decision": "allow",
-                    "confidence": 0.5,
-                    "reason_code": "unclear",
-                }
-            ]
-        }
+        raise llm_runtime.LlmRuntimeError("timeout", code="llm_timeout", status_code=504)
 
     monkeypatch.setattr(llm_runtime, "complete_json", complete_json)
 
@@ -404,10 +393,46 @@ def test_repeated_timeout_splits_batch_without_discarding_valid_boundaries(monke
         model_id="review-model",
     )
 
-    assert error is None
-    assert [item.boundary_id for item in reviews] == [item["boundary_id"] for item in candidates]
+    assert reviews == []
+    assert error == "timeout"
     assert batch_sizes.count(2) == boundary_review.MAX_ATTEMPTS
-    assert batch_sizes.count(1) == 2
+    assert batch_sizes.count(1) == 0
+
+
+def test_provider_http_failures_are_not_retried_by_boundary_layer(monkeypatch):
+    from app.services import llm_runtime
+
+    candidate = {
+        "boundary_id": "word_000001:word_000002",
+        "left_word_id": "word_000001",
+        "right_word_id": "word_000002",
+        "left_context": [],
+        "right_context": [],
+        "features": {},
+    }
+    calls = 0
+
+    def complete_json(**_kwargs):
+        nonlocal calls
+        calls += 1
+        raise llm_runtime.LlmRuntimeError(
+            "provider unavailable",
+            code="llm_provider_unavailable",
+            status_code=503,
+        )
+
+    monkeypatch.setattr(llm_runtime, "complete_json", complete_json)
+
+    reviews, error = boundary_review._review_batch(
+        [candidate],
+        language="en",
+        profile_id="review",
+        model_id="review-model",
+    )
+
+    assert reviews == []
+    assert error == "provider unavailable"
+    assert calls == 1
 
 
 def test_boundary_review_records_split_recovery_as_batch_fallback(monkeypatch):

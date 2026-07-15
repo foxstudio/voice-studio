@@ -17,7 +17,7 @@ from app.services import settings_store
 
 
 PROMPT_VERSION = "boundary-review-v2"
-BATCH_SIZE = 12
+BATCH_SIZE = 4
 MAX_PARALLEL_BATCHES = 4
 MAX_REVIEW_ROUNDS = 2
 MAX_ATTEMPTS = 2
@@ -533,7 +533,7 @@ def _is_output_truncated(exc: Exception | None) -> bool:
 def _should_split_batch(exc: Exception | None) -> bool:
     from app.services.llm_runtime import LlmRuntimeError
 
-    return isinstance(exc, LlmRuntimeError) and exc.code in {"llm_output_truncated", "llm_timeout"}
+    return isinstance(exc, LlmRuntimeError) and exc.code == "llm_output_truncated"
 
 
 def _candidate_boundaries(
@@ -659,8 +659,6 @@ def _retryable(exc: Exception) -> bool:
         "llm_json_invalid",
         "llm_json_not_object",
         "llm_output_truncated",
-        "llm_provider_unavailable",
-        "llm_rate_limited",
         "llm_response_invalid",
         "llm_timeout",
         "llm_network_error",
