@@ -142,7 +142,17 @@ def test_video_localization_asr_operation_summary_distinguishes_raw_segments_fro
                     confidence=0.96,
                     status="accepted",
                     evidence_source_ids=["source_01"],
-                )
+                ),
+                VideoLocalizationTranscriptEditOperation(
+                    start_word_id="word_0003",
+                    end_word_id="word_0003",
+                    source_text="result",
+                    replacement_text="output",
+                    reason="语义模型建议换词",
+                    confidence=0.62,
+                    status="rejected",
+                    rejection_reason="声音证据仍然更接近 result",
+                ),
             ],
         }
     )
@@ -257,13 +267,54 @@ def test_video_localization_asr_operation_summary_distinguishes_raw_segments_fro
     assert summary["task_step_results"]["asr"]["sections"][0]["items"][0]["text"] == "Concurrent ASR result."
     research_result = summary["task_step_results"]["web_research"]
     assert {item["label"]: item["value"] for item in research_result["metrics"]}["支持修改"] == "1"
-    assert research_result["sections"][1]["title"] == "对文本校对的作用"
-    assert research_result["sections"][1]["items"][0]["title"] == "ASR → Seedance"
-    assert "Seedance 官方产品页" in summary["task_step_results"]["text_review"]["sections"][0]["items"][0]["text"]
+    assert research_result["sections"][0]["title"] == "逐项查证结果"
+    research_item = research_result["sections"][0]["items"][0]
+    assert research_item["title"] == "问题 1 · Seedance official product name"
+    assert "ASR → Seedance" in research_item["text"]
+    assert research_item["facts"][2] == {"label": "产生的作用", "value": "已用于修正识别文本"}
+    assert research_item["links"][0]["title"] == "Seedance 官方产品页"
+    correction_item = summary["task_step_results"]["text_review"]["sections"][0]["items"][0]
+    assert correction_item["before"] == "ASR"
+    assert correction_item["after"] == "Seedance"
+    assert correction_item["meta"] == "已采纳"
+    assert correction_item["links"][0]["title"] == "Seedance 官方产品页"
+    rejected_item = summary["task_step_results"]["text_review"]["sections"][0]["items"][1]
+    assert rejected_item["before"] == "result"
+    assert rejected_item["after"] == "output"
+    assert rejected_item["meta"] == "未采纳"
+    assert "声音证据仍然更接近 result" in rejected_item["text"]
     assert summary["task_step_results"]["subtitle_track"]["status"] == "success"
+    assert summary["task_step_results"]["subtitle_track"]["sections"] == []
     assert {item["label"]: item["value"] for item in summary["task_step_results"]["subtitle_track"]["metrics"]}[
         "字幕数量"
     ] == "3"
+
+
+def test_video_localization_asr_step_results_keep_evenly_spaced_recognition_samples():
+    draft = _completed_asr_result(VideoLocalizationDraft())
+    base_segment = draft.transcription.segments[0]
+    segments = [
+        base_segment.model_copy(
+            update={
+                "segment_id": f"asr_{index:04d}",
+                "start_ms": index * 1_000,
+                "end_ms": index * 1_000 + 800,
+                "raw_text": f"Sample {index}",
+                "corrected_text": f"Sample {index}",
+            }
+        )
+        for index in range(20)
+    ]
+    draft = draft.model_copy(update={"transcription": draft.transcription.model_copy(update={"segments": segments})})
+
+    summary = video_localization_operation_state.english_asr_summary(draft)
+    asr_result = summary["task_step_results"]["asr"]
+    samples = asr_result["sections"][0]["items"]
+
+    assert len(samples) == 15
+    assert samples[0]["text"] == "Sample 0"
+    assert samples[-1]["text"] == "Sample 19"
+    assert {item["label"]: item["value"] for item in asr_result["metrics"]}["语言"] == "英语"
 
 
 def test_video_localization_asr_rerun_reuses_replaceable_cue_ids():

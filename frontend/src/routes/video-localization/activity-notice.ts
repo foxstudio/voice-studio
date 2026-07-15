@@ -17,9 +17,19 @@ export type ActivityTaskStepResultItem = {
 	text?: string;
 	before?: string;
 	after?: string;
+	beforeLabel?: string;
+	afterLabel?: string;
 	meta?: string;
 	url?: string;
+	tone?: 'positive' | 'warning' | 'muted' | 'neutral';
+	facts: ActivityTaskStepResultFact[];
+	links: ActivityTaskStepResultLink[];
+	visual?: ActivityTaskStepResultVisual;
 };
+
+export type ActivityTaskStepResultFact = { label: string; value: string };
+export type ActivityTaskStepResultLink = { title: string; url: string; meta?: string; text?: string };
+export type ActivityTaskStepResultVisual = { label: string; value: number; max: number };
 
 export type ActivityTaskStepResultSection = {
 	title: string;
@@ -98,12 +108,12 @@ const AREAS = new Set<ActivityTaskScope['area']>(['project', 'timeline', 'voice'
 
 const ASR_STEP_DEFINITIONS = [
 	{ id: 'recognize', label: '识别人声内容', stages: ['准备处理', '识别人声'], timingStages: ['asr'] },
-	{ id: 'research', label: '核验专名与背景', stages: ['判断是否需要联网核验', '联网核验'], timingStages: ['web_research'] },
+	{ id: 'research', label: '查证名称与背景', stages: ['判断是否需要联网核验', '联网核验'], timingStages: ['web_research'] },
 	{ id: 'review', label: '校对识别文本', stages: ['校对识别', '文本校对'], timingStages: ['text_review'] },
-	{ id: 'timestamps', label: '生成逐词时间码', stages: ['逐词时间码', '强制对齐'], timingStages: ['alignment'] },
-	{ id: 'boundaries', label: '分析声学边界', stages: ['声学边界'], timingStages: ['audio_boundaries'] },
-	{ id: 'boundary-review', label: '复核字幕断句', stages: ['字幕断句', '复核断句'], timingStages: ['boundary_review'] },
-	{ id: 'subtitles', label: '生成并写入字幕轨', stages: ['生成字幕轨'], timingStages: ['subtitle_track'] }
+	{ id: 'timestamps', label: '给每个词定位', stages: ['逐词时间码', '强制对齐'], timingStages: ['alignment'] },
+	{ id: 'boundaries', label: '找出声音停顿', stages: ['声学边界'], timingStages: ['audio_boundaries'] },
+	{ id: 'boundary-review', label: '检查字幕断句', stages: ['字幕断句', '复核断句'], timingStages: ['boundary_review'] },
+	{ id: 'subtitles', label: '写入 ASR 字幕轨', stages: ['生成字幕轨'], timingStages: ['subtitle_track'] }
 ] as const;
 
 const TRACK_LABELS: Record<string, string> = {
@@ -165,18 +175,56 @@ function normalizeStepResult(value: unknown, fallbackStatus: ActivityTaskStepSta
 			const items = section.items.flatMap((rawItem) => {
 				const item = recordValue(rawItem);
 				if (!item) return [];
+				const facts = Array.isArray(item.facts)
+					? item.facts.flatMap((rawFact) => {
+						const fact = recordValue(rawFact);
+						const label = stringValue(fact?.label);
+						const value = stringValue(fact?.value) ?? numberValue(fact?.value)?.toString() ?? null;
+						return label && value !== null ? [{ label, value }] : [];
+					}).slice(0, 12)
+					: [];
+				const links = Array.isArray(item.links)
+					? item.links.flatMap((rawLink) => {
+						const link = recordValue(rawLink);
+						const title = stringValue(link?.title);
+						const url = stringValue(link?.url);
+						return title && url ? [{
+							title,
+							url,
+							meta: stringValue(link?.meta) ?? undefined,
+							text: stringValue(link?.text) ?? undefined
+						}] : [];
+					}).slice(0, 12)
+					: [];
+				const rawVisual = recordValue(item.visual);
+				const visualLabel = stringValue(rawVisual?.label);
+				const visualValue = numberValue(rawVisual?.value);
+				const visualMax = numberValue(rawVisual?.max);
+				const visual = visualLabel && visualValue !== null && visualMax !== null && visualMax > 0
+					? { label: visualLabel, value: Math.min(visualValue, visualMax), max: visualMax }
+					: undefined;
+				const rawTone = stringValue(item.tone);
+				const tone: ActivityTaskStepResultItem['tone'] = rawTone === 'positive' || rawTone === 'warning' || rawTone === 'muted' || rawTone === 'neutral'
+					? rawTone
+					: undefined;
 				const normalized = {
 					title: stringValue(item.title) ?? undefined,
 					text: stringValue(item.text) ?? undefined,
 					before: stringValue(item.before) ?? undefined,
 					after: stringValue(item.after) ?? undefined,
+					beforeLabel: stringValue(item.before_label) ?? stringValue(item.beforeLabel) ?? undefined,
+					afterLabel: stringValue(item.after_label) ?? stringValue(item.afterLabel) ?? undefined,
 					meta: stringValue(item.meta) ?? undefined,
-					url: stringValue(item.url) ?? undefined
+					url: stringValue(item.url) ?? undefined,
+					tone,
+					facts,
+					links,
+					visual
 				};
-				return Object.values(normalized).some(Boolean) ? [normalized] : [];
-			}).slice(0, 6);
+				return Object.values(normalized).some((entry) => Array.isArray(entry) ? entry.length > 0 : Boolean(entry)) ? [normalized] : [];
+			}).slice(0, 50);
 			return items.length ? [{ title, items }] : [];
-		}).slice(0, 4)
+		}).slice(0, 8)
 		: [];
 	return {
 		status: stepResultStatus(result.status, fallbackStatus),

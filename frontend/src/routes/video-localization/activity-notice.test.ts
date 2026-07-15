@@ -185,7 +185,16 @@ describe('activity notice tasks', () => {
 						status: 'warning',
 						summary: '联网核验部分完成。',
 						metrics: [{ label: '资料来源', value: 3 }],
-						sections: [{ title: '参考来源', items: [{ title: 'Source', url: 'https://example.com' }] }],
+						sections: [{
+							title: '逐项查证结果',
+							items: Array.from({ length: 8 }, (_, index) => ({
+								title: `问题 ${index + 1}`,
+								text: '查证结论',
+								facts: [{ label: '产生的作用', value: index ? '背景参考' : '已用于修正识别文本' }],
+								links: [{ title: 'Source', url: 'https://example.com', meta: 'web-search' }],
+								tone: index ? 'neutral' : 'positive'
+							}))
+						}],
 						notes: ['一个查询未返回结果']
 					}
 				}
@@ -210,8 +219,15 @@ describe('activity notice tasks', () => {
 		});
 		expect(task.steps?.[1].result).toMatchObject({
 			status: 'warning',
-			sections: [{ title: '参考来源', items: [{ title: 'Source', url: 'https://example.com' }] }],
 			notes: ['一个查询未返回结果']
+		});
+		expect(task.steps?.[1].result?.sections[0].title).toBe('逐项查证结果');
+		expect(task.steps?.[1].result?.sections[0].items).toHaveLength(8);
+		expect(task.steps?.[1].result?.sections[0].items[0]).toMatchObject({
+			title: '问题 1',
+			tone: 'positive',
+			facts: [{ label: '产生的作用', value: '已用于修正识别文本' }],
+			links: [{ title: 'Source', url: 'https://example.com', meta: 'web-search' }]
 		});
 		expect(task.steps?.[2].result?.summary).toContain('旧任务仅保留了状态和统计');
 		expect(task.semanticModelId).toBe('deepseek-chat');

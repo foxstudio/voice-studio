@@ -40,6 +40,25 @@
 		}
 	}
 
+	function changedParts(source = '', target = '') {
+		const sourceChars = [...source];
+		const targetChars = [...target];
+		let prefix = 0;
+		while (prefix < sourceChars.length && prefix < targetChars.length && sourceChars[prefix] === targetChars[prefix]) prefix += 1;
+		let suffix = 0;
+		while (
+			suffix < sourceChars.length - prefix
+			&& suffix < targetChars.length - prefix
+			&& sourceChars[sourceChars.length - 1 - suffix] === targetChars[targetChars.length - 1 - suffix]
+		) suffix += 1;
+		const end = suffix ? -suffix : undefined;
+		return [
+			{ text: targetChars.slice(0, prefix).join(''), changed: false },
+			{ text: targetChars.slice(prefix, end).join(''), changed: true },
+			{ text: suffix ? targetChars.slice(-suffix).join('') : '', changed: false }
+		].filter((part) => part.text);
+	}
+
 	function handleKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape') {
 			event.preventDefault();
@@ -134,19 +153,52 @@
 					<h3>{section.title}</h3>
 					<div class="result-items">
 						{#each section.items as item, index}
-							<article class="result-item">
+							<article
+								class="result-item"
+								class:item-positive={item.tone === 'positive'}
+								class:item-warning={item.tone === 'warning'}
+								class:item-muted={item.tone === 'muted'}
+							>
 								<div class="item-heading">
 									<strong>{item.title || `样例 ${index + 1}`}</strong>
 									{#if item.meta}<span>{item.meta}</span>{/if}
 								</div>
 								{#if item.before || item.after}
 									<div class="comparison">
-										{#if item.before}<p><b>识别原文</b><span>{item.before}</span></p>{/if}
-										{#if item.after}<p><b>校对结果</b><span>{item.after}</span></p>{/if}
+										{#if item.before}<p><b>{item.beforeLabel || '识别原文'}</b><span>{item.before}</span></p>{/if}
+										{#if item.after}
+											<p>
+												<b>{item.afterLabel || '校对结果'}</b>
+												<span>{#each changedParts(item.before, item.after) as part}<mark class:changed={part.changed}>{part.text}</mark>{/each}</span>
+											</p>
+										{/if}
 									</div>
 									{#if item.text}<p class="item-detail">{item.text}</p>{/if}
 								{:else if item.text}
 									<p class="item-text">{item.text}</p>
+								{/if}
+								{#if item.facts.length}
+									<dl class="item-facts">
+										{#each item.facts as fact}<div><dt>{fact.label}</dt><dd>{fact.value}</dd></div>{/each}
+									</dl>
+								{/if}
+								{#if item.visual}
+									<div class="item-visual" aria-label={`${item.visual.label} ${Math.round(item.visual.value / item.visual.max * 100)}%`}>
+										<span>{item.visual.label}</span>
+										<div><i style={`width:${Math.round(item.visual.value / item.visual.max * 100)}%`}></i></div>
+									</div>
+								{/if}
+								{#if item.links.length}
+									<div class="item-links" aria-label="参考来源">
+										{#each item.links as link}
+											{#if safeExternalUrl(link.url)}
+												<a href={safeExternalUrl(link.url)} target="_blank" rel="noreferrer">
+													<span><strong>{link.title}</strong>{#if link.text}<small>{link.text}</small>{/if}</span>
+													{#if link.meta}<em>{link.meta}</em>{/if}<ExternalLink size={11} />
+												</a>
+											{/if}
+										{/each}
+									</div>
 								{/if}
 								{#if safeExternalUrl(item.url)}
 									<a href={safeExternalUrl(item.url)} target="_blank" rel="noreferrer">查看来源 <ExternalLink size={11} /></a>
@@ -238,7 +290,25 @@
 	.comparison p { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 8px; }
 	.comparison b { color: #73848b; font-size: 9px; font-weight: 600; }
 	.comparison p:last-child span { color: #cad8dc; }
+	.comparison mark { padding: 0; background: transparent; color: inherit; }
+	.comparison mark.changed { padding: 1px 2px; border-radius: 2px; background: rgba(95, 176, 199, 0.16); color: #a9d9e6; }
 	.item-detail { margin: 7px 0 0; padding-left: 70px; color: #87979e; font-size: 9.5px; line-height: 1.55; overflow-wrap: anywhere; }
+	.item-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 9px 0 0; overflow: hidden; border: 1px solid #2d373c; border-radius: 4px; background: #2d373c; }
+	.item-facts div { min-width: 0; padding: 7px 8px; background: #191f23; }
+	.item-facts dt { margin-bottom: 3px; color: #6f7f86; font-size: 8.5px; }
+	.item-facts dd { margin: 0; overflow-wrap: anywhere; color: #b5c1c6; font-size: 9.5px; line-height: 1.45; }
+	.item-visual { display: grid; grid-template-columns: 132px minmax(0, 1fr); align-items: center; gap: 10px; margin-top: 9px; color: #73838a; font-size: 8.5px; }
+	.item-visual > div { height: 4px; overflow: hidden; border-radius: 2px; background: #293238; }
+	.item-visual i { display: block; height: 100%; border-radius: inherit; background: #65aabd; }
+	.item-links { display: grid; gap: 4px; margin-top: 9px; }
+	.result-item .item-links a { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; margin: 0; padding: 7px 8px; border: 1px solid #2c373c; border-radius: 4px; background: #181e22; text-decoration: none; }
+	.item-links a > span { min-width: 0; display: grid; gap: 2px; }
+	.item-links strong { overflow: hidden; color: #9fc4cf; font-size: 9.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+	.item-links small { overflow: hidden; color: #708087; font-size: 8.5px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+	.item-links em { color: #66767d; font-size: 8px; font-style: normal; white-space: nowrap; }
+	.result-item.item-positive { border-left: 2px solid #4c8d71; padding-left: 10px; }
+	.result-item.item-warning { border-left: 2px solid #9b7945; padding-left: 10px; }
+	.result-item.item-muted { opacity: 0.78; }
 	.result-item a { width: fit-content; display: inline-flex; align-items: center; gap: 4px; margin-top: 7px; color: #72b8cc; font-size: 9.5px; text-decoration: none; }
 	.result-item a:hover { color: #a4d8e6; text-decoration: underline; }
 	.result-notes { color: #d7af73; }
@@ -259,6 +329,10 @@
 		.result-metrics div:not(:nth-child(3n + 1)) { padding-left: 0; border-left: 0; }
 		.result-metrics div:nth-child(even) { padding-left: 10px; border-left: 1px solid #2b3439; }
 		.result-summary { grid-template-columns: 1fr; gap: 5px; }
+		.item-facts { grid-template-columns: 1fr; }
+		.item-visual { grid-template-columns: 1fr; gap: 5px; }
+		.result-item .item-links a { grid-template-columns: minmax(0, 1fr) auto; }
+		.item-links em { display: none; }
 	}
 	@media (prefers-reduced-motion: reduce) {
 		.result-backdrop, .result-dialog, .spinning { animation: none; }
