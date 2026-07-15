@@ -19,7 +19,7 @@ from app.schemas.voice_studio import (
     TaskStatus,
     now_iso,
 )
-from app.services import database as db, engine_registry, engine_request_builder, settings_store, voice_store
+from app.services import cosyvoice_constraints, database as db, engine_registry, engine_request_builder, settings_store, voice_store
 from app.services.paths import PROJECT_ROOT, expand_path
 
 _queue: asyncio.Queue[str] | None = None
@@ -175,6 +175,7 @@ def _result_segments(req: BatchGenerateRequest) -> list[BatchSegmentResult]:
 async def submit(payload: Any) -> BatchTask:
     global _queue
     req = normalize_payload(payload)
+    _validate_cosyvoice_zero_shot_references(req)
     start_worker()
     batch = BatchTask(
         project_name=req.project_name,
@@ -227,6 +228,22 @@ def _all_segments_have_reference_text(req: BatchGenerateRequest) -> bool:
     return bool(req.segments) and all((_segment_ref_text(segment) or "").strip() for segment in req.segments)
 
 
+def _validate_cosyvoice_zero_shot_references(req: BatchGenerateRequest) -> None:
+    """Validate the actual common/segment reference paths before queueing."""
+
+    if req.engine_id != "cosyvoice-zero-shot":
+        return
+    common_ref = _resolve_reference(req)
+    effective_references = [
+        _segment_reference(segment) or common_ref
+        for segment in req.segments
+    ] or [common_ref]
+    if not effective_references or any(reference is None for reference in effective_references):
+        raise ValueError("REFERENCE_AUDIO_REQUIRED")
+    for reference in set(effective_references):
+        cosyvoice_constraints.validate_zero_shot_reference_audio(reference)
+
+
 def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
     if engine_request_builder.is_mimo_tts_request(req.engine_id):
         return engine_request_builder.build_mimo_tts_batch_common_kwargs(
@@ -247,15 +264,27 @@ def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
     has_segment_ref_texts = _all_segments_have_reference_text(req)
     if req.engine_id in {"indextts-v2", "confucius4-mlx-int8"} and not (ref or has_segment_refs):
         raise ValueError("REFERENCE_AUDIO_REQUIRED")
+    if req.engine_id == "indextts-v2" and req.parameters.get("emotion_mode") == "emotion_text":
+        raise ValueError("INDEXTTS_EMOTION_TEXT_UNSUPPORTED")
     if req.engine_id in {"f5-tts", "cosyvoice-zero-shot"}:
         if not (ref or has_segment_refs):
             raise ValueError("REFERENCE_AUDIO_REQUIRED")
         if not ((ref_text or "").strip() or has_segment_ref_texts):
             raise ValueError("REFERENCE_TEXT_REQUIRED")
+    _validate_cosyvoice_zero_shot_references(req)
+    if req.engine_id == "qwen3-tts-mlx-0.6b" and (ref or has_segment_refs) and not ((ref_text or "").strip() or has_segment_ref_texts):
+        raise ValueError("REFERENCE_TEXT_REQUIRED")
     base = GenerateRequest(text="placeholder", engine_id=req.engine_id, voice_id=req.voice_id, language=req.language)
     values = base.model_dump()
     values.update(req.parameters)
-    if req.engine_id in {"emotivoice", "cosyvoice-sft"}:
+    # Batch jobs start from the generic request model too.  Keep OmniVoice's
+    # actual default aligned with its page and official runtime, while leaving
+    # an explicit batch `diffusion_steps` untouched.
+    if req.engine_id == "omnivoice" and "diffusion_steps" not in req.parameters:
+        values["diffusion_steps"] = 32
+    if req.engine_id == "emotivoice":
+        return engine_request_builder.build_emotivoice_batch_common_kwargs(values)
+    if req.engine_id == "cosyvoice-sft":
         return engine_request_builder.build_preset_voice_batch_common_kwargs(values)
     if req.engine_id == "f5-tts":
         return engine_request_builder.build_f5_tts_batch_common_kwargs(
@@ -308,6 +337,15 @@ def _runner_segments(req: BatchGenerateRequest, batch: BatchTask, output_dir: Pa
         result = batch.segments[index]
         output_path = output_dir / (result.audio or f"{result.segment_id}.{req.output_format}")
         params = dict(segment.parameters)
+        if req.engine_id == "qwen3-tts-mlx-0.6b":
+            # The Qwen3 CustomVoice route accepts ``style_instruction`` as
+            # ``instruct``.  The single-request builder already removes it
+            # for Base reference cloning and VoiceDesign; keep the segment
+            # value here so CustomVoice batches do not silently lose it.
+            # These two legacy generic fields still have no Qwen3 control
+            # path and must not appear as deceptively "used" settings.
+            for key in ("cfg_scale", "ddpm_steps"):
+                params.pop(key, None)
         explicit_params = {
             "speed": segment.speed,
             "emotion": segment.emotion,
@@ -329,8 +367,8 @@ def _runner_segments(req: BatchGenerateRequest, batch: BatchTask, output_dir: Pa
             "top_k": segment.parameters.get("top_k"),
             "repetition_penalty": segment.parameters.get("repetition_penalty"),
             "max_tokens": segment.parameters.get("max_tokens"),
-            "cfg_scale": segment.parameters.get("cfg_scale"),
-            "ddpm_steps": segment.parameters.get("ddpm_steps"),
+            "cfg_scale": None if req.engine_id == "qwen3-tts-mlx-0.6b" else segment.parameters.get("cfg_scale"),
+            "ddpm_steps": None if req.engine_id == "qwen3-tts-mlx-0.6b" else segment.parameters.get("ddpm_steps"),
         }
         params.update({key: value for key, value in explicit_params.items() if value is not None})
         runner_segments.append(
@@ -345,6 +383,7 @@ def _runner_segments(req: BatchGenerateRequest, batch: BatchTask, output_dir: Pa
 
 
 def run_batch(req: BatchGenerateRequest, batch: BatchTask) -> dict[str, Any]:
+    _validate_cosyvoice_zero_shot_references(req)
     engine_registry.ensure_loaded(req.engine_id)
     output_dir = expand_path(req.output_dir) if req.output_dir else settings_store.output_dir() / "batches" / batch.batch_task_id
     output_dir.mkdir(parents=True, exist_ok=True)

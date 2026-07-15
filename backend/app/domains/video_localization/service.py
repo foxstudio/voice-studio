@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import shutil
-from typing import Any
+import threading
+from typing import Any, Callable
 
 from fastapi import UploadFile
 
@@ -13,6 +14,7 @@ from app.domains.video_localization import exporting
 from app.domains.video_localization import localization
 from app.domains.video_localization import media_assets
 from app.domains.video_localization import project_manifest
+from app.domains.video_localization import quality_gate
 from app.domains.video_localization import reference_clips
 from app.domains.video_localization import speakers
 from app.domains.video_localization import source_pipeline
@@ -30,11 +32,13 @@ from app.domains.video_localization.schemas import (
     VideoLocalizationReferenceClipUpdate,
     VideoLocalizationSpeakerCreate,
     VideoLocalizationSpeakerUpdate,
+    VideoLocalizationSubtitleCueUpdate,
     VideoLocalizationSubtitleImportRequest,
 )
 from app.services import project_store
 
 VIDEO_LOCALIZATION_KEY = draft_store.VIDEO_LOCALIZATION_KEY
+_DRAFT_WRITE_LOCK = threading.RLock()
 
 
 def get_video_localization(project_id: str) -> VideoLocalizationDraft | None:
@@ -74,19 +78,46 @@ def sync_local_projects() -> list[Project]:
 
 
 def save_video_localization(project_id: str, draft: VideoLocalizationDraft) -> VideoLocalizationDraft | None:
-    current = draft_store.get(project_id)
-    if current and current.updated_at and draft.updated_at and current.updated_at != draft.updated_at:
-        raise AppException(409, "VIDEO_LOCALIZATION_DRAFT_CONFLICT", "Project changed while this draft was being edited")
-    return draft_store.save(project_id, draft)
+    with _DRAFT_WRITE_LOCK:
+        current = draft_store.get(project_id)
+        if current and current.updated_at and draft.updated_at and current.updated_at != draft.updated_at:
+            raise AppException(409, "VIDEO_LOCALIZATION_DRAFT_CONFLICT", "Project changed while this draft was being edited")
+        return draft_store.save(project_id, draft)
+
+
+def replace_video_localization_from_client(
+    project_id: str,
+    draft: VideoLocalizationDraft,
+) -> VideoLocalizationDraft | None:
+    """Replace an editable draft without trusting backend-owned audit fields."""
+    with _DRAFT_WRITE_LOCK:
+        current = draft_store.get(project_id)
+        if current and current.updated_at and draft.updated_at and current.updated_at != draft.updated_at:
+            raise AppException(409, "VIDEO_LOCALIZATION_DRAFT_CONFLICT", "Project changed while this draft was being edited")
+        sanitized = cue_tools.sanitize_client_draft_timing_provenance(current, draft)
+        return draft_store.save(project_id, sanitized)
+
+
+def update_video_localization_atomic(
+    project_id: str,
+    updater: Callable[[VideoLocalizationDraft], VideoLocalizationDraft],
+) -> VideoLocalizationDraft | None:
+    """Merge a backend-owned patch into the latest draft under one write lock."""
+    with _DRAFT_WRITE_LOCK:
+        current = draft_store.get(project_id)
+        if current is None:
+            return None
+        return draft_store.save(project_id, updater(current))
 
 
 def update_video_localization_ui_state(project_id: str, patch: dict[str, Any]) -> VideoLocalizationDraft | None:
-    project = project_store.get_project(project_id)
-    if not project:
-        return None
-    draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    next_draft = draft.model_copy(update={"ui_state": {**draft.ui_state, **patch}})
-    return draft_store.save(project_id, next_draft)
+    with _DRAFT_WRITE_LOCK:
+        project = project_store.get_project(project_id)
+        if not project:
+            return None
+        draft = get_video_localization(project_id) or VideoLocalizationDraft()
+        next_draft = draft.model_copy(update={"ui_state": {**draft.ui_state, **patch}})
+        return draft_store.save(project_id, next_draft)
 
 
 def reset_video_localization(project_id: str) -> VideoLocalizationDraft | None:
@@ -172,11 +203,19 @@ def separate_source_audio(project_id: str) -> VideoLocalizationDraft | None:
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    next_draft = source_pipeline.with_separated_source_audio(project_id, draft)
-    new_paths = [next_draft.stems.vocals_clean_path, next_draft.stems.background_path]
+    separated_draft = source_pipeline.with_separated_source_audio(project_id, draft)
+    separated_stems = separated_draft.stems
+    new_paths = [separated_stems.vocals_clean_path, separated_stems.background_path]
     previous_paths = {draft.stems.vocals_clean_path, draft.stems.background_path}
     try:
-        saved = save_video_localization(project_id, next_draft)
+        # Separation can take minutes. Merge only its result into the newest draft so
+        # autosaved UI/timeline changes made while Demucs was running are preserved.
+        with _DRAFT_WRITE_LOCK:
+            latest = get_video_localization(project_id)
+            if latest is None:
+                saved = None
+            else:
+                saved = draft_store.save(project_id, latest.model_copy(update={"stems": separated_stems}))
     except Exception:
         for value in new_paths:
             if value and value not in previous_paths:
@@ -187,12 +226,41 @@ def separate_source_audio(project_id: str) -> VideoLocalizationDraft | None:
     return saved
 
 
-def transcribe_english_source_audio(project_id: str, engine_id: str = "faster-whisper-turbo") -> VideoLocalizationDraft | None:
+def transcribe_english_source_audio(
+    project_id: str,
+    engine_id: str = source_pipeline.DEFAULT_ENGLISH_ASR_ENGINE_ID,
+    source_track_id: source_pipeline.EnglishAsrSourceTrackId | str = "auto",
+    is_cancelled: Callable[[], bool] | None = None,
+    on_progress: Callable[[float, str], None] | None = None,
+    on_preview: Callable[[str, list[dict]], None] | None = None,
+    segmentation_profile_id: str = "generic_zh",
+) -> VideoLocalizationDraft | None:
     project = project_store.get_project(project_id)
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    return save_video_localization(project_id, source_pipeline.with_english_asr(draft, engine_id))
+    result = source_pipeline.with_english_asr(
+        draft,
+        engine_id,
+        source_track_id,
+        segmentation_profile_id=segmentation_profile_id,
+        progress_callback=on_progress,
+        is_cancelled=is_cancelled,
+        preview_callback=on_preview,
+    )
+
+    # ASR can take minutes. Re-read and merge into the latest draft so autosaved
+    # timeline/UI edits are not overwritten by the snapshot used to start ASR.
+    with _DRAFT_WRITE_LOCK:
+        latest = get_video_localization(project_id)
+        if latest is None:
+            return None
+        if is_cancelled and is_cancelled():
+            return latest
+        merged = source_pipeline.merge_english_asr_result(latest, result)
+        if is_cancelled and is_cancelled():
+            return latest
+        return draft_store.save(project_id, merged)
 
 
 def import_subtitles(project_id: str, kind: str, request: VideoLocalizationSubtitleImportRequest) -> VideoLocalizationDraft | None:
@@ -238,6 +306,37 @@ def update_cue(project_id: str, cue_id: str, patch: VideoLocalizationCueUpdate) 
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
     next_draft = cue_tools.with_updated_cue(draft, cue_id, patch)
     return save_video_localization(project_id, speakers.reconcile_speakers(next_draft))
+
+
+def update_localized_subtitle(
+    project_id: str,
+    subtitle_id: str,
+    patch: VideoLocalizationSubtitleCueUpdate,
+) -> VideoLocalizationDraft | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    next_draft = subtitles.with_updated_localized_subtitle(draft, subtitle_id, patch)
+    return save_video_localization(project_id, next_draft)
+
+
+def clear_subtitles(project_id: str, kind: str) -> VideoLocalizationDraft | None:
+    def clear(current: VideoLocalizationDraft) -> VideoLocalizationDraft:
+        if kind == "en":
+            if any(
+                operation.kind == "english_asr" and operation.status in {"queued", "running"}
+                for operation in current.operations
+            ):
+                raise AppException(
+                    409,
+                    "VIDEO_LOCALIZATION_SUBTITLE_CLEAR_BLOCKED",
+                    "字幕听写仍在运行，请先取消或等待完成后再清空 ASR 字幕轨。",
+                )
+            return source_pipeline.without_english_asr(current)
+        return subtitles.without_localized_subtitle_track(current)
+
+    return update_video_localization_atomic(project_id, clear)
 
 
 def create_speaker(project_id: str, payload: VideoLocalizationSpeakerCreate) -> VideoLocalizationDraft | None:
@@ -293,6 +392,14 @@ def export_subtitles(project_id: str, kind: str) -> str | None:
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    blockers = quality_gate.subtitle_export_blockers(draft, kind)
+    if blockers:
+        raise AppException(
+            409,
+            "VIDEO_LOCALIZATION_SUBTITLE_EXPORT_BLOCKED",
+            f"字幕未通过导出检查，请先处理 {len(blockers)} 个时间或内容问题。",
+            {"issues": [issue.model_dump(mode="json") for issue in blockers]},
+        )
     return exporting.export_subtitles(draft, kind)
 
 
@@ -361,11 +468,7 @@ def timeline_clip_audio_file(project_id: str, clip_id: str) -> Path | None:
     draft = get_video_localization(project_id)
     if not draft:
         return None
-    clip = next((dict(item) for item in draft.timeline_clips if dict(item).get("clip_id") == clip_id), None)
-    if not clip or not clip.get("audio_path"):
-        return None
-    path = Path(str(clip["audio_path"]))
-    return path if path.exists() else None
+    return audio_access.timeline_clip_audio_path(draft, clip_id)
 
 
 def apply_generated_candidate(project_id: str, candidate_id: str) -> VideoLocalizationDraft | None:

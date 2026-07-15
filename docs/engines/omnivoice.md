@@ -37,7 +37,7 @@
 
 ## 当前参数与默认值
 
-OmniVoice 当前接入只消费语言、参考音色或声音描述、语速。选了本地音色时走参考音频；没选本地音色时，可以用“声音描述/指令”描述想要的声音。
+OmniVoice 当前接入会消费语言、参考音色或声音描述、语速、固定时长、扩散步数、引导强度和官方长文本切分配置。选了本地音色时走参考音频；没选本地音色时，可以用“声音描述/指令”描述想要的声音。语速和固定时长由 Voice Studio 在完整生成后做不变调处理；长句和极端目标时长仍要先试听确认自然度与完整性。
 
 正文内可插入的官方非语言标签包括：`[laughter]`、`[sigh]`、`[sniff]`、`[confirmation-en]`、`[question-en]`、`[question-ah]`、`[question-oh]`、`[question-ei]`、`[question-yi]`、`[surprise-ah]`、`[surprise-oh]`、`[surprise-wa]`、`[surprise-yo]`、`[dissatisfaction-hnn]`。生成页也保留 `[pause]`、`[cough]` 作为历史兼容快捷标签；耳语/小声属于声音设计属性。
 
@@ -52,8 +52,12 @@ OmniVoice 当前接入只消费语言、参考音色或声音描述、语速。�
 | 语言 `language` | `auto` | 自动判断，或手动选中文/英文/日文等。 |
 | 声音描述 `emotion_text` | 空 | 未选本地音色时，用文字描述声音，例如“女，青年，中音调”。 |
 | 语速 `speed` | `1.0` | 控制朗读速度。 |
+| 扩散步数 `diffusion_steps` | `32` | 生成时细化声音的次数；调高通常更慢。 |
+| 引导强度 `guidance_scale` | `2.0` | 控制结果贴合文字、参考音色或声音描述的力度；`0` 表示关闭额外引导。 |
+| 固定时长 `duration` | `0` | `0` 自动估算；填写秒数后，Voice Studio 会在完整生成后拉伸或压缩到目标时长。和文字长度差距过大时，语速和自然度可能受影响。 |
 | 长文本分段目标 `audio_chunk_duration` | `15s` | 官方内置长文本切分目标，每段约 15 秒。 |
 | 长文本切分阈值 `audio_chunk_threshold` | `30s` | 官方默认预计音频超过 30 秒时启动内部切分。 |
+| 开发者配置 | 官方默认 | `t_shift=0.1`、`layer_penalty_factor=5`、`position_temperature=5`、`class_temperature=0`、`denoise/preprocess_prompt/postprocess_output=true` 都已接通。它们是内部采样/处理开关，不对应简单的“更好听”，一般保持默认。 |
 
 内置预设：OmniVoice 女青年设计。生成页“一键重置参数”会恢复语言和语速默认值。
 

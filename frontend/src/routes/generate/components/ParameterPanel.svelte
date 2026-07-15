@@ -6,6 +6,7 @@
 	import Toggle from '$lib/components/shared/Toggle.svelte';
 
 	interface Props {
+		engineId?: string;
 		parameterSchema: ParameterSchema[];
 		values: Record<string, unknown>;
 		onChange?: (key: string, value: unknown) => void;
@@ -13,6 +14,7 @@
 	}
 
 	let {
+		engineId = '',
 		parameterSchema = [],
 		values = {},
 		onChange = () => {},
@@ -23,6 +25,74 @@
 	const advancedParams = $derived(
 		parameterSchema.filter((p) => p.level === 'advanced' || p.level === 'developer')
 	);
+	type ParameterGroup = { label: string; params: ParameterSchema[]; showTitle: boolean };
+
+	type GroupDefinition = { label: string; keys: string[] };
+	const ENGINE_ADVANCED_LAYOUT: Record<string, GroupDefinition[]> = {
+		'indextts-v2': [
+			{ label: '生成控制', keys: ['temperature', 'top_p', 'top_k', 'repetition_penalty'] },
+			{ label: '质量与长文本', keys: ['cfg_rate', 'diffusion_steps', 'max_mel_tokens', 'max_text_tokens_per_segment', 'interval_silence'] }
+		],
+		omnivoice: [
+			{ label: '生成质量', keys: ['diffusion_steps', 'guidance_scale'] },
+			{ label: '时长与分段', keys: ['duration', 'audio_chunk_duration', 'audio_chunk_threshold'] },
+			{ label: '开发调试', keys: ['t_shift', 'layer_penalty_factor', 'position_temperature', 'class_temperature', 'denoise', 'preprocess_prompt', 'postprocess_output'] }
+		],
+		'confucius4-mlx-int8': [
+			{ label: '生成与复现', keys: ['temperature', 'top_p', 'top_k', 'repetition_penalty', 'diffusion_steps', 'cfg_rate', 'seed'] }
+		],
+		'qwen3-tts-mlx-0.6b': [
+			{ label: '生成与长度', keys: ['temperature', 'top_p', 'top_k', 'repetition_penalty', 'max_tokens'] }
+		],
+		'f5-tts': [
+			{ label: '质量与衔接', keys: ['nfe_step', 'cfg_strength', 'cross_fade_duration', 'remove_silence'] },
+			{ label: '调试与复现', keys: ['target_rms', 'sway_sampling_coef', 'fix_duration', 'seed'] }
+		],
+		'doubao-tts-preset': [
+			{ label: '文本处理', keys: ['max_length_to_filter_parenthesis', 'disable_markdown_filter', 'latex_parser_mode'] },
+			{ label: '来源信息', keys: ['aigc_metadata_enable', 'content_producer', 'produce_id', 'content_propagator', 'propagate_id'] }
+		],
+		'doubao-tts-voiceclone': [
+			{ label: '文本处理', keys: ['max_length_to_filter_parenthesis', 'disable_markdown_filter', 'latex_parser_mode'] },
+			{ label: '来源信息', keys: ['aigc_metadata_enable', 'content_producer', 'produce_id', 'content_propagator', 'propagate_id'] }
+		],
+		'doubao-seed-audio-1.0': [
+			{ label: '输出质量', keys: ['sample_rate', 'loudness_rate', 'pitch_rate'] },
+			{ label: '交付标记', keys: ['enable_subtitle', 'aigc_watermark'] },
+			{ label: '来源信息', keys: ['aigc_metadata_enable', 'content_producer', 'produce_id', 'content_propagator', 'propagate_id'] }
+		]
+	};
+
+	function inferredEngineId(params: ParameterSchema[]): string {
+		const keys = new Set(params.map((param) => param.key));
+		if (keys.has('t_shift')) return 'omnivoice';
+		if (keys.has('nfe_step')) return 'f5-tts';
+		if (keys.has('max_mel_tokens')) return 'indextts-v2';
+		if (keys.has('max_tokens')) return 'qwen3-tts-mlx-0.6b';
+		if (keys.has('max_length_to_filter_parenthesis')) return 'doubao-tts-preset';
+		if (keys.has('cfg_rate')) return 'confucius4-mlx-int8';
+		return '';
+	}
+
+	const layoutEngineId = $derived(engineId || inferredEngineId(advancedParams));
+
+	const advancedGroups = $derived.by((): ParameterGroup[] => {
+		const byKey = new Map(advancedParams.map((param) => [param.key, param]));
+		const used = new Set<string>();
+		const configured = (ENGINE_ADVANCED_LAYOUT[layoutEngineId] ?? []).flatMap((group) => {
+			const params = group.keys.flatMap((key) => {
+				const param = byKey.get(key);
+				if (!param) return [];
+				used.add(key);
+				return [param];
+			});
+			return params.length ? [{ label: group.label, params, showTitle: params.length > 1 }] : [];
+		});
+		const unconfigured = advancedParams.filter((param) => !used.has(param.key));
+		return unconfigured.length
+			? [...configured, { label: '其他高级设置', params: unconfigured, showTitle: unconfigured.length > 1 }]
+			: configured;
+	});
 
 	let showAdvanced = $state(false);
 
@@ -134,7 +204,11 @@
 
 	{#if (autoExpand && advancedParams.length > 0) || showAdvanced}
 			<div class="advanced-section">
-				{#each advancedParams as param}
+				{#each advancedGroups as group}
+					<section class="advanced-group" class:source-info-group={group.label === '来源信息'} aria-label={group.label}>
+						{#if group.showTitle}<h3 class="param-group-title">{group.label}</h3>{/if}
+						<div class="advanced-group-grid">
+							{#each group.params as param}
 					<div class={fieldClass(param)}>
 						<Field label={param.label} tooltip={param.description}>
 							{#if param.type === 'slider'}
@@ -208,6 +282,9 @@
 							{/if}
 						</Field>
 					</div>
+							{/each}
+						</div>
+					</section>
 				{/each}
 			</div>
 	{/if}
@@ -247,19 +324,61 @@
 
 	.advanced-section {
 		display: grid;
-		grid-template-columns: repeat(12, minmax(0, 1fr));
-		gap: 10px 12px;
-		padding-top: 2px;
+		gap: 10px;
+		padding-top: 0;
+	}
+
+	.advanced-group {
+		display: grid;
+		gap: 6px;
+		min-width: 0;
+	}
+
+	.advanced-group + .advanced-group {
+		padding-top: 8px;
+	}
+
+	.advanced-group-grid {
+		display: grid;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: 8px 10px;
 		align-items: start;
 	}
 
 	.param-item {
-		grid-column: span 3;
+		grid-column: auto;
 		min-width: 0;
 	}
 
+	.param-group-title {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		min-height: 18px;
+		margin: 0;
+		color: var(--text);
+		font-size: 12px;
+		font-weight: 600;
+		line-height: 18px;
+		letter-spacing: 0.015em;
+	}
+
+	.param-group-title::before {
+		content: '';
+		width: 3px;
+		height: 12px;
+		border-radius: 999px;
+		background: var(--accent);
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent);
+		flex: 0 0 auto;
+	}
+
+	.source-info-group .advanced-group-grid > .param-item:last-child {
+		grid-column: span 2;
+	}
+
 	.param-textarea {
-		grid-column: span 6;
+		grid-column: span 2;
 	}
 
 	.advanced-section :global(.field) {
@@ -274,23 +393,35 @@
 	}
 
 	:global(.field) .param-input {
-		height: 28px;
-		min-height: 28px;
-		padding: 3px 8px;
-		border-radius: 6px;
+		height: 32px;
+		min-height: 32px;
+		padding: 5px 8px;
+		border-radius: 7px;
 		font-size: 12px;
 		line-height: 1.2;
 		box-sizing: border-box;
 	}
 
 	:global(.field) .param-textarea {
-		min-height: 68px;
+		min-height: 32px;
+		line-height: 18px;
 		resize: vertical;
 	}
 
-	@media (max-width: 1100px) {
+	.advanced-section :global(.select-trigger) {
+		min-height: 32px;
+		height: 32px;
+		padding: 5px 8px;
+		font-size: 12px;
+	}
+
+	@media (max-width: 1000px) {
+		.advanced-group-grid {
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
+
 		.param-item {
-			grid-column: span 4;
+			grid-column: auto;
 		}
 
 		.param-textarea {
@@ -299,8 +430,12 @@
 	}
 
 	@media (max-width: 760px) {
+		.advanced-group-grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
 		.param-item {
-			grid-column: span 6;
+			grid-column: auto;
 		}
 
 		.param-textarea {
@@ -313,7 +448,8 @@
 	}
 
 	@media (max-width: 560px) {
-		.advanced-section {
+		.advanced-group-grid {
+			grid-template-columns: 1fr;
 			gap: 8px;
 		}
 

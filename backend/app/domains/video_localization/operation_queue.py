@@ -6,6 +6,7 @@ import threading
 
 from app.domains.video_localization import operation_state
 from app.domains.video_localization import service
+from app.domains.video_localization import source_pipeline
 from app.errors import AppException
 from app.domains.video_localization.schemas import VideoLocalizationDraft, VideoLocalizationOperation, now_iso
 from app.services import project_store
@@ -78,6 +79,7 @@ def cancel(project_id: str, operation_id: str) -> VideoLocalizationOperation | N
         "cancel_requested": True,
         "completed_at": completed_at,
         "error_message": "已取消" if operation.status == "queued" else "已请求取消；当前处理结束后会丢弃任务结果。",
+        "result_summary": {"stage": "已取消" if operation.status == "queued" else "正在取消", "preview_cues": []},
     }
     _mark_operation(project_id, operation_id, kind=operation.kind, **updates)
     updated = get_operation(project_id, operation_id)
@@ -102,18 +104,20 @@ def submit(project_id: str, kind: OperationKind, parameters: dict | None = None)
     if not project:
         return None
     draft = service.get_video_localization(project_id) or VideoLocalizationDraft()
-    operation_state.validate_prerequisites(kind, draft)
+    operation_state.validate_prerequisites(kind, draft, parameters)
 
     active = operation_state.active_operation_for_kind(draft, kind)
     if active:
         _enqueue(active.operation_id)
         return active
 
+    operation_parameters = dict(parameters or {})
+    operation_parameters["scope"] = operation_state.operation_scope(kind, operation_parameters)
     operation = VideoLocalizationOperation(
         project_id=project_id,
         kind=kind,
         label=_KIND_LABELS[kind],
-        parameters=parameters or {},
+        parameters=operation_parameters,
     )
     draft = operation_state.with_operation(draft, operation)
     draft = operation_state.with_kind_status(draft, kind, "queued")
@@ -144,7 +148,15 @@ def _process(operation_id: str) -> None:
         _mark_operation(project_id, operation_id, kind=operation.kind, status="cancelled", completed_at=operation.completed_at or now_iso())
         return
 
-    _mark_operation(project_id, operation_id, kind=operation.kind, status="running", progress=0.2, started_at=now_iso())
+    _mark_operation(
+        project_id,
+        operation_id,
+        kind=operation.kind,
+        status="running",
+        progress=0.05,
+        started_at=now_iso(),
+        result_summary={"stage": "准备处理"},
+    )
     try:
         if operation.kind == "source_audio":
             updated = service.extract_source_audio(project_id)
@@ -153,8 +165,31 @@ def _process(operation_id: str) -> None:
             updated = service.separate_source_audio(project_id)
             summary = operation_state.stems_summary(updated)
         elif operation.kind == "english_asr":
-            engine_id = str(operation.parameters.get("engine_id") or "faster-whisper-turbo")
-            updated = service.transcribe_english_source_audio(project_id, engine_id=engine_id)
+            engine_id = str(operation.parameters.get("engine_id") or source_pipeline.DEFAULT_ENGLISH_ASR_ENGINE_ID)
+            source_track_id = str(operation.parameters.get("source_track_id") or "auto")
+            segmentation_profile_id = str(operation.parameters.get("segmentation_profile_id") or "generic_zh")
+            updated = service.transcribe_english_source_audio(
+                project_id,
+                engine_id=engine_id,
+                source_track_id=source_track_id,
+                is_cancelled=lambda: operation_state.operation_was_cancelled(get_operation(project_id, operation_id)),
+                on_progress=lambda progress, stage: _mark_operation(
+                    project_id,
+                    operation_id,
+                    kind=operation.kind,
+                    status="running",
+                    progress=progress,
+                    result_summary={"stage": stage},
+                ),
+                on_preview=lambda phase, cues: _mark_operation(
+                    project_id,
+                    operation_id,
+                    kind=operation.kind,
+                    status="running",
+                    result_summary={"preview_phase": phase, "preview_cues": cues},
+                ),
+                segmentation_profile_id=segmentation_profile_id,
+            )
             summary = operation_state.english_asr_summary(updated)
         elif operation.kind == "reference_clips":
             updated = service.create_reference_clips_from_cues(project_id)
@@ -241,24 +276,42 @@ def _operation_from_draft(draft: VideoLocalizationDraft, operation_id: str) -> V
 
 
 def _mark_operation(project_id: str, operation_id: str, *, kind: OperationKind | None = None, **updates) -> None:
-    draft = service.get_video_localization(project_id)
-    if draft is None:
-        return
-    next_operations = []
-    for operation in draft.operations:
-        if operation.operation_id == operation_id:
-            next_operations.append(operation.model_copy(update=updates))
-        else:
-            next_operations.append(operation)
-    next_draft = draft.model_copy(update={"operations": next_operations})
-    status = updates.get("status")
-    if kind and status in _TERMINAL_STATUSES.union(_ACTIVE_STATUSES):
-        next_draft = operation_state.with_kind_status(next_draft, kind, status)
-    service.save_video_localization(project_id, next_draft)
+    def apply(draft: VideoLocalizationDraft) -> VideoLocalizationDraft:
+        next_operations = []
+        applied = False
+        for operation in draft.operations:
+            if operation.operation_id == operation_id:
+                incoming_status = updates.get("status")
+                if (operation.cancel_requested or operation.status in _TERMINAL_STATUSES) and incoming_status in _ACTIVE_STATUSES:
+                    next_operations.append(operation)
+                else:
+                    operation_updates = dict(updates)
+                    if incoming_status in _ACTIVE_STATUSES and isinstance(operation_updates.get("result_summary"), dict):
+                        operation_updates["result_summary"] = {
+                            **operation.result_summary,
+                            **operation_updates["result_summary"],
+                        }
+                    next_operations.append(operation.model_copy(update=operation_updates))
+                    applied = True
+            else:
+                next_operations.append(operation)
+        next_draft = draft.model_copy(update={"operations": next_operations})
+        status = updates.get("status")
+        if applied and kind and status in _TERMINAL_STATUSES.union(_ACTIVE_STATUSES):
+            next_draft = operation_state.with_kind_status(next_draft, kind, status)
+        return next_draft
+
+    service.update_video_localization_atomic(project_id, apply)
 
 
 def _mark_kind_failed(project_id: str, kind: OperationKind, code: str, message: str) -> None:
-    draft = service.get_video_localization(project_id)
-    if draft is None:
-        return
-    service.save_video_localization(project_id, operation_state.with_kind_status(draft, kind, "failed", error_code=code, error_message=message))
+    service.update_video_localization_atomic(
+        project_id,
+        lambda draft: operation_state.with_kind_status(
+            draft,
+            kind,
+            "failed",
+            error_code=code,
+            error_message=message,
+        ),
+    )

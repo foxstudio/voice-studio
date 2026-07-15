@@ -1,6 +1,6 @@
 export type EngineStatus = 'not_installed' | 'stopped' | 'loading' | 'loaded' | 'running' | 'error';
 export type TaskStatus = 'pending' | 'queued' | 'running' | 'postprocessing' | 'success' | 'failed' | 'cancelled' | 'retrying';
-export type OutputFormat = 'wav' | 'mp3' | 'flac';
+export type OutputFormat = 'wav' | 'mp3' | 'flac' | 'pcm' | 'ogg_opus';
 
 export interface AudioQualityResult {
 	duration_ms: number;
@@ -43,6 +43,7 @@ export interface EngineDetail {
 		privacy_level: string;
 		default_use_case: string;
 		parameter_schema: ParameterSchema[];
+		supported_output_formats?: OutputFormat[];
 	};
 	state: {
 		engine_id: string;
@@ -69,6 +70,15 @@ export interface EngineInstallation {
 		resolved_path: string | null;
 	}>;
 	automatic_download_supported: boolean;
+	download_sources: Array<{
+		provider: string;
+		label: string;
+		url: string;
+		region: 'cn' | 'global' | string;
+		preferred: boolean;
+		compatibility_note: string;
+	}>;
+	download_policy: string;
 	reuse_note: string;
 }
 
@@ -140,6 +150,65 @@ export interface AppSettings {
 	default_emotion: string;
 	default_emo_alpha: number;
 	theme: 'system' | 'dark' | 'light';
+}
+
+export type LlmProviderProtocol = 'openai_compatible';
+
+export interface LlmProviderProfile {
+	profile_id: string;
+	name: string;
+	protocol: LlmProviderProtocol;
+	base_url: string;
+	model_id: string;
+	enabled: boolean;
+	api_key_configured: boolean;
+}
+
+export interface LlmProviderProfileUpsert {
+	name: string;
+	protocol: LlmProviderProtocol;
+	base_url: string;
+	model_id: string;
+	enabled: boolean;
+	api_key?: string;
+	clear_api_key?: boolean;
+	make_default?: boolean;
+}
+
+export interface LlmProviderListResponse {
+	profiles: LlmProviderProfile[];
+	default_profile_id: string | null;
+}
+
+export interface LlmModelInfo {
+	model_id: string;
+	owned_by: string | null;
+}
+
+export interface LlmModelListResponse {
+	profile_id: string;
+	models: LlmModelInfo[];
+}
+
+export interface LlmConnectionTestResponse {
+	profile_id: string;
+	status: 'connected';
+	models_count: number;
+	selected_model_available: boolean | null;
+	message: string;
+}
+
+export type CloudProviderId = 'mimo' | 'doubao' | 'volcengine_directory';
+
+export interface CloudConnectionTestResponse {
+	provider: CloudProviderId;
+	status: 'connected';
+	message: string;
+	verified_scopes: string[];
+	billing_effect: 'none' | 'minimal';
+	models_count: number | null;
+	request_id: string | null;
+	logid: string | null;
 }
 
 export interface StorageLocation {
@@ -260,6 +329,10 @@ export interface UploadResult {
 	filename: string;
 	path: string;
 	quality: { passed: boolean; warnings: string[] };
+	duration_ms?: number | null;
+	size_bytes?: number;
+	source_kind?: 'audio' | 'video';
+	source_filename?: string | null;
 }
 
 export interface VoiceFile {
@@ -334,6 +407,8 @@ export interface VideoLocalizationSourceMedia {
 	height: number | null;
 	frame_rate: number | null;
 	imported_at: string | null;
+	content_sha256?: string | null;
+	audio_sha256?: string | null;
 	metadata: Record<string, unknown>;
 	[key: string]: unknown;
 }
@@ -345,6 +420,9 @@ export interface VideoLocalizationStems {
 	separation_engine_id: string | null;
 	separation_status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'skipped';
 	quality_flags: string[];
+	original_audio_sha256?: string | null;
+	vocals_clean_sha256?: string | null;
+	background_sha256?: string | null;
 	[key: string]: unknown;
 }
 
@@ -473,6 +551,119 @@ export interface VideoLocalizationTimelineClip {
 	[key: string]: unknown;
 }
 
+export interface VideoLocalizationTranscriptSegment {
+	segment_id: string;
+	start_ms: number;
+	end_ms: number;
+	raw_text: string;
+	corrected_text: string | null;
+	review_candidate_text?: string | null;
+	review_rejection_reason?: string | null;
+	review_confidence: number | null;
+	review_flags: string[];
+	review_operations: VideoLocalizationTranscriptEditOperation[];
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationTranscriptEditOperation {
+	start_word_id: string;
+	end_word_id: string;
+	source_text: string;
+	replacement_text: string;
+	reason: string;
+	confidence: number;
+	status: 'accepted' | 'rejected';
+	rejection_reason: string | null;
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationGlossaryEntry {
+	glossary_id: string;
+	source_text: string;
+	corrected_source_text: string | null;
+	zh_text: string | null;
+	notes: string | null;
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationAlignedWord {
+	word_id: string;
+	segment_id: string;
+	text: string;
+	start_ms: number;
+	end_ms: number;
+	timing_confidence: 'high' | 'medium' | 'low';
+	timing_source: 'forced_aligner' | 'asr_segment_interpolation';
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationAudioBoundaryEvidence {
+	boundary_id: string;
+	left_word_id: string;
+	right_word_id: string;
+	start_ms: number;
+	end_ms: number;
+	gap_ms: number;
+	low_energy_ms: number;
+	low_energy_ratio: number;
+	gap_rms_dbfs: number;
+	speech_reference_dbfs: number;
+	noise_floor_dbfs: number;
+	energy_drop_db: number;
+	confidence: 'none' | 'low' | 'medium' | 'high';
+	analysis_version: string;
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationBoundaryReview {
+	boundary_id: string;
+	left_word_id: string;
+	right_word_id: string;
+	decision: 'prefer' | 'allow' | 'avoid';
+	confidence: number;
+	reason: string;
+	prompt_version: string;
+	model_id: string | null;
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationTranscriptionState {
+	revision_id: string;
+	language: string;
+	source_track_id: string | null;
+	source_audio_sha256?: string | null;
+	alignment_source_track_id?: string | null;
+	alignment_audio_sha256?: string | null;
+	engine_id: string | null;
+	raw_text: string;
+	corrected_text: string;
+	segments: VideoLocalizationTranscriptSegment[];
+	words: VideoLocalizationAlignedWord[];
+	review_status: 'not_configured' | 'skipped' | 'completed' | 'partial' | 'failed';
+	review_profile_id: string | null;
+	review_model_id: string | null;
+	review_prompt_version: string | null;
+	review_error: string | null;
+	alignment_status: 'not_run' | 'completed' | 'partial' | 'failed';
+	alignment_engine_id: string | null;
+	alignment_error: string | null;
+	timing_confidence: 'high' | 'medium' | 'low';
+	audio_boundary_status: 'not_run' | 'completed' | 'failed' | 'skipped';
+	audio_boundary_analysis_version: string | null;
+	audio_boundary_error: string | null;
+	audio_boundary_features: VideoLocalizationAudioBoundaryEvidence[];
+	boundary_review_status: 'not_configured' | 'skipped' | 'completed' | 'partial' | 'failed';
+	boundary_review_profile_id: string | null;
+	boundary_review_model_id: string | null;
+	boundary_review_prompt_version: string | null;
+	boundary_review_error: string | null;
+	boundary_reviews: VideoLocalizationBoundaryReview[];
+	segmentation_profile_id: 'generic_zh' | 'short_video_large_text' | 'conservative_release';
+	quality_flags: string[];
+	created_at: string;
+	[key: string]: unknown;
+}
+
 export interface VideoLocalizationCue {
 	cue_id: string;
 	speaker_id: string | null;
@@ -491,11 +682,29 @@ export interface VideoLocalizationCue {
 	tts_attempted_at: string | null;
 	source_duration_ms: number | null;
 	generated_duration_ms: number | null;
+	source_word_ids: string[];
+	source_text_raw: string | null;
+	timing_confidence: 'high' | 'medium' | 'low' | null;
+	transcription_revision_id: string | null;
 	review_status: 'needs_review' | 'ready' | 'blocked' | 'locked';
 	quality_flags: string[];
 	notes: string | null;
 	[key: string]: unknown;
 }
+
+export interface VideoLocalizationSubtitleCue {
+	subtitle_id: string;
+	start_ms: number;
+	end_ms: number;
+	text: string;
+	linked_cue_id?: string | null;
+	quality_flags: string[];
+	[key: string]: unknown;
+}
+
+export type VideoLocalizationSubtitleCueUpdate = Partial<
+	Pick<VideoLocalizationSubtitleCue, 'start_ms' | 'end_ms'>
+>;
 
 export type VideoLocalizationCueUpdate = Partial<
 	Pick<
@@ -511,8 +720,10 @@ export type VideoLocalizationCueUpdate = Partial<
 		| 'review_status'
 		| 'quality_flags'
 		| 'notes'
-	>
->;
+		>
+> & {
+	confirm_timing?: boolean;
+};
 
 export interface VideoLocalizationQualityIssue {
 	code: string;
@@ -570,9 +781,13 @@ export interface VideoLocalizationDraft {
 	speakers: VideoLocalizationSpeaker[];
 	reference_clips: VideoLocalizationReferenceClip[];
 	cues: VideoLocalizationCue[];
+	transcription: VideoLocalizationTranscriptionState | null;
+	localized_subtitles: VideoLocalizationSubtitleCue[];
 	quality_gate: VideoLocalizationQualityGate;
 	exports: VideoLocalizationExportState;
 	operations: VideoLocalizationOperation[];
+	glossary: VideoLocalizationGlossaryEntry[];
+	scene_context: string;
 	ui_state: Record<string, unknown>;
 	project_voice_samples: Record<string, unknown>[];
 	voice_recipes: VideoLocalizationVoiceRecipe[];

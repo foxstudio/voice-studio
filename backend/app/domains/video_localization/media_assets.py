@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -37,6 +38,14 @@ async def save_uploaded_video(project_id: str, file: UploadFile) -> tuple[Path, 
     destination = unique_path(source_dir / safe_filename(filename))
     destination.write_bytes(content)
     return destination, content
+
+
+def file_sha256(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def project_video_localization_dir(project_id: str) -> Path:

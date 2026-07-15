@@ -45,3 +45,11 @@ def test_model_catalog_exposes_sources_without_automatic_download():
     assert entries["indextts-v2"]["source_url"].startswith("https://")
     assert entries["cosyvoice-sft"]["source_url"] == entries["cosyvoice-zero-shot"]["source_url"]
     assert all(item["automatic_download_supported"] is False for item in entries.values())
+    assert entries["indextts-v2"]["download_sources"][0]["provider"] == "modelscope"
+    assert entries["cosyvoice-sft"]["download_sources"][0]["preferred"] is True
+    qwen_source = entries["qwen3-asr-mlx"]["download_sources"][0]
+    assert qwen_source["provider"] == "modelscope"
+    assert qwen_source["preferred"] is True
+    assert "Qwen3-ASR-1.7B-8bit" in qwen_source["url"]
+    assert "MLX" in qwen_source["compatibility_note"]
+    assert "不静默切换" in entries["qwen3-asr-mlx"]["download_policy"]

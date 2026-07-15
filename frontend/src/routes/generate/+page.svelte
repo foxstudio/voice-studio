@@ -2,6 +2,8 @@
 	import { Api } from '$lib/api';
 	import type { AppSettings, EngineDetail, EngineSpeaker, GenerationTask, GeneratePlanResponse, GenerateRequest, LongformTask, PlannedTextSegment, PresetTemplate, TaskPageParams, TaskSummary, TranscriptionRecord, TranscriptionSegment, TTSVerificationResponse, UploadResult, VoiceAsset, VoiceAssetCreate, VoiceClipTranscribeResponse } from '$lib/api/types';
 	import { taskStatusLabel } from '$lib/labels';
+	import { buildVisibleWaveformBars } from '$lib/audio/waveform';
+	import { resolveSelectionPlayback, resolveSelectionReleasePlayback } from '$lib/audio/selection-playback';
 	import { Captions, CheckSquare, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleCheck, CloudUpload, FileAudio, FileText, Info, Mic, Cpu, Pencil, Play, Plus, Repeat, RotateCcw, Save, Search, Settings, SlidersHorizontal, Square, Trash2, X } from 'lucide-svelte';
 	import { onMount, tick, untrack } from 'svelte';
 	import { get } from 'svelte/store';
@@ -15,7 +17,7 @@
 	import Toggle from '$lib/components/shared/Toggle.svelte';
 	import Tooltip from '$lib/components/shared/Tooltip.svelte';
 	import DoubaoVoiceCatalogDrawer from '$lib/components/DoubaoVoiceCatalogDrawer.svelte';
-	import { DOUBAO_TTS_DEFAULTS, generateStore } from '$lib/stores/generate';
+	import { DOUBAO_TTS_DEFAULTS, generateStore, pickEngineSpecificParameters } from '$lib/stores/generate';
 	import * as H from './helpers';
 	import type { LongformStrategy, PresetDraft } from '$lib/stores/generate';
 	import type { TaskDateFilter, TaskSortBy, TaskSourceFilter, TaskStatusTab } from './helpers';
@@ -65,6 +67,7 @@
 	let taskSocketReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	let taskSocket: WebSocket | null = null;
 	let taskSocketClosed = false;
+	const locallySubmittedTaskIds = new Set<string>();
 	let recordsViewportEl: HTMLElement | undefined = $state();
 	let recordsBottomPagerEl: HTMLElement | undefined = $state();
 	let taskCardStreamTimer: ReturnType<typeof setTimeout> | null = null;
@@ -108,6 +111,9 @@
 	let customVoiceTimelineScrollLeft = $state(0);
 	let customVoiceTimelineViewportWidth = $state(0);
 	let customVoiceTimelineZoom = $state(1);
+	let customVoiceTimelinePanning = $state(false);
+	let customVoiceTrimEditing = $state(false);
+	let customVoiceResumePreviewAfterTrimEdit = $state(false);
 	let customVoiceTrimHover = $state(false);
 	let customVoiceTrimFocusWithin = $state(false);
 	let videoLocalizationHandoff = $state<VideoLocalizationHandoffMeta | null>(null);
@@ -200,9 +206,32 @@
 	const mimoVoiceOptions = $derived(selected?.manifest.parameter_schema.find(p => p.key === 'mimo_voice')?.options ?? []);
 	const doubaoSampleRateOptions = $derived(selected?.manifest.parameter_schema.find(p => p.key === 'sample_rate')?.options ?? []);
 	const doubaoBitRateOptions = $derived(selected?.manifest.parameter_schema.find(p => p.key === 'bit_rate')?.options ?? []);
+	const outputFormatOptions = $derived(selected?.manifest.supported_output_formats?.length ? selected.manifest.supported_output_formats : ['wav', 'mp3', 'flac']);
+	const outputFormatTooltip = $derived.by(() => {
+		const explanations: Record<string, string> = {
+			wav: 'WAV：兼容剪辑和后期，文件较大。',
+			mp3: 'MP3：文件较小，适合快速试听和分享。',
+			flac: 'FLAC：无损保留更多细节，文件较大。',
+			ogg_opus: 'OGG Opus：压缩率高，适合网页试听和分享。',
+			pcm: 'PCM：没有文件头的原始音频，只适合下载给专业软件或设备处理，浏览器不能直接试听。'
+		};
+		const supported = outputFormatOptions.map(format => explanations[format] ?? `${format.toUpperCase()}：由当前引擎直接输出。`);
+		return `决定保存成哪种音频文件，不会改变说话内容。${supported.join(' ')}`;
+	});
 	const languageOptions = $derived(selected?.manifest.parameter_schema.find(p => p.key === 'language')?.options ?? [{ label: '中文', value: 'zh' }, { label: '英文', value: 'en' }, { label: '自动', value: 'auto' }]);
+	const doubaoSelectedSpeaker = $derived($store.speakerCatalog.find((speaker) => speaker.speaker_id === $store.speakerId) ?? null);
+	const activeLanguageOptions = $derived.by(() => {
+		if (!isDoubaoPreset || !doubaoSelectedSpeaker?.languages?.length) return languageOptions;
+		const supported = new Set(doubaoSelectedSpeaker.languages.map((item) => typeof item === 'string' ? item : (item.code || item.language || '')).filter(Boolean));
+		return languageOptions.filter((option) => option.value === 'auto' || supported.has(String(option.value)));
+	});
 	const advancedParameterSchema = $derived(selected?.manifest.parameter_schema.filter(p => p.level === 'advanced' || p.level === 'developer') ?? []);
-	const genericAdvancedParameterSchema = $derived(isDoubao ? advancedParameterSchema.filter(p => !['pitch_rate', 'loudness_rate', 'sample_rate', 'bit_rate', 'enable_subtitle', 'silence_duration', 'aigc_watermark'].includes(p.key)) : advancedParameterSchema);
+	const inlineAdvancedParameterKeys = new Set([
+		'speaker_id', 'prompt', 'mimo_voice', 'language', 'voice_design_prompt', 'style_instruction',
+		'loudness_rate', 'pitch_rate', 'sample_rate', 'bit_rate', 'silence_duration',
+		'enable_subtitle', 'aigc_watermark', 'emotion', 'tone_fidelity'
+	]);
+	const genericAdvancedParameterSchema = $derived(advancedParameterSchema.filter((parameter) => !inlineAdvancedParameterKeys.has(parameter.key)));
 	const styleInstructionParam = $derived(selected?.manifest.parameter_schema.find(p => p.key === 'style_instruction'));
 	const styleInstructionLabel = $derived(styleInstructionParam?.label ?? '风格指令');
 	const styleInstructionTooltip = $derived(styleInstructionParam?.description ?? '');
@@ -280,24 +309,35 @@
 		URL.revokeObjectURL(url);
 	}
 	function seedAudioFileUrl(fileId: string) { return fileId ? `/api/voices/files/${encodeURIComponent(fileId)}/audio` : ''; }
+	function isReferenceVideo(file: File) { return /\.(mp4|mov|m4v|webm|mkv)$/i.test(file.name) || file.type.startsWith('video/'); }
+	function isSupportedReferenceMedia(file: File) { return file.type.startsWith('audio/') || isReferenceVideo(file) || /\.(wav|mp3|m4a|flac|aac|ogg|opus|pcm)$/i.test(file.name); }
+	function referenceMediaLabel(uploaded: UploadResult) { return uploaded.source_kind === 'video' ? `${uploaded.source_filename || '视频'} · 已抽取音频` : uploaded.filename; }
+	async function uploadedAudioFile(uploaded: UploadResult): Promise<File> {
+		const response = await fetch(seedAudioFileUrl(uploaded.file_id));
+		if (!response.ok) throw new Error('抽取后的参考音频无法读取');
+		const blob = await response.blob();
+		return new File([blob], uploaded.filename, { type: blob.type || 'audio/wav' });
+	}
 	async function uploadSeedAudioReference(slot: 1 | 2 | 3, file: File) {
 		seedAssetError = '';
-		if (file.size > 10 * 1024 * 1024) { seedAssetError = '参考声音不能超过 10MB，请裁短或压缩后重试。'; return; }
-		if (!file.type.startsWith('audio/') && !/\.(wav|mp3|pcm|ogg|opus)$/i.test(file.name)) { seedAssetError = '只支持 WAV、MP3、PCM 或 OGG Opus 音频。'; return; }
+		if (!isSupportedReferenceMedia(file)) { seedAssetError = '只支持常见音频或 MP4、MOV、M4V、WebM、MKV 视频。'; return; }
+		if (!isReferenceVideo(file) && file.size > 10 * 1024 * 1024) { seedAssetError = '参考声音不能超过 10MB，请裁短或压缩后重试。'; return; }
 		seedAssetBusy = true;
-		const previewUrl = createSeedObjectUrl(file);
 		try {
-			const [uploaded, durationSeconds] = await Promise.all([Api.uploadVoice(file), loadAudioDuration(previewUrl)]);
-			const durationMs = Math.round(durationSeconds * 1000);
+			const uploaded = await Api.uploadVoice(file);
+			if ((uploaded.size_bytes ?? 0) > 10 * 1024 * 1024) throw new Error('抽取后的参考音频超过 10MB，请缩短视频后重试。');
+			const previewUrl = seedAudioFileUrl(uploaded.file_id);
+			const durationMs = uploaded.duration_ms ?? Math.round((await loadAudioDuration(previewUrl)) * 1000);
+			const displayName = referenceMediaLabel(uploaded);
 			const referenceAudio = createReferenceAudioDraft(`seed-slot-${slot}-${uploaded.file_id}`, {
 				sourceKind: 'upload',
-				source: { fileId: uploaded.file_id, fileName: file.name, path: uploaded.path, previewUrl, durationMs, mimeType: file.type, sizeBytes: file.size },
-				clip: { fileId: uploaded.file_id, fileName: file.name, path: uploaded.path, previewUrl, durationMs, mimeType: file.type, sizeBytes: file.size },
+				source: { fileId: uploaded.file_id, fileName: displayName, path: uploaded.path, previewUrl, durationMs, mimeType: 'audio/wav', sizeBytes: uploaded.size_bytes ?? file.size },
+				clip: { fileId: uploaded.file_id, fileName: uploaded.filename, path: uploaded.path, previewUrl, durationMs, mimeType: 'audio/wav', sizeBytes: uploaded.size_bytes ?? file.size },
 				trim: { startMs: 0, endMs: durationMs },
 				qualityWarnings: uploaded.quality.warnings
 			});
 			const asset: SeedAudioReferenceAsset = {
-				assetId: referenceAudio.draftId, type: 'audio', source: 'upload', displayName: file.name,
+				assetId: referenceAudio.draftId, type: 'audio', source: 'upload', displayName,
 				voiceId: '', speakerId: '', licenseStatus: 'self_voice', referenceAudio
 			};
 			updateSeedAudioState(setSeedAudioReference(seedAudioState, slot, asset));
@@ -306,7 +346,6 @@
 				await openSeedAudioEditor(slot, asset);
 			}
 		} catch (e) {
-			releaseSeedObjectUrl(previewUrl);
 			seedAssetError = (e as Error).message || '参考声音上传失败，请检查文件后重试。';
 		} finally {
 			seedAssetBusy = false;
@@ -428,14 +467,15 @@
 		return meta.mode === 'tune_with_recipe' ? '带参数调试' : '仅带样音生成';
 	}
 	function currentComposerText() { return isSeedAudio ? activeSeedAudioDraft(seedAudioState).prompt : $store.text; }
-	function currentPresetParameters() { if (isSeedAudio) return seedAudioStateToRequest(seedAudioState).engine_parameters; const req = store.toRequest(); const params: Record<string, unknown> = { language: req.language, output_format: req.output_format }; for (const k of selected?.manifest.parameter_schema.map(p => p.key) ?? []) { const v = (req as unknown as Record<string, unknown>)[k]; if (v !== undefined && v !== null && v !== '') params[k] = v; } return params; }
+	function activeParameterTooltip(key: string, fallback = '') { return selected?.manifest.parameter_schema.find((parameter) => parameter.key === key)?.description || fallback; }
+	function currentPresetParameters() { if (isSeedAudio) return seedAudioStateToRequest(seedAudioState).engine_parameters; const req = store.toRequest(); const params: Record<string, unknown> = { language: req.language, output_format: req.output_format, ...(req.engine_parameters ?? {}) }; for (const k of selected?.manifest.parameter_schema.map(p => p.key) ?? []) { const v = (req as unknown as Record<string, unknown>)[k]; if (v !== undefined && v !== null && v !== '') params[k] = v; } return params; }
 	function resetCurrentEngineParams() { const keepText = $store.text; const keepVoiceId = $store.voiceId; const keepShowMore = $store.showMoreParams; store.setEngine($store.engineId); $store.text = keepText; $store.showMoreParams = keepShowMore; if (usesReferenceVoice) $store.voiceId = keepVoiceId; }
 	function setSpeedValue(value: string | number) { const n = Number(value); if (!Number.isFinite(n)) return; $store.speed = Math.min(2, Math.max(0.5, Math.round(n * 100) / 100)); }
 	function setTaskDateFilter(value: TaskDateFilter) { $store.taskDateFilter = value; $store.currentPage = 1; }
 	function resetPresetDraft() { $store.presetDraft = { name: '', scene: '', description: '', tags: '', sample_text: currentComposerText() }; $store.editingPresetId = ''; }
 	function presetTooltip(p: PresetTemplate) { return `${p.description || '无说明'}\n示例：${p.sample_text || '未设置'}\n标签：${p.tags.join('、') || '无'}`; }
 	function openPresetEditor(p?: PresetTemplate) { if (p) { $store.editingPresetId = p.preset_id; $store.presetDraft = { name: p.name, scene: p.scene, description: p.description, tags: p.tags.join('，'), sample_text: p.sample_text }; } else resetPresetDraft(); $store.showPresetEditor = true; }
-	function applyPreset(p: PresetTemplate) { const pp = p.parameters; const m = p.engine_id.startsWith('mimo-v2.5'); const keepVoiceId = p.recommended_voice_type === 'reference_voice' && p.engine_id === $store.engineId && usesReferenceVoice ? $store.voiceId : ''; store.fromRequest({ text: p.sample_text, engine_id: p.engine_id, voice_id: keepVoiceId || null, reference_audio_path: null, ref_text: null, language: String(pp.language ?? 'zh'), emotion_mode: pp.emotion ? 'emotion_vector' : 'follow_reference', emotion: typeof pp.emotion === 'string' ? pp.emotion : null, emotion_values: null, emotion_text: typeof pp.emotion_text === 'string' ? pp.emotion_text : null, style_instruction: typeof pp.style_instruction === 'string' ? pp.style_instruction : null, voice_design_prompt: typeof pp.voice_design_prompt === 'string' ? pp.voice_design_prompt : null, mimo_voice: typeof pp.mimo_voice === 'string' ? pp.mimo_voice : null, speaker_id: typeof pp.speaker_id === 'string' ? pp.speaker_id : null, prompt: typeof pp.prompt === 'string' ? pp.prompt : null, nfe_step: Number(pp.nfe_step ?? 32), cfg_strength: Number(pp.cfg_strength ?? 2.0), target_rms: Number(pp.target_rms ?? 0.1), cross_fade_duration: Number(pp.cross_fade_duration ?? 0.15), sway_sampling_coef: Number(pp.sway_sampling_coef ?? -1.0), fix_duration: Number(pp.fix_duration ?? 0), remove_silence: Boolean(pp.remove_silence ?? false), emo_alpha: Number(pp.emo_alpha ?? 0.6), speed: Number(pp.speed ?? 1.0), pitch_rate: pp.pitch_rate === undefined || pp.pitch_rate === null ? null : Number(pp.pitch_rate), sample_rate: (Number(pp.sample_rate ?? DOUBAO_TTS_DEFAULTS.sampleRate) as GenerateRequest['sample_rate']), bit_rate: Number(pp.bit_rate ?? DOUBAO_TTS_DEFAULTS.bitRate), loudness_rate: Number(pp.loudness_rate ?? 0), enable_subtitle: Boolean(pp.enable_subtitle ?? false), silence_duration: Number(pp.silence_duration ?? 0), aigc_watermark: Boolean(pp.aigc_watermark ?? false), temperature: Number(pp.temperature ?? (m ? 0.6 : 0.8)), top_p: Number(pp.top_p ?? (m ? 0.95 : 0.8)), top_k: Number(pp.top_k ?? 30), repetition_penalty: Number(pp.repetition_penalty ?? 10), seed: pp.seed === undefined || pp.seed === null ? null : Number(pp.seed), max_mel_tokens: Number(pp.max_mel_tokens ?? 1500), max_tokens: Number(pp.max_tokens ?? 1200), cfg_scale: pp.cfg_scale === undefined || pp.cfg_scale === null ? null : Number(pp.cfg_scale), ddpm_steps: pp.ddpm_steps === undefined || pp.ddpm_steps === null ? null : Number(pp.ddpm_steps), max_text_tokens_per_segment: Number(pp.max_text_tokens_per_segment ?? 120), interval_silence: Number(pp.interval_silence ?? 200), diffusion_steps: Number(pp.diffusion_steps ?? (p.engine_id === 'omnivoice' ? 32 : 25)), cfg_rate: Number(pp.cfg_rate ?? 0.7), guidance_scale: Number(pp.guidance_scale ?? 2.0), duration: Number(pp.duration ?? 0), audio_chunk_duration: Number(pp.audio_chunk_duration ?? 15), audio_chunk_threshold: Number(pp.audio_chunk_threshold ?? 30), output_format: (pp.output_format ?? 'wav') as 'wav' | 'mp3' | 'flac', } as GenerateRequest); $store.error = ''; }
+	function applyPreset(p: PresetTemplate) { const pp = p.parameters; const m = p.engine_id.startsWith('mimo-v2.5'); const keepVoiceId = p.recommended_voice_type === 'reference_voice' && p.engine_id === $store.engineId && usesReferenceVoice ? $store.voiceId : ''; store.fromRequest({ text: p.sample_text, engine_id: p.engine_id, engine_parameters: pickEngineSpecificParameters(pp), voice_id: keepVoiceId || null, reference_audio_path: null, ref_text: null, language: String(pp.language ?? (p.engine_id === 'doubao-tts-preset' ? 'auto' : 'zh')), emotion_mode: pp.emotion ? 'emotion_vector' : 'follow_reference', emotion: typeof pp.emotion === 'string' ? pp.emotion : null, emotion_values: null, emotion_text: typeof pp.emotion_text === 'string' ? pp.emotion_text : null, style_instruction: typeof pp.style_instruction === 'string' ? pp.style_instruction : null, voice_design_prompt: typeof pp.voice_design_prompt === 'string' ? pp.voice_design_prompt : null, mimo_voice: typeof pp.mimo_voice === 'string' ? pp.mimo_voice : null, speaker_id: typeof pp.speaker_id === 'string' ? pp.speaker_id : null, prompt: typeof pp.prompt === 'string' ? pp.prompt : null, nfe_step: Number(pp.nfe_step ?? 32), cfg_strength: Number(pp.cfg_strength ?? 2.0), target_rms: Number(pp.target_rms ?? 0.1), cross_fade_duration: Number(pp.cross_fade_duration ?? 0.15), sway_sampling_coef: Number(pp.sway_sampling_coef ?? -1.0), fix_duration: Number(pp.fix_duration ?? 0), remove_silence: Boolean(pp.remove_silence ?? false), emo_alpha: Number(pp.emo_alpha ?? 0.6), speed: Number(pp.speed ?? 1.0), pitch_rate: pp.pitch_rate === undefined || pp.pitch_rate === null ? null : Number(pp.pitch_rate), sample_rate: (Number(pp.sample_rate ?? DOUBAO_TTS_DEFAULTS.sampleRate) as GenerateRequest['sample_rate']), bit_rate: Number(pp.bit_rate ?? DOUBAO_TTS_DEFAULTS.bitRate), loudness_rate: Number(pp.loudness_rate ?? 0), enable_subtitle: Boolean(pp.enable_subtitle ?? false), silence_duration: Number(pp.silence_duration ?? 0), aigc_watermark: Boolean(pp.aigc_watermark ?? false), temperature: Number(pp.temperature ?? (m ? 0.6 : 0.8)), top_p: Number(pp.top_p ?? (m ? 0.95 : 0.8)), top_k: Number(pp.top_k ?? 30), repetition_penalty: Number(pp.repetition_penalty ?? 10), seed: pp.seed === undefined || pp.seed === null ? null : Number(pp.seed), max_mel_tokens: Number(pp.max_mel_tokens ?? 1500), max_tokens: Number(pp.max_tokens ?? 1200), cfg_scale: pp.cfg_scale === undefined || pp.cfg_scale === null ? null : Number(pp.cfg_scale), ddpm_steps: pp.ddpm_steps === undefined || pp.ddpm_steps === null ? null : Number(pp.ddpm_steps), max_text_tokens_per_segment: Number(pp.max_text_tokens_per_segment ?? 120), interval_silence: Number(pp.interval_silence ?? 200), diffusion_steps: Number(pp.diffusion_steps ?? (p.engine_id === 'omnivoice' ? 32 : 25)), cfg_rate: Number(pp.cfg_rate ?? 0.7), guidance_scale: Number(pp.guidance_scale ?? 2.0), duration: Number(pp.duration ?? 0), audio_chunk_duration: Number(pp.audio_chunk_duration ?? 15), audio_chunk_threshold: Number(pp.audio_chunk_threshold ?? 30), output_format: (pp.output_format ?? 'wav') as 'wav' | 'mp3' | 'flac' | 'pcm' | 'ogg_opus', } as GenerateRequest); $store.error = ''; }
 	function applyComposerPreset(p: ComposerPreset) {
 		if (p.seedBundle) { updateSeedAudioState(applySeedAudioPreset(seedAudioState, p.seedBundle)); return; }
 		if (p.engine_id !== SEED_AUDIO_ENGINE_ID) { applyPreset(p); return; }
@@ -480,7 +520,6 @@
 	}
 	function setCustomVoiceTimelineZoom(value: string | number) { const n = Number(value); if (!Number.isFinite(n)) return; zoomCustomVoiceTimeline(n); }
 	function updateCustomVoiceTimelineViewport(element?: HTMLElement | null) { const el = element ?? document.querySelector<HTMLElement>('.custom-voice-timebar-window'); if (!el) return; customVoiceTimelineScrollLeft = el.scrollLeft; customVoiceTimelineViewportWidth = el.clientWidth; }
-	function buildVisibleWaveformBars(bars: number[], zoom: number, scrollLeft: number, viewportWidth: number) { if (!bars.length) return []; const total = bars.length; const safeViewport = Math.max(1, viewportWidth || 900); const scrollWidth = Math.max(safeViewport, safeViewport * Math.max(1, zoom)); const visibleStartRatio = Math.max(0, Math.min(1, scrollLeft / scrollWidth)); const visibleEndRatio = Math.max(visibleStartRatio, Math.min(1, (scrollLeft + safeViewport) / scrollWidth)); const padRatio = Math.min(0.02, Math.max(0.001, (visibleEndRatio - visibleStartRatio) * 0.35)); const start = Math.max(0, Math.floor((visibleStartRatio - padRatio) * total)); const end = Math.min(total, Math.ceil((visibleEndRatio + padRatio) * total)); const span = Math.max(1, end - start); const targetBars = Math.max(180, Math.min(2600, Math.round(safeViewport * 1.35))); const bucket = Math.max(1, Math.ceil(span / targetBars)); const result: Array<{ x: number; width: number; level: number }> = []; for (let i = start; i < end; i += bucket) { let peak = 0; const stop = Math.min(end, i + bucket); for (let j = i; j < stop; j++) peak = Math.max(peak, bars[j] ?? 0); result.push({ x: i, width: Math.max(1, (stop - i) * 0.82), level: peak }); } return result; }
 	function nextAnimationFrame() { return new Promise<void>(resolve => requestAnimationFrame(() => resolve())); }
 	function splitTags(value: string) { return value.split(/[，,]/).map(t => t.trim()).filter(Boolean); }
 	function trimFileName(file: File, start: number, end: number) { const stem = file.name.replace(/\.[^.]+$/, '') || 'custom-voice'; return `${stem}_clip_${start.toFixed(1)}-${end.toFixed(1)}s.wav`; }
@@ -488,23 +527,81 @@
 	function syncCustomVoiceTrimMetadata() { const { start, end } = selectedTrimRange(); $store.customVoiceSourceDurationMs = customVoiceSourceDurationMs; $store.customVoiceTrimStartMs = Math.round(start * 1000); $store.customVoiceTrimEndMs = Math.round(end * 1000); }
 	function clearCustomVoiceProcessedState() { $store.customVoiceFileId = ''; $store.customVoiceReferenceAudioPath = ''; $store.customVoiceTranscript = ''; $store.customVoiceSrt = ''; $store.customVoiceDurationMs = null; $store.customVoiceSrtSegmentCount = 0; $store.customVoiceTranscriptionId = ''; $store.customVoiceConfirmed = false; $store.customVoiceQualityWarnings = []; resetVoiceRegisterDialog(); }
 	function setCustomVoicePreviewUrl(url: string) { if ($store.customVoicePreviewUrl && $store.customVoicePreviewUrl !== url && $store.customVoicePreviewUrl !== customVoiceSourcePreviewUrl) revokeObjectUrlIfNeeded($store.customVoicePreviewUrl); $store.customVoicePreviewUrl = url; }
-	function invalidateCustomVoiceTrim() { if (!customVoiceOriginalFile) return; if ($store.customVoiceReferenceAudioPath || $store.customVoiceTranscriptionId) customVoiceSelectionDirty = true; clearCustomVoiceProcessedState(); setCustomVoicePreviewUrl(customVoiceSourcePreviewUrl); if (!customVoiceLoopPreview) stopVoicePreview(); customVoicePlaybackPosition = customVoiceTrimStart; }
+	function invalidateCustomVoiceTrim() {
+		if (!customVoiceOriginalFile) return;
+		if ($store.customVoiceReferenceAudioPath || $store.customVoiceTranscriptionId) customVoiceSelectionDirty = true;
+		clearCustomVoiceProcessedState();
+		setCustomVoicePreviewUrl(customVoiceSourcePreviewUrl);
+		// 拖动入/出点时，试听和选区是两件事：不能因为选区暂时变化而
+		// 打断正在播放的原始音频，或把播放头跳回新的入点。
+		if (customVoiceTrimEditing) return;
+		if (!customVoiceLoopPreview) stopVoicePreview();
+		if (!$store.voicePreviewPlaying) customVoicePlaybackPosition = customVoiceTrimStart;
+	}
 	function clampCustomVoicePlaybackTime(value: number) { const duration = (customVoiceSourceDurationMs ?? 0) / 1000; return Math.max(0, Math.min(duration || value, value)); }
 	function setCustomVoicePlaybackPosition(value: string | number) { const n = Number(value); if (!Number.isFinite(n)) return; customVoicePlaybackPosition = clampCustomVoicePlaybackTime(n); if (customVoiceLoopPreview && $store.voicePreviewAudio) $store.voicePreviewAudio.currentTime = customVoicePlaybackPosition; }
-	function setCustomVoiceTrimStart(value: string | number) { const max = customVoiceTrimEnd || (customVoiceSourceDurationMs ?? 0) / 1000; const n = Number(value); if (!Number.isFinite(n)) return; customVoiceTrimStart = Math.max(0, Math.min(n, Math.max(0, max - 0.1))); if (customVoicePlaybackPosition < customVoiceTrimStart) customVoicePlaybackPosition = customVoiceTrimStart; if (customVoiceLoopPreview && $store.voicePreviewAudio) $store.voicePreviewAudio.currentTime = customVoiceTrimStart; syncCustomVoiceTrimMetadata(); invalidateCustomVoiceTrim(); }
-	function setCustomVoiceTrimEnd(value: string | number) { const duration = (customVoiceSourceDurationMs ?? 0) / 1000; const n = Number(value); if (!Number.isFinite(n)) return; customVoiceTrimEnd = Math.max(customVoiceTrimStart + 0.1, Math.min(duration || n, n)); if (customVoicePlaybackPosition > customVoiceTrimEnd) customVoicePlaybackPosition = customVoiceTrimEnd; syncCustomVoiceTrimMetadata(); invalidateCustomVoiceTrim(); }
+	function beginCustomVoiceTrimEdit() {
+		const audio = $store.voicePreviewAudio;
+		customVoiceTrimEditing = true;
+		// Keep the user's original playback intention.  Native audio reaches its
+		// source end while a handle is held, but that is not the same as the user
+		// pressing Stop or Space.
+		customVoiceResumePreviewAfterTrimEdit = Boolean(customVoiceLoopPreview && $store.voicePreviewPlaying && audio && !audio.paused);
+	}
+	function resumeCustomVoicePreviewAfterTrimEdit(shouldResume = customVoiceResumePreviewAfterTrimEdit) {
+		const audio = $store.voicePreviewAudio;
+		const { start, end } = selectedTrimRange();
+		const currentTime = audio?.currentTime ?? customVoicePlaybackPosition;
+		const { nextPosition, shouldRestartAtStart } = resolveSelectionReleasePlayback(currentTime, start, end, Boolean(audio?.ended), customVoiceLoopEnabled);
+		// A playhead retained by the edited range is intentionally left alone.
+		// Only a playhead outside the new range returns to IN.
+		if (audio && Math.abs(audio.currentTime - nextPosition) > 0.001) audio.currentTime = nextPosition;
+		customVoicePlaybackPosition = nextPosition;
+		customVoiceResumePreviewAfterTrimEdit = false;
+		if (!shouldResume || !audio) return;
+		// A non-looping preview that already finished at its final OUT stays
+		// finished.  The shared release rule turns a finished loop into IN here.
+		if (audio.ended && !shouldRestartAtStart) return;
+		customVoiceLoopPreview = true;
+		$store.voicePreviewPlaying = true;
+		void audio.play().then(() => {
+			startCustomVoicePreviewFrameLoop();
+		}).catch(() => {
+			stopCustomVoicePreviewFrameLoop();
+			customVoiceLoopPreview = false;
+			$store.voicePreviewPlaying = false;
+		});
+	}
+	function setCustomVoiceTrimStart(value: string | number) {
+		const max = customVoiceTrimEnd || (customVoiceSourceDurationMs ?? 0) / 1000;
+		const n = Number(value);
+		if (!Number.isFinite(n)) return;
+		customVoiceTrimStart = Math.max(0, Math.min(n, Math.max(0, max - 0.1)));
+		syncCustomVoiceTrimMetadata();
+		invalidateCustomVoiceTrim();
+		if (!customVoiceTrimEditing) resumeCustomVoicePreviewAfterTrimEdit();
+	}
+	function setCustomVoiceTrimEnd(value: string | number) {
+		const duration = (customVoiceSourceDurationMs ?? 0) / 1000;
+		const n = Number(value);
+		if (!Number.isFinite(n)) return;
+		customVoiceTrimEnd = Math.max(customVoiceTrimStart + 0.1, Math.min(duration || n, n));
+		syncCustomVoiceTrimMetadata();
+		invalidateCustomVoiceTrim();
+		if (!customVoiceTrimEditing) resumeCustomVoicePreviewAfterTrimEdit();
+	}
 	function setCustomVoiceTrimStartAtPlayhead() { setCustomVoiceTrimStart(customVoicePlaybackPosition); }
 	function setCustomVoiceTrimEndAtPlayhead() { setCustomVoiceTrimEnd(customVoicePlaybackPosition); }
 	function resetCustomVoiceTrimRange() { const duration = customVoiceDurationSeconds; if (!duration) return; customVoiceTrimStart = 0; customVoiceTrimEnd = Math.max(0.1, duration); customVoicePlaybackPosition = 0; if (customVoiceLoopPreview && $store.voicePreviewAudio) $store.voicePreviewAudio.currentTime = 0; syncCustomVoiceTrimMetadata(); invalidateCustomVoiceTrim(); centerCustomVoiceTimelineOnSelection(); }
 	function customVoiceBusyText() { return customVoiceBusyMode === 'source' ? '正在读取参考音频' : '正在处理选区并识别台词'; }
-	function customVoiceStatusText() { if ($store.customVoiceBusy) return customVoiceBusyText(); if ($store.customVoiceConfirmed) return '参考音色与台词已匹配'; if (customVoiceSelectionDirty) return '选区已调整，请重新识别'; if ($store.customVoiceTranscript.trim()) return '可编辑台词，已可使用'; if ($store.customVoiceFileName) return '选择范围后使用选区'; return '拖入 wav 或 mp3 音频'; }
+	function customVoiceStatusText() { if ($store.customVoiceBusy) return customVoiceBusyText(); if ($store.customVoiceConfirmed) return '参考音色与台词已匹配'; if (customVoiceSelectionDirty) return '选区已调整，请重新识别'; if ($store.customVoiceTranscript.trim()) return '可编辑台词，已可使用'; if ($store.customVoiceFileName) return '选择范围后使用选区'; return '拖入音频或视频，视频会自动抽取音频'; }
 	function setVoiceSource(source: 'voice_library' | 'reference_audio') { $store.voiceSource = source; $store.error = ''; stopVoicePreview(); if (source === 'reference_audio') $store.voiceId = ''; }
 	function updateCustomVoiceTranscript(value: string) { $store.customVoiceTranscript = value; $store.customVoiceConfirmed = Boolean($store.customVoiceReferenceAudioPath && value.trim()); }
 	function resetVoiceRegisterDialog() { voiceRegisterOpen = false; voiceRegisterBusy = false; voiceRegisterSerBusy = false; voiceRegisterError = ''; }
-	function resetCustomVoice() { if ($store.customVoicePreviewUrl) revokeObjectUrlIfNeeded($store.customVoicePreviewUrl); if (customVoiceSourcePreviewUrl && customVoiceSourcePreviewUrl !== $store.customVoicePreviewUrl) revokeObjectUrlIfNeeded(customVoiceSourcePreviewUrl); customVoiceOriginalFile = null; customVoiceSourcePreviewUrl = ''; customVoiceSourceDurationMs = null; customVoiceTrimStart = 0; customVoiceTrimEnd = 0; customVoicePlaybackPosition = 0; customVoiceWaveformBars = []; customVoiceWaveformLoading = false; customVoiceWaveformProgress = 0; customVoiceTimelineScrollLeft = 0; customVoiceTimelineViewportWidth = 0; customVoiceTimelineZoom = 1; customVoiceSelectionDirty = false; customVoiceBusyMode = ''; $store.customVoiceFileName = ''; $store.customVoiceFileId = ''; $store.customVoicePreviewUrl = ''; $store.customVoiceReferenceAudioPath = ''; $store.customVoiceSourceFileId = ''; $store.customVoiceSourceAudioPath = ''; $store.customVoiceSourceDurationMs = null; $store.customVoiceTrimStartMs = null; $store.customVoiceTrimEndMs = null; $store.customVoiceTranscript = ''; $store.customVoiceSrt = ''; $store.customVoiceDurationMs = null; $store.customVoiceSrtSegmentCount = 0; $store.customVoiceTranscriptionId = ''; $store.customVoiceConfirmed = false; $store.customVoiceBusy = false; $store.customVoiceError = ''; $store.customVoiceQualityWarnings = []; resetVoiceRegisterDialog(); stopVoicePreview(); }
+	function resetCustomVoice() { if ($store.customVoicePreviewUrl) revokeObjectUrlIfNeeded($store.customVoicePreviewUrl); if (customVoiceSourcePreviewUrl && customVoiceSourcePreviewUrl !== $store.customVoicePreviewUrl) revokeObjectUrlIfNeeded(customVoiceSourcePreviewUrl); customVoiceOriginalFile = null; customVoiceSourcePreviewUrl = ''; customVoiceSourceDurationMs = null; customVoiceTrimStart = 0; customVoiceTrimEnd = 0; customVoicePlaybackPosition = 0; customVoiceWaveformBars = []; customVoiceWaveformLoading = false; customVoiceWaveformProgress = 0; customVoiceTimelineScrollLeft = 0; customVoiceTimelineViewportWidth = 0; customVoiceTimelineZoom = 1; customVoiceTrimEditing = false; customVoiceResumePreviewAfterTrimEdit = false; customVoiceSelectionDirty = false; customVoiceBusyMode = ''; $store.customVoiceFileName = ''; $store.customVoiceFileId = ''; $store.customVoicePreviewUrl = ''; $store.customVoiceReferenceAudioPath = ''; $store.customVoiceSourceFileId = ''; $store.customVoiceSourceAudioPath = ''; $store.customVoiceSourceDurationMs = null; $store.customVoiceTrimStartMs = null; $store.customVoiceTrimEndMs = null; $store.customVoiceTranscript = ''; $store.customVoiceSrt = ''; $store.customVoiceDurationMs = null; $store.customVoiceSrtSegmentCount = 0; $store.customVoiceTranscriptionId = ''; $store.customVoiceConfirmed = false; $store.customVoiceBusy = false; $store.customVoiceError = ''; $store.customVoiceQualityWarnings = []; resetVoiceRegisterDialog(); stopVoicePreview(); }
 	function loadAudioDuration(url: string): Promise<number> { return new Promise((resolve, reject) => { const audio = new Audio(); audio.preload = 'metadata'; audio.onloadedmetadata = () => { resolve(Number.isFinite(audio.duration) ? audio.duration : 0); audio.src = ''; }; audio.onerror = () => reject(new Error('无法读取音频时长')); audio.src = url; }); }
 	function encodeWav(buffer: AudioBuffer) { const channelCount = buffer.numberOfChannels; const sampleRate = buffer.sampleRate; const frameCount = buffer.length; const bytesPerSample = 2; const blockAlign = channelCount * bytesPerSample; const dataSize = frameCount * blockAlign; const arrayBuffer = new ArrayBuffer(44 + dataSize); const view = new DataView(arrayBuffer); const writeString = (offset: number, value: string) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); }; writeString(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); writeString(8, 'WAVE'); writeString(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, channelCount, true); view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * blockAlign, true); view.setUint16(32, blockAlign, true); view.setUint16(34, 16, true); writeString(36, 'data'); view.setUint32(40, dataSize, true); let offset = 44; for (let i = 0; i < frameCount; i++) { for (let channel = 0; channel < channelCount; channel++) { const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i] ?? 0)); view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true); offset += 2; } } return new Blob([arrayBuffer], { type: 'audio/wav' }); }
-	async function buildWaveformBars(file: File, onProgress?: (bars: number[], progress: number) => void, count = 2400) { const audioContext = new AudioContext(); try { onProgress?.([], 0.04); const decoded = await audioContext.decodeAudioData(await file.arrayBuffer()); const channel = decoded.getChannelData(0); const dynamicCount = Math.max(count, Math.min(180000, Math.ceil(decoded.duration * 60), Math.round(decoded.length / 2048))); const bucketSize = Math.max(1, Math.floor(channel.length / dynamicCount)); const rawBars = new Array<number>(dynamicCount).fill(0); let maxPeak = 0.01; const chunkSize = Math.max(360, Math.min(1800, Math.ceil(dynamicCount / 80))); for (let i = 0; i < dynamicCount; i++) { const start = i * bucketSize; const end = Math.min(channel.length, start + bucketSize); let peak = 0; for (let j = start; j < end; j++) peak = Math.max(peak, Math.abs(channel[j] ?? 0)); rawBars[i] = peak; maxPeak = Math.max(maxPeak, peak); if (i % chunkSize === 0 || i === dynamicCount - 1) { const upto = i + 1; const normalized = rawBars.slice(0, upto).map(v => Math.max(0.1, Math.min(1, Math.pow(v / maxPeak, 0.72)))); onProgress?.(normalized, Math.max(0.08, Math.min(0.98, upto / dynamicCount))); await nextAnimationFrame(); } } const finalMax = Math.max(...rawBars, 0.01); const finalBars = rawBars.map(v => Math.max(0.1, Math.min(1, Math.pow(v / finalMax, 0.72)))); onProgress?.(finalBars, 1); return finalBars; } finally { void audioContext.close(); } }
+	async function buildWaveformBars(file: File, onProgress?: (bars: number[], progress: number) => void, count = 2400) { const audioContext = new AudioContext(); try { onProgress?.([], 0.04); const decoded = await audioContext.decodeAudioData(await file.arrayBuffer()); const channel = decoded.getChannelData(0); const dynamicCount = Math.max(count, Math.min(180000, Math.ceil(decoded.duration * 60), Math.round(decoded.length / 2048))); const bucketSize = Math.max(1, Math.floor(channel.length / dynamicCount)); const rawBars = new Array<number>(dynamicCount).fill(0); let maxPeak = 0.01; const chunkSize = Math.max(360, Math.min(1800, Math.ceil(dynamicCount / 80))); for (let i = 0; i < dynamicCount; i++) { const start = i * bucketSize; const end = Math.min(channel.length, start + bucketSize); let peak = 0; for (let j = start; j < end; j++) peak = Math.max(peak, Math.abs(channel[j] ?? 0)); rawBars[i] = peak; maxPeak = Math.max(maxPeak, peak); if (i % chunkSize === 0 || i === dynamicCount - 1) { const upto = i + 1; const normalized = rawBars.slice(0, upto).map(v => Math.max(0, Math.min(1, Math.pow(v / maxPeak, 0.72)))); onProgress?.(normalized, Math.max(0.08, Math.min(0.98, upto / dynamicCount))); await nextAnimationFrame(); } } const finalMax = Math.max(...rawBars, 0.01); const finalBars = rawBars.map(v => Math.max(0, Math.min(1, Math.pow(v / finalMax, 0.72)))); onProgress?.(finalBars, 1); return finalBars; } finally { void audioContext.close(); } }
 	async function cropAudioFile(file: File, start: number, end: number) { const audioContext = new AudioContext(); try { const decoded = await audioContext.decodeAudioData(await file.arrayBuffer()); const sampleRate = decoded.sampleRate; const startFrame = Math.max(0, Math.floor(start * sampleRate)); const endFrame = Math.min(decoded.length, Math.ceil(end * sampleRate)); const frameCount = Math.max(1, endFrame - startFrame); const clip = audioContext.createBuffer(decoded.numberOfChannels, frameCount, sampleRate); for (let channel = 0; channel < decoded.numberOfChannels; channel++) clip.copyToChannel(decoded.getChannelData(channel).slice(startFrame, endFrame), channel); return encodeWav(clip); } finally { void audioContext.close(); } }
 	function applyCustomVoiceClipResult(uploaded: Pick<UploadResult, 'file_id' | 'filename' | 'path' | 'quality'>, transcript: TranscriptionRecord, durationMs: number, previewUrl: string) {
 		setCustomVoicePreviewUrl(previewUrl);
@@ -551,7 +648,7 @@
 	async function applyCustomVoiceTrim() {
 		const sourceFileId = $store.customVoiceSourceFileId;
 		if (!customVoiceOriginalFile && !sourceFileId) {
-			$store.customVoiceError = '请先拖入音频文件。';
+			$store.customVoiceError = '请先拖入音频或视频文件。';
 			return;
 		}
 		const { start, end } = selectedTrimRange();
@@ -592,7 +689,67 @@
 			customVoiceBusyMode = '';
 		}
 	}
-	async function handleCustomVoiceFile(file: File) { if (!file.type.startsWith('audio/') && !/\.(wav|mp3|m4a|flac|aac|ogg)$/i.test(file.name)) { $store.customVoiceError = '请拖入音频文件。'; return; } resetCustomVoice(); $store.voiceSource = 'reference_audio'; $store.voiceId = ''; customVoiceOriginalFile = file; customVoiceSourcePreviewUrl = URL.createObjectURL(file); setCustomVoicePreviewUrl(customVoiceSourcePreviewUrl); $store.customVoiceFileName = file.name; $store.customVoiceError = ''; $store.customVoiceBusy = true; customVoiceBusyMode = 'source'; customVoiceWaveformLoading = true; customVoiceWaveformProgress = 0; const waveformTarget = file; const waveformPromise = buildWaveformBars(file, (bars, progress) => { if (customVoiceOriginalFile !== waveformTarget) return; customVoiceWaveformBars = bars; customVoiceWaveformProgress = progress; }).catch(() => [] as number[]); const sourceUploadPromise = Api.uploadVoice(file); try { const [duration, sourceUpload] = await Promise.all([loadAudioDuration(customVoiceSourcePreviewUrl), sourceUploadPromise]); customVoiceSourceDurationMs = Math.round(duration * 1000); customVoiceTrimStart = 0; customVoicePlaybackPosition = 0; customVoiceTrimEnd = Math.max(0.1, duration); $store.customVoiceSourceFileId = sourceUpload.file_id; $store.customVoiceSourceAudioPath = sourceUpload.path; syncCustomVoiceTrimMetadata(); centerCustomVoiceTimelineOnSelection(); } catch (e) { customVoiceSourceDurationMs = null; customVoiceTrimStart = 0; customVoiceTrimEnd = 0; customVoicePlaybackPosition = 0; $store.customVoiceSourceFileId = ''; $store.customVoiceSourceAudioPath = ''; $store.customVoiceSourceDurationMs = null; $store.customVoiceTrimStartMs = null; $store.customVoiceTrimEndMs = null; $store.customVoiceError = (e as Error).message || '无法读取或保存原始音频'; } finally { const bars = await waveformPromise; if (customVoiceOriginalFile === waveformTarget) { customVoiceWaveformBars = bars; customVoiceWaveformProgress = bars.length ? 1 : 0; customVoiceWaveformLoading = false; } $store.customVoiceBusy = false; customVoiceBusyMode = ''; } }
+	async function handleCustomVoiceFile(file: File) {
+		if (!isSupportedReferenceMedia(file)) {
+			$store.customVoiceError = '请拖入常见音频或 MP4、MOV、M4V、WebM、MKV 视频。';
+			return;
+		}
+		resetCustomVoice();
+		$store.voiceSource = 'reference_audio';
+		$store.voiceId = '';
+		$store.customVoiceFileName = file.name;
+		$store.customVoiceError = '';
+		$store.customVoiceBusy = true;
+		customVoiceBusyMode = 'source';
+		customVoiceWaveformLoading = true;
+		customVoiceWaveformProgress = 0;
+		try {
+			const uploaded = await Api.uploadVoice(file);
+			const wasVideo = uploaded.source_kind === 'video';
+			const audioFile = wasVideo ? await uploadedAudioFile(uploaded) : file;
+			const previewUrl = wasVideo ? seedAudioFileUrl(uploaded.file_id) : URL.createObjectURL(audioFile);
+			customVoiceOriginalFile = audioFile;
+			customVoiceSourcePreviewUrl = previewUrl;
+			setCustomVoicePreviewUrl(previewUrl);
+			$store.customVoiceFileName = referenceMediaLabel(uploaded);
+			const waveformTarget = audioFile;
+			const waveformPromise = buildWaveformBars(audioFile, (bars, progress) => {
+				if (customVoiceOriginalFile !== waveformTarget) return;
+				customVoiceWaveformBars = bars;
+				customVoiceWaveformProgress = progress;
+			}).catch(() => [] as number[]);
+			const duration = (uploaded.duration_ms ?? Math.round((await loadAudioDuration(previewUrl)) * 1000)) / 1000;
+			customVoiceSourceDurationMs = Math.round(duration * 1000);
+			customVoiceTrimStart = 0;
+			customVoicePlaybackPosition = 0;
+			customVoiceTrimEnd = Math.max(0.1, duration);
+			$store.customVoiceSourceFileId = uploaded.file_id;
+			$store.customVoiceSourceAudioPath = uploaded.path;
+			syncCustomVoiceTrimMetadata();
+			centerCustomVoiceTimelineOnSelection();
+			const bars = await waveformPromise;
+			if (customVoiceOriginalFile === waveformTarget) {
+				customVoiceWaveformBars = bars;
+				customVoiceWaveformProgress = bars.length ? 1 : 0;
+			}
+		} catch (e) {
+			customVoiceOriginalFile = null;
+			customVoiceSourceDurationMs = null;
+			customVoiceTrimStart = 0;
+			customVoiceTrimEnd = 0;
+			customVoicePlaybackPosition = 0;
+			$store.customVoiceSourceFileId = '';
+			$store.customVoiceSourceAudioPath = '';
+			$store.customVoiceSourceDurationMs = null;
+			$store.customVoiceTrimStartMs = null;
+			$store.customVoiceTrimEndMs = null;
+			$store.customVoiceError = (e as Error).message || '无法读取或保存参考音频';
+		} finally {
+			customVoiceWaveformLoading = false;
+			$store.customVoiceBusy = false;
+			customVoiceBusyMode = '';
+		}
+	}
 	async function restoreCustomVoiceReference(req: GenerateRequest) {
 		const referencePath = req.reference_audio_path ?? '';
 		const fileId = referenceAudioFileIdFromPath(referencePath);
@@ -687,11 +844,98 @@
 	async function saveRegisteredVoice() { if (!$store.customVoiceFileId || !voiceRegisterName.trim()) return; voiceRegisterBusy = true; voiceRegisterError = ''; try { const payload: VoiceAssetCreate = { name: voiceRegisterName.trim(), description: voiceRegisterDescription.trim(), tags: splitTags(voiceRegisterTags), reference_text: voiceRegisterReferenceText.trim(), reference_audio_ids: [$store.customVoiceFileId], license_status: voiceRegisterLicense, recommended_engine_id: voiceRegisterEngine || null, default_language: $store.language === 'en' ? 'en' : 'zh', voice_type: 'test_sample' }; let created = await Api.createVoice(payload); const emotionTags = splitTags(voiceRegisterEmotionTags); if (emotionTags.length) created = await Api.updateVoice(created.voice_id, { emotion_tags: emotionTags }); $store.voices = [created, ...$store.voices.filter(v => v.voice_id !== created.voice_id)]; $store.voiceSource = 'voice_library'; $store.voiceId = created.voice_id; voiceRegisterOpen = false; } catch (e) { voiceRegisterError = (e as Error).message || '注册音色失败'; } finally { voiceRegisterBusy = false; } }
 	function onCustomVoiceDrop(event: DragEvent) { event.preventDefault(); customVoiceDragActive = false; const file = event.dataTransfer?.files?.[0]; if (file) void handleCustomVoiceFile(file); }
 	function customVoiceTimeFromPointer(event: PointerEvent, timebar: HTMLElement) { const rect = timebar.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)); return Math.round(ratio * customVoiceDurationSeconds * 10) / 10; }
-	function handleCustomVoiceTimebarPointer(event: PointerEvent) { if (!customVoiceDurationSeconds) return; if ((event.target as HTMLElement).closest('button,input')) return; setCustomVoicePlaybackPosition(customVoiceTimeFromPointer(event, event.currentTarget as HTMLElement)); }
+	function previewCustomVoiceTrimRange(anchorTime: number, currentTime: number) {
+		const duration = customVoiceDurationSeconds;
+		if (!duration) return;
+		let start = Math.max(0, Math.min(anchorTime, currentTime));
+		let end = Math.min(duration, Math.max(anchorTime, currentTime));
+		if (end - start < 0.1) {
+			if (currentTime < anchorTime) start = Math.max(0, end - 0.1);
+			else end = Math.min(duration, start + 0.1);
+		}
+		customVoiceTrimStart = start;
+		customVoiceTrimEnd = end;
+		if (!customVoiceTrimEditing) setCustomVoicePlaybackPosition(currentTime);
+	}
+	function finishCustomVoiceTrimEdit() {
+		if (!customVoiceTrimEditing) return;
+		const shouldResume = customVoiceResumePreviewAfterTrimEdit;
+		customVoiceTrimEditing = false;
+		resumeCustomVoicePreviewAfterTrimEdit(shouldResume);
+	}
+	function handleCustomVoiceTimebarPointer(event: PointerEvent) {
+		if (!customVoiceDurationSeconds || (event.target as HTMLElement).closest('button,input')) return;
+		const timebar = event.currentTarget as HTMLElement;
+		if (event.button === 1) {
+			beginCustomVoiceTimelinePan(event);
+			return;
+		}
+		if (event.button !== 0) return;
+		event.preventDefault();
+		const anchorTime = customVoiceTimeFromPointer(event, timebar);
+		const originX = event.clientX;
+		const originY = event.clientY;
+		let dragged = false;
+		const apply = (moveEvent: PointerEvent) => {
+			if (!dragged && Math.max(Math.abs(moveEvent.clientX - originX), Math.abs(moveEvent.clientY - originY)) < 3) return;
+			if (!dragged) beginCustomVoiceTrimEdit();
+			dragged = true;
+			previewCustomVoiceTrimRange(anchorTime, customVoiceTimeFromPointer(moveEvent, timebar));
+		};
+		const cleanup = (commitSelection: boolean) => {
+			window.removeEventListener('pointermove', apply);
+			window.removeEventListener('pointerup', finish);
+			window.removeEventListener('pointercancel', cancel);
+			if (dragged && commitSelection) {
+				syncCustomVoiceTrimMetadata();
+				invalidateCustomVoiceTrim();
+				finishCustomVoiceTrimEdit();
+			} else if (dragged) {
+				finishCustomVoiceTrimEdit();
+			} else if (!dragged) {
+				setCustomVoicePlaybackPosition(anchorTime);
+			}
+		};
+		const finish = () => cleanup(true);
+		const cancel = () => cleanup(false);
+		window.addEventListener('pointermove', apply);
+		window.addEventListener('pointerup', finish, { once: true });
+		window.addEventListener('pointercancel', cancel, { once: true });
+	}
+	function beginCustomVoiceTimelinePan(event: PointerEvent) {
+		const windowEl = (event.currentTarget as HTMLElement).closest('.custom-voice-timebar-window') as HTMLElement | null;
+		if (!windowEl) return;
+		event.preventDefault();
+		event.stopPropagation();
+		const startX = event.clientX;
+		const startScrollLeft = windowEl.scrollLeft;
+		customVoiceTimelinePanning = true;
+		const apply = (moveEvent: PointerEvent) => {
+			windowEl.scrollLeft = startScrollLeft - (moveEvent.clientX - startX);
+			updateCustomVoiceTimelineViewport(windowEl);
+		};
+		const cleanup = () => {
+			customVoiceTimelinePanning = false;
+			window.removeEventListener('pointermove', apply);
+			window.removeEventListener('pointerup', cleanup);
+			window.removeEventListener('pointercancel', cleanup);
+		};
+		window.addEventListener('pointermove', apply);
+		window.addEventListener('pointerup', cleanup, { once: true });
+		window.addEventListener('pointercancel', cleanup, { once: true });
+	}
 	function handleCustomVoiceTimelineWheel(event: WheelEvent) {
 		if (!customVoiceDurationSeconds) return;
 		event.preventDefault();
 		const windowEl = event.currentTarget as HTMLElement;
+		// Two-finger left/right swipes on a trackpad arrive as deltaX. Keep the
+		// familiar timeline behavior: pan horizontally instead of changing zoom.
+		if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+			windowEl.scrollLeft += Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+			updateCustomVoiceTimelineViewport(windowEl);
+			return;
+		}
+		if (Math.abs(event.deltaY) < 0.5) return;
 		const rect = windowEl.getBoundingClientRect();
 		const anchorOffset = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
 		const anchorRatio = (windowEl.scrollLeft + anchorOffset) / Math.max(1, windowEl.scrollWidth);
@@ -704,6 +948,7 @@
 		if (!timebar) return;
 		event.preventDefault();
 		event.stopPropagation();
+		beginCustomVoiceTrimEdit();
 		const apply = (e: PointerEvent) => {
 			const time = customVoiceTimeFromPointer(e, timebar);
 			if (boundary === 'start') setCustomVoiceTrimStart(time);
@@ -713,6 +958,7 @@
 			window.removeEventListener('pointermove', apply);
 			window.removeEventListener('pointerup', cleanup);
 			window.removeEventListener('pointercancel', cleanup);
+			finishCustomVoiceTrimEdit();
 		};
 		apply(event);
 		window.addEventListener('pointermove', apply);
@@ -812,13 +1058,19 @@
 		}
 		customVoicePlaybackPosition = start;
 		customVoiceLoopPreview = false;
+		customVoiceResumePreviewAfterTrimEdit = false;
 		$store.voicePreviewPlaying = false;
 	}
-	async function previewSelectedVoice() { if (!$store.voicePreviewAudio || !activeVoicePreviewUrl) return; const audio = $store.voicePreviewAudio; if ($store.voicePreviewPlaying && !audio.paused) { stopCustomVoicePreviewFrameLoop(); audio.pause(); customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; return; } stopCustomVoicePreviewFrameLoop(); customVoiceLoopPreview = false; const absoluteUrl = new URL(activeVoicePreviewUrl, window.location.href).href; if (audio.src !== absoluteUrl) { audio.src = activeVoicePreviewUrl; audio.currentTime = 0; } $store.error = ''; $store.voicePreviewPlaying = true; try { await audio.play(); } catch (e) { $store.voicePreviewPlaying = false; $store.error = `音色预览播放失败：${(e as Error).message || '请确认参考音频文件可访问'}`; } }
+	async function previewSelectedVoice() { if (!$store.voicePreviewAudio || !activeVoicePreviewUrl) return; const audio = $store.voicePreviewAudio; if ($store.voicePreviewPlaying && !audio.paused) { stopCustomVoicePreviewFrameLoop(); audio.pause(); customVoiceLoopPreview = false; customVoiceResumePreviewAfterTrimEdit = false; $store.voicePreviewPlaying = false; return; } stopCustomVoicePreviewFrameLoop(); customVoiceLoopPreview = false; customVoiceResumePreviewAfterTrimEdit = false; const absoluteUrl = new URL(activeVoicePreviewUrl, window.location.href).href; if (audio.src !== absoluteUrl) { audio.src = activeVoicePreviewUrl; audio.currentTime = 0; } $store.error = ''; $store.voicePreviewPlaying = true; try { await audio.play(); } catch (e) { $store.voicePreviewPlaying = false; $store.error = `音色预览播放失败：${(e as Error).message || '请确认参考音频文件可访问'}`; } }
 	function syncCustomVoicePreviewPlayback() {
 		const audio = $store.voicePreviewAudio;
 		if (!audio || !customVoiceLoopPreview) return;
 		const { start, end } = selectedTrimRange();
+		const playback = resolveSelectionPlayback(audio.currentTime, start, end, customVoiceTrimEditing);
+		if (!playback.enforceSelection) {
+			customVoicePlaybackPosition = clampCustomVoicePlaybackTime(playback.nextPosition);
+			return;
+		}
 		customVoicePlaybackPosition = Math.max(start, Math.min(end, audio.currentTime));
 		if (audio.currentTime >= end || audio.currentTime < start) {
 			if (customVoiceLoopEnabled) {
@@ -845,10 +1097,32 @@
 		customVoicePreviewFrame = requestAnimationFrame(step);
 	}
 	function handleVoicePreviewTimeUpdate() { syncCustomVoicePreviewPlayback(); }
-	function handleVoicePreviewPause() { stopCustomVoicePreviewFrameLoop(); if ($store.voicePreviewAudio?.ended || !$store.voicePreviewAudio?.currentTime) { customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; } }
-	function stopVoicePreview() { stopCustomVoicePreviewFrameLoop(); if ($store.voicePreviewAudio && $store.voicePreviewPlaying) { $store.voicePreviewAudio.pause(); } customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; }
+	function handleCustomVoicePreviewEnded() {
+		// Natural completion during a trim drag is not a user-requested Stop.  Keep
+		// the saved resume intent so release can apply the final IN/OUT range.
+		if (customVoiceTrimEditing && customVoiceResumePreviewAfterTrimEdit) {
+			stopCustomVoicePreviewFrameLoop();
+			customVoicePlaybackPosition = clampCustomVoicePlaybackTime($store.voicePreviewAudio?.currentTime ?? customVoicePlaybackPosition);
+			customVoiceLoopPreview = false;
+			$store.voicePreviewPlaying = false;
+			return;
+		}
+		stopVoicePreview();
+	}
+	function handleVoicePreviewPause() { stopCustomVoicePreviewFrameLoop(); if (customVoiceTrimEditing && customVoiceResumePreviewAfterTrimEdit) return; if ($store.voicePreviewAudio?.ended || !$store.voicePreviewAudio?.currentTime) { customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; } }
+	function stopVoicePreview() { stopCustomVoicePreviewFrameLoop(); if ($store.voicePreviewAudio && $store.voicePreviewPlaying) { $store.voicePreviewAudio.pause(); } customVoiceLoopPreview = false; customVoiceResumePreviewAfterTrimEdit = false; $store.voicePreviewPlaying = false; }
 	function upsertTask(t: GenerationTask) { $store.tasks = [t, ...$store.tasks.filter(i => i.task_id !== t.task_id)]; }
-	async function poll(taskId: string) { for (let i = 0; i < 900; i++) { const t = await Api.task(taskId); upsertTask(t); if (['success', 'failed', 'cancelled'].includes(t.status)) return; await new Promise(r => setTimeout(r, 1000)); } }
+	async function revealSubmittedTask(taskId: string) {
+		locallySubmittedTaskIds.add(taskId);
+		$store.currentPage = 1;
+		const task = await Api.task(taskId);
+		upsertTask(task);
+		// Refresh the aggregate counts and page data immediately. The card above is
+		// deliberately inserted first, so a slow task-page response cannot leave a
+		// just-submitted job invisible while it is queued or running.
+		await loadTaskPage({ ...taskPageParams, offset: 0 });
+	}
+	async function poll(taskId: string) { for (let i = 0; i < 900; i++) { const t = await Api.task(taskId); upsertTask(t); if (['success', 'failed', 'cancelled'].includes(t.status)) { locallySubmittedTaskIds.delete(taskId); return; } await new Promise(r => setTimeout(r, 1000)); } }
 	async function refreshComposerData() {
 		if (composerDataPromise) return composerDataPromise;
 		composerDataPromise = (async () => {
@@ -927,7 +1201,10 @@
 		taskSocket.onmessage = (event) => {
 			try {
 				const task = JSON.parse(String(event.data)) as GenerationTask;
-				if ($store.tasks.some(item => item.task_id === task.task_id)) upsertTask(task);
+				if ($store.tasks.some(item => item.task_id === task.task_id) || locallySubmittedTaskIds.has(task.task_id)) {
+					upsertTask(task);
+					if (['success', 'failed', 'cancelled'].includes(task.status)) locallySubmittedTaskIds.delete(task.task_id);
+				}
 				scheduleTaskPageRefresh();
 				if (task.longform_task_id) void loadLongformTasks().catch(() => undefined);
 			} catch {
@@ -963,7 +1240,7 @@
 			const eng = $store.engines.find(item => item.manifest.engine_id === SEED_AUDIO_ENGINE_ID);
 			if (eng && eng.state.status !== 'loaded') await Api.startEngine(SEED_AUDIO_ENGINE_ID);
 			const response = await Api.generate(request);
-			$store.currentPage = 1;
+			void revealSubmittedTask(response.task_id).catch(() => scheduleTaskPageRefresh(0));
 			void poll(response.task_id).catch((e) => { $store.error = (e as Error).message || '任务状态刷新失败'; });
 		} catch (e) {
 			$store.error = (e as Error).message || 'Seed Audio 生成失败';
@@ -1011,6 +1288,10 @@
 				$store.error = '请检查或填写自定义音色参考台词。';
 				return;
 			}
+			if (isCosyVoiceZeroShot && usingCustomVoice && customVoiceDisplayDurationMs && customVoiceDisplayDurationMs > 30_000) {
+				$store.error = 'CosyVoice Zero-Shot 官方要求参考音频不超过 30 秒，请在参考音色编辑器中裁到 30 秒以内后再生成。';
+				return;
+			}
 			if ((isF5 || isCosyVoiceZeroShot) && !usingCustomVoice && !$store.voiceId) {
 				$store.error = `${selected?.manifest.display_name ?? '当前模型'} 需要选择带参考音频和参考台词的本地音色。`;
 				return;
@@ -1054,7 +1335,7 @@
 			const eng = $store.engines.find(i => i.manifest.engine_id === $store.engineId);
 			if (eng && eng.state.status !== 'loaded') await Api.startEngine($store.engineId);
 			const res = await Api.generate(store.toRequest());
-			$store.currentPage = 1;
+			void revealSubmittedTask(res.task_id).catch(() => scheduleTaskPageRefresh(0));
 			void poll(res.task_id).catch((e) => {
 				$store.error = (e as Error).message || '任务状态刷新失败';
 			});
@@ -1425,6 +1706,7 @@
 	$effect(() => { if (!hasMoreParams && $store.showMoreParams) $store.showMoreParams = false; });
 	$effect(() => { const eid = $store.engineId; const q = eid === 'doubao-tts-preset' ? '' : $store.speakerQuery.trim(); const g = eid === 'doubao-tts-preset' ? 'all' : $store.speakerGenderFilter; const key = `${eid}|${q}|${g}`; if (key === _speakerCatalogRequestKey) return; _speakerCatalogRequestKey = key; if (_speakerCatalogTimer) clearTimeout(_speakerCatalogTimer); _speakerCatalogTimer = setTimeout(() => { untrack(() => { void loadSpeakerCatalog(eid, q, g); }); }, 150); });
 	$effect(() => { if (!$store.initialized) return; if (!usesReferenceVoice) { if ($store.voiceId) untrack(() => { $store.voiceId = ''; }); if ($store.voiceSource !== 'voice_library') untrack(() => { $store.voiceSource = 'voice_library'; }); return; } if (isDoubaoClone && $store.voiceSource !== 'voice_library') untrack(() => { $store.voiceSource = 'voice_library'; }); if ($store.voiceSource === 'reference_audio' && $store.voiceId) untrack(() => { $store.voiceId = ''; }); if ($store.voiceSource === 'voice_library' && $store.voiceId && !visibleVoiceOptions.some(v => v.voice_id === $store.voiceId)) untrack(() => { $store.voiceId = ''; }); });
+	$effect(() => { if (!isDoubaoPreset || !$store.initialized || $store.language === 'auto' || !doubaoSelectedSpeaker?.languages?.length) return; if (!activeLanguageOptions.some((option) => option.value === $store.language)) untrack(() => { $store.language = 'auto'; }); });
 	let _lastPreviewVoiceId = $state('');
 	$effect(() => { const vid = `${$store.voiceSource}|${$store.voiceId}|${$store.customVoicePreviewUrl}`; if (vid !== _lastPreviewVoiceId) { _lastPreviewVoiceId = vid; untrack(() => stopVoicePreview()); } });
 	$effect(() => { if ($store.currentPage > pageCount) $store.currentPage = pageCount; });
@@ -1477,7 +1759,7 @@
 		{#if presetStripOpen}<div class="preset-strip">{#each enginePresets as p}{#if p.preset_id.startsWith('custom_')}<div class="preset-chip custom-preset"><div class="preset-custom-head"><button class="preset-action-btn" type="button" aria-label="编辑预设" data-tooltip="编辑这个自定义预设" onclick={() => openPresetEditor(p)}><Pencil size={12} /></button><button class="preset-custom-title text-pop" type="button" data-text={presetTooltip(p)} onclick={() => applyComposerPreset(p)}><strong>{p.name}</strong></button><button class="preset-action-btn danger" type="button" aria-label="删除预设" data-tooltip="删除这个自定义预设" onclick={() => deletePreset(p)}><Trash2 size={12} /></button></div><button class="preset-custom-subtitle text-pop" type="button" data-text={presetTooltip(p)} onclick={() => applyComposerPreset(p)}>{p.scene || p.description || H.engineTypeLabel(p.engine_id, engineMap)}</button></div>{:else}<div class="preset-chip"><button class="preset-main" type="button" aria-label={`应用预设：${p.name}`} use:presetDescriptionMarquee onclick={() => applyComposerPreset(p)}><strong>{p.name}</strong><span class="preset-description-marquee"><span class="preset-description-track">{p.scene || p.description || H.engineTypeLabel(p.engine_id, engineMap)}</span></span></button></div>{/if}{/each}<button class="preset-chip preset-add-chip" type="button" aria-label="保存当前参数为预设" data-tooltip="把当前文本、素材和参数保存成这个引擎当前模式的自定义预设" onclick={() => openPresetEditor()}><Plus size={17} /><span>保存当前</span></button></div>{/if}
 		{#if $store.showPresetEditor}<div class="preset-editor"><div class="row gen-section-head"><div><h3>{$store.editingPresetId ? '编辑自定义预设' : '保存当前为预设'}</h3><p class="muted">绑定引擎：{selected?.manifest.display_name ?? $store.engineId}</p></div><button class="gen-icon-btn mini" type="button" aria-label="关闭预设编辑器" data-tooltip="关闭预设编辑器" onclick={() => ($store.showPresetEditor = false)}>X</button></div><div class="preset-editor-grid"><label class="field"><span>名称</span><input bind:value={$store.presetDraft.name} placeholder="例如：课程慢讲" /></label><label class="field"><span>场景</span><input bind:value={$store.presetDraft.scene} placeholder="例如：教程 / 长文旁白" /></label><label class="field wide"><span>描述</span><input bind:value={$store.presetDraft.description} placeholder="简短说明" /></label><label class="field"><span>标签</span><input bind:value={$store.presetDraft.tags} placeholder="慢讲，课程" /></label><label class="field wide"><span>示例文本</span><textarea bind:value={$store.presetDraft.sample_text} placeholder="可选"></textarea></label></div><div class="row wrap"><button class="btn primary compact" type="button" onclick={savePreset} disabled={$store.presetBusy || !$store.presetDraft.name.trim()}><Save size={14} /> {$store.presetBusy ? '保存中' : '保存预设'}</button><button class="btn compact" type="button" onclick={() => ($store.showPresetEditor = false)}>取消</button></div></div>{/if}
 		<div class="param-inline-row">
-			<label class="param-inline engine-param-inline"><span>引擎</span><EngineSelector engines={ttsEngines} bind:value={$store.engineId} /></label>
+			<label class="param-inline engine-param-inline"><span class="label-with-tooltip">引擎<Tooltip content="选择本次使用的语音模型。不同模型支持的音色、语言和高级参数不同。" /></span><EngineSelector engines={ttsEngines} bind:value={$store.engineId} /></label>
 			{#if isDoubaoPreset}<DoubaoVoiceCatalogDrawer speakers={speakerCatalogIsCurrent ? $store.speakerCatalog : []} bind:value={$store.speakerId} loading={$store.speakerCatalogLoading} recentIds={doubaoRecentSpeakerIds} onRefresh={refreshDoubaoSpeakerCatalog} />{/if}
 			{#if isSeedAudio}
 				<SeedAudioInlineControls
@@ -1487,9 +1769,9 @@
 					onToggleAdvanced={() => (seedShowAdvanced = !seedShowAdvanced)}
 				/>
 			{:else}
-			{#if usesReferenceVoice}<div class="param-inline voice-param-inline" class:library-source={$store.voiceSource === 'voice_library'} class:custom-source={$store.voiceSource === 'reference_audio'}><span>声音</span><div class="voice-source-control"><div class="gen-segmented voice-source-tabs" role="tablist" aria-label="声音来源"><button class:active={$store.voiceSource === 'voice_library'} type="button" onclick={() => setVoiceSource('voice_library')}>{isDoubaoClone ? '云端音色' : '音色库'}</button>{#if !isDoubaoClone}<button class:active={$store.voiceSource === 'reference_audio'} type="button" onclick={() => setVoiceSource('reference_audio')}>自定义</button>{/if}</div>{#if $store.voiceSource === 'voice_library'}<div class="voice-inline"><VoiceSelector voices={visibleVoiceOptions} bind:value={$store.voiceId} /><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听音色' : '试听当前音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停当前音色试听' : '试听当前选择的音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{:else}<div class="custom-voice-inline"><span class="custom-voice-chip" class:ok={customVoiceMatched}>{#if customVoiceMatched}<CircleCheck size={13} />{:else}<FileAudio size={13} />{/if}{$store.customVoiceFileName || '未上传'}</span><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听自定义音色' : '试听自定义音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停自定义音色试听' : '试听当前自定义音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{/if}</div></div>{#if activeVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={activeVoicePreviewUrl} preload="none" ontimeupdate={handleVoicePreviewTimeUpdate} onended={stopVoicePreview} onpause={handleVoicePreviewPause}></audio>{/if}{/if}
-			{#if activeParamKeys.has('speed')}<label class="param-inline-range"><span>语速</span><input class="speed-number" type="number" min="0.5" max="2" step="0.05" value={$store.speed.toFixed(2)} oninput={(e) => setSpeedValue((e.currentTarget as HTMLInputElement).value)} onblur={(e) => ((e.currentTarget as HTMLInputElement).value = $store.speed.toFixed(2))} /><input type="range" min="0.5" max="2" step="0.05" value={$store.speed} oninput={(e) => setSpeedValue((e.currentTarget as HTMLInputElement).value)} /></label>{/if}
-			<label class="param-inline param-inline-format"><span>格式</span><select bind:value={$store.outputFormat}><option value="wav">WAV</option><option value="mp3">MP3</option><option value="flac">FLAC</option></select></label>
+			{#if usesReferenceVoice}<div class="param-inline voice-param-inline" class:library-source={$store.voiceSource === 'voice_library'} class:custom-source={$store.voiceSource === 'reference_audio'}><span class="label-with-tooltip">声音<Tooltip content="选择本次朗读使用的声音来源。音色库使用已保存的参考音色；自定义可临时上传一段参考音频。" /></span><div class="voice-source-control"><div class="gen-segmented voice-source-tabs" role="tablist" aria-label="声音来源"><button class:active={$store.voiceSource === 'voice_library'} type="button" onclick={() => setVoiceSource('voice_library')}>{isDoubaoClone ? '云端音色' : '音色库'}</button>{#if !isDoubaoClone}<button class:active={$store.voiceSource === 'reference_audio'} type="button" onclick={() => setVoiceSource('reference_audio')}>自定义</button>{/if}</div>{#if $store.voiceSource === 'voice_library'}<div class="voice-inline"><VoiceSelector voices={visibleVoiceOptions} bind:value={$store.voiceId} /><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听音色' : '试听当前音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停当前音色试听' : '试听当前选择的音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{:else}<div class="custom-voice-inline"><span class="custom-voice-chip" class:ok={customVoiceMatched}>{#if customVoiceMatched}<CircleCheck size={13} />{:else}<FileAudio size={13} />{/if}{$store.customVoiceFileName || '未上传'}</span><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听自定义音色' : '试听当前自定义音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停自定义音色试听' : '试听当前自定义音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{/if}</div></div>{#if activeVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={activeVoicePreviewUrl} preload="none" ontimeupdate={handleVoicePreviewTimeUpdate} onended={handleCustomVoicePreviewEnded} onpause={handleVoicePreviewPause}></audio>{/if}{/if}
+			{#if activeParamKeys.has('speed')}<label class="param-inline-range"><span class="label-with-tooltip">语速{#if activeParameterTooltip('speed')}<Tooltip content={activeParameterTooltip('speed')} />{/if}</span><input class="speed-number" type="number" min="0.5" max="2" step="0.05" value={$store.speed.toFixed(2)} oninput={(e) => setSpeedValue((e.currentTarget as HTMLInputElement).value)} onblur={(e) => ((e.currentTarget as HTMLInputElement).value = $store.speed.toFixed(2))} /><input type="range" min="0.5" max="2" step="0.05" value={$store.speed} oninput={(e) => setSpeedValue((e.currentTarget as HTMLInputElement).value)} /></label>{/if}
+			<label class="param-inline param-inline-format"><span class="label-with-tooltip">格式<Tooltip content={outputFormatTooltip} /></span><select bind:value={$store.outputFormat}>{#each outputFormatOptions as format}<option value={format}>{format === 'ogg_opus' ? 'OGG Opus' : format === 'pcm' ? 'PCM · 原始数据（仅下载）' : format.toUpperCase()}</option>{/each}</select></label>
 			<div class="param-actions-inline">
 				<button class="btn param-action-btn param-reset-btn" type="button" data-tooltip="把当前引擎的参数恢复到默认值。正文和已选参考音色会保留。" onclick={resetCurrentEngineParams}><RotateCcw size={14} /> 重置参数</button>
 				{#if hasMoreParams}<button class="btn param-action-btn param-inline-more" type="button" onclick={() => ($store.showMoreParams = !$store.showMoreParams)}><Settings size={14} /> {$store.showMoreParams ? '收起高级' : '更多选项'}</button>{/if}
@@ -1515,14 +1797,14 @@
 			/>
 			{#if seedAssetError}<div class="badge fail seed-asset-error">{seedAssetError}</div>{/if}
 		{/if}
-			{#if isSeedAudio && seedEditingSlot && $store.customVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={$store.customVoicePreviewUrl} preload="none" ontimeupdate={handleVoicePreviewTimeUpdate} onended={stopVoicePreview} onpause={handleVoicePreviewPause}></audio>{/if}
+			{#if isSeedAudio && seedEditingSlot && $store.customVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={$store.customVoicePreviewUrl} preload="none" ontimeupdate={handleVoicePreviewTimeUpdate} onended={handleCustomVoicePreviewEnded} onpause={handleVoicePreviewPause}></audio>{/if}
 			{#if (usesReferenceVoice && $store.voiceSource === 'reference_audio') || (isSeedAudio && seedEditingSlot !== null)}
 				<section class="custom-voice-panel">
 					<div class="custom-voice-source-row">
 						<div class="custom-voice-dropzone" role="region" aria-label="自定义音色拖拽上传区" class:drag-active={customVoiceDragActive} ondragenter={(e) => { e.preventDefault(); customVoiceDragActive = true; }} ondragover={(e) => { e.preventDefault(); customVoiceDragActive = true; }} ondragleave={(e) => { e.preventDefault(); customVoiceDragActive = false; }} ondrop={onCustomVoiceDrop}>
 							<CloudUpload size={22} />
 							<div>
-								<strong>{$store.customVoiceFileName || '拖入参考音频'}</strong>
+							<strong>{$store.customVoiceFileName || '拖入参考音频或视频'}</strong>
 								<span class:fail={$store.customVoiceError} class:warn={!$store.customVoiceError && $store.customVoiceQualityWarnings.length > 0}>{$store.customVoiceError || $store.customVoiceQualityWarnings[0] || customVoiceStatusText()}</span>
 							</div>
 							{#if $store.customVoiceBusy}<span class="badge">{customVoiceBusyMode === 'source' ? '读取' : 'ASR'}</span>{:else if customVoiceMatched}<span class="badge ok">已匹配</span>{:else if customVoiceReady}<span class="badge">待识别</span>{/if}
@@ -1577,7 +1859,7 @@
 									</div>
 								<div class="custom-voice-editor-strip">
 								<div class="custom-voice-timebar-window" role="region" aria-label="裁剪时间轴滚动窗口" onwheel={handleCustomVoiceTimelineWheel} onscroll={(e) => updateCustomVoiceTimelineViewport(e.currentTarget as HTMLElement)} onpointerenter={(e) => updateCustomVoiceTimelineViewport(e.currentTarget as HTMLElement)}>
-									<div class="custom-voice-timebar" role="group" aria-label="自定义音色裁切时间轴" style={`--trim-start:${customVoiceTrimStartPercent}%;--trim-end:${customVoiceTrimEndPercent}%;--playhead:${customVoicePlayheadPercent}%;width:${customVoiceTimelineZoom * 100}%`} onpointerdown={handleCustomVoiceTimebarPointer}>
+									<div class="custom-voice-timebar" class:panning={customVoiceTimelinePanning} role="group" aria-label="自定义音色裁切时间轴" style={`--trim-start:${customVoiceTrimStartPercent}%;--trim-end:${customVoiceTrimEndPercent}%;--playhead:${customVoicePlayheadPercent}%;width:${customVoiceTimelineZoom * 100}%`} onpointerdown={handleCustomVoiceTimebarPointer}>
 										<div class="custom-voice-timebar-ruler" aria-hidden="true">
 											{#each customVoiceTimelineTicks as tick}
 												<span class:major={tick.major} style={`left:${tick.percent}%`}><i></i><b>{tick.label}</b></span>
@@ -1589,7 +1871,7 @@
 												<svg class="custom-voice-waveform-svg" viewBox={`0 0 ${customVoiceWaveformBars.length} 100`} preserveAspectRatio="none">
 													<line class="waveform-midline" x1="0" y1="50" x2={customVoiceWaveformBars.length} y2="50" />
 													{#each customVoiceVisibleWaveformBars as bar}
-														<rect x={bar.x + 0.08} y={50 - bar.level * 46} width={bar.width} height={Math.max(8, bar.level * 92)} rx="0.18" />
+																<rect x={bar.x + 0.1} y={50 - bar.level * 38} width={bar.width} height={Math.max(2, bar.level * 76)} rx="0.12" />
 													{/each}
 												</svg>
 											{:else}
@@ -1600,8 +1882,8 @@
 										<button type="button" class="trim-playhead-handle" aria-label="拖动当前播放指针" onpointerdown={beginCustomVoicePlayheadDrag}><span>当前</span></button>
 										<button type="button" class="trim-handle-label trim-in-label" aria-label="拖动裁切入点" onpointerdown={(e) => beginCustomVoiceTrimDrag(e, 'start')}><span>IN</span></button>
 										<button type="button" class="trim-handle-label trim-out-label" aria-label="拖动裁切出点" onpointerdown={(e) => beginCustomVoiceTrimDrag(e, 'end')}><span>OUT</span></button>
-										<input aria-label="裁切入点" class="trim-range trim-start" type="range" min="0" max={customVoiceDurationSeconds} step="0.1" value={customVoiceTrimStart} oninput={(e) => setCustomVoiceTrimStart((e.currentTarget as HTMLInputElement).value)} disabled={!customVoiceSourceDurationMs} />
-										<input aria-label="裁切出点" class="trim-range trim-end" type="range" min="0.1" max={customVoiceDurationSeconds} step="0.1" value={customVoiceTrimEnd} oninput={(e) => setCustomVoiceTrimEnd((e.currentTarget as HTMLInputElement).value)} disabled={!customVoiceSourceDurationMs} />
+										<input aria-label="裁切入点" class="trim-range trim-start" type="range" min="0" max={customVoiceDurationSeconds} step="0.1" value={customVoiceTrimStart} onpointerdown={beginCustomVoiceTrimEdit} onpointerup={finishCustomVoiceTrimEdit} onpointercancel={finishCustomVoiceTrimEdit} onchange={finishCustomVoiceTrimEdit} oninput={(e) => setCustomVoiceTrimStart((e.currentTarget as HTMLInputElement).value)} disabled={!customVoiceSourceDurationMs} />
+										<input aria-label="裁切出点" class="trim-range trim-end" type="range" min="0.1" max={customVoiceDurationSeconds} step="0.1" value={customVoiceTrimEnd} onpointerdown={beginCustomVoiceTrimEdit} onpointerup={finishCustomVoiceTrimEdit} onpointercancel={finishCustomVoiceTrimEdit} onchange={finishCustomVoiceTrimEdit} oninput={(e) => setCustomVoiceTrimEnd((e.currentTarget as HTMLInputElement).value)} disabled={!customVoiceSourceDurationMs} />
 									</div>
 								</div>
 							</div>
@@ -1615,9 +1897,10 @@
 				</section>
 			{/if}
 		{#if !isSeedAudio && $store.showMoreParams && hasMoreParams}<div class="more-params-panel" class:doubao-tts-params={isDoubao} class:doubao-preset-params={isDoubaoPreset} class:doubao-clone-params={isDoubaoClone}>
+			{#if isDoubaoPreset}<div class="advanced-subhead">朗读控制</div>{/if}
 			{#if activeParamKeys.has('speaker_id') && !isDoubaoPreset}
 				<div class="field param-field" class:span-wide={hasSearchableSpeakerCatalog} class:doubao-speaker-field={isDoubaoPreset} class:field-muted={isQwen3TTS && !qwen3PresetRoute}>
-					<label class="param-label" for="spk">{isQwen3TTS ? '预置音色' : '音色'}</label>
+					<label class="param-label label-with-tooltip" for="spk">{isQwen3TTS ? '预置音色' : '音色'}{#if activeParameterTooltip('speaker_id')}<Tooltip content={activeParameterTooltip('speaker_id')} />{/if}</label>
 					<div class="param-control">
 						{#if hasSearchableSpeakerCatalog}
 							<div class="speaker-catalog-tools">
@@ -1642,20 +1925,23 @@
 					</div>
 				</div>
 			{/if}
-			{#if activeParamKeys.has('prompt')}<div class="field param-field"><label class="param-label" for="vprompt">情绪提示</label><div class="param-control"><select id="vprompt" bind:value={$store.voicePrompt}>{#each promptOptions as o}<option value={o.value}>{o.label}</option>{/each}</select></div></div>{/if}
-			{#if isMimoPreset}<div class="field param-field"><label class="param-label" for="mimo-v">MiMo 音色</label><div class="param-control"><select id="mimo-v" bind:value={$store.mimoVoice}>{#each mimoVoiceOptions as o}<option value={o.value}>{o.label}</option>{/each}</select></div></div>{/if}
-			{#if activeParamKeys.has('language')}<div class="field param-field"><label class="param-label" for="lang">语言</label><div class="param-control"><select id="lang" bind:value={$store.language}>{#each languageOptions as o}<option value={o.value}>{o.label}</option>{/each}</select></div></div>{/if}
-			{#if activeParamKeys.has('voice_design_prompt')}<div class="field param-field span-textarea" class:field-muted={qwen3ReferenceRoute}><label class="param-label" for="vd-prompt">声音描述</label><div class="param-control"><textarea id="vd-prompt" bind:value={$store.voiceDesignPrompt} placeholder={isQwen3TTS ? '例如：温柔的中文女声，吐字清晰，语速稍慢' : '例如：calm British narrator'} disabled={qwen3ReferenceRoute}></textarea>{#if isMimoDesign}<small>描述声音本身：年龄、性别、质感、语速和情绪底色。</small>{:else if isQwen3TTS}<small>{qwen3ReferenceRoute ? '本地音色库或自定义音色复刻时，声音描述不参与本次生成。' : '支持中文或英文。填写后使用 VoiceDesign；留空则使用上面的预置音色。'}</small>{/if}</div></div>{/if}
+			{#if activeParamKeys.has('prompt')}<div class="field param-field"><label class="param-label label-with-tooltip" for="vprompt">{isEmotiVoice ? '演绎提示' : '提示'}{#if activeParameterTooltip('prompt')}<Tooltip content={activeParameterTooltip('prompt')} />{/if}</label><div class="param-control">{#if isEmotiVoice}<input id="vprompt" list="emotivoice-prompt-options" bind:value={$store.voicePrompt} placeholder="例如：开心，或 克制、略带疲惫" /><datalist id="emotivoice-prompt-options">{#each promptOptions as o}<option value={o.value}>{o.label}</option>{/each}</datalist>{:else}<select id="vprompt" bind:value={$store.voicePrompt}>{#each promptOptions as o}<option value={o.value}>{o.label}</option>{/each}</select>{/if}</div></div>{/if}
+			{#if isMimoPreset}<div class="field param-field"><label class="param-label label-with-tooltip" for="mimo-v">MiMo 音色{#if activeParameterTooltip('mimo_voice')}<Tooltip content={activeParameterTooltip('mimo_voice')} />{/if}</label><div class="param-control"><select id="mimo-v" bind:value={$store.mimoVoice}>{#each mimoVoiceOptions as o}<option value={o.value}>{o.label}</option>{/each}</select></div></div>{/if}
+			{#if activeParamKeys.has('language')}<div class="field param-field"><label class="param-label label-with-tooltip" for="lang">语言{#if activeParameterTooltip('language')}<Tooltip content={activeParameterTooltip('language')} />{/if}</label><div class="param-control"><select id="lang" bind:value={$store.language}>{#each activeLanguageOptions as o}<option value={o.value}>{o.label}</option>{/each}</select>{#if isDoubaoPreset && doubaoSelectedSpeaker?.languages?.length}<small>已按当前音色支持的语言收窄选项。</small>{/if}</div></div>{/if}
+			{#if activeParamKeys.has('voice_design_prompt')}<div class="field param-field span-textarea" class:field-muted={qwen3ReferenceRoute}><label class="param-label label-with-tooltip" for="vd-prompt">声音描述{#if activeParameterTooltip('voice_design_prompt')}<Tooltip content={activeParameterTooltip('voice_design_prompt')} />{/if}</label><div class="param-control"><textarea id="vd-prompt" bind:value={$store.voiceDesignPrompt} placeholder={isQwen3TTS ? '例如：温柔的中文女声，吐字清晰，语速稍慢' : '例如：calm British narrator'} disabled={qwen3ReferenceRoute}></textarea>{#if isMimoDesign}<small>描述声音本身：年龄、性别、质感、语速和情绪底色。</small>{:else if isQwen3TTS}<small>{qwen3ReferenceRoute ? '本地音色库或自定义音色复刻时，声音描述不参与本次生成。' : '支持中文或英文。填写后使用 VoiceDesign；留空则使用上面的预置音色。'}</small>{/if}</div></div>{/if}
 			{#if activeParamKeys.has('style_instruction')}<div class="field param-field span-textarea" class:doubao-style-field={isDoubao} class:field-muted={isQwen3TTS && (qwen3ReferenceRoute || qwen3VoiceDesignRoute)}><label class="param-label label-with-tooltip" for="style">{styleInstructionLabel}{#if styleInstructionTooltip}<Tooltip content={styleInstructionTooltip} />{/if}</label><div class="param-control"><textarea id="style" bind:value={$store.styleInstruction} placeholder={styleInstructionPlaceholder} disabled={isQwen3TTS && (qwen3ReferenceRoute || qwen3VoiceDesignRoute)}></textarea>{#if isQwen3TTS}<small>{qwen3ReferenceRoute ? '参考音色复刻使用 Base 模型，风格指令不参与本次生成。' : (qwen3VoiceDesignRoute ? '声音描述已使用同一个官方 instruct 槽位，风格指令不会重复提交。' : '支持中文或英文；只影响预置声音路线。留空时后端按官方示例使用 Normal tone。')}</small>{/if}</div></div>{/if}
-			{#if isDoubao && activeParamKeys.has('loudness_rate')}<div class="field param-field param-slider doubao-loudness-field"><label class="param-label label-with-tooltip">音量<Tooltip content="官方 loudness_rate：-50 为 0.5 倍，0 为原始音量，100 为 2 倍。" /></label><div class="param-control"><Slider value={$store.doubaoLoudnessRate} min={-50} max={100} step={5} onChange={(value: number) => ($store.doubaoLoudnessRate = value)} /></div></div>{/if}
-			{#if isDoubao && activeParamKeys.has('pitch_rate')}<div class="field param-field param-slider doubao-pitch-field"><label class="param-label label-with-tooltip">音调<Tooltip content="官方 additions.post_process.pitch：-12 更低沉，0 为原始音调，12 更明亮。" /></label><div class="param-control"><Slider value={$store.pitchRate} min={-12} max={12} step={1} onChange={(value: number) => ($store.pitchRate = value)} /></div></div>{/if}
-			{#if isDoubao && activeParamKeys.has('sample_rate')}<div class="field param-field doubao-sample-rate-field"><label class="param-label label-with-tooltip" for="doubao-sample-rate">采样率<Tooltip content="官方 sample_rate，可选 8–48 kHz。24 kHz 适合普通语音，较高采样率文件更大。" /></label><div class="param-control"><select id="doubao-sample-rate" bind:value={$store.doubaoSampleRate}>{#each doubaoSampleRateOptions as option}<option value={option.value}>{option.label}</option>{/each}</select></div></div>{/if}
-			{#if isDoubao && activeParamKeys.has('bit_rate')}<div class="field param-field doubao-bit-rate-field" class:field-muted={$store.outputFormat !== 'mp3'}><label class="param-label label-with-tooltip" for="doubao-bit-rate">MP3 码率<Tooltip content="官方 bit_rate，范围 64–160 kbps；只有格式选择 MP3 时生效。" /></label><div class="param-control"><select id="doubao-bit-rate" bind:value={$store.doubaoBitRate} disabled={$store.outputFormat !== 'mp3'}>{#each doubaoBitRateOptions as option}<option value={option.value}>{option.label}</option>{/each}</select></div></div>{/if}
-			{#if isDoubao && activeParamKeys.has('silence_duration')}<div class="field param-field doubao-silence-field"><label class="param-label label-with-tooltip" for="doubao-silence">结尾静音 ms<Tooltip content="官方 additions.silence_duration，范围 0–30000 毫秒。" /></label><div class="param-control"><input id="doubao-silence" type="number" min="0" max="30000" step="100" bind:value={$store.doubaoSilenceDuration} /></div></div>{/if}
+			{#if isDoubao}<div class="advanced-subhead doubao-sound-subhead">声音控制与文件</div>{/if}
+			{#if isDoubao && activeParamKeys.has('tone_fidelity')}<div class="field param-field doubao-tone-fidelity-field"><span class="param-label label-with-tooltip">更贴近训练音色<Tooltip content={activeParameterTooltip('tone_fidelity')} /></span><div class="doubao-switch-row"><Toggle compact checked={$store.engineParameters.tone_fidelity === true} label="保留训练音色的说话习惯和口音" onChange={(checked) => ($store.engineParameters = { ...$store.engineParameters, tone_fidelity: checked })} /></div></div>{/if}
+			{#if isDoubao && activeParamKeys.has('loudness_rate')}<div class="field param-field param-slider doubao-loudness-field"><label class="param-label label-with-tooltip">音量<Tooltip content={activeParameterTooltip('loudness_rate')} /></label><div class="param-control"><Slider value={$store.doubaoLoudnessRate} min={-50} max={100} step={5} onChange={(value: number) => ($store.doubaoLoudnessRate = value)} /></div></div>{/if}
+			{#if isDoubao && activeParamKeys.has('pitch_rate')}<div class="field param-field param-slider doubao-pitch-field"><label class="param-label label-with-tooltip">音调<Tooltip content={activeParameterTooltip('pitch_rate')} /></label><div class="param-control"><Slider value={$store.pitchRate} min={-12} max={12} step={1} onChange={(value: number) => ($store.pitchRate = value)} /></div></div>{/if}
+			{#if isDoubao && activeParamKeys.has('sample_rate')}<div class="field param-field doubao-sample-rate-field"><label class="param-label label-with-tooltip" for="doubao-sample-rate">采样率<Tooltip content={activeParameterTooltip('sample_rate')} /></label><div class="param-control"><select id="doubao-sample-rate" bind:value={$store.doubaoSampleRate}>{#each doubaoSampleRateOptions as option}<option value={option.value}>{option.label}</option>{/each}</select></div></div>{/if}
+			{#if isDoubao && activeParamKeys.has('bit_rate')}<div class="field param-field doubao-bit-rate-field" class:field-muted={$store.outputFormat !== 'mp3'}><label class="param-label label-with-tooltip" for="doubao-bit-rate">MP3 码率<Tooltip content={activeParameterTooltip('bit_rate')} /></label><div class="param-control"><select id="doubao-bit-rate" bind:value={$store.doubaoBitRate} disabled={$store.outputFormat !== 'mp3'}>{#each doubaoBitRateOptions as option}<option value={option.value}>{option.label}</option>{/each}</select></div></div>{/if}
+			{#if isDoubao && activeParamKeys.has('silence_duration')}<div class="field param-field doubao-silence-field"><label class="param-label label-with-tooltip" for="doubao-silence">结尾静音 ms<Tooltip content={activeParameterTooltip('silence_duration')} /></label><div class="param-control"><input id="doubao-silence" type="number" min="0" max="30000" step="100" bind:value={$store.doubaoSilenceDuration} /></div></div>{/if}
+			{#if isDoubao}<div class="advanced-subhead doubao-delivery-subhead">交付标记</div>{/if}
 			{#if isDoubao && (activeParamKeys.has('enable_subtitle') || activeParamKeys.has('aigc_watermark'))}<div class="field param-field doubao-output-switches"><span class="param-label label-with-tooltip">输出附加<Tooltip content="字级时间戳：随音频返回文字位置，用于字幕或画面对齐。AIGC 声音标识：在音频结尾加入可识别的 AI 生成节奏标识。" /></span><div class="doubao-switch-row">{#if activeParamKeys.has('enable_subtitle')}<Toggle compact checked={$store.doubaoEnableSubtitle} label="字级时间戳" onChange={(checked) => ($store.doubaoEnableSubtitle = checked)} />{/if}{#if activeParamKeys.has('aigc_watermark')}<Toggle compact checked={$store.doubaoAigcWatermark} label="AIGC 声音标识" onChange={(checked) => ($store.doubaoAigcWatermark = checked)} />{/if}</div></div>{/if}
-			{#if supportsEmotion}<div class="field param-field"><label class="param-label" for="emo">情绪</label><div class="param-control"><select id="emo" bind:value={$store.emotion}><option value="">跟随参考音色</option><option value="calm">自然</option><option value="happy">高兴</option><option value="sad">悲伤</option><option value="angry">愤怒</option><option value="afraid">恐惧</option><option value="disgusted">反感</option><option value="melancholic">低落</option><option value="surprised">惊讶</option></select></div></div>{#if isIndexTTS && !followsReferenceEmotion}<div class="field param-field param-slider emotion-intensity-field"><label class="param-label label-with-tooltip">情绪强度<Tooltip content="情感强度，0.0=无情感，1.0=最大情感表达" /></label><div class="param-control emotion-intensity-control"><Slider value={$store.emoAlpha} min={0} max={1} step={0.05} onChange={(v: number) => $store.emoAlpha = v} /></div></div>{/if}{/if}
-			{#if isOmniVoice && $store.voiceSource === 'voice_library' && !$store.voiceId}<div class="field param-field"><label class="param-label" for="vd">设计标签</label><div class="param-control"><select id="vd" bind:value={$store.voiceDesign}><option value="女，青年，中音调">女，青年，中音调</option><option value="男，青年，中音调">男，青年，中音调</option><option value="女，中年，高音调">女，中年，高音调</option><option value="男，中年，低音调">男，中年，低音调</option><option value="女，青年，耳语">女，青年，耳语</option></select></div></div>{/if}
-			{#if genericAdvancedParameterSchema.length > 0}<ParameterPanel autoExpand={true} parameterSchema={genericAdvancedParameterSchema} values={{ temperature: $store.temperature, top_p: $store.topP, top_k: $store.topK, seed: $store.seed, max_text_tokens_per_segment: $store.maxTextTokensPerSegment, interval_silence: $store.intervalSilence, diffusion_steps: $store.diffusionSteps, cfg_rate: $store.cfgRate, guidance_scale: $store.guidanceScale, duration: $store.duration, audio_chunk_duration: $store.audioChunkDuration, audio_chunk_threshold: $store.audioChunkThreshold, max_tokens: $store.maxTokens, cfg_scale: $store.cfgScale, ddpm_steps: $store.ddpmSteps, max_mel_tokens: $store.maxMelTokens, repetition_penalty: $store.repetitionPenalty, nfe_step: $store.nfeStep, cfg_strength: $store.cfgStrength, target_rms: $store.targetRms, cross_fade_duration: $store.crossFadeDuration, sway_sampling_coef: $store.swaySamplingCoef, fix_duration: $store.fixDuration, remove_silence: $store.removeSilence, optimize_text_preview: $store.optimizeTextPreview }} onChange={(k, v) => { const st: Record<string, (x: unknown) => void> = { temperature: (x: unknown) => $store.temperature = x as number, top_p: (x: unknown) => $store.topP = x as number, top_k: (x: unknown) => $store.topK = x as number, seed: (x: unknown) => $store.seed = x === '' || x === null || x === undefined ? null : Number(x), max_text_tokens_per_segment: (x: unknown) => $store.maxTextTokensPerSegment = x as number, interval_silence: (x: unknown) => $store.intervalSilence = x as number, diffusion_steps: (x: unknown) => $store.diffusionSteps = x as number, cfg_rate: (x: unknown) => $store.cfgRate = x as number, guidance_scale: (x: unknown) => $store.guidanceScale = x as number, duration: (x: unknown) => $store.duration = x as number, audio_chunk_duration: (x: unknown) => $store.audioChunkDuration = x as number, audio_chunk_threshold: (x: unknown) => $store.audioChunkThreshold = x as number, max_tokens: (x: unknown) => $store.maxTokens = x as number, cfg_scale: (x: unknown) => $store.cfgScale = x === '' || x === null || x === undefined ? null : Number(x), ddpm_steps: (x: unknown) => $store.ddpmSteps = x === '' || x === null || x === undefined ? null : Number(x), max_mel_tokens: (x: unknown) => $store.maxMelTokens = x as number, repetition_penalty: (x: unknown) => $store.repetitionPenalty = x as number, nfe_step: (x: unknown) => $store.nfeStep = x as number, cfg_strength: (x: unknown) => $store.cfgStrength = x as number, target_rms: (x: unknown) => $store.targetRms = x as number, cross_fade_duration: (x: unknown) => $store.crossFadeDuration = x as number, sway_sampling_coef: (x: unknown) => $store.swaySamplingCoef = x as number, fix_duration: (x: unknown) => $store.fixDuration = x as number, remove_silence: (x: unknown) => $store.removeSilence = x as boolean, optimize_text_preview: (x: unknown) => $store.optimizeTextPreview = x as boolean }; st[k]?.(v); }} />{/if}
+			{#if supportsEmotion}<div class="field param-field"><label class="param-label label-with-tooltip" for="emo">情绪{#if activeParameterTooltip('emotion')}<Tooltip content={activeParameterTooltip('emotion')} />{/if}</label><div class="param-control"><select id="emo" bind:value={$store.emotion}><option value="">跟随参考音色</option><option value="calm">自然</option><option value="happy">高兴</option><option value="sad">悲伤</option><option value="angry">愤怒</option><option value="afraid">恐惧</option><option value="disgusted">反感</option><option value="melancholic">低落</option><option value="surprised">惊讶</option></select></div></div>{#if isIndexTTS && !followsReferenceEmotion}<div class="field param-field param-slider emotion-intensity-field"><label class="param-label label-with-tooltip">情绪强度<Tooltip content="情绪越强，读法越有表演感；调得太高可能显得夸张。0 是最轻，1 是最强。" /></label><div class="param-control emotion-intensity-control"><Slider value={$store.emoAlpha} min={0} max={1} step={0.05} onChange={(v: number) => $store.emoAlpha = v} /></div></div>{/if}{/if}
+			{#if isOmniVoice && $store.voiceSource === 'voice_library' && !$store.voiceId}<div class="field param-field"><label class="param-label label-with-tooltip" for="vd">设计标签<Tooltip content="没有选参考音色时，用它决定大致的人声类型，例如性别、年龄、音调或耳语感。它不是自由聊天提示词，保持给出的格式组合效果更稳定。" /></label><div class="param-control"><select id="vd" bind:value={$store.voiceDesign}><option value="女，青年，中音调">女，青年，中音调</option><option value="男，青年，中音调">男，青年，中音调</option><option value="女，中年，高音调">女，中年，高音调</option><option value="男，中年，低音调">男，中年，低音调</option><option value="女，青年，耳语">女，青年，耳语</option></select></div></div>{/if}
+			{#if genericAdvancedParameterSchema.length > 0}<ParameterPanel autoExpand={true} parameterSchema={genericAdvancedParameterSchema} values={{ ...$store.engineParameters, temperature: $store.temperature, top_p: $store.topP, top_k: $store.topK, seed: $store.seed, max_text_tokens_per_segment: $store.maxTextTokensPerSegment, interval_silence: $store.intervalSilence, diffusion_steps: $store.diffusionSteps, cfg_rate: $store.cfgRate, guidance_scale: $store.guidanceScale, duration: $store.duration, audio_chunk_duration: $store.audioChunkDuration, audio_chunk_threshold: $store.audioChunkThreshold, max_tokens: $store.maxTokens, cfg_scale: $store.cfgScale, ddpm_steps: $store.ddpmSteps, max_mel_tokens: $store.maxMelTokens, repetition_penalty: $store.repetitionPenalty, nfe_step: $store.nfeStep, cfg_strength: $store.cfgStrength, target_rms: $store.targetRms, cross_fade_duration: $store.crossFadeDuration, sway_sampling_coef: $store.swaySamplingCoef, fix_duration: $store.fixDuration, remove_silence: $store.removeSilence, optimize_text_preview: $store.optimizeTextPreview }} onChange={(k, v) => { const st: Record<string, (x: unknown) => void> = { temperature: (x: unknown) => $store.temperature = x as number, top_p: (x: unknown) => $store.topP = x as number, top_k: (x: unknown) => $store.topK = x as number, seed: (x: unknown) => $store.seed = x === '' || x === null || x === undefined ? null : Number(x), max_text_tokens_per_segment: (x: unknown) => $store.maxTextTokensPerSegment = x as number, interval_silence: (x: unknown) => $store.intervalSilence = x as number, diffusion_steps: (x: unknown) => $store.diffusionSteps = x as number, cfg_rate: (x: unknown) => $store.cfgRate = x as number, guidance_scale: (x: unknown) => $store.guidanceScale = x as number, duration: (x: unknown) => $store.duration = x as number, audio_chunk_duration: (x: unknown) => $store.audioChunkDuration = x as number, audio_chunk_threshold: (x: unknown) => $store.audioChunkThreshold = x as number, max_tokens: (x: unknown) => $store.maxTokens = x as number, cfg_scale: (x: unknown) => $store.cfgScale = x === '' || x === null || x === undefined ? null : Number(x), ddpm_steps: (x: unknown) => $store.ddpmSteps = x === '' || x === null || x === undefined ? null : Number(x), max_mel_tokens: (x: unknown) => $store.maxMelTokens = x as number, repetition_penalty: (x: unknown) => $store.repetitionPenalty = x as number, nfe_step: (x: unknown) => $store.nfeStep = x as number, cfg_strength: (x: unknown) => $store.cfgStrength = x as number, target_rms: (x: unknown) => $store.targetRms = x as number, cross_fade_duration: (x: unknown) => $store.crossFadeDuration = x as number, sway_sampling_coef: (x: unknown) => $store.swaySamplingCoef = x as number, fix_duration: (x: unknown) => $store.fixDuration = x as number, remove_silence: (x: unknown) => $store.removeSilence = x as boolean, optimize_text_preview: (x: unknown) => $store.optimizeTextPreview = x as boolean }; if (st[k]) st[k](v); else $store.engineParameters = { ...$store.engineParameters, [k]: v }; }} />{/if}
 		</div>{/if}
 		{#if !isSeedAudio}<TextInput bind:text={$store.text} engineId={$store.engineId} ontexttool={(mode: 'clean' | 'numbers' | 'split') => runTextTool(mode)} textToolBusy={$store.textToolBusy} onGenerate={generate} generateBusy={$store.busy} />{/if}
 		{#if $store.error}<div class="badge fail">{$store.error}</div>{/if}

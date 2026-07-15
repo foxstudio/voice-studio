@@ -16,6 +16,43 @@ DEFAULT_ICL_RESOURCE_ID = "seed-icl-2.0"
 DEFAULT_TTS_SAMPLE_RATE = 48000
 DEFAULT_TTS_BIT_RATE = 160000
 SUPPORTED_TTS_AUDIO_FORMATS = frozenset({"wav", "mp3", "pcm", "ogg_opus"})
+DOUBAO_TTS_EXPLICIT_LANGUAGES = {
+    "zh-cn": "中文（支持中英混读）",
+    "en": "英语",
+    "ja": "日语",
+    "es-mx": "墨西哥西班牙语",
+    "id": "印度尼西亚语",
+    "pt-br": "巴西葡萄牙语",
+    "pt": "葡萄牙语",
+    "ko": "韩语",
+    "it": "意大利语",
+    "de": "德语",
+    "fr": "法语",
+    "th": "泰语",
+    "vi": "越南语",
+    "ru": "俄语",
+    "fil": "菲律宾语",
+    "ms": "马来语",
+    "ar": "阿拉伯语",
+    "pl": "波兰语",
+    "tr": "土耳其语",
+    "sv": "瑞典语",
+}
+DOUBAO_TTS_EXPLICIT_LANGUAGE_ALIASES = {
+    "zh": "zh-cn",
+    "cn": "zh-cn",
+    "chinese": "zh-cn",
+    "en-us": "en",
+    "english": "en",
+    "ja-jp": "ja",
+    "japanese": "ja",
+    "es": "es-mx",
+    "spanish": "es-mx",
+    "pt-pt": "pt",
+    "portuguese": "pt",
+    "ko-kr": "ko",
+    "korean": "ko",
+}
 DOUBAO_VOICE_CLONE_LANGUAGE_CODES = {
     "zh": 0,
     "zh-cn": 0,
@@ -26,24 +63,6 @@ DOUBAO_VOICE_CLONE_LANGUAGE_CODES = {
     "en-us": 1,
     "english": 1,
     "英文": 1,
-    "ja": 2,
-    "jp": 2,
-    "japanese": 2,
-    "日文": 2,
-    "es": 3,
-    "spanish": 3,
-    "id": 4,
-    "indonesian": 4,
-    "pt": 5,
-    "portuguese": 5,
-    "de": 6,
-    "german": 6,
-    "fr": 7,
-    "french": 7,
-    "ko": 8,
-    "kr": 8,
-    "korean": 8,
-    "韩文": 8,
 }
 DOUBAO_TTS_PRESET_SPEAKERS = [
     {"voice_id": "zh_female_xiaohe_uranus_bigtts", "label": "小何 2.0 · 女声", "language": "zh", "gender": "female"},
@@ -94,15 +113,29 @@ def voice_clone_language_code(language: str | int | None) -> int:
     if language is None:
         return 0
     if isinstance(language, int):
-        return language
+        if language in {0, 1}:
+            return language
+        raise DoubaoAPIError("豆包声音复刻 2.0 只支持中文或英文训练音频")
     value = str(language).strip().lower()
     if not value:
         return 0
     if value.isdigit():
-        return int(value)
+        return voice_clone_language_code(int(value))
     if value in DOUBAO_VOICE_CLONE_LANGUAGE_CODES:
         return DOUBAO_VOICE_CLONE_LANGUAGE_CODES[value]
     raise DoubaoAPIError(f"豆包声音复刻不支持语种：{language}")
+
+
+def normalize_tts_explicit_language(language: str | None) -> str | None:
+    """Return a documented TTS 2.0 language code, or None for auto-detect."""
+    value = str(language or "").strip().lower()
+    if value in {"", "auto", "automatic", "自动"}:
+        return None
+    value = DOUBAO_TTS_EXPLICIT_LANGUAGE_ALIASES.get(value, value)
+    if value not in DOUBAO_TTS_EXPLICIT_LANGUAGES:
+        supported = ", ".join(DOUBAO_TTS_EXPLICIT_LANGUAGES)
+        raise DoubaoAPIError(f"豆包 TTS 不支持指定朗读语言：{language}；支持：{supported}")
+    return value
 
 
 def build_headers(
@@ -178,6 +211,54 @@ def iter_concatenated_json(raw: str) -> list[dict[str, Any]]:
     return items
 
 
+def _normalize_parenthesis_filter(value: int | bool | None) -> int | None:
+    """Map the product's clear on/off control to Volcengine's 0-100 value."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return 100 if value else 0
+    if isinstance(value, int) and 0 <= value <= 100:
+        return value
+    raise DoubaoAPIError("圆括号过滤范围必须是 0 到 100")
+
+
+def _apply_latex_parser_mode(additions: dict[str, Any], mode: str | None) -> None:
+    normalized = str(mode or "off").strip().lower()
+    if normalized in {"", "off", "none", "false"}:
+        return
+    if normalized == "basic":
+        additions["enable_latex_tn"] = True
+        return
+    if normalized == "enhanced":
+        # The provider requires Markdown filtering for its v2 formula parser.
+        additions["disable_markdown_filter"] = True
+        additions["latex_parser"] = "v2"
+        return
+    raise DoubaoAPIError("公式朗读模式必须是 off、basic 或 enhanced")
+
+
+def _build_aigc_metadata(
+    *,
+    enabled: bool,
+    content_producer: str | None,
+    produce_id: str | None,
+    content_propagator: str | None,
+    propagate_id: str | None,
+) -> dict[str, Any] | None:
+    if not enabled:
+        return None
+    metadata: dict[str, Any] = {"enable": True}
+    for key, value in {
+        "content_producer": content_producer,
+        "produce_id": produce_id,
+        "content_propagator": content_propagator,
+        "propagate_id": propagate_id,
+    }.items():
+        if value is not None and str(value).strip():
+            metadata[key] = str(value).strip()
+    return metadata
+
+
 def build_tts_payload(
     *,
     text: str,
@@ -189,9 +270,19 @@ def build_tts_payload(
     loudness_rate: int | None = None,
     pitch_rate: int | None = None,
     style_instruction: str | None = None,
+    explicit_language: str | None = None,
     enable_subtitle: bool = False,
     silence_duration: int = 0,
     aigc_watermark: bool = False,
+    max_length_to_filter_parenthesis: int | bool | None = None,
+    disable_markdown_filter: bool = False,
+    latex_parser_mode: str | None = None,
+    aigc_metadata_enable: bool = False,
+    content_producer: str | None = None,
+    produce_id: str | None = None,
+    content_propagator: str | None = None,
+    propagate_id: str | None = None,
+    tone_fidelity: bool = False,
     user_id: str = "voice-studio",
 ) -> dict[str, Any]:
     audio_format = str(audio_format).strip().lower()
@@ -217,6 +308,9 @@ def build_tts_payload(
         "audio_params": audio_params,
     }
     additions: dict[str, Any] = {}
+    normalized_explicit_language = normalize_tts_explicit_language(explicit_language)
+    if normalized_explicit_language:
+        additions["explicit_language"] = normalized_explicit_language
     if style_instruction and style_instruction.strip():
         additions["context_texts"] = [style_instruction.strip()]
     if pitch_rate is not None:
@@ -225,6 +319,25 @@ def build_tts_payload(
         additions["silence_duration"] = max(0, min(30000, int(silence_duration)))
     if aigc_watermark:
         additions["aigc_watermark"] = True
+    parenthesis_filter = _normalize_parenthesis_filter(max_length_to_filter_parenthesis)
+    if parenthesis_filter:
+        additions["max_length_to_filter_parenthesis"] = parenthesis_filter
+    if disable_markdown_filter:
+        additions["disable_markdown_filter"] = True
+    _apply_latex_parser_mode(additions, latex_parser_mode)
+    metadata = _build_aigc_metadata(
+        enabled=aigc_metadata_enable,
+        content_producer=content_producer,
+        produce_id=produce_id,
+        content_propagator=content_propagator,
+        propagate_id=propagate_id,
+    )
+    if metadata:
+        if audio_format not in {"wav", "mp3", "ogg_opus"}:
+            raise DoubaoAPIError("豆包隐藏来源信息只支持 WAV、MP3 或 OGG Opus 输出")
+        additions["aigc_metadata"] = metadata
+    if tone_fidelity:
+        additions["tone_fidelity"] = True
     if additions:
         req_params["additions"] = json.dumps(additions, ensure_ascii=False)
 
@@ -249,9 +362,19 @@ def generate_tts_unidirectional_http(
     loudness_rate: int | None = None,
     pitch_rate: int | None = None,
     style_instruction: str | None = None,
+    explicit_language: str | None = None,
     enable_subtitle: bool = False,
     silence_duration: int = 0,
     aigc_watermark: bool = False,
+    max_length_to_filter_parenthesis: int | bool | None = None,
+    disable_markdown_filter: bool = False,
+    latex_parser_mode: str | None = None,
+    aigc_metadata_enable: bool = False,
+    content_producer: str | None = None,
+    produce_id: str | None = None,
+    content_propagator: str | None = None,
+    propagate_id: str | None = None,
+    tone_fidelity: bool = False,
     timeout: int = 120,
 ) -> dict[str, Any]:
     body = build_tts_payload(
@@ -264,9 +387,19 @@ def generate_tts_unidirectional_http(
         loudness_rate=loudness_rate,
         pitch_rate=pitch_rate,
         style_instruction=style_instruction,
+        explicit_language=explicit_language,
         enable_subtitle=enable_subtitle,
         silence_duration=silence_duration,
         aigc_watermark=aigc_watermark,
+        max_length_to_filter_parenthesis=max_length_to_filter_parenthesis,
+        disable_markdown_filter=disable_markdown_filter,
+        latex_parser_mode=latex_parser_mode,
+        aigc_metadata_enable=aigc_metadata_enable,
+        content_producer=content_producer,
+        produce_id=produce_id,
+        content_propagator=content_propagator,
+        propagate_id=propagate_id,
+        tone_fidelity=tone_fidelity,
     )
     headers, request_id = build_headers(api_key=api_key, resource_id=resource_id)
     url = base_url.rstrip("/") + "/api/v3/tts/unidirectional"
@@ -330,6 +463,69 @@ def generate_tts_unidirectional_http(
         subtitle={"source": "doubao", "sentences": subtitle_sentences} if subtitle_sentences else None,
     )
     return result.__dict__
+
+
+def probe_tts_connection(
+    *,
+    base_url: str,
+    api_key: str,
+    resource_id: str = DEFAULT_TTS_RESOURCE_ID,
+    timeout: int = 15,
+) -> dict[str, Any]:
+    """Verify TTS credentials with a one-character request and no file write."""
+
+    body = build_tts_payload(
+        text="测",
+        speaker=DOUBAO_TTS_PRESET_SPEAKERS[0]["voice_id"],
+        audio_format="mp3",
+        sample_rate=24000,
+        bit_rate=64000,
+        user_id="voice-studio-connection-test",
+    )
+    headers, request_id = build_headers(api_key=api_key, resource_id=resource_id)
+    url = base_url.rstrip("/") + "/api/v3/tts/unidirectional"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            logid = resp.headers.get("X-Tt-Logid")
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        logid = exc.headers.get("X-Tt-Logid")
+        raise DoubaoAPIError(
+            f"Doubao TTS probe failed: HTTP {exc.code}",
+            status_code=exc.code,
+            logid=logid,
+            body=raw[:1200],
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise DoubaoAPIError("Doubao TTS probe network failure") from exc
+
+    audio_bytes = 0
+    final: dict[str, Any] | None = None
+    for frame in iter_concatenated_json(raw):
+        data = frame.get("data")
+        if isinstance(data, str) and data:
+            try:
+                audio_bytes += len(base64.b64decode(data))
+            except (ValueError, TypeError) as exc:
+                raise DoubaoAPIError("Doubao TTS probe returned invalid audio", logid=logid) from exc
+        if frame.get("code") is not None:
+            final = frame
+    if final and final.get("code") not in {20000000, "20000000"}:
+        raise DoubaoAPIError(
+            "Doubao TTS probe returned an error",
+            logid=logid,
+            body=json.dumps(final, ensure_ascii=False)[:1200],
+        )
+    if audio_bytes <= 0:
+        raise DoubaoAPIError("Doubao TTS probe returned no audio", logid=logid, body=raw[:1200])
+    return {"request_id": request_id, "logid": logid, "audio_bytes": audio_bytes}
 
 
 def build_voice_clone_payload(

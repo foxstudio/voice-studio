@@ -51,6 +51,8 @@ export type GenerateStoreState = {
 	requestProjectId: string;
 	requestSegmentId: string;
 	engineId: string;
+	/** Model-specific settings that are not shared legacy TTS fields. */
+	engineParameters: Record<string, unknown>;
 	engineUiStateById: Record<string, unknown>;
 	voiceSource: VoiceSourceMode;
 	voiceId: string;
@@ -119,7 +121,7 @@ export type GenerateStoreState = {
 	maxMelTokens: number;
 	repetitionPenalty: number;
 	seed: number | null;
-	outputFormat: 'wav' | 'mp3' | 'flac';
+	outputFormat: 'wav' | 'mp3' | 'flac' | 'pcm' | 'ogg_opus';
 	showAdvanced: boolean;
 	showMoreParams: boolean;
 	tasks: GenerationTask[];
@@ -232,6 +234,43 @@ export const REFERENCE_VOICE_ENGINE_IDS = [
 	'cosyvoice-zero-shot'
 ] as const;
 
+// 豆包声音复刻必须先训练为云端音色，再从音色库选择；它不接受一段
+// 本地参考音频直接合成，因此不能进入“自定义上传”的请求分支。
+const DIRECT_CUSTOM_REFERENCE_ENGINE_IDS = [
+	'indextts-v2',
+	'omnivoice',
+	'confucius4-mlx-int8',
+	'qwen3-tts-mlx-0.6b',
+	'mimo-v2.5-tts-voiceclone',
+	'f5-tts',
+	'cosyvoice-zero-shot'
+] as const;
+
+// These keys already have dedicated state and request fields.  All other
+// manifest parameters stay in `engineParameters`, which lets a model grow
+// model-specific advanced controls without adding another global store field.
+const LEGACY_REQUEST_PARAMETER_KEYS = new Set([
+	'language', 'speaker_id', 'prompt', 'style_instruction', 'voice_design_prompt', 'mimo_voice',
+	'optimize_text_preview', 'emotion', 'emo_alpha', 'speed', 'pitch_rate', 'sample_rate', 'bit_rate',
+	'loudness_rate', 'enable_subtitle', 'silence_duration', 'aigc_watermark', 'temperature', 'top_p',
+	'top_k', 'repetition_penalty', 'seed', 'max_mel_tokens', 'max_text_tokens_per_segment',
+	'interval_silence', 'diffusion_steps', 'cfg_rate', 'guidance_scale', 'duration',
+	'audio_chunk_duration', 'audio_chunk_threshold', 'max_tokens', 'cfg_scale', 'ddpm_steps',
+	'nfe_step', 'cfg_strength', 'target_rms', 'cross_fade_duration', 'sway_sampling_coef',
+	'fix_duration', 'remove_silence', 'emotion_text'
+]);
+
+/**
+ * Keep generic model-specific controls separate from the long-lived request
+ * fields above. Presets use this too, so an advanced control cannot render
+ * correctly and then silently disappear when that preset is applied.
+ */
+export function pickEngineSpecificParameters(parameters: Record<string, unknown>) {
+	return Object.fromEntries(
+		Object.entries(parameters).filter(([key]) => !LEGACY_REQUEST_PARAMETER_KEYS.has(key))
+	);
+}
+
 function createInitialState(): GenerateStoreState {
 	return {
 		engines: [],
@@ -257,6 +296,7 @@ function createInitialState(): GenerateStoreState {
 		requestProjectId: '',
 		requestSegmentId: '',
 		engineId: 'indextts-v2',
+		engineParameters: {},
 		engineUiStateById: {},
 		voiceSource: 'voice_library',
 		voiceId: '',
@@ -374,6 +414,7 @@ function getActiveParamKeys(state: GenerateStoreState, engineId = state.engineId
 
 function getEngineDefaults(state: GenerateStoreState, engineId: string) {
 	const selectedEngine = getSelectedEngine(state, engineId);
+	const parameterSchema = selectedEngine?.manifest.parameter_schema ?? [];
 	const speakerParam = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'speaker_id');
 	const promptParam = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'prompt');
 	const styleParam = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'style_instruction');
@@ -386,10 +427,14 @@ function getEngineDefaults(state: GenerateStoreState, engineId: string) {
 		return value === null || value === undefined || value === '' ? null : Number(value);
 	};
 	const seedDefault = selectedEngine?.manifest.parameter_schema.find((param) => param.key === 'seed')?.default;
+	const engineParameters = pickEngineSpecificParameters(
+		Object.fromEntries(parameterSchema.map((parameter) => [parameter.key, parameter.default]))
+	);
 
 	return {
 		engineId,
 		lastEngineId: engineId,
+		engineParameters,
 		showAdvanced: engineId === 'f5-tts',
 		language: String(languageParam?.default ?? state.language),
 		emotion: INDEX_TTS_DEFAULTS.emotion,
@@ -419,6 +464,8 @@ function getEngineDefaults(state: GenerateStoreState, engineId: string) {
 		cfgStrength: F5_DEFAULTS.cfgStrength,
 		targetRms: F5_DEFAULTS.targetRms,
 		crossFadeDuration: F5_DEFAULTS.crossFadeDuration,
+		swaySamplingCoef: Number(parameterDefault('sway_sampling_coef', F5_DEFAULTS.swaySamplingCoef)),
+		fixDuration: Number(parameterDefault('fix_duration', F5_DEFAULTS.fixDuration)),
 		removeSilence: F5_DEFAULTS.removeSilence,
 		repetitionPenalty: Number(parameterDefault('repetition_penalty', CONFUCIUS4_DEFAULTS.repetitionPenalty)),
 		seed: seedDefault === undefined || seedDefault === null ? null : Number(seedDefault),
@@ -434,10 +481,11 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 	const activeParamKeys = getActiveParamKeys(state);
 	const selectedVoice = state.voices.find((voice) => voice.voice_id === state.voiceId) ?? null;
 	const usesReferenceVoice = Boolean(selected && REFERENCE_VOICE_ENGINE_IDS.includes(selected.manifest.engine_id as (typeof REFERENCE_VOICE_ENGINE_IDS)[number]));
+	const acceptsDirectCustomReference = Boolean(selected && DIRECT_CUSTOM_REFERENCE_ENGINE_IDS.includes(selected.manifest.engine_id as (typeof DIRECT_CUSTOM_REFERENCE_ENGINE_IDS)[number]));
 	const supportsEmotion = activeParamKeys.has('emotion');
 	const isOmniVoice = state.engineId === 'omnivoice';
 	const isMimoPreset = state.engineId === 'mimo-v2.5-tts-preset';
-	const useCustomReference = usesReferenceVoice && state.voiceSource === 'reference_audio';
+	const useCustomReference = acceptsDirectCustomReference && state.voiceSource === 'reference_audio';
 	const useLibraryReference =
 		usesReferenceVoice && state.voiceSource === 'voice_library' && Boolean(state.voiceId);
 	const isQwen3TTS = state.engineId === 'qwen3-tts-mlx-0.6b';
@@ -449,11 +497,12 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 	return {
 		text: state.text,
 		engine_id: state.engineId,
+		engine_parameters: state.engineParameters,
 		source: state.requestSource || null,
 		project_id: state.requestProjectId || null,
 		segment_id: state.requestSegmentId || null,
 		voice_id: useLibraryReference ? state.voiceId || null : null,
-		voice_source: usesReferenceVoice ? state.voiceSource : undefined,
+		voice_source: usesReferenceVoice ? (useCustomReference ? 'reference_audio' : 'voice_library') : undefined,
 		reference_audio_path: useCustomReference ? state.customVoiceReferenceAudioPath || null : null,
 		reference_audio_license_status: useCustomReference ? 'self_voice' : null,
 		reference_audio_tags: useCustomReference ? ['custom-reference'] : [],
@@ -530,6 +579,9 @@ function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<
 
 	return {
 		...engineDefaults,
+		// Old tasks and hand-written presets often omit controls added later.
+		// Preserve the current engine default instead of showing an incomplete UI.
+		engineParameters: { ...engineDefaults.engineParameters, ...(req.engine_parameters ?? {}) },
 		text: req.text,
 		requestSource: req.source ?? '',
 		requestProjectId: req.project_id ?? '',

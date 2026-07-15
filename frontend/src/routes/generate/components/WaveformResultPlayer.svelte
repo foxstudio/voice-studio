@@ -53,6 +53,7 @@
 	import type { GenerationTask } from '$lib/api/types';
 	import { Download, Loader2, Play, Square } from 'lucide-svelte';
 	import { onMount } from 'svelte';
+	import { taskSupportsBrowserPreview } from '../helpers';
 
 	type WaveSurfer = import('wavesurfer.js').default;
 
@@ -105,8 +106,10 @@
 	const durationSeconds = $derived(Math.max(0, (task.result_duration_ms ?? 0) / 1000 || decodedDuration));
 	const timeLabel = $derived(formatClock(isPlaying || currentTime > 0 ? currentTime : 0));
 	const statusLabel = $derived(loadError ? '波形不可用' : loadQueued ? '排队读取' : loading ? '读取波形' : durationLabel || '播放结果');
+	const downloadOnly = $derived(!taskSupportsBrowserPreview(task));
 
 	$effect(() => {
+		if (downloadOnly) return;
 		const loadKey = `${audioUrl}|${peaksUrl}`;
 		if (!waveSurfer || !audioUrl || loadKey === lastLoadedUrl) return;
 		queueWaveformLoad(audioUrl, peaksUrl);
@@ -126,6 +129,7 @@
 	});
 
 	onMount(() => {
+		if (downloadOnly) return;
 		if (!shellEl) return;
 		const fallbackTimer = window.setTimeout(() => {
 			if (waveSurfer) return;
@@ -153,7 +157,7 @@
 	});
 
 	async function mountWaveform() {
-		if (waveSurfer || !waveformEl || !audioUrl) return;
+		if (downloadOnly || waveSurfer || !waveformEl || !audioUrl) return;
 		loading = true;
 		loadQueued = false;
 		loadError = '';
@@ -309,7 +313,19 @@
 	}
 </script>
 
-<div bind:this={shellEl} class="result-waveform-player" class:playing={isPlaying} class:loading class:pending={isPending} class:error={Boolean(loadError)}>
+<div bind:this={shellEl} class="result-waveform-player" class:download-only={downloadOnly} class:playing={isPlaying} class:loading class:pending={isPending} class:error={Boolean(loadError)}>
+	{#if downloadOnly}
+		<span class="waveform-inline-label">PCM 原始数据不支持网页试听</span>
+		<a
+			class="waveform-download-button"
+			href={downloadUrl}
+			download={downloadName}
+			aria-label="下载 PCM 原始音频"
+			data-tooltip="PCM 是原始音频数据，仅支持下载后在专业工具中使用"
+		>
+			<Download size={14} />
+		</a>
+	{:else}
 	<button
 		class="waveform-play-button"
 		class:playing={isPlaying}
@@ -358,6 +374,7 @@
 	>
 		<Download size={14} />
 	</a>
+	{/if}
 </div>
 
 <style>
@@ -376,6 +393,14 @@
 
 	.result-waveform-player.playing {
 		background: transparent;
+	}
+
+	.result-waveform-player.download-only {
+		grid-template-columns: minmax(0, 1fr) 32px;
+	}
+
+	.result-waveform-player.download-only .waveform-inline-label {
+		padding-left: 8px;
 	}
 
 	.waveform-play-button,

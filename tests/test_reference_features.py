@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import builtins
 import sys
+import wave
+from io import BytesIO
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +33,16 @@ def _client(tmp_path: Path) -> TestClient:
         )
     )
     return TestClient(app)
+
+
+def _valid_wav_bytes() -> bytes:
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(24000)
+        output.writeframes(b"\x00\x00" * 2400)
+    return buffer.getvalue()
 
 
 def test_presets_are_available_and_apply_to_main_engines(tmp_path: Path, monkeypatch):
@@ -244,7 +256,7 @@ def test_agent_can_register_voice_with_license_and_tags(tmp_path: Path):
             "tags": '["agent:demo", "授权", "参考声音"]',
             "recommended_engine_id": "indextts-v2",
         },
-        files={"file": ("agent.wav", b"RIFF\x24\x00\x00\x00WAVEfmt ", "audio/wav")},
+        files={"file": ("agent.wav", _valid_wav_bytes(), "audio/wav")},
     )
 
     assert resp.status_code == 200
@@ -265,7 +277,7 @@ def test_voice_upload_returns_reference_audio_path(tmp_path: Path):
 
     resp = client.post(
         "/api/voices/upload",
-        files={"file": ("custom.wav", b"RIFF\x24\x00\x00\x00WAVEfmt ", "audio/wav")},
+        files={"file": ("custom.wav", _valid_wav_bytes(), "audio/wav")},
     )
 
     assert resp.status_code == 200
@@ -281,7 +293,7 @@ def test_predict_file_emotion_uses_uploaded_voice_file(tmp_path: Path, monkeypat
 
     uploaded = client.post(
         "/api/voices/upload",
-        files={"file": ("custom.wav", b"RIFF\x24\x00\x00\x00WAVEfmt ", "audio/wav")},
+        files={"file": ("custom.wav", _valid_wav_bytes(), "audio/wav")},
     ).json()
 
     captured: dict[str, str] = {}
@@ -396,15 +408,12 @@ def test_engine_registry_exposes_only_current_main_engines(tmp_path: Path, monke
     assert "preset_voice" in by_id["qwen3-tts-mlx-0.6b"]["capabilities"]
     assert "voice_design" in by_id["qwen3-tts-mlx-0.6b"]["capabilities"]
     assert "voice_clone" in by_id["qwen3-tts-mlx-0.6b"]["capabilities"]
-    assert any(param["key"] == "style_instruction" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
     assert any(param["key"] == "voice_design_prompt" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
     assert any(param["key"] == "speed" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
     assert any(param["key"] == "top_p" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
     assert any(param["key"] == "top_k" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
     assert any(param["key"] == "repetition_penalty" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
     assert any(param["key"] == "max_tokens" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
-    assert any(param["key"] == "cfg_scale" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
-    assert any(param["key"] == "ddpm_steps" for param in by_id["qwen3-tts-mlx-0.6b"]["parameter_schema"])
     assert "preset_voice" in by_id["cosyvoice-sft"]["capabilities"]
     assert "voice_clone" in by_id["f5-tts"]["capabilities"]
     assert "voice_clone" in by_id["cosyvoice-zero-shot"]["capabilities"]
@@ -416,7 +425,7 @@ def test_mimo_secret_is_not_returned_in_settings(tmp_path: Path):
     assert resp.status_code == 200
     data = resp.json()
     assert data["mimo_api_key_configured"] is True
-    assert data["cloud_enabled"] is True
+    assert data["cloud_enabled"] is False
     assert "secret-token" not in str(data)
 
     settings = client.get("/api/settings").json()

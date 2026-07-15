@@ -16,7 +16,7 @@ if str(BACKEND) not in sys.path:
 
 from app.main import app  # noqa: E402
 from app.schemas.voice_studio import AppSettings, VoiceAssetCreate  # noqa: E402
-from app.services import database, engine_registry, mimo_client, qwen_forced_aligner, settings_store, voice_store  # noqa: E402
+from app.services import database, engine_registry, mimo_client, qwen_forced_aligner, qwen_mlx_asr, settings_store, voice_store  # noqa: E402
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -69,7 +69,10 @@ def test_mimo_engines_are_split_and_legacy_id_is_hidden(tmp_path: Path):
     clone_param_keys = {p["key"] for p in clone["parameter_schema"]}
     assert "voice_clone" in clone["capabilities"]
     assert "preset_voice" not in clone["capabilities"]
-    assert clone_param_keys == {"style_instruction", "temperature", "top_p"}
+    assert clone_param_keys == {"style_instruction"}
+    assert preset["supported_output_formats"] == ["wav"]
+    assert design["supported_output_formats"] == ["wav"]
+    assert clone["supported_output_formats"] == ["wav"]
 
     local_only_params = {
         "speed",
@@ -163,6 +166,13 @@ def test_mimo_validation_rejects_invalid_voiceclone_inputs(tmp_path: Path):
     large.write_bytes(b"0" * (10 * 1024 * 1024 + 1))
     with pytest.raises(ValueError, match="MIMO_VOICECLONE_AUDIO_TOO_LARGE"):
         mimo_client.audio_file_data_url(str(large))
+
+    # The API limits the final `data:...;base64,...` string.  This source is
+    # under 10 MiB on disk but exceeds the provider limit after Base64 growth.
+    base64_expanded = tmp_path / "base64-expanded.wav"
+    base64_expanded.write_bytes(b"0" * (8 * 1024 * 1024))
+    with pytest.raises(ValueError, match="MIMO_VOICECLONE_AUDIO_TOO_LARGE"):
+        mimo_client.audio_file_data_url(str(base64_expanded))
 
     with pytest.raises(ValueError, match="MIMO_VOICE_DESIGN_PROMPT_REQUIRED"):
         mimo_client.build_tts_payload(
@@ -570,18 +580,10 @@ def test_qwen3_asr_health_reports_runtime_missing_when_model_exists(tmp_path: Pa
     client = _client(tmp_path)
     model_dir = tmp_path / "qwen3-asr-mlx"
     model_dir.mkdir(parents=True, exist_ok=True)
-    for name in [
-        "config.json",
-        "preprocessor_config.json",
-        "tokenizer.json",
-        "tokenizer_config.json",
-        "model.safetensors",
-    ]:
+    for name in qwen_mlx_asr.REQUIRED_MODEL_FILES:
         (model_dir / name).write_text("{}", encoding="utf-8")
 
     monkeypatch.setattr(settings_store, "model_path", lambda engine_id: model_dir)
-    import app.services.qwen_mlx_asr as qwen_mlx_asr  # noqa: E402
-
     monkeypatch.setattr(qwen_mlx_asr, "runtime_available", lambda: (False, "mlx-audio is not installed"))
 
     resp = client.post("/api/engines/qwen3-asr-mlx/health-check")

@@ -5,6 +5,7 @@ import os
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from app.services.paths import expand_path
@@ -123,6 +124,10 @@ def conn():
         _schema_applied_paths.add(DB_PATH)
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
+    else:
         db.commit()
     finally:
         db.close()
@@ -215,5 +220,19 @@ def get_settings_rows() -> dict[str, str]:
 
 
 def save_setting(key: str, value: str) -> None:
+    apply_settings_changes({key: value})
+
+
+def apply_settings_changes(
+    upserts: Mapping[str, str],
+    deletes: Iterable[str] = (),
+) -> None:
     with conn() as db:
-        db.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
+        db.executemany(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            list(upserts.items()),
+        )
+        db.executemany(
+            "DELETE FROM settings WHERE key = ?",
+            [(key,) for key in deletes],
+        )

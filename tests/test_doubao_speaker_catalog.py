@@ -44,6 +44,10 @@ class FakeResponse:
 @pytest.fixture
 def isolated_catalog(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(settings_store, "cache_dir", lambda: tmp_path / "cache")
+    # The catalog tests exercise the no-credentials fallback.  A developer's
+    # locally saved AK/SK must not make this assertion depend on their machine.
+    monkeypatch.setattr(settings_store, "volcengine_access_key_id", lambda: None)
+    monkeypatch.setattr(settings_store, "volcengine_secret_access_key", lambda: None)
     monkeypatch.delenv("VOLCENGINE_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("VOLCENGINE_ACCESS_KEY", raising=False)
     monkeypatch.delenv("VOLCENGINE_SECRET_ACCESS_KEY", raising=False)
@@ -86,7 +90,7 @@ def test_list_speakers_maps_pages_and_deduplicates_metadata():
                                 "Categories": {"Categories": [{"Name": "通用场景"}]},
                                 "TrialURL": "https://voice.volces.com/a.mp3",
                                 "ShortTrialURL": "https://voice.volces.com/a-short.mp3",
-                                "AvatarURL": "https://lf3-static.bytednsdoc.com/avatar.png",
+                                "Avatar": "https://lf3-static.bytednsdoc.com/avatar.png",
                                 "ResourceID": "seed-tts-2.0",
                             },
                             {"SpeakerID": "voice-b", "SpeakerName": "沉稳男声", "Gender": "M"},

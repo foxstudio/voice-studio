@@ -353,6 +353,10 @@ export function resultDownloadName(task: GenerationTask) {
 	return resultDownloadNameForScope(task, [task]);
 }
 
+export function taskSupportsBrowserPreview(task: GenerationTask) {
+	return String(taskRequestParameters(task).output_format ?? 'wav').trim().toLowerCase() !== 'pcm';
+}
+
 export function resultDownloadNameForScope(task: GenerationTask, scope: GenerationTask[], knownSequence?: number) {
 	const sequence = (knownSequence && knownSequence > 0 ? knownSequence : taskDownloadSequence(task, scope)).toString().padStart(3, '0');
 	const title = sanitizeDownloadTitle(displayTitle(task));
@@ -400,7 +404,9 @@ function sanitizeDownloadTitle(title: string) {
 }
 
 function sanitizeDownloadFormat(format: unknown) {
-	return typeof format === 'string' && /^[a-z0-9]{2,8}$/i.test(format) ? format.toLowerCase() : 'wav';
+	const normalized = typeof format === 'string' ? format.trim().toLowerCase() : '';
+	if (normalized === 'ogg_opus') return 'ogg';
+	return ['wav', 'mp3', 'flac', 'pcm'].includes(normalized) ? normalized : 'wav';
 }
 
 export function longformTitle(task: LongformTask) { return task.input_text.trim() || '长文本任务'; }

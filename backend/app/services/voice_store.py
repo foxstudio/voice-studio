@@ -10,6 +10,10 @@ from app.schemas.voice_studio import LicenseStatus, VoiceAsset, VoiceAssetCreate
 from app.services import audio_tools, custom_reference_store, database as db, settings_store, voice_aliases
 
 
+MAX_REFERENCE_MEDIA_BYTES = 200 * 1024 * 1024
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
 def list_voices(offset: int = 0, limit: int = 100) -> list[VoiceAsset]:
     all_voices = [_normalize_voice(VoiceAsset(**d)) for d in db.list_all("voices", "updated_at", limit=-1)]
     return all_voices[offset:offset + limit]
@@ -112,6 +116,13 @@ def delete_voice(voice_id: str) -> None:
                     pass
                 else:
                     file_path.unlink(missing_ok=True)
+                    if source_media_path := custom_reference_store.owned_source_media_path(vf):
+                        try:
+                            source_media_path.relative_to(voice_dir)
+                        except ValueError:
+                            pass
+                        else:
+                            source_media_path.unlink(missing_ok=True)
                 db.delete_one("voice_files", "file_id", file_id)
     db.delete_one("voices", "voice_id", voice_id)
 
@@ -125,28 +136,88 @@ def delete_file(file_id: str, *, unlink: bool = True) -> None:
     vf = get_file(file_id)
     if vf and unlink and vf.path:
         Path(vf.path).unlink(missing_ok=True)
+        if source_media_path := custom_reference_store.owned_source_media_path(vf):
+            source_media_path.unlink(missing_ok=True)
     db.delete_one("voice_files", "file_id", file_id)
 
 
 async def upload_audio(file: UploadFile) -> dict:
     settings_store.ensure_directories()
-    suffix = Path(file.filename or "voice.wav").suffix or ".wav"
-    vf = VoiceFile(original_name=file.filename or "voice.wav", path="")
-    path = custom_reference_store.allocate_path(vf.file_id, suffix)
-    content = await file.read()
-    path.write_bytes(content)
-    vf.path = str(path)
-    vf.mime_type = file.content_type or "audio/wav"
-    vf.size_bytes = len(content)
+    original_name = Path(file.filename or "voice.wav").name or "voice.wav"
+    suffix = Path(original_name).suffix or ".wav"
+    is_video = audio_tools.is_reference_video(original_name)
+    vf = VoiceFile(original_name=original_name, path="")
+    path: Path | None = None
+    source_path: Path | None = None
     try:
-        meta = audio_tools.probe_audio(path)
+        if is_video:
+            source_path = custom_reference_store.allocate_path(vf.file_id, suffix)
+            path = custom_reference_store.allocate_path(vf.file_id, ".wav")
+            await _save_upload(file, source_path)
+            meta = audio_tools.extract_reference_audio(source_path, path)
+            vf.original_name = f"{Path(original_name).stem or 'reference'}_extracted.wav"
+            vf.source_media_path = str(source_path)
+            vf.source_media_name = original_name
+            vf.mime_type = "audio/wav"
+        else:
+            path = custom_reference_store.allocate_path(vf.file_id, suffix)
+            await _save_upload(file, path)
+            meta = audio_tools.probe_audio(path)
+            vf.mime_type = file.content_type or "audio/wav"
+        vf.path = str(path)
+        vf.size_bytes = meta["size_bytes"]
         vf.duration_ms = meta["duration_ms"]
         vf.sample_rate = meta["sample_rate"]
         quality = _quality_for_voice_file(vf.duration_ms)
+    except AppException:
+        if path:
+            path.unlink(missing_ok=True)
+        if source_path:
+            source_path.unlink(missing_ok=True)
+        raise
     except Exception as exc:
-        quality = {"passed": False, "warnings": [f"无法读取音频: {exc}"]}
+        if path:
+            path.unlink(missing_ok=True)
+        if source_path:
+            source_path.unlink(missing_ok=True)
+        code = str(exc) or "REFERENCE_MEDIA_UNREADABLE"
+        if code == "REFERENCE_VIDEO_NO_AUDIO":
+            raise AppException(400, code, "视频没有可用的音轨，不能作为参考音色") from exc
+        if code == "REFERENCE_VIDEO_FFMPEG_MISSING":
+            raise AppException(500, code, "本机缺少 FFmpeg，无法从视频抽取音频") from exc
+        if code.startswith("REFERENCE_VIDEO_"):
+            raise AppException(400, code, "视频音频抽取失败，请换一个带声音的视频后重试") from exc
+        if is_video:
+            raise AppException(400, "REFERENCE_VIDEO_AUDIO_EXTRACT_FAILED", "视频音频抽取失败，请换一个带声音的视频后重试") from exc
+        raise AppException(400, "REFERENCE_AUDIO_UNREADABLE", "无法读取参考音频，请换一个可播放的音频或视频后重试") from exc
     db.upsert("voice_files", vf.file_id, vf.model_dump())
-    return {"file_id": vf.file_id, "filename": vf.original_name, "path": vf.path, "quality": quality}
+    return {
+        "file_id": vf.file_id,
+        "filename": vf.original_name,
+        "path": vf.path,
+        "quality": quality,
+        "duration_ms": vf.duration_ms,
+        "size_bytes": vf.size_bytes,
+        "source_kind": "video" if is_video else "audio",
+        "source_filename": vf.source_media_name,
+    }
+
+
+async def _save_upload(file: UploadFile, destination: Path) -> int:
+    """Save an upload in bounded chunks so a large video is never duplicated in RAM."""
+
+    total = 0
+    try:
+        with destination.open("wb") as output:
+            while chunk := await file.read(UPLOAD_CHUNK_BYTES):
+                total += len(chunk)
+                if total > MAX_REFERENCE_MEDIA_BYTES:
+                    raise AppException(413, "REFERENCE_MEDIA_TOO_LARGE", "参考音频或视频不能超过 200MB")
+                output.write(chunk)
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+    return total
 
 
 def create_audio_clip(file_id: str, start_ms: int, end_ms: int) -> dict:

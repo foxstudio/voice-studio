@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from app.services import confucius4_paths, engine_manifests, engine_policy, engine_runtime_paths, faster_whisper_asr, qwen3_tts_paths, qwen_mlx_asr, settings_store
+from app.services import confucius4_paths, cosyvoice_worker, engine_manifests, engine_policy, engine_runtime_paths, faster_whisper_asr, qwen3_tts_paths, qwen_mlx_asr, settings_store
 
 
 DEFAULT_EXTERNAL_ROOTS = {
@@ -137,6 +137,7 @@ def _health_external_engine(engine_id: str) -> dict[str, Any]:
         }
     python = root / ".venv" / "bin" / "python"
     required: list[Path] = [python]
+    model_path = root
     if engine_id == "emotivoice":
         required.extend(
             [
@@ -155,29 +156,53 @@ def _health_external_engine(engine_id: str) -> dict[str, Any]:
             ]
         )
     elif engine_id in {"cosyvoice-sft", "cosyvoice-zero-shot"}:
+        model_path = cosyvoice_worker.model_directory(root, engine_id)
         required.extend(
             [
                 root / "cosyvoice" / "cli" / "cosyvoice.py",
                 root / "third_party" / "Matcha-TTS",
-                root / "pretrained_models" / "CosyVoice-300M-SFT" / "cosyvoice.yaml",
-                root / "pretrained_models" / "CosyVoice-300M-SFT" / "llm.pt",
-                root / "pretrained_models" / "CosyVoice-300M-SFT" / "spk2info.pt",
+                *(model_path / name for name in cosyvoice_worker.required_model_files(engine_id)),
             ]
         )
     missing = [str(path.relative_to(root)) if path.is_relative_to(root) else str(path) for path in required if not path.exists()]
-    return {
+    result = {
         "healthy": not missing,
         "status": "ok" if not missing else "external_runtime_missing",
-        "model_path": str(root),
+        "model_path": str(model_path),
         "python": str(python),
         "missing": missing,
     }
+    if engine_id in {"cosyvoice-sft", "cosyvoice-zero-shot"}:
+        result["runtime_path"] = str(root)
+    return result
 
 
 def _health_omnivoice() -> dict[str, Any]:
+    from app.services.inference_runner import OMNIVOICE_MODEL_ID, omnivoice_local_snapshot
+
+    try:
+        model_path = omnivoice_local_snapshot()
+    except RuntimeError as exc:
+        return {
+            "healthy": False,
+            "status": "model_missing",
+            "model_id": OMNIVOICE_MODEL_ID,
+            "detail": str(exc),
+        }
     try:
         import omnivoice  # noqa: F401
 
-        return {"healthy": True, "status": "package_available", "model_id": "k2-fsa/OmniVoice"}
+        return {
+            "healthy": True,
+            "status": "ok",
+            "model_id": OMNIVOICE_MODEL_ID,
+            "model_path": str(model_path),
+        }
     except Exception as exc:
-        return {"healthy": False, "status": "package_missing", "detail": str(exc)}
+        return {
+            "healthy": False,
+            "status": "package_missing",
+            "model_id": OMNIVOICE_MODEL_ID,
+            "model_path": str(model_path),
+            "detail": str(exc),
+        }

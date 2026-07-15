@@ -17,6 +17,7 @@ import {
 	formatSeconds,
 	formatAudioDuration,
 	resultDownloadNameForScope,
+	taskSupportsBrowserPreview,
 	verificationStatusLabel,
 } from './helpers';
 import type { EngineDetail, GenerationTask, ParameterSchema, VoiceAsset } from '$lib/api/types';
@@ -400,5 +401,25 @@ describe('resultDownloadNameForScope', () => {
 		});
 
 		expect(resultDownloadNameForScope(task, [task])).toBe('001-那-AI-应该怎么办-比如隐私-效率-成本-需要非常非常非常非常.wav');
+	});
+
+	it.each([
+		['pcm', '001-原始-PCM.pcm'],
+		['ogg_opus', '001-OGG-Opus.ogg']
+	])('keeps the selected raw provider format in the history download name (%s)', (outputFormat, expectedName) => {
+		const task = makeTask({
+			task_id: `raw-${outputFormat}`,
+			result_id: `result-${outputFormat}`,
+			input_text: outputFormat === 'pcm' ? '原始 PCM' : 'OGG Opus',
+			created_at: '2026-07-15T01:00:00+08:00',
+			parameters: { output_format: outputFormat }
+		});
+
+		expect(resultDownloadNameForScope(task, [task])).toBe(expectedName);
+	});
+
+	it('keeps PCM download-only while OGG Opus remains previewable', () => {
+		expect(taskSupportsBrowserPreview(makeTask({ parameters: { output_format: 'pcm' } }))).toBe(false);
+		expect(taskSupportsBrowserPreview(makeTask({ parameters: { output_format: 'ogg_opus' } }))).toBe(true);
 	});
 });

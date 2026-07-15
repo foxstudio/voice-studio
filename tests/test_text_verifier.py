@@ -116,6 +116,18 @@ def test_seed_audio_non_speech_prompt_is_not_treated_as_missing_dialogue():
     assert "不适用 ASR 覆盖率" in report.warnings[0]
 
 
+def test_parenthetical_filter_uses_the_same_expected_text_as_doubao_tts():
+    expected = text_verifier.verification_expected_text(
+        "你好（这段是脚本备注）世界。",
+        engine_id="doubao-tts-preset",
+        filter_parenthetical_content=True,
+    )
+    assert expected == "你好世界。"
+    report = text_verifier.verify_transcript(expected_text=expected, transcript_text="你好，世界。")
+    assert report.status == "passed"
+    assert report.coverage == 1.0
+
+
 def test_tts_verification_endpoint_accepts_transcript_text_without_asr():
     client = TestClient(app)
     response = client.post(

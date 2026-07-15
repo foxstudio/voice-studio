@@ -403,7 +403,10 @@ def _map_speaker(raw: dict[str, Any]) -> EngineSpeaker | None:
     trial_url = _first(raw, "TrialURL", "TrialUrl", "PreviewURL", "PreviewUrl", "DemoAudio", "demo_audio", "trial_url")
     short_trial_url = _first(raw, "ShortTrialURL", "ShortTrialUrl", "short_trial_url")
     preview_text = str(_first(raw, "PreviewText", "TrialText", "preview_text", "trial_text") or "").strip() or _nested_text(raw_languages, "Text")
-    avatar_url = _first(raw, "AvatarURL", "AvatarUrl", "avatar_url")
+    # ListSpeakers (2025-05-20) returns `Avatar`.  Keep the older aliases so
+    # a previously cached catalog or an older response shape still imports,
+    # but prefer the official field used by the current API.
+    avatar_url = _first(raw, "Avatar", "AvatarURL", "AvatarUrl", "avatar_url")
     resource_id = _first(raw, "ResourceID", "ResourceId", "resource_id")
     authorization = _first(raw, "AuthorizationStatus", "Authorized", "authorization_status", "authorized")
     if isinstance(authorization, bool):

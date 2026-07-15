@@ -14,12 +14,51 @@ TERMINAL_STATUSES = {"success", "failed", "cancelled"}
 KIND_LABELS: dict[OperationKind, str] = {
     "source_audio": "抽取源音轨",
     "stems": "分离人声与背景声",
-    "english_asr": "英文 ASR 转字幕",
+    "english_asr": "听写字幕",
     "reference_clips": "生成参考音候选",
 }
 
 
-def validate_prerequisites(kind: OperationKind, draft: VideoLocalizationDraft) -> None:
+def operation_scope(kind: OperationKind, parameters: dict | None = None) -> dict:
+    source_track_id = str((parameters or {}).get("source_track_id") or "vocals")
+    source_track_id = source_track_id if source_track_id in {"original", "vocals", "dub"} else "vocals"
+    scopes = {
+        "source_audio": {
+            "area": "timeline",
+            "exclusive": True,
+            "cancel_mode": "queued_only",
+            "tracks": [{"id": "original", "role": "output"}],
+        },
+        "stems": {
+            "area": "timeline",
+            "exclusive": True,
+            "cancel_mode": "queued_only",
+            "tracks": [
+                {"id": "original", "role": "input"},
+                {"id": "vocals", "role": "output"},
+                {"id": "background", "role": "output"},
+            ],
+        },
+        "english_asr": {
+            "area": "subtitle",
+            "exclusive": True,
+            "cancel_mode": "safe_point",
+            "tracks": [
+                {"id": source_track_id, "role": "input"},
+                {"id": "subtitles", "role": "output"},
+            ],
+        },
+        "reference_clips": {
+            "area": "voice",
+            "exclusive": False,
+            "cancel_mode": "queued_only",
+            "tracks": [{"id": "vocals", "role": "input"}],
+        },
+    }
+    return scopes[kind]
+
+
+def validate_prerequisites(kind: OperationKind, draft: VideoLocalizationDraft, parameters: dict | None = None) -> None:
     if kind == "source_audio":
         if not draft.source_media.video_path:
             raise AppException(400, "VIDEO_LOCALIZATION_SOURCE_MISSING", "Import a source video before extracting audio")
@@ -27,12 +66,18 @@ def validate_prerequisites(kind: OperationKind, draft: VideoLocalizationDraft) -
             raise AppException(400, "VIDEO_LOCALIZATION_SOURCE_NOT_FOUND", "Source video file is missing")
         return
 
-    if kind in {"stems", "english_asr"}:
+    if kind == "stems":
         audio_path_value = draft.source_media.audio_path or draft.stems.original_audio_path
         if not audio_path_value:
             raise AppException(400, "VIDEO_LOCALIZATION_SOURCE_AUDIO_MISSING", "Extract source audio before running this operation")
         if not Path(audio_path_value).exists():
             raise AppException(400, "VIDEO_LOCALIZATION_SOURCE_AUDIO_NOT_FOUND", "Source audio file is missing")
+        return
+
+    if kind == "english_asr":
+        from app.domains.video_localization import source_pipeline
+
+        source_pipeline.validate_english_asr_source(draft, str((parameters or {}).get("source_track_id") or "auto"))
         return
 
     if kind == "reference_clips":
@@ -136,10 +181,26 @@ def stems_summary(draft: VideoLocalizationDraft | None) -> dict:
 def english_asr_summary(draft: VideoLocalizationDraft | None) -> dict:
     if not draft:
         return {}
+    pipeline_timing = getattr(draft.transcription, "pipeline_timing", None) if draft.transcription else None
+    pipeline_timing = pipeline_timing if isinstance(pipeline_timing, dict) else {}
+    stages = pipeline_timing.get("stages") if isinstance(pipeline_timing.get("stages"), dict) else {}
+    boundary_review_timing = (
+        stages.get("boundary_review") if isinstance(stages.get("boundary_review"), dict) else {}
+    )
     return {
         "engine_id": draft.source_media.metadata.get("english_asr_engine_id"),
-        "segment_count": draft.source_media.metadata.get("english_asr_segment_count"),
+        "source_track_id": draft.source_media.metadata.get("english_asr_source_track_id"),
+        "segment_count": draft.source_media.metadata.get("english_asr_raw_segment_count"),
         "cue_count": len(draft.cues),
+        "audio_boundary_status": draft.source_media.metadata.get("english_asr_audio_boundary_status"),
+        "audio_boundary_count": draft.source_media.metadata.get("english_asr_audio_boundary_count"),
+        "audio_boundary_analysis_version": draft.source_media.metadata.get("english_asr_audio_boundary_analysis_version"),
+        "boundary_review_status": draft.source_media.metadata.get("english_asr_boundary_review_status"),
+        "boundary_review_count": draft.source_media.metadata.get("english_asr_boundary_review_count"),
+        "boundary_review_prompt_version": draft.source_media.metadata.get("english_asr_boundary_review_prompt_version"),
+        "duration_ms": pipeline_timing.get("total_duration_ms"),
+        "stage_timings": stages,
+        "boundary_review_rounds": boundary_review_timing.get("rounds", []),
     }
 
 

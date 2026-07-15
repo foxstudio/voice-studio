@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import sys
+import shutil
+import subprocess
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 
 import pytest
 from starlette.datastructures import Headers, UploadFile
+from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
@@ -22,6 +25,8 @@ from app.schemas.voice_studio import (  # noqa: E402
     VoiceAssetCreate,
     VoiceFile,
 )
+from app.errors import AppException  # noqa: E402
+from app.main import app  # noqa: E402
 from app.services import custom_reference_store, database as db, history_store, preset_store, settings_store, task_queue, voice_store  # noqa: E402
 
 
@@ -97,6 +102,173 @@ async def test_upload_audio_uses_managed_custom_root(isolated_store, monkeypatch
     assert custom_reference_store.is_managed_custom_path(result["path"])
     assert Path(result["path"]).parent == custom_reference_store.custom_reference_dir()
     assert voice_store.get_file(result["file_id"]).path == result["path"]
+
+
+def _create_video(path: Path, *, with_audio: bool) -> None:
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg
+    command = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=c=black:s=160x90:r=24:d=3",
+    ]
+    if with_audio:
+        command += ["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=3", "-shortest"]
+    command += ["-c:v", "mpeg4"]
+    if with_audio:
+        command += ["-c:a", "aac"]
+    command.append(str(path))
+    subprocess.run(command, check=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg is required for reference-video tests")
+async def test_upload_video_extracts_managed_wav_and_cleans_the_pair(isolated_store, tmp_path: Path):
+    video = tmp_path / "reference.mp4"
+    _create_video(video, with_audio=True)
+    upload = UploadFile(
+        BytesIO(video.read_bytes()),
+        filename=video.name,
+        headers=Headers({"content-type": "video/mp4"}),
+    )
+
+    result = await voice_store.upload_audio(upload)
+    stored = voice_store.get_file(result["file_id"])
+
+    assert result["source_kind"] == "video"
+    assert result["filename"].endswith("_extracted.wav")
+    assert stored is not None
+    assert stored.source_media_name == video.name
+    assert stored.source_media_path
+    assert Path(stored.path).suffix == ".wav"
+    assert Path(stored.path).parent == Path(stored.source_media_path).parent
+    assert Path(stored.path).exists()
+    assert Path(stored.source_media_path).exists()
+    assert voice_store.audio_tools.probe_audio(stored.path)["sample_rate"] == 24000
+
+    deleted = custom_reference_store.delete_if_unreferenced(stored.path, task_rows=[], history_rows=[], voice_rows=[])
+    assert deleted == stored.file_id
+    assert not Path(stored.path).exists()
+    assert not Path(stored.source_media_path).exists()
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg is required for reference-video tests")
+def test_upload_video_endpoint_serves_the_extracted_audio(isolated_store, tmp_path: Path):
+    video = tmp_path / "endpoint-reference.mp4"
+    _create_video(video, with_audio=True)
+
+    with TestClient(app) as client:
+        uploaded = client.post(
+            "/api/voices/upload",
+            files={"file": (video.name, video.read_bytes(), "video/mp4")},
+        )
+        assert uploaded.status_code == 200
+        result = uploaded.json()
+        assert result["source_kind"] == "video"
+        served_audio = client.get(f"/api/voices/files/{result['file_id']}/audio")
+
+    assert served_audio.status_code == 200
+    assert served_audio.content.startswith(b"RIFF")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg is required for reference-video tests")
+async def test_upload_video_without_audio_is_rejected_without_leaving_a_file(isolated_store, tmp_path: Path):
+    video = tmp_path / "silent.mp4"
+    _create_video(video, with_audio=False)
+    upload = UploadFile(
+        BytesIO(video.read_bytes()),
+        filename=video.name,
+        headers=Headers({"content-type": "video/mp4"}),
+    )
+
+    with pytest.raises(AppException) as error:
+        await voice_store.upload_audio(upload)
+
+    assert error.value.code == "REFERENCE_VIDEO_NO_AUDIO"
+    assert list(custom_reference_store.custom_reference_dir().glob("*")) == []
+
+
+@pytest.mark.asyncio
+async def test_failed_video_extraction_leaves_no_invalid_voice_file(isolated_store, monkeypatch):
+    def fail_extraction(*args, **kwargs):
+        raise subprocess.TimeoutExpired("ffmpeg", 120)
+
+    monkeypatch.setattr(voice_store.audio_tools, "extract_reference_audio", fail_extraction)
+    upload = UploadFile(
+        BytesIO(b"not-a-real-video"),
+        filename="timeout.mp4",
+        headers=Headers({"content-type": "video/mp4"}),
+    )
+
+    with pytest.raises(AppException) as error:
+        await voice_store.upload_audio(upload)
+
+    assert error.value.code == "REFERENCE_VIDEO_AUDIO_EXTRACT_FAILED"
+    assert db.list_all("voice_files", "created_at", limit=-1) == []
+    assert list(custom_reference_store.custom_reference_dir().glob("*")) == []
+
+
+@pytest.mark.asyncio
+async def test_unreadable_audio_is_rejected_without_a_dangling_record(isolated_store, monkeypatch):
+    monkeypatch.setattr(voice_store.audio_tools, "probe_audio", lambda *_: (_ for _ in ()).throw(ValueError("bad audio")))
+    upload = UploadFile(
+        BytesIO(b"not-a-real-wave"),
+        filename="broken.wav",
+        headers=Headers({"content-type": "audio/wav"}),
+    )
+
+    with pytest.raises(AppException) as error:
+        await voice_store.upload_audio(upload)
+
+    assert error.value.code == "REFERENCE_AUDIO_UNREADABLE"
+    assert db.list_all("voice_files", "created_at", limit=-1) == []
+    assert list(custom_reference_store.custom_reference_dir().glob("*")) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg is required for reference-video tests")
+async def test_registered_video_pair_moves_together_then_deletes_together(isolated_store, tmp_path: Path):
+    video = tmp_path / "register-me.mp4"
+    _create_video(video, with_audio=True)
+    result = await voice_store.upload_audio(
+        UploadFile(BytesIO(video.read_bytes()), filename=video.name, headers=Headers({"content-type": "video/mp4"}))
+    )
+    uploaded = voice_store.get_file(result["file_id"])
+    assert uploaded and uploaded.source_media_path
+    custom_audio_path = Path(uploaded.path)
+    custom_video_path = Path(uploaded.source_media_path)
+
+    voice = voice_store.create_voice(VoiceAssetCreate(name="Video reference", reference_audio_ids=[uploaded.file_id]))
+    stored = voice_store.get_file(uploaded.file_id)
+    assert stored and stored.source_media_path
+    assert Path(stored.path).parent == settings_store.voice_dir()
+    assert Path(stored.source_media_path).parent == settings_store.voice_dir()
+    assert Path(stored.path).exists() and Path(stored.source_media_path).exists()
+    assert not custom_audio_path.exists() and not custom_video_path.exists()
+
+    voice_store.delete_voice(voice.voice_id)
+    assert not Path(stored.path).exists()
+    assert not Path(stored.source_media_path).exists()
+    assert voice_store.get_file(uploaded.file_id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg is required for reference-video tests")
+async def test_referenced_video_pair_is_kept_until_all_references_are_gone(isolated_store, tmp_path: Path):
+    video = tmp_path / "keep-me.mp4"
+    _create_video(video, with_audio=True)
+    result = await voice_store.upload_audio(
+        UploadFile(BytesIO(video.read_bytes()), filename=video.name, headers=Headers({"content-type": "video/mp4"}))
+    )
+    stored = voice_store.get_file(result["file_id"])
+    assert stored and stored.source_media_path
+    task_rows = [{"parameters": {"reference_audio_path": stored.path}}]
+
+    assert custom_reference_store.delete_if_unreferenced(stored.path, task_rows=task_rows, history_rows=[], voice_rows=[]) is None
+    assert Path(stored.path).exists() and Path(stored.source_media_path).exists()
+
+    assert custom_reference_store.delete_if_unreferenced(stored.path, task_rows=[], history_rows=[], voice_rows=[]) == stored.file_id
+    assert not Path(stored.path).exists() and not Path(stored.source_media_path).exists()
 
 
 def test_create_voice_promotes_custom_file_and_updates_record(isolated_store):

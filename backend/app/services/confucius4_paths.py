@@ -28,6 +28,20 @@ REQUIRED_RUNTIME_FILES = [
     "mlx_audio/tts/utils.py",
 ]
 
+# This is the language-token map shipped in the pinned local MLX runtime.
+# Keep the UI and request validation tied to it: unsupported values used to
+# silently fall back to an English prompt inside the runtime.
+SUPPORTED_LANGUAGE_CODES = ("zh", "en", "vi", "ja", "ko", "th")
+
+
+def require_supported_language(value: str | None) -> str:
+    language = str(value or "zh").strip().lower()
+    if language not in SUPPORTED_LANGUAGE_CODES:
+        raise ValueError(
+            "CONFUCIUS4_LANGUAGE_UNSUPPORTED: 当前本机 Confucius4 MLX 仅支持中文、英文、越南语、日语、韩语、泰语"
+        )
+    return language
+
 
 def model_candidates(settings_base: Path | None = None) -> list[Path]:
     candidates: list[Path] = []

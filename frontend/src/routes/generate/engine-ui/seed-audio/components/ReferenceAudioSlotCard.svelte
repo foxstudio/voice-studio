@@ -81,16 +81,16 @@
 	{:else}
 		<div class="empty-copy">
 			<strong>添加第 {slot.slot} 条参考声音</strong>
-			<span>拖入 WAV、MP3、PCM 或 OGG，单条不超过 30 秒 / 10MB</span>
+			<span>拖入音频或视频；视频会自动抽取音频，成品需不超过 30 秒 / 10MB</span>
 		</div>
 		<div class="source-actions">
 			<button type="button" onclick={() => onChooseVoice(slot.slot)}><Library size={15} />从音色库添加</button>
 			<button type="button" onclick={() => onChooseSpeaker(slot.slot)}><Mic2 size={15} />选择云端音色</button>
-			<button type="button" onclick={() => input.click()}><Upload size={15} />上传音频</button>
+			<button type="button" onclick={() => input.click()}><Upload size={15} />上传音频或视频</button>
 		</div>
 	{/if}
 
-	<input bind:this={input} class="file-input" type="file" accept="audio/wav,audio/mpeg,audio/ogg,audio/opus,.pcm,.wav,.mp3,.ogg,.opus" onchange={(event) => useFiles(event.currentTarget.files)} />
+	<input bind:this={input} class="file-input" type="file" accept="audio/*,video/mp4,video/quicktime,video/webm,video/x-matroska,.pcm,.wav,.mp3,.m4a,.flac,.aac,.ogg,.opus,.mp4,.mov,.m4v,.webm,.mkv" onchange={(event) => useFiles(event.currentTarget.files)} />
 </article>
 
 <style>

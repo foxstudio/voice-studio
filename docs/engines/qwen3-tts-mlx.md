@@ -21,7 +21,7 @@
 
 ### 本地参考音色复刻
 
-选择音色库 `voice_id` 或传入 `reference_audio_path` 时，Voice Studio 使用 Base 模型做参考音色复刻。建议给参考音频补准确 `ref_text`，方便模型保持音色和节奏。
+选择音色库 `voice_id` 或传入 `reference_audio_path` 时，Voice Studio 使用 Base 模型做参考音色复刻，必须给参考音频填写准确 `ref_text`；缺失会直接提示补充，不再用占位文字硬生成。
 
 ### 声音设计
 
@@ -32,17 +32,15 @@
 | 参数 | 默认值 | 说明 |
 |---|---:|---|
 | `speaker_id` | `Vivian` | CustomVoice 预置音色。 |
-| `language` | `zh` | 目标语言提示，可用中文、英文、日文、韩文。 |
-| `style_instruction` | 空 | CustomVoice 情绪/风格指令；留空时后端按官方示例使用 `Normal tone`。支持中文或英文，例如“语气温柔，语速稍慢，像在讲解课程”。 |
+| `style_instruction` | 空（Normal tone） | 只在 CustomVoice 预置音色路线生效的演绎指令，例如“温柔、耐心，像在讲解课程”。参考音色与 VoiceDesign 路线不提交它，避免和各自的声音控制冲突。 |
+| `language` | `chinese` | 目标语言提示，可选自动、中文、英文、日文、韩文、德文、意大利文、葡萄牙文、西班牙文、法文、俄文。页面会把旧的 `zh/en/ja/ko` 写法转换为模型实际识别的语言 ID。 |
 | `voice_design_prompt` | 空 | VoiceDesign 声音描述。仅在本机安装 VoiceDesign 模型后展示；填写后使用 VoiceDesign 模型。支持中文或英文，例如“年轻中文女声，声线温暖，吐字清晰”。 |
-| `speed` | `1.0` | 官方 speed 参数。README 推荐 Normal `1.0`、Fast `1.3`、Slow `0.8`。 |
+| `speed` | `1.0` | 本项目在生成后做不变调时间拉伸来兑现语速；它已实际生效，但不是当前 MLX 上游的原生生成参数。 |
 | `temperature` | `0.7` | 采样随机度，默认偏稳定。 |
 | `top_p` | `0.9` | 官方 top_p 参数，控制核采样范围。 |
 | `top_k` | `50` | 官方 top_k 参数，控制候选 token 数量。 |
 | `repetition_penalty` | `1.1` | 官方 repetition_penalty 参数，抑制重复发音或片段。 |
 | `max_tokens` | `1200` | 官方 max_tokens 参数。 |
-| `cfg_scale` | `1.5` | `mlx-audio` CLI 默认 1.5；官方帮助提示 1.0-1.5 通常更稳定。 |
-| `ddpm_steps` | 空 | 官方 ddpm_steps 参数；留空使用模型默认。官方帮助建议可尝试 30-50，数值越高越慢。 |
 
 ## 使用建议
 
@@ -57,7 +55,7 @@
 | 预设 | 路线 | 关键参数 |
 |---|---|---|
 | Qwen3 官方基准 | CustomVoice 预置音色 | `speaker_id=Vivian`, `speed=1.0`, `temperature=0.7`, `top_p=1.0`, `top_k=30`, `repetition_penalty=1.15`, `max_tokens=512` |
-| Qwen3 课程慢讲 | CustomVoice 预置音色 | `speed=0.8`, `temperature=0.65`, `top_p=0.92`, `top_k=35`, `style_instruction=语气自然、吐字清晰...` |
+| Qwen3 课程慢讲 | CustomVoice 预置音色 | `speed=0.8`, `temperature=0.65`, `top_p=0.92`, `top_k=35` |
 | Qwen3 声音设计 | VoiceDesign | 仅安装 `Qwen3-TTS-12Hz-0.6B-VoiceDesign-8bit` 后显示；`voice_design_prompt=温柔的中文女声...`, `temperature=0.65`, `top_p=0.92`, `top_k=35` |
 | Qwen3 复刻讲述 | Base 参考音色复刻 | 需要当前选择本地音色或自定义参考音色；不提交 `speaker_id` / `style_instruction` / `voice_design_prompt` |
 

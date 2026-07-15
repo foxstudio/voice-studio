@@ -21,6 +21,9 @@ async def generate_batch(payload: Any = Body(...)):
     try:
         return await batch_queue.submit(payload)
     except ValueError as exc:
+        code, separator, message = str(exc).partition(": ")
+        if code.startswith("COSYVOICE_"):
+            raise AppException(400, code, message if separator else "CosyVoice Zero-Shot 参考音频不符合官方要求") from exc
         raise AppException(400, "BATCH_PAYLOAD_INVALID", str(exc)) from exc
 
 

@@ -95,11 +95,12 @@ def run_indextts_v2(payload: dict[str, Any]) -> list[dict[str, Any]]:
 def run_omnivoice(payload: dict[str, Any]) -> list[dict[str, Any]]:
     import numpy as np
     import soundfile as sf
+    from app.services.inference_runner import omnivoice_local_snapshot
     from omnivoice import OmniVoice
     from omnivoice.models.omnivoice import OmniVoiceGenerationConfig
 
     common = dict(payload["common"])
-    model = OmniVoice.from_pretrained("k2-fsa/OmniVoice", device_map=common.pop("device", "mps"))
+    model = OmniVoice.from_pretrained(str(omnivoice_local_snapshot()), device_map=common.pop("device", "mps"))
     results = []
     for segment in payload["segments"]:
         started = time.perf_counter()
@@ -213,6 +214,9 @@ def run_doubao_tts(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 speaker=kwargs.get("speaker") or kwargs.get("speaker_id") or "zh_female_vv_uranus_bigtts",
                 resource_id=kwargs.get("resource_id") or "seed-tts-2.0",
                 style_instruction=kwargs.get("style_instruction"),
+                # Same provider field as the single-task runner.  Batch jobs
+                # must not silently fall back to automatic language detection.
+                explicit_language=kwargs.get("explicit_language"),
                 speed=kwargs.get("speed"),
                 sample_rate=kwargs.get("sample_rate") or doubao_client.DEFAULT_TTS_SAMPLE_RATE,
                 bit_rate=kwargs.get("bit_rate") or doubao_client.DEFAULT_TTS_BIT_RATE,
@@ -221,6 +225,15 @@ def run_doubao_tts(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 enable_subtitle=bool(kwargs.get("enable_subtitle")),
                 silence_duration=kwargs.get("silence_duration") or 0,
                 aigc_watermark=bool(kwargs.get("aigc_watermark")),
+                max_length_to_filter_parenthesis=kwargs.get("max_length_to_filter_parenthesis"),
+                disable_markdown_filter=bool(kwargs.get("disable_markdown_filter")),
+                latex_parser_mode=kwargs.get("latex_parser_mode"),
+                aigc_metadata_enable=bool(kwargs.get("aigc_metadata_enable")),
+                content_producer=kwargs.get("content_producer"),
+                produce_id=kwargs.get("produce_id"),
+                content_propagator=kwargs.get("content_propagator"),
+                propagate_id=kwargs.get("propagate_id"),
+                tone_fidelity=bool(kwargs.get("tone_fidelity")),
                 audio_format=provider_format,
             )
             if provider_out != out:

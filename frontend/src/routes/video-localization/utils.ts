@@ -18,7 +18,7 @@ export function buildWorkflow(current: VideoLocalizationDraft | null): WorkflowS
 	return [
 		{ label: '导入', status: hasSource ? 'done' : 'active' },
 		{ label: '人声分离', status: stemsReady ? 'done' : hasSource ? 'active' : 'pending' },
-		{ label: '英文 ASR', status: hasAsr ? 'done' : hasSourceAudio ? 'active' : 'pending' },
+		{ label: '生成 ASR 字幕', status: hasAsr ? 'done' : hasSourceAudio ? 'active' : 'pending' },
 		{ label: '说话人', status: hasSpeakers ? 'done' : hasAsr ? 'active' : 'pending' },
 		{ label: '人工校对', status: blocked ? 'blocked' : hasReviewed ? 'active' : 'pending' },
 		{ label: 'TTS', status: hasTts ? 'done' : readyForTts ? 'active' : 'pending' },
@@ -106,7 +106,11 @@ export function candidateAudioUrl(projectId: string, candidate: VideoLocalizatio
 }
 
 export function timelineClipAudioUrl(projectId: string, clip: VideoLocalizationTimelineClip) {
-	return projectId && clip.audio_path ? `/api/projects/${projectId}/video-localization/timeline-clips/${clip.clip_id}/audio` : '';
+	return projectId && (clip.clip_id === 'media_original' || clip.audio_path) ? `/api/projects/${projectId}/video-localization/timeline-clips/${clip.clip_id}/audio` : '';
+}
+
+export function timelineClipWaveformUrl(projectId: string, clip: VideoLocalizationTimelineClip) {
+	return projectId && (clip.clip_id === 'media_original' || clip.audio_path) ? `/api/projects/${projectId}/video-localization/timeline-clips/${clip.clip_id}/waveform` : '';
 }
 
 export function sourceCueAudioUrl(projectId: string, cue: VideoLocalizationCue) {
@@ -124,7 +128,11 @@ export function isActiveOperation(operation: VideoLocalizationOperation) {
 export function operationStatusLabel(operation: VideoLocalizationOperation | null | undefined) {
 	if (!operation) return '未开始';
 	if (operation.status === 'queued') return '排队中';
-	if (operation.status === 'running') return '处理中';
+	if (operation.status === 'running') {
+		const stage = typeof operation.result_summary?.stage === 'string' ? operation.result_summary.stage.trim() : '';
+		const percent = Math.round(Math.max(0, Math.min(1, operation.progress ?? 0)) * 100);
+		return `${stage || '处理中'} · ${percent}%`;
+	}
 	if (operation.status === 'success') return '已完成';
 	if (operation.status === 'failed') return '失败';
 	if (operation.status === 'cancelled') return '已取消';
@@ -137,6 +145,94 @@ export function operationBadgeClass(operation: VideoLocalizationOperation | null
 	if (operation.status === 'failed' || operation.status === 'cancelled') return 'fail';
 	if (isActiveOperation(operation)) return 'active';
 	return '';
+}
+
+const VIDEO_LOCALIZATION_ERROR_MESSAGES: Record<string, string> = {
+	'English ASR did not return subtitle text': '语音识别没有返回有效的字幕文本，请检查音轨内容或更换识别引擎后重试。',
+	'English ASR source track must be auto, original, or vocals': '语音识别的来源轨道无效，请选择原音轨或分离后的人声轨。',
+	'Import a source video before extracting audio': '请先导入视频，再抽取原音轨。',
+	'Source video file is missing': '源视频文件不存在，请重新导入视频。',
+	'Extract source audio before running this operation': '请先抽取原音轨，再执行此操作。',
+	'Extract source audio before running stem separation': '请先抽取原音轨，再分离人声和背景音乐。',
+	'Source audio file is missing': '原音频文件不存在，请重新抽取原音轨。',
+	'Separate clean vocals before running English ASR from vocals': '请先分离人声和背景音乐，再识别人声轨字幕。',
+	'Separate clean vocals before creating reference clips': '请先分离出干净人声，再创建参考音片段。',
+	'Clean vocals file is missing': '分离后的人声音频不存在，请重新执行人声分离。',
+	'Source audio is empty': '原音轨没有有效声音，无法分离人声和背景音乐。',
+	'Failed to separate vocals and background': '人声与背景音乐分离失败，请检查原音轨后重试。',
+	'No cue has speaker and time range for reference clipping': '没有可用于截取参考音的字幕片段，请先设置说话人和时间范围。',
+	'Reference selection requires a valid start and end time': '参考音选区缺少有效的入点或出点。',
+	'Reference selection exceeds source duration': '参考音选区超出了源音频时长。',
+	'Reference clip not found': '参考音片段不存在，可能已被删除。',
+	'Clean reference clips must come from separated clean vocals': '干净参考音必须从分离后的人声轨中截取。',
+	'Reference audio file is missing': '参考音文件不存在，请重新截取或选择其他音色。',
+	'Verified reference clips require ASR text': '通过校验的参考音需要填写对应的识别文本。',
+	'Cue update is invalid': '字幕片段数据无效，请检查时间和文本内容。',
+	'Cue not found': '字幕片段不存在，可能已被删除。',
+	'Speaker already exists': '该说话人已存在。',
+	'Speaker not found': '说话人不存在，可能已被删除。',
+	'Create English ASR cues before generating Chinese localization draft': '请先生成原文字幕，再创建本土化草稿。',
+	'All cues already have Chinese subtitle and TTS text': '所有字幕片段都已有本土化文本和配音台词，无需重复生成。',
+	'All cues already have Chinese subtitles': '所有字幕片段都已有本土化文本，无需重复生成。',
+	'No timed subtitle cues are available': '当前没有带时间码的字幕片段可供导出。',
+	'No valid SRT subtitle entries were found': 'SRT 文件中没有识别到有效的字幕条目。',
+	'Run source-language ASR before importing source subtitles': '请先生成原文字幕，再导入对应字幕内容。',
+	'Only mp4, mov, m4v, webm, and mkv videos are supported': '仅支持 MP4、MOV、M4V、WEBM 和 MKV 视频。',
+	'Uploaded video is empty': '导入的视频文件为空，请选择其他文件。',
+	'Could not allocate a unique video path': '无法为视频创建唯一的存储位置，请修改文件名后重试。',
+	'ffmpeg is required to extract source audio': '缺少 FFmpeg，无法抽取原音轨。',
+	'Failed to extract source audio': '原音轨抽取失败，请检查视频文件后重试。',
+	'ffmpeg is required to create reference clips': '缺少 FFmpeg，无法创建参考音片段。',
+	'Reference clip time range is invalid': '参考音片段的时间范围无效。',
+	'Failed to create reference clip': '参考音片段创建失败，请调整选区后重试。',
+	'Timeline clip audio not found': '时间线上的音频文件不存在，请重新生成或导入。',
+	'Operation not found': '任务不存在，可能已被清理。',
+	'Operation is still active': '任务仍在处理中，请等待完成或先取消任务。',
+	'Project not found': '项目不存在，可能已从本地删除。',
+	'Project changed while this draft was being edited': '项目内容已在其他位置更新，已停止覆盖保存，请刷新后继续。',
+	'No ready clone-from-source cues can be submitted': '没有可提交的配音片段，请先完成字幕、音色和台词准备。',
+	'TTS batch task not found': '批量配音任务不存在，可能已被清理。',
+	'Batch task has no segment results': '批量配音任务没有返回任何片段结果。',
+	'TTS audio file not found': '合成音频文件不存在，请重新生成。',
+	'Generated candidate not found': '候选声音不存在，可能已被删除。',
+	'Generated candidate audio is not available': '候选声音的音频文件不可用，请重新生成。',
+	'No routed speech clips are available to render': '没有可用于导出的配音片段。',
+	'No timeline audio clips could be rendered': '时间线上没有可渲染的音频片段。',
+	'Source video is required to render localized video': '导出本土化视频需要可用的源视频。',
+	'ffmpeg is required to render localized video': '缺少 FFmpeg，无法导出本土化视频。',
+	'Failed to render localized video': '本土化视频导出失败，请检查时间线素材后重试。',
+	'Request validation failed': '提交的数据不完整或格式不正确，请检查后重试。',
+	'Method Not Allowed': '当前服务还没有加载这项操作，请刷新服务后重试。',
+	'Internal Server Error': '服务处理时出现异常，请稍后重试或打开详情继续排查。',
+	'Bad Gateway': '后台服务暂时没有响应，请稍后重试。',
+	'Service Unavailable': '后台服务暂时不可用，请稍后重试。',
+	'Failed to fetch': '无法连接本地服务，请检查服务是否正在运行。'
+};
+
+export function localizeVideoLocalizationError(message: string | null | undefined) {
+	if (!message) return '';
+	const normalized = message.trim();
+	const known = VIDEO_LOCALIZATION_ERROR_MESSAGES[normalized];
+	if (known) return known;
+	const cueTextMatch = normalized.match(/^Cue (.+) does not have production-ready TTS text$/);
+	if (cueTextMatch) return `字幕片段 ${cueTextMatch[1]} 还没有可用于生成的配音台词。`;
+	const cueReferenceMatch = normalized.match(/^Cue (.+) does not have a reference clip$/);
+	if (cueReferenceMatch) return `字幕片段 ${cueReferenceMatch[1]} 还没有绑定参考音。`;
+	const referenceMissingMatch = normalized.match(/^Reference audio is missing for (.+)$/);
+	if (referenceMissingMatch) return `参考音 ${referenceMissingMatch[1]} 的音频文件不存在。`;
+	const unsupportedOperationMatch = normalized.match(/^Unsupported operation: (.+)$/);
+	if (unsupportedOperationMatch) return `不支持的任务类型：${unsupportedOperationMatch[1]}。`;
+	return normalized;
+}
+
+export function summarizeVideoLocalizationError(message: string | null | undefined) {
+	const localized = localizeVideoLocalizationError(message);
+	if (!localized) return '';
+	const normalized = message?.trim() ?? '';
+	if (localized !== normalized) return localized;
+	const hasChinese = /[\u3400-\u9fff]/.test(localized);
+	const looksTechnical = /[A-Za-z]{4,}|\b(?:HTTP|API|JSON|traceback|exception|error|failed|status)\b/i.test(localized);
+	return !hasChinese && looksTechnical ? '操作没有完成，请打开详情查看具体原因。' : localized;
 }
 
 export function batchProjectId(batch: BatchTask) {
@@ -184,6 +280,10 @@ export function createManualCue(draft: VideoLocalizationDraft): VideoLocalizatio
 		tts_attempted_at: null,
 		source_duration_ms: null,
 		generated_duration_ms: null,
+		source_word_ids: [],
+		source_text_raw: null,
+		timing_confidence: null,
+		transcription_revision_id: null,
 		review_status: 'needs_review',
 		quality_flags: ['手动新增'],
 		notes: null

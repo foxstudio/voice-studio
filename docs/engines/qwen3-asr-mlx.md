@@ -12,6 +12,7 @@
 | 架构 | 纯 MLX 实现，无需 PyTorch/Transformers |
 | 许可证 | 开源 |
 | 仓库 | [github.com/moona3k/mlx-qwen3-asr](https://github.com/moona3k/mlx-qwen3-asr/) |
+| 国内模型 | [ModelScope: mlx-community/Qwen3-ASR-1.7B-8bit](https://modelscope.cn/models/mlx-community/Qwen3-ASR-1.7B-8bit) |
 | PyPI | [qwen3-asr-mlx](https://pypi.org/project/qwen3-asr-mlx/) |
 
 ## 核心能力
@@ -25,6 +26,7 @@
 ## 在本项目中的适配
 
 - 本地 MLX 推理，1.7B 8-bit 量化
+- 国内下载优先使用 ModelScope 上同格式的 MLX Community 8-bit 权重
 - 作为云端 ASR（MiMo V2.5 ASR）的离线备选
 - 预留后续更完整的离线转写能力
 
@@ -37,4 +39,5 @@
 ## 参考链接
 
 - [mlx-qwen3-asr GitHub](https://github.com/moona3k/mlx-qwen3-asr/)
+- [ModelScope 国内模型](https://modelscope.cn/models/mlx-community/Qwen3-ASR-1.7B-8bit)
 - [PyPI: qwen3-asr-mlx](https://pypi.org/project/qwen3-asr-mlx/)

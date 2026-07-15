@@ -1,10 +1,67 @@
 from __future__ import annotations
 
+import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+
+
+REFERENCE_VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".m4v", ".webm", ".mkv"})
+
+
+def is_reference_video(path_or_name: str | Path) -> bool:
+    return Path(path_or_name).suffix.lower() in REFERENCE_VIDEO_SUFFIXES
+
+
+def extract_reference_audio(video_path: str | Path, audio_path: str | Path, *, timeout_seconds: int = 120) -> dict:
+    """Extract a mono 24 kHz PCM WAV suitable for all reference-audio paths."""
+
+    source = Path(video_path)
+    destination = Path(audio_path)
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("REFERENCE_VIDEO_FFMPEG_MISSING")
+
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe:
+        probe = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_type", "-of", "json", str(source)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=20,
+        )
+        try:
+            streams = json.loads(probe.stdout or "{}").get("streams") or []
+        except json.JSONDecodeError:
+            streams = []
+        if probe.returncode == 0 and not streams:
+            raise ValueError("REFERENCE_VIDEO_NO_AUDIO")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg, "-nostdin", "-v", "error", "-y", "-i", str(source),
+                "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", str(destination),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired as exc:
+        destination.unlink(missing_ok=True)
+        raise RuntimeError("REFERENCE_VIDEO_AUDIO_EXTRACT_TIMEOUT") from exc
+    if result.returncode != 0 or not destination.exists() or not destination.stat().st_size:
+        destination.unlink(missing_ok=True)
+        if "matches no streams" in (result.stderr or "").lower():
+            raise ValueError("REFERENCE_VIDEO_NO_AUDIO")
+        raise RuntimeError("REFERENCE_VIDEO_AUDIO_EXTRACT_FAILED")
+    return probe_audio(destination)
 
 
 def probe_audio(path: str | Path) -> dict:

@@ -1,11 +1,10 @@
 <script lang="ts">
-	import { AudioLines, BookOpenText, ChartNoAxesColumn, ChevronsLeft, ChevronsRight, Clock3, FileAudio, Film, Gauge, Library, Settings, SlidersHorizontal } from 'lucide-svelte';
+	import { AudioLines, BookOpenText, ChartNoAxesColumn, ChevronsLeft, ChevronsRight, FileAudio, Film, Library, Settings, SlidersHorizontal } from 'lucide-svelte';
 	import { page } from '$app/state';
 
 	let { collapsed = false, onToggle = () => {}, onNavClick = () => {} }: { collapsed?: boolean; onToggle?: () => void; onNavClick?: () => void } = $props();
 
 	const items = [
-		{ href: '/', label: '总览', icon: Gauge },
 		{ href: '/engine-hub', label: '引擎管理', icon: SlidersHorizontal },
 		{ href: '/voice-library', label: '音色管理', icon: Library },
 		{ href: '/generate', label: '语音合成', icon: AudioLines },
@@ -19,8 +18,10 @@
 
 <aside class="sidebar">
 	<div class="brand">
-		<div class="brand-mark"><Clock3 size={17} /></div>
-		<span>声音工作台</span>
+		<a class="brand-link" href="/generate" aria-label="进入语音合成" onclick={onNavClick}>
+			<div class="brand-mark"><img src="/voice-studio-mark.png" alt="" /></div>
+			<span>声音工作台</span>
+		</a>
 		<button class="icon-btn collapse-btn" type="button" aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'} data-tooltip={collapsed ? '展开侧边栏' : '收起侧边栏'} onclick={onToggle}>
 			{#if collapsed}<ChevronsRight size={16} />{:else}<ChevronsLeft size={16} />{/if}
 		</button>

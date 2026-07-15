@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import sys
+import wave
+from io import BytesIO
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -12,8 +15,8 @@ if str(BACKEND) not in sys.path:
 
 from app.main import app  # noqa: E402
 from app.models.exceptions import AppException  # noqa: E402
-from app.schemas.voice_studio import AppSettings, EngineSpeaker, GenerateRequest, VoiceAsset  # noqa: E402
-from app.services import database, doubao_client, engine_registry, engine_request_builder, settings_store  # noqa: E402
+from app.schemas.voice_studio import AppSettings, BatchGenerateRequest, BatchSegmentInput, DoubaoVoiceCloneTrainRequest, EngineSpeaker, GenerateRequest, HistoryItem, VoiceAsset  # noqa: E402
+from app.services import database, doubao_client, engine_registry, engine_request_builder, history_store, settings_store  # noqa: E402
 import pytest  # noqa: E402
 
 
@@ -36,6 +39,42 @@ def _client(tmp_path: Path, monkeypatch) -> TestClient:
     return TestClient(app)
 
 
+def _valid_wav_bytes() -> bytes:
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(24000)
+        output.writeframes(b"\x00\x00" * 2400)
+    return buffer.getvalue()
+
+
+def test_history_audio_route_exposes_internal_ogg_opus_as_standard_ogg(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+    output = tmp_path / "outputs" / "doubao-result.ogg_opus"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(b"OggSprovider-audio")
+    history_store.add(
+        HistoryItem(
+            result_id="doubao-ogg",
+            task_id="task-doubao-ogg",
+            engine_id="doubao-tts-preset",
+            input_text="OGG 历史路由验证。",
+            output_path=str(output),
+        )
+    )
+
+    preview = client.get("/api/history/doubao-ogg/audio")
+    assert preview.status_code == 200
+    assert preview.headers["content-type"].startswith("audio/ogg")
+
+    download = client.get("/api/history/doubao-ogg/audio?download=1&filename=001-旁白.ogg")
+    assert download.status_code == 200
+    assert download.headers["content-type"].startswith("audio/ogg")
+    assert "001-" in download.headers["content-disposition"]
+    assert ".ogg" in download.headers["content-disposition"]
+
+
 def test_settings_include_doubao_defaults_and_secret_state(tmp_path: Path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
 
@@ -47,7 +86,7 @@ def test_settings_include_doubao_defaults_and_secret_state(tmp_path: Path, monke
     assert settings["doubao_upload_confirm"] is True
 
     saved = client.patch("/api/settings/doubao-secret", json={"api_key": "  test-doubao-key  "}).json()
-    assert saved["cloud_enabled"] is True
+    assert saved["cloud_enabled"] is False
     assert saved["doubao_api_key_configured"] is True
     assert "doubao_api_key" not in saved
     assert settings_store.doubao_api_key() == "test-doubao-key"
@@ -203,6 +242,56 @@ def test_doubao_tts_payload_and_chunk_parser():
         doubao_client.build_tts_payload(text="测试", speaker="speaker", audio_format="flac")
 
 
+def test_doubao_tts_explicit_language_is_sent_only_when_selected():
+    automatic = doubao_client.build_tts_payload(text="Hello", speaker="speaker", explicit_language="auto")
+    assert "additions" not in automatic["req_params"]
+
+    payload = doubao_client.build_tts_payload(text="Hello", speaker="speaker", explicit_language="en")
+    assert json.loads(payload["req_params"]["additions"])["explicit_language"] == "en"
+
+    alias = doubao_client.build_tts_payload(text="你好", speaker="speaker", explicit_language="zh")
+    assert json.loads(alias["req_params"]["additions"])["explicit_language"] == "zh-cn"
+
+    with pytest.raises(doubao_client.DoubaoAPIError, match="不支持指定朗读语言"):
+        doubao_client.build_tts_payload(text="Hello", speaker="speaker", explicit_language="xx")
+
+
+def test_doubao_tts_advanced_additions_use_product_safe_values():
+    payload = doubao_client.build_tts_payload(
+        text="甲（角色备注）乙，公式是 $x^2$。",
+        speaker="speaker",
+        audio_format="wav",
+        max_length_to_filter_parenthesis=True,
+        disable_markdown_filter=True,
+        latex_parser_mode="enhanced",
+        aigc_metadata_enable=True,
+        content_producer="Voice Studio",
+        produce_id="project-42",
+        tone_fidelity=True,
+    )
+    additions = json.loads(payload["req_params"]["additions"])
+    assert additions["max_length_to_filter_parenthesis"] == 100
+    assert additions["disable_markdown_filter"] is True
+    assert additions["latex_parser"] == "v2"
+    assert additions["aigc_metadata"] == {
+        "enable": True,
+        "content_producer": "Voice Studio",
+        "produce_id": "project-42",
+    }
+    assert additions["tone_fidelity"] is True
+
+    basic = doubao_client.build_tts_payload(text="$x$", speaker="speaker", latex_parser_mode="basic")
+    assert json.loads(basic["req_params"]["additions"])["enable_latex_tn"] is True
+
+    with pytest.raises(doubao_client.DoubaoAPIError, match="隐藏来源信息只支持"):
+        doubao_client.build_tts_payload(
+            text="metadata",
+            speaker="speaker",
+            audio_format="pcm",
+            aigc_metadata_enable=True,
+        )
+
+
 def test_doubao_voice_clone_payload(tmp_path: Path):
     audio = tmp_path / "ref.wav"
     audio.write_bytes(b"voice-bytes")
@@ -238,12 +327,21 @@ def test_doubao_voice_clone_language_mapping(tmp_path: Path):
 
     assert doubao_client.voice_clone_language_code("zh") == 0
     assert doubao_client.voice_clone_language_code("en") == 1
-    assert doubao_client.voice_clone_language_code(8) == 8
-    assert doubao_client.build_voice_clone_payload(
-        speaker_id="voice_studio_demo",
-        audio_path=str(audio),
-        language="ko",
-    )["language"] == 8
+    with pytest.raises(doubao_client.DoubaoAPIError, match="只支持中文或英文"):
+        doubao_client.voice_clone_language_code(8)
+    with pytest.raises(doubao_client.DoubaoAPIError, match="不支持语种"):
+        doubao_client.build_voice_clone_payload(
+            speaker_id="voice_studio_demo",
+            audio_path=str(audio),
+            language="ko",
+        )
+
+
+def test_doubao_voice_clone_train_normalizes_only_chinese_or_english():
+    assert DoubaoVoiceCloneTrainRequest(language="zh-cn").language == "zh"
+    assert DoubaoVoiceCloneTrainRequest(language="english").language == "en"
+    with pytest.raises(ValueError, match="只支持中文或英文"):
+        DoubaoVoiceCloneTrainRequest(language="ja")
 
 
 def test_doubao_voice_clone_train_requires_confirmation_and_updates_binding(tmp_path: Path, monkeypatch):
@@ -257,7 +355,7 @@ def test_doubao_voice_clone_train_requires_confirmation_and_updates_binding(tmp_
             "license_status": "self_voice",
             "tags": "豆包,云端",
         },
-        files={"file": ("sample.wav", b"voice-bytes", "audio/wav")},
+        files={"file": ("sample.wav", _valid_wav_bytes(), "audio/wav")},
     ).json()
 
     blocked = client.post(f"/api/voices/{registered['voice_id']}/doubao/clone-train", json={"confirm_upload": False})
@@ -315,7 +413,7 @@ def test_doubao_cloud_list_refresh_and_unbind(tmp_path: Path, monkeypatch):
             "license_status": "self_voice",
             "tags": "豆包,云端",
         },
-        files={"file": ("sample.wav", b"voice-bytes", "audio/wav")},
+        files={"file": ("sample.wav", _valid_wav_bytes(), "audio/wav")},
     ).json()
 
     from app.services import voice_store  # noqa: E402
@@ -372,6 +470,7 @@ def test_doubao_voiceclone_generation_uses_external_speaker_and_rejects_raw_refe
         engine_id="doubao-tts-voiceclone",
         voice_id=voice.voice_id,
         style_instruction="自然清晰。",
+        enable_subtitle=True,
         output_format="mp3",
     )
 
@@ -380,6 +479,15 @@ def test_doubao_voiceclone_generation_uses_external_speaker_and_rejects_raw_refe
     assert kwargs["speaker"] == "voice_studio_ready"
     assert kwargs["resource_id"] == "seed-icl-2.0"
     assert kwargs["style_instruction"] is None
+    assert kwargs["enable_subtitle"] is True
+
+    batch = BatchGenerateRequest(
+        engine_id="doubao-tts-voiceclone",
+        parameters={"enable_subtitle": True},
+        segments=[BatchSegmentInput(text="批量复刻音色字幕测试。")],
+    )
+    batch_kwargs = engine_request_builder.build_doubao_tts_batch_common_kwargs(batch, voice=voice)
+    assert batch_kwargs["enable_subtitle"] is True
 
     raw_reference_req = req.model_copy(update={"reference_audio_path": str(tmp_path / "raw.wav")})
     try:
@@ -438,6 +546,7 @@ def test_doubao_engine_manifest_is_registered(tmp_path: Path, monkeypatch):
 
 def test_doubao_speaker_catalog_supports_search_gender_and_custom_ids(tmp_path: Path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
+    client.patch("/api/settings", json={"cloud_enabled": True})
     settings_store.update_doubao_api_key("test-doubao-key")
 
     all_items = client.get("/api/engines/doubao-tts-preset/speakers").json()

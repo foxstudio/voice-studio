@@ -49,7 +49,7 @@
 		<div class="import-actions">
 			<span class="muted">{text.split(/\r?\n/).filter((line) => line.trim()).length} 行</span>
 			<input bind:this={srtInput} class="hidden-file" type="file" accept=".srt,application/x-subrip,text/plain" onchange={(event) => importSrtFile(event.currentTarget.files?.[0])} />
-			<button class="btn" type="button" data-tooltip="导入 SRT：按时间码匹配并更新本土化字幕片段。" onclick={() => srtInput?.click()} disabled={!cueCount}>
+			<button class="btn" type="button" data-tooltip="导入 SRT：按时间码匹配现有字幕；空字幕轨会直接创建本土化字幕片段。" onclick={() => srtInput?.click()}>
 				<FileText size={14} /> 导入 SRT
 			</button>
 			<button class="btn primary" type="button" data-tooltip="应用文本：按行顺序写入现有字幕片段。" onclick={apply} disabled={!text.trim() || !cueCount}>

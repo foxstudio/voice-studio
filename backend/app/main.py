@@ -85,7 +85,24 @@ async def http_exception_handler(request, exc: HTTPException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc: RequestValidationError):
-    return JSONResponse(status_code=400, content={"error": {"code": "INVALID_REQUEST", "message": "Request validation failed", "detail": exc.errors()}})
+    detail = [
+        {
+            "type": str(error.get("type", "validation_error")),
+            "loc": list(error.get("loc", ())),
+            "msg": str(error.get("msg", "Invalid value")),
+        }
+        for error in exc.errors()
+    ]
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": {
+                "code": "INVALID_REQUEST",
+                "message": "Request validation failed",
+                "detail": detail,
+            }
+        },
+    )
 
 
 @app.get("/api/health")

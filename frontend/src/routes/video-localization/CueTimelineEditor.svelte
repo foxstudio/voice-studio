@@ -1,7 +1,18 @@
 <script lang="ts">
 	import { analyzeWaveformFromUrl, buildTimelineTicks, buildVisibleWaveformBars, formatDuration, formatTimecode, formatTimelineZoom } from '$lib/audio/waveform';
+	import { resolveSelectionPlayback, resolveSelectionReleasePlayback } from '$lib/audio/selection-playback';
 	import type { VideoLocalizationCue } from '$lib/api/types';
-	import { ChevronsLeft, ChevronsRight, Play, Repeat, Square } from 'lucide-svelte';
+	import { AlertTriangle, CheckCircle2, ChevronsLeft, ChevronsRight, Play, Repeat, Square } from 'lucide-svelte';
+
+	type ManualTimingCue = VideoLocalizationCue & {
+		manual_timing_revision?: number;
+		manual_timing_review_status?: 'not_reviewed' | 'required' | 'confirmed';
+		manual_timing_confirmed_revision?: number | null;
+		manual_timing_confirmed_start_ms?: number | null;
+		manual_timing_confirmed_end_ms?: number | null;
+		manual_timing_confirmed_at?: string | null;
+		manual_timing_confirmation_method?: 'auditioned' | null;
+	};
 
 	let {
 		selectedCue,
@@ -32,6 +43,9 @@
 	let timelineScrollLeft = $state(0);
 	let timelineViewportWidth = $state(0);
 	let timelineZoom = $state(1);
+	let trimEditing = $state(false);
+	let trimEditBoundary = $state<'start' | 'end' | null>(null);
+	let resumePreviewAfterTrimEdit = $state(false);
 	let trimPanelActive = $state(false);
 	let trimFocusWithin = $state(false);
 
@@ -44,10 +58,34 @@
 	const visibleWaveformBars = $derived(buildVisibleWaveformBars(waveformBars, timelineZoom, timelineScrollLeft, timelineViewportWidth));
 	const trimHotkeysActive = $derived(trimPanelActive || trimFocusWithin);
 	const audioReady = $derived(Boolean(audioSrc && sourceDurationMs));
+	const manualTimingReview = $derived(resolveManualTimingReview(selectedCue));
 
 	$effect(() => {
 		void syncAudioSource(audioSrc, audioDurationMs, selectedCue?.cue_id ?? '', selectedCue?.start_ms ?? null, selectedCue?.end_ms ?? null);
 	});
+
+	function resolveManualTimingReview(cue: VideoLocalizationCue | null) {
+		if (!cue) return { status: 'none' as const, confirmedAt: null };
+		const reviewed = cue as ManualTimingCue;
+		const currentConfirmation =
+			reviewed.manual_timing_review_status === 'confirmed' &&
+			reviewed.manual_timing_confirmed_revision === (reviewed.manual_timing_revision ?? 0) &&
+			reviewed.manual_timing_confirmed_start_ms === cue.start_ms &&
+			reviewed.manual_timing_confirmed_end_ms === cue.end_ms &&
+			reviewed.manual_timing_confirmation_method === 'auditioned' &&
+			Boolean(reviewed.manual_timing_confirmed_at);
+		if (currentConfirmation || cue.quality_flags.includes('manual_timing_verified')) {
+			return { status: 'confirmed' as const, confirmedAt: reviewed.manual_timing_confirmed_at ?? null };
+		}
+		if (
+			reviewed.manual_timing_review_status === 'required' ||
+			cue.quality_flags.includes('timing_review_required') ||
+			cue.timing_confidence === 'low'
+		) {
+			return { status: 'required' as const, confirmedAt: reviewed.manual_timing_confirmed_at ?? null };
+		}
+		return { status: 'none' as const, confirmedAt: null };
+	}
 
 	$effect(() => {
 		selectedCue?.cue_id;
@@ -72,17 +110,22 @@
 		const next = Number(value);
 		if (!Number.isFinite(next)) return;
 		trimStart = Math.max(0, Math.min(next, Math.max(0, max - 0.1)));
-		if (playhead < trimStart) playhead = trimStart;
-		if (loopPreview && previewAudio) previewAudio.currentTime = trimStart;
 		if (persist) onUpdateCueTime('start_ms', Math.round(trimStart * 1000));
+		if (!trimEditing) {
+			const { start, end } = selectedRange();
+			resumeSelectionPreviewAfterTrimEdit(start, end);
+		}
 	}
 
 	function setTrimEnd(value: string | number, persist = true) {
 		const next = Number(value);
 		if (!Number.isFinite(next)) return;
 		trimEnd = Math.max(trimStart + 0.1, Math.min(durationSeconds || next, next));
-		if (playhead > trimEnd) playhead = trimEnd;
 		if (persist) onUpdateCueTime('end_ms', Math.round(trimEnd * 1000));
+		if (!trimEditing) {
+			const { start, end } = selectedRange();
+			resumeSelectionPreviewAfterTrimEdit(start, end);
+		}
 	}
 
 	function setTrimStartAtPlayhead() {
@@ -118,22 +161,43 @@
 		const timebar = (event.currentTarget as HTMLElement).closest('.cue-timeline-timebar') as HTMLElement | null;
 		if (!timebar) return;
 		trimPanelActive = true;
+		beginTrimEdit(boundary);
 		event.preventDefault();
 		event.stopPropagation();
 		const apply = (cursorEvent: PointerEvent) => {
 			const next = timelineTimeFromPointer(cursorEvent, timebar);
-			if (boundary === 'start') setTrimStart(next);
-			else setTrimEnd(next);
+			if (boundary === 'start') setTrimStart(next, false);
+			else setTrimEnd(next, false);
 		};
 		const cleanup = () => {
 			window.removeEventListener('pointermove', apply);
 			window.removeEventListener('pointerup', cleanup);
 			window.removeEventListener('pointercancel', cleanup);
+			finishTrimEdit(boundary);
 		};
 		apply(event);
 		window.addEventListener('pointermove', apply);
 		window.addEventListener('pointerup', cleanup, { once: true });
 		window.addEventListener('pointercancel', cleanup, { once: true });
+	}
+
+	function beginTrimEdit(boundary: 'start' | 'end') {
+		trimEditing = true;
+		trimEditBoundary = boundary;
+		// Preserve playback intent across a long drag.  Reaching the media end is
+		// not an explicit Stop action and should not prevent the new IN/OUT
+		// selection from resuming on release.
+		resumePreviewAfterTrimEdit = Boolean(loopPreview && previewAudio && !previewAudio.paused);
+	}
+
+	function finishTrimEdit(boundary: 'start' | 'end') {
+		if (trimEditBoundary !== boundary) return;
+		const { start, end } = selectedRange();
+		const shouldResume = resumePreviewAfterTrimEdit;
+		trimEditing = false;
+		trimEditBoundary = null;
+		onUpdateCueTime(boundary === 'start' ? 'start_ms' : 'end_ms', Math.round((boundary === 'start' ? start : end) * 1000));
+		resumeSelectionPreviewAfterTrimEdit(start, end, shouldResume);
 	}
 
 	function beginPlayheadDrag(event: PointerEvent) {
@@ -216,6 +280,37 @@
 		}
 		playhead = start;
 		loopPreview = false;
+		resumePreviewAfterTrimEdit = false;
+	}
+
+	function handlePreviewEnded() {
+		// A handle can keep being dragged after the source audio naturally ends.
+		// Leave that final source position visible until the edit is released
+		// instead of snapping the playhead back to the temporary IN point.
+		if (trimEditing) {
+			playhead = durationSeconds;
+			loopPreview = false;
+			return;
+		}
+		stopSelectionPreview();
+	}
+
+	function resumeSelectionPreviewAfterTrimEdit(start: number, end: number, shouldResume = resumePreviewAfterTrimEdit) {
+		const currentTime = previewAudio?.currentTime ?? playhead;
+		const { nextPosition, shouldRestartAtStart } = resolveSelectionReleasePlayback(currentTime, start, end, Boolean(previewAudio?.ended), loopEnabled);
+		// Inside the edited range: keep the moving playhead.  Outside it: seek to
+		// IN, then resume only if this preview was playing when the drag started.
+		if (previewAudio && Math.abs(previewAudio.currentTime - nextPosition) > 0.001) previewAudio.currentTime = nextPosition;
+		playhead = nextPosition;
+		resumePreviewAfterTrimEdit = false;
+		if (!shouldResume || !previewAudio) return;
+		// A non-looping preview that already finished at final OUT stays finished;
+		// a settled loop has already been returned to IN by the shared rule.
+		if (previewAudio.ended && !shouldRestartAtStart) return;
+		loopPreview = true;
+		void previewAudio.play().catch(() => {
+			loopPreview = false;
+		});
 	}
 
 	function handlePreviewMetadata() {
@@ -228,6 +323,11 @@
 	function handlePreviewTimeUpdate() {
 		if (!previewAudio || !loopPreview) return;
 		const { start, end } = selectedRange();
+		const playback = resolveSelectionPlayback(previewAudio.currentTime, start, end, trimEditing);
+		if (!playback.enforceSelection) {
+			playhead = Math.max(0, Math.min(durationSeconds, playback.nextPosition));
+			return;
+		}
 		playhead = Math.max(start, Math.min(end, previewAudio.currentTime));
 		if (previewAudio.currentTime >= end || previewAudio.currentTime < start) {
 			if (loopEnabled) {
@@ -324,12 +424,21 @@
 <svelte:window onkeydown={handleTrimKeydown} onpointerdown={handleGlobalPointerDown} />
 
 <section bind:this={timelinePanel} class="cue-timeline-panel">
-	<div class="cue-timeline-head">
-		<div>
-			<h3>时间轴与波形</h3>
-			<p>{audioLabel} 的整段时间轴。拖动 IN / OUT 可直接调整 cue 入点出点。</p>
-		</div>
-		<div class="cue-timeline-metrics">
+		<div class="cue-timeline-head">
+			<div>
+				<h3>时间轴与波形</h3>
+				<p>{audioLabel} 的整段时间轴。拖动 IN / OUT 可直接调整 cue 入点出点。</p>
+			</div>
+			{#if manualTimingReview.status === 'confirmed'}
+				<span class="timing-review-state confirmed" title={manualTimingReview.confirmedAt ? `确认时间：${manualTimingReview.confirmedAt}` : '旧版人工确认记录'}>
+					<CheckCircle2 size={13} /> 已试听确认
+				</span>
+			{:else if manualTimingReview.status === 'required'}
+				<span class="timing-review-state required" title="模型时间置信度不会因人工确认而提高；请试听当前片段后在字幕检查器中明确确认。">
+					<AlertTriangle size={13} /> 待试听确认
+				</span>
+			{/if}
+			<div class="cue-timeline-metrics">
 			<div><span>当前</span><strong>{formatTimecode(playhead)}</strong></div>
 			<div><span>入点</span><strong class="metric-in">{formatTimecode(trimStart)}</strong></div>
 			<div><span>出点</span><strong class="metric-out">{formatTimecode(trimEnd)}</strong></div>
@@ -338,7 +447,7 @@
 	</div>
 
 	{#if audioSrc}
-		<audio bind:this={previewAudio} src={audioSrc} preload="metadata" onloadedmetadata={handlePreviewMetadata} ontimeupdate={handlePreviewTimeUpdate} onended={stopSelectionPreview}></audio>
+		<audio bind:this={previewAudio} src={audioSrc} preload="metadata" onloadedmetadata={handlePreviewMetadata} ontimeupdate={handlePreviewTimeUpdate} onended={handlePreviewEnded}></audio>
 		<div
 			class="cue-timeline-shell"
 			class:hotkeys-active={trimHotkeysActive}
@@ -391,8 +500,8 @@
 					<button type="button" class="timeline-playhead-handle" aria-label="拖动当前播放指针" onpointerdown={beginPlayheadDrag}><span>当前</span></button>
 					<button type="button" class="timeline-handle-label timeline-in-label" aria-label="拖动裁切入点" onpointerdown={(event) => beginTrimDrag(event, 'start')}><span>IN</span></button>
 					<button type="button" class="timeline-handle-label timeline-out-label" aria-label="拖动裁切出点" onpointerdown={(event) => beginTrimDrag(event, 'end')}><span>OUT</span></button>
-					<input aria-label="裁切入点" class="timeline-range timeline-start" type="range" min="0" max={durationSeconds} step="0.1" value={trimStart} oninput={(event) => setTrimStart((event.currentTarget as HTMLInputElement).value)} disabled={!audioReady} />
-					<input aria-label="裁切出点" class="timeline-range timeline-end" type="range" min="0.1" max={durationSeconds} step="0.1" value={trimEnd} oninput={(event) => setTrimEnd((event.currentTarget as HTMLInputElement).value)} disabled={!audioReady} />
+					<input aria-label="裁切入点" class="timeline-range timeline-start" type="range" min="0" max={durationSeconds} step="0.1" value={trimStart} onpointerdown={() => beginTrimEdit('start')} onpointerup={() => finishTrimEdit('start')} onpointercancel={() => finishTrimEdit('start')} onchange={() => finishTrimEdit('start')} oninput={(event) => setTrimStart((event.currentTarget as HTMLInputElement).value, trimEditBoundary !== 'start')} disabled={!audioReady} />
+					<input aria-label="裁切出点" class="timeline-range timeline-end" type="range" min="0.1" max={durationSeconds} step="0.1" value={trimEnd} onpointerdown={() => beginTrimEdit('end')} onpointerup={() => finishTrimEdit('end')} onpointercancel={() => finishTrimEdit('end')} onchange={() => finishTrimEdit('end')} oninput={(event) => setTrimEnd((event.currentTarget as HTMLInputElement).value, trimEditBoundary !== 'end')} disabled={!audioReady} />
 				</div>
 			</div>
 		</div>
@@ -414,6 +523,32 @@
 	.cue-timeline-head {
 		display: grid;
 		gap: 10px;
+	}
+
+	.timing-review-state {
+		justify-self: start;
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		min-height: 24px;
+		padding: 3px 7px;
+		border: 1px solid #3b414a;
+		border-radius: 5px;
+		background: #171a1f;
+		color: #c4cad2;
+		font-size: 11px;
+	}
+
+	.timing-review-state.confirmed {
+		border-color: #245c45;
+		color: #83d4aa;
+		background: #10231a;
+	}
+
+	.timing-review-state.required {
+		border-color: #755526;
+		color: #e2b76d;
+		background: #251c10;
 	}
 
 	.cue-timeline-head h3,

@@ -3,6 +3,8 @@ import type {
 	AppSettings,
 	BatchTask,
 	CommunityVoicePack,
+	CloudConnectionTestResponse,
+	CloudProviderId,
 	DoubaoCloudRefreshResponse,
 	DoubaoCloudVoiceListResponse,
 	DoubaoVoiceCloneResponse,
@@ -22,6 +24,10 @@ import type {
 	HistoryItem,
 	LongformGenerateRequest,
 	LongformTask,
+	LlmConnectionTestResponse,
+	LlmModelListResponse,
+	LlmProviderListResponse,
+	LlmProviderProfileUpsert,
 	PresetTemplate,
 	PresetTemplateInput,
 	Project,
@@ -48,6 +54,7 @@ import type {
 	VideoLocalizationReferenceClipCreate,
 	VideoLocalizationReferenceClipUpdate,
 	VideoLocalizationSubtitleImportRequest,
+	VideoLocalizationSubtitleCueUpdate,
 	VoiceAsset,
 	VoiceAssetCreate,
 	VoiceClipTranscribeResponse,
@@ -72,9 +79,20 @@ export const Api = {
 		clear_access_key_id?: boolean;
 		clear_secret_access_key?: boolean;
 	}) => api.patch<AppSettings>('/settings/volcengine-directory-secret', body),
+	testCloudConnection: (provider: CloudProviderId) =>
+		api.post<CloudConnectionTestResponse>(`/settings/cloud-connections/${encodeURIComponent(provider)}/test`),
 	settingsStorage: () => api.get<StorageAudit>('/settings/storage'),
 	cleanupSettingsStorage: (targets: string[]) => api.post<StorageCleanupResponse>('/settings/storage/cleanup', { targets }),
 	openSettingsStorageLocation: (key: string) => api.post<StorageOpenResponse>('/settings/storage/open', { key }),
+	llmProfiles: () => api.get<LlmProviderListResponse>('/settings/llm-profiles'),
+	saveLlmProfile: (id: string, body: LlmProviderProfileUpsert) =>
+		api.put<LlmProviderListResponse>(`/settings/llm-profiles/${encodeURIComponent(id)}`, body),
+	deleteLlmProfile: (id: string) =>
+		api.delete<LlmProviderListResponse>(`/settings/llm-profiles/${encodeURIComponent(id)}`),
+	llmProfileModels: (id: string) =>
+		api.post<LlmModelListResponse>(`/settings/llm-profiles/${encodeURIComponent(id)}/models`),
+	testLlmProfile: (id: string) =>
+		api.post<LlmConnectionTestResponse>(`/settings/llm-profiles/${encodeURIComponent(id)}/test`),
 	engines: () => api.get<EngineDetail[]>('/engines'),
 	engineInstallations: () => api.get<EngineInstallation[]>('/engines/installations'),
 	engineSpeakers: (id: string, params: { q?: string; gender?: 'all' | 'F' | 'M'; limit?: number } = {}) => {
@@ -186,6 +204,8 @@ export const Api = {
 	updateVideoLocalizationSpeaker: (id: string, speakerId: string, body: VideoLocalizationSpeakerUpdate) =>
 		api.patch<VideoLocalizationDraft>(`/projects/${id}/video-localization/speakers/${speakerId}`, body),
 	updateVideoLocalizationCue: (id: string, cueId: string, body: VideoLocalizationCueUpdate) => api.patch<VideoLocalizationDraft>(`/projects/${id}/video-localization/cues/${cueId}`, body),
+	updateVideoLocalizationLocalizedSubtitle: (id: string, subtitleId: string, body: VideoLocalizationSubtitleCueUpdate) =>
+		api.patch<VideoLocalizationDraft>(`/projects/${id}/video-localization/localized-subtitles/${subtitleId}`, body),
 	updateVideoLocalizationReference: (id: string, referenceClipId: string, body: VideoLocalizationReferenceClipUpdate) =>
 		api.patch<VideoLocalizationDraft>(`/projects/${id}/video-localization/reference-clips/${referenceClipId}`, body),
 	deleteVideoLocalizationReference: (id: string, referenceClipId: string) => api.delete<VideoLocalizationDraft>(`/projects/${id}/video-localization/reference-clips/${referenceClipId}`),
@@ -195,6 +215,8 @@ export const Api = {
 	syncVideoLocalizationBatchTts: (id: string, batchId: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/tts/batch/${batchId}/sync`),
 	importVideoLocalizationSubtitles: (id: string, kind: 'en' | 'zh' | 'tts', body: VideoLocalizationSubtitleImportRequest) =>
 		api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/subtitles/${kind}/import`, body),
+	clearVideoLocalizationSubtitles: (id: string, kind: 'en' | 'zh') =>
+		api.delete<VideoLocalizationDraft>(`/projects/${id}/video-localization/subtitles/${kind}`),
 	exportVideoLocalizationDraft: (id: string) => api.get<VideoLocalizationExport>(`/projects/${id}/video-localization/export`),
 	exportVideoLocalizationTimeline: (id: string) => api.get<Record<string, unknown>>(`/projects/${id}/video-localization/export/timeline`),
 	videoLocalizationReadiness: (id: string) => api.get<Record<string, unknown>>(`/projects/${id}/video-localization/readiness`),

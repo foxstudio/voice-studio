@@ -2,6 +2,7 @@
 	import { browser } from '$app/environment';
 	import { Api } from '$lib/api';
 	import type { DoubaoSpeakerCatalogStatus, EngineSpeaker } from '$lib/api/types';
+	import Tooltip from '$lib/components/shared/Tooltip.svelte';
 	import { Check, Clock3, Heart, Library, Pause, Play, RefreshCw, Search, Sparkles, X } from 'lucide-svelte';
 	import { onDestroy, onMount, tick } from 'svelte';
 	import {
@@ -308,7 +309,7 @@
 
 {#if mode === 'drawer'}<div class="doubao-speaker-picker">
 	<div class="doubao-speaker-current">
-		<span class="doubao-speaker-label">音色 <span class="doubao-speaker-count" aria-label={`${speakers.length} 个音色`}>{speakers.length || '—'}</span></span>
+		<span class="doubao-speaker-label">音色 <span class="doubao-speaker-count" aria-label={`${speakers.length} 个音色`}>{speakers.length || '—'}</span><Tooltip content="选择豆包官方内置音色，决定说话人的声线和可用语言。点击音色框可搜索、筛选和试听。" /></span>
 		<div class="doubao-current-control">
 			<button bind:this={currentTrigger} class="doubao-current-card" type="button" onclick={openDrawer} aria-label="打开豆包官方音色目录" title={currentSpeaker?.speaker_id || '选择豆包官方音色'}>
 				<span class="doubao-current-copy"><strong>{currentSpeaker?.name || '选择官方音色'}</strong>{#if currentSpeaker?.speaker_id}<small>{currentSpeaker.speaker_id}</small>{/if}</span>
@@ -372,7 +373,13 @@
 					{#each visibleSpeakers as speaker (speaker.speaker_id)}
 						<article class="doubao-voice-card" class:selected={value === speaker.speaker_id} class:previewing={previewingId === speaker.speaker_id} class:denied={speaker.authorization_status === 'denied'}>
 							<div class="doubao-card-main">
-								<span class="doubao-voice-orb large" class:playing={previewingId === speaker.speaker_id}><span></span><span></span><span></span></span>
+								<span class="doubao-voice-orb large" class:playing={previewingId === speaker.speaker_id} class:with-avatar={Boolean(speaker.avatar_url)}>
+									{#if speaker.avatar_url}
+										<img src={speaker.avatar_url} alt="" />
+									{:else}
+										<span></span><span></span><span></span>
+									{/if}
+								</span>
 								<div class="doubao-card-copy">
 									<div class="doubao-card-title"><strong>{speaker.name}</strong><span>{genderLabel(speaker.gender)}{speaker.age ? ` · ${speaker.age}` : ''}</span></div>
 									<p>{speaker.description || speaker.speaker_id}</p>
@@ -409,11 +416,11 @@
 {/if}
 
 <style>
-	.doubao-speaker-picker { flex: 0 1 auto; min-width: 0; }
-	.doubao-speaker-current { display: flex; align-items: center; gap: 6px; min-width: 0; }
+	.doubao-speaker-picker { width: 100%; min-width: 0; }
+	.doubao-speaker-current { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 28px; gap: 4px; min-width: 0; align-content: end; }
 	.doubao-speaker-label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 	.doubao-speaker-count { min-width: 22px; height: 16px; display: inline-flex; align-items: center; justify-content: center; padding: 0 5px; border: 1px solid rgba(116, 151, 190, .22); border-radius: 999px; background: #111820; color: #7faee0; font: 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; }
-	.doubao-current-control { width: 300px; min-width: 220px; height: 28px; display: flex; align-items: stretch; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: #101215; transition: border-color 120ms ease, box-shadow 120ms ease; }
+	.doubao-current-control { width: 100%; min-width: 0; height: 28px; display: flex; align-items: stretch; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: #101215; transition: border-color 120ms ease, box-shadow 120ms ease; }
 	.doubao-current-control:hover, .doubao-current-control:focus-within { border-color: #46515f; box-shadow: 0 0 0 2px rgba(80, 147, 224, .09); }
 	.doubao-current-card { flex: 1 1 auto; min-width: 0; height: 26px; display: flex; align-items: center; padding: 0 8px; border: 0; border-radius: 0; color: var(--text); background: transparent; text-align: left; }
 	.doubao-current-card:focus-visible { outline: 2px solid rgba(90, 167, 255, .72); outline-offset: -2px; }
@@ -425,6 +432,8 @@
 	.doubao-inline-preview-action:hover, .doubao-inline-preview-action:focus-visible, .doubao-inline-preview-action.active { color: #beddff; background: #17202b; outline: none; }
 	.doubao-inline-preview-action:disabled { color: #59616c; cursor: not-allowed; }
 	.doubao-voice-orb { width: 25px; height: 25px; flex: 0 0 25px; border: 1px solid rgba(112, 178, 255, .35); border-radius: 50%; background: radial-gradient(circle at 35% 30%, #263e58, #10161d 65%); display: flex; align-items: center; justify-content: center; gap: 2px; }
+	.doubao-voice-orb.with-avatar { overflow: hidden; background: #172331; }
+	.doubao-voice-orb img { width: 100%; height: 100%; display: block; object-fit: cover; }
 	.doubao-voice-orb span { width: 2px; height: 7px; border-radius: 2px; background: #8dc7ff; opacity: .72; }
 	.doubao-voice-orb span:nth-child(2) { height: 12px; background: #8ce0c0; }
 	.doubao-voice-orb.playing span { animation: doubao-level .7s ease-in-out infinite alternate; }
@@ -511,8 +520,7 @@
 	@keyframes doubao-level { to { height: 4px; opacity: .45; } }
 	@media (max-width: 720px) {
 		.doubao-speaker-picker { min-width: 100%; flex-basis: 100%; }
-		.doubao-speaker-current { flex-wrap: wrap; }
-		.doubao-current-control { flex: 1 1 220px; width: auto; }
+		.doubao-current-control { width: 100%; }
 		.doubao-catalog-drawer { width: 100vw; max-width: none; padding: 16px 14px; border-left: 0; }
 		.doubao-drawer-resizer { display: none; }
 		.doubao-catalog-drawer.embedded { width: 100%; height: 720px; min-height: 520px; border: 1px solid rgba(119, 165, 216, .24); }

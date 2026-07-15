@@ -1183,7 +1183,7 @@
 
 	.result-head {
 		display: grid;
-		grid-template-columns: 18px minmax(0, 1fr) auto;
+		grid-template-columns: 22px minmax(0, 1fr) auto;
 		grid-template-rows: auto;
 		align-items: flex-start;
 		column-gap: 8px;
@@ -1198,11 +1198,61 @@
 	.title-row input[type='checkbox'] {
 		grid-column: 1;
 		grid-row: 1;
-		width: 16px;
-		height: 16px;
-		margin: 2px 0 0;
+		appearance: none;
+		width: 20px;
+		height: 20px;
+		margin: 0;
+		border: 1px solid rgba(142, 164, 190, 0.34);
+		border-radius: 6px;
+		background: rgba(17, 22, 29, 0.84);
+		color: transparent;
+		cursor: pointer;
 		justify-self: start;
 		align-self: start;
+		transition: color 140ms ease, border-color 140ms ease, background 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+	}
+
+	.title-row input[type='checkbox']::after {
+		content: '';
+		display: block;
+		width: 8px;
+		height: 4px;
+		margin: 5px 0 0 4px;
+		border: solid currentColor;
+		border-width: 0 0 2px 2px;
+		transform: rotate(-45deg) scale(0.55);
+		transform-origin: center;
+		opacity: 0;
+		transition: opacity 130ms ease, transform 130ms ease;
+	}
+
+	.title-row input[type='checkbox']:hover:not(:disabled),
+	.title-row input[type='checkbox']:focus-visible:not(:disabled) {
+		border-color: rgba(117, 183, 255, 0.78);
+		background: rgba(40, 91, 142, 0.28);
+		box-shadow: 0 0 0 3px rgba(75, 161, 245, 0.1);
+		outline: none;
+	}
+
+	.title-row input[type='checkbox']:checked {
+		border-color: rgba(100, 181, 255, 0.9);
+		background: linear-gradient(145deg, #3d9df4, #2474bd);
+		color: #eff8ff;
+		box-shadow: 0 0 0 3px rgba(75, 161, 245, 0.13);
+	}
+
+	.title-row input[type='checkbox']:checked::after {
+		opacity: 1;
+		transform: rotate(-45deg) scale(1);
+	}
+
+	.title-row input[type='checkbox']:active:not(:disabled) {
+		transform: scale(0.92);
+	}
+
+	.title-row input[type='checkbox']:disabled {
+		opacity: 0.34;
+		cursor: not-allowed;
 	}
 
 	.result-title {
@@ -1862,11 +1912,14 @@
 
 	/* ── 内联参数行 ── */
 	.param-inline-row {
-		display: flex;
-		align-items: center;
-		gap: 14px;
-		flex-wrap: wrap;
-		padding: 8px 0;
+		display: grid;
+		grid-template-columns: minmax(220px, 1.08fr) minmax(210px, 1fr) minmax(154px, 0.72fr) minmax(92px, 0.42fr) max-content;
+		align-items: end;
+		gap: 8px 10px;
+		padding: 10px 12px;
+		border: 1px solid color-mix(in srgb, var(--line) 86%, transparent);
+		border-radius: 9px;
+		background: transparent;
 		position: relative;
 	}
 
@@ -1875,23 +1928,19 @@
 	}
 
 	.param-inline {
-		flex: 1 1 180px;
-		max-width: 280px;
+		max-width: none;
 		min-width: 0;
-		display: flex;
-		align-items: center;
-		gap: 6px;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: 4px;
+		align-content: end;
 		font-size: 12px;
 		color: var(--muted);
 	}
 	.engine-param-inline {
-		flex: 0 0 300px;
-		max-width: 300px;
-		min-width: 300px;
+		min-width: 0;
 	}
 	.voice-param-inline {
-		flex: 0 1 auto;
-		max-width: 100%;
 		min-width: 0;
 	}
 	.param-inline > span {
@@ -1906,9 +1955,8 @@
 		min-width: 90px;
 	}
 	.engine-param-inline .select {
-		flex: 0 0 270px;
-		width: 270px;
-		max-width: 270px;
+		width: 100%;
+		max-width: none;
 		min-width: 0;
 	}
 	.engine-param-inline .select-trigger {
@@ -1921,16 +1969,18 @@
 		min-width: 0;
 	}
 	.param-inline-range {
-		flex: 0 1 210px;
-		max-width: 230px;
 		min-width: 0;
-		display: flex;
-		align-items: center;
-		gap: 6px;
+		display: grid;
+		grid-template-columns: 56px minmax(72px, 1fr);
+		grid-template-rows: auto 28px;
+		column-gap: 10px;
+		row-gap: 4px;
 		font-size: 12px;
 		color: var(--muted);
+		align-items: center;
 	}
 	.param-inline-range > span {
+		grid-column: 1 / -1;
 		white-space: nowrap;
 		flex-shrink: 0;
 	}
@@ -1946,15 +1996,15 @@
 		text-align: center;
 	}
 	.param-inline-range input[type='range'] {
-		flex: 0 1 88px;
-		min-width: 72px;
-		max-width: 96px;
+		width: 100%;
+		min-width: 0;
+		max-width: none;
 		height: 4px;
 		accent-color: var(--accent);
 	}
 	.param-inline-range .speed-number {
-		width: 52px;
-		min-width: 52px;
+		width: 56px;
+		min-width: 56px;
 		min-height: 26px;
 		padding: 2px 4px;
 		border: 1px solid var(--line);
@@ -1969,14 +2019,13 @@
 		display: flex;
 		align-items: center;
 		gap: 4px;
-		flex: 0 1 auto;
-		width: auto;
+		width: 100%;
 		min-width: 0;
 	}
 	.voice-inline .select {
-		flex: 0 1 clamp(180px, 22vw, 260px);
-		width: clamp(180px, 22vw, 260px);
-		max-width: min(260px, 38vw);
+		flex: 1 1 0;
+		width: 100%;
+		max-width: none;
 		min-width: 0;
 	}
 	.voice-inline .select-trigger {
@@ -2000,7 +2049,7 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-		width: auto;
+		width: 100%;
 		min-width: 0;
 		max-width: 100%;
 	}
@@ -2019,7 +2068,7 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
-		width: auto;
+		width: 100%;
 		min-width: 0;
 	}
 	.custom-voice-chip {
@@ -2322,11 +2371,14 @@
 	.custom-voice-timebar {
 		position: relative;
 		min-width: 100%;
-		height: 150px;
+		height: 122px;
 		--trim-start: 0%;
 		--trim-end: 100%;
 		--playhead: 0%;
 		cursor: copy;
+	}
+	.custom-voice-timebar.panning {
+		cursor: grabbing;
 	}
 	.custom-voice-timebar-window {
 		overflow-x: scroll;
@@ -2409,7 +2461,7 @@
 		left: 0;
 		right: 0;
 		top: 34px;
-		height: 104px;
+		height: 76px;
 		overflow: hidden;
 		border: 1px solid rgba(148, 163, 184, 0.18);
 		border-radius: 8px;
@@ -2443,7 +2495,7 @@
 		left: 8px;
 		right: 8px;
 		top: 38px;
-		height: 96px;
+		height: 68px;
 		z-index: 5;
 		display: block;
 		overflow: hidden;
@@ -2471,12 +2523,11 @@
 		width: 100%;
 		height: 100%;
 		overflow: visible;
-		filter: drop-shadow(0 0 8px rgba(79, 156, 249, 0.28));
+		filter: none;
 	}
 	.custom-voice-waveform-svg rect {
-		fill: rgba(177, 219, 255, 0.92);
-		stroke: rgba(241, 249, 255, 0.18);
-		stroke-width: 0.05;
+		fill: rgba(177, 219, 255, 0.82);
+		stroke: none;
 	}
 	.custom-voice-waveform-svg .waveform-midline {
 		stroke: rgba(220, 230, 242, 0.28);
@@ -2494,7 +2545,7 @@
 		left: var(--trim-start);
 		right: calc(100% - var(--playhead));
 		z-index: 2;
-		height: 104px;
+		height: 76px;
 		border-radius: 8px;
 		background: rgba(186, 244, 213, 0.12);
 		pointer-events: none;
@@ -2505,7 +2556,7 @@
 		left: var(--playhead);
 		z-index: 10;
 		width: 20px;
-		height: 116px;
+		height: 88px;
 		border: 0;
 		background: transparent;
 		color: #f8d99d;
@@ -2520,7 +2571,7 @@
 		top: 0;
 		left: 50%;
 		width: 2px;
-		height: 116px;
+		height: 88px;
 		border-radius: 999px;
 		background: currentColor;
 		transform: translateX(-50%);
@@ -2558,7 +2609,7 @@
 		z-index: 9;
 		display: inline-grid;
 		width: 18px;
-		height: 104px;
+		height: 76px;
 		place-items: center;
 		border: 0;
 		color: #dce6f2;
@@ -2598,7 +2649,7 @@
 		top: 0;
 		left: 50%;
 		width: 3px;
-		height: 104px;
+		height: 76px;
 		border: 0;
 		border-radius: 999px;
 		background: currentColor;
@@ -2648,7 +2699,7 @@
 		position: absolute;
 		inset: 0;
 		width: 100%;
-		height: 118px;
+		height: 90px;
 		margin: 0;
 		background: transparent;
 		opacity: 0;
@@ -2881,18 +2932,20 @@
 		flex-wrap: wrap;
 	}
 	.param-inline-format {
-		flex: 0 0 auto;
 		min-width: 0;
 	}
 	.param-inline-format select {
-		min-width: 64px;
+		width: 100%;
+		min-width: 0;
 	}
 	.param-actions-inline {
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-		flex: 0 0 auto;
 		min-width: 0;
+		grid-column: -2 / -1;
+		justify-self: end;
+		padding-top: 20px;
 	}
 	.param-action-btn {
 		display: inline-flex;
@@ -2925,16 +2978,32 @@
 	.param-action-btn svg {
 		flex: 0 0 auto;
 	}
+	.param-inline-row :global(.doubao-speaker-picker) {
+		min-width: 0;
+		width: 100%;
+	}
+	.param-inline-row :global(.doubao-speaker-current) {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto 28px;
+		gap: 4px;
+		align-content: end;
+	}
+	.param-inline-row :global(.doubao-current-control) {
+		width: 100%;
+		min-width: 0;
+	}
 
 	/* ── 更多参数折叠面板 ── */
 	.more-params-panel {
-		padding: 12px;
+		--generate-param-control-height: 32px;
+		padding: 10px 12px;
 		border: 1px solid var(--line);
-		border-radius: 8px;
+		border-radius: 9px;
 		background: var(--panel-2);
 		display: grid;
 		grid-template-columns: repeat(12, minmax(0, 1fr));
-		gap: 10px 12px;
+		gap: 8px 10px;
 		align-items: start;
 	}
 	.more-params-panel .span-full { grid-column: 1 / -1; }
@@ -2946,8 +3015,33 @@
 	.more-params-panel > small {
 		grid-column: 1 / -1;
 	}
-	.more-params-panel .param-field,
-	.more-params-panel .param-slider {
+	.more-params-panel .advanced-subhead {
+		grid-column: 1 / -1;
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		min-height: 18px;
+		margin: 0;
+		color: var(--text);
+		font-size: 12px;
+		font-weight: 600;
+		line-height: 18px;
+		letter-spacing: 0.015em;
+	}
+	.more-params-panel .advanced-subhead::before {
+		content: '';
+		width: 3px;
+		height: 12px;
+		border-radius: 999px;
+		background: var(--accent);
+		box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent);
+		flex: 0 0 auto;
+	}
+	.more-params-panel .advanced-subhead:not(:first-child) {
+		margin-top: 2px;
+	}
+	.more-params-panel > .param-field,
+	.more-params-panel > .param-slider {
 		grid-column: span 3;
 		min-width: 0;
 		width: 100%;
@@ -2957,10 +3051,10 @@
 		grid-column: span 3;
 		min-width: 220px;
 	}
-	.more-params-panel .param-field.span-full,
-	.more-params-panel .param-slider.span-full,
-	.more-params-panel .param-field.span-wide,
-	.more-params-panel .param-slider.span-wide {
+	.more-params-panel > .param-field.span-full,
+	.more-params-panel > .param-slider.span-full,
+	.more-params-panel > .param-field.span-wide,
+	.more-params-panel > .param-slider.span-wide {
 		max-width: none;
 	}
 	.more-params-panel .slider {
@@ -2975,37 +3069,45 @@
 		gap: 6px;
 	}
 	.more-params-panel .field-label {
-		min-height: 18px;
+		min-height: 16px;
 		font-size: 11.5px;
 	}
 	.more-params-panel > .field {
 		grid-column: span 3;
 		min-width: 0;
 	}
-	.more-params-panel select {
-		min-height: 28px;
-		height: 28px;
+	.more-params-panel select,
+	.more-params-panel input:not([type='checkbox']):not([type='radio']):not([type='range']) {
+		min-height: var(--generate-param-control-height);
+		height: var(--generate-param-control-height);
+		font-size: 12px;
+	}
+	.more-params-panel :global(.select-trigger) {
+		min-height: var(--generate-param-control-height);
+		height: var(--generate-param-control-height);
+		padding: 5px 8px;
 		font-size: 12px;
 	}
 	.more-params-panel textarea {
-		min-height: 68px;
+		min-height: var(--generate-param-control-height);
+		line-height: 18px;
 		resize: vertical;
 	}
 
 	.more-params-panel.doubao-tts-params {
 		grid-template-columns: repeat(12, minmax(0, 1fr));
-		gap: 10px 14px;
+		gap: 8px 10px;
 		align-items: start;
 	}
 
 	.more-params-panel.doubao-tts-params .doubao-style-field {
-		grid-column: span 6;
+		grid-column: span 9;
 		max-width: none;
 	}
 
 	.more-params-panel.doubao-tts-params .doubao-style-field textarea {
-		height: 28px;
-		min-height: 28px;
+		height: var(--generate-param-control-height);
+		min-height: var(--generate-param-control-height);
 		max-height: 112px;
 		padding-top: 4px;
 		padding-bottom: 4px;
@@ -3023,14 +3125,18 @@
 	.more-params-panel.doubao-tts-params .doubao-sample-rate-field,
 	.more-params-panel.doubao-tts-params .doubao-bit-rate-field,
 	.more-params-panel.doubao-tts-params .doubao-silence-field,
-	.more-params-panel.doubao-tts-params .doubao-output-switches {
+	.more-params-panel.doubao-tts-params .doubao-tone-fidelity-field {
 		grid-column: span 3;
+		max-width: none;
+	}
+	.more-params-panel.doubao-tts-params .doubao-output-switches {
+		grid-column: span 6;
 		max-width: none;
 	}
 
 	.more-params-panel.doubao-tts-params .doubao-silence-field input {
 		width: 100%;
-		min-height: 28px;
+		min-height: var(--generate-param-control-height);
 	}
 
 	.doubao-switch-row {
@@ -3038,7 +3144,7 @@
 		align-items: center;
 		gap: 10px 16px;
 		flex-wrap: wrap;
-		min-height: 28px;
+		min-height: var(--generate-param-control-height);
 	}
 
 	.doubao-output-switches > .param-label {
@@ -3521,5 +3627,35 @@
 
 		.doubao-speaker-id-row {
 			grid-template-columns: 1fr;
+		}
+	}
+
+	/* 参数控制带使用 grid；在较窄窗口主动降列，而不是沿用旧 flex 的换行规则。 */
+	@media (max-width: 900px) {
+		.param-inline-row {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
+		.param-inline,
+		.param-inline-range {
+			min-width: 0;
+		}
+
+		.param-actions-inline {
+			grid-column: 1 / -1;
+			justify-self: end;
+			padding-top: 0;
+		}
+	}
+
+	@media (max-width: 640px) {
+		.param-inline-row {
+			grid-template-columns: minmax(0, 1fr);
+			padding: 9px 10px;
+		}
+
+		.param-actions-inline {
+			grid-column: auto;
+			justify-self: start;
 		}
 	}

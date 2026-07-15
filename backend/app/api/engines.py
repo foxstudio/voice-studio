@@ -177,7 +177,7 @@ async def diagnose_audio(engine_id: str, data: EngineAudioDiagnosisRequest):
             kwargs = {
                 "text": data.text,
                 "output_path": str(output_path),
-                "base_url": settings.mimo_base_url or "https://token-plan-cn.xiaomimimo.com/v1",
+                "base_url": settings.mimo_base_url or "https://api.xiaomimimo.com/v1",
                 "api_key": api_key,
                 "model": model,
                 "voice": "mimo_default",

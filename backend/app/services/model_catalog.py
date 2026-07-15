@@ -3,15 +3,25 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from app.services import confucius4_paths, engine_health, engine_runtime_paths, qwen3_tts_paths, settings_store
+from app.services import confucius4_paths, cosyvoice_worker, engine_health, engine_runtime_paths, qwen3_tts_paths, settings_store
 
 
-SOURCES: dict[str, dict[str, str]] = {
+SOURCES: dict[str, dict[str, Any]] = {
     "indextts-v2": {
         "source_url": "https://github.com/index-tts/index-tts",
         "source_label": "IndexTTS 官方仓库",
         "install_kind": "download_and_convert",
         "license_note": "模型权重不随 Voice Studio 仓库分发；按官方许可自行下载并转换。",
+        "download_sources": [
+            {
+                "provider": "modelscope",
+                "label": "IndexTTS-2 ModelScope 国内模型",
+                "url": "https://modelscope.cn/models/IndexTeam/IndexTTS-2",
+                "region": "cn",
+                "preferred": True,
+                "compatibility_note": "官方发布者的国内模型页；仍需按本项目说明完成转换。",
+            }
+        ],
     },
     "omnivoice": {
         "source_url": "https://github.com/k2-fsa/OmniVoice",
@@ -48,18 +58,48 @@ SOURCES: dict[str, dict[str, str]] = {
         "source_label": "CosyVoice 官方仓库",
         "install_kind": "external_runtime",
         "license_note": "SFT 与 Zero-Shot 共用同一个 CosyVoice 运行时。",
+        "download_sources": [
+            {
+                "provider": "modelscope",
+                "label": "CosyVoice-300M-SFT 国内模型",
+                "url": "https://modelscope.cn/models/iic/CosyVoice-300M-SFT",
+                "region": "cn",
+                "preferred": True,
+                "compatibility_note": "ModelScope 官方组织 iic 发布；下载到 pretrained_models/CosyVoice-300M-SFT 后可被 SFT 引擎识别。",
+            }
+        ],
     },
     "cosyvoice-zero-shot": {
         "source_url": "https://github.com/FunAudioLLM/CosyVoice",
         "source_label": "CosyVoice 官方仓库",
         "install_kind": "external_runtime",
         "license_note": "SFT 与 Zero-Shot 共用同一个 CosyVoice 运行时。",
+        "download_sources": [
+            {
+                "provider": "modelscope",
+                "label": "CosyVoice-300M 国内模型",
+                "url": "https://modelscope.cn/models/iic/CosyVoice-300M",
+                "region": "cn",
+                "preferred": True,
+                "compatibility_note": "ModelScope 官方组织 iic 发布；下载到 pretrained_models/CosyVoice-300M 后可被 Zero-Shot 引擎识别。",
+            }
+        ],
     },
     "qwen3-asr-mlx": {
         "source_url": "https://github.com/moona3k/mlx-qwen3-asr",
-        "source_label": "Qwen3-ASR MLX 官方仓库",
+        "source_label": "Qwen3-ASR MLX 社区运行时",
         "install_kind": "python_package_and_model",
         "license_note": "Python 包与模型缓存分开管理。",
+        "download_sources": [
+            {
+                "provider": "modelscope",
+                "label": "Qwen3-ASR 1.7B 8-bit MLX 国内社区镜像",
+                "url": "https://modelscope.cn/models/mlx-community/Qwen3-ASR-1.7B-8bit",
+                "region": "cn",
+                "preferred": True,
+                "compatibility_note": "MLX Community 发布的 8-bit MLX 转换权重，与当前运行时格式兼容；并非 Qwen 官方发布者镜像。",
+            }
+        ],
     },
     "faster-whisper-turbo": {
         "source_url": "https://github.com/SYSTRAN/faster-whisper",
@@ -74,7 +114,7 @@ def list_installations() -> list[dict[str, Any]]:
     return [_entry(engine_id, source) for engine_id, source in SOURCES.items()]
 
 
-def _entry(engine_id: str, source: dict[str, str]) -> dict[str, Any]:
+def _entry(engine_id: str, source: dict[str, Any]) -> dict[str, Any]:
     candidates = _candidates(engine_id)
     discovered = []
     for path in candidates:
@@ -97,6 +137,8 @@ def _entry(engine_id: str, source: dict[str, str]) -> dict[str, Any]:
         "installation_status": str(health.get("status") or "unknown"),
         "discovered_paths": discovered,
         "automatic_download_supported": False,
+        "download_sources": list(source.get("download_sources") or []),
+        "download_policy": "国内镜像优先；国际官方源仅作为手动备选，不静默切换。",
         "reuse_note": "已有文件可通过环境变量或软链接复用，不需要重复下载。",
     }
 
@@ -111,6 +153,14 @@ def _candidates(engine_id: str) -> list[Path]:
     if engine_id == "omnivoice":
         hub = Path.home() / ".cache" / "huggingface" / "hub" / "models--k2-fsa--OmniVoice" / "snapshots"
         return sorted((path for path in hub.glob("*") if path.is_dir()), reverse=True) or [hub]
+    if engine_id in cosyvoice_worker.MODEL_DIRECTORY_NAMES:
+        roots = engine_runtime_paths.engine_root_candidates(engine_id)
+        try:
+            preferred_root = engine_health.external_engine_root(engine_id)
+        except RuntimeError:
+            preferred_root = roots[0]
+        ordered_roots = list(dict.fromkeys([preferred_root, *roots]))
+        return [cosyvoice_worker.model_directory(root, engine_id) for root in ordered_roots]
     if engine_id in engine_runtime_paths.ENGINE_LAYOUT:
         return engine_runtime_paths.engine_root_candidates(engine_id)
     return settings_store.model_candidates(engine_id)

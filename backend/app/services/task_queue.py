@@ -33,7 +33,7 @@ from app.schemas.voice_studio import (
     TTSVerificationResponse,
     now_iso,
 )
-from app.services import asr_service, audio_tools, custom_reference_store, database as db, engine_policy, engine_registry, engine_request_builder, history_store, project_store, settings_store, text_verifier, voice_store
+from app.services import asr_service, audio_tools, cosyvoice_constraints, custom_reference_store, database as db, engine_policy, engine_registry, engine_request_builder, history_store, project_store, settings_store, text_verifier, voice_store
 
 _queue: asyncio.Queue[str] | None = None
 _worker_task: asyncio.Task[None] | None = None
@@ -348,6 +348,26 @@ def _verification_language(task: GenerationTask) -> str:
     return value if value in {"auto", "zh", "en"} else "zh"
 
 
+def verification_expected_text_for_task(task: GenerationTask) -> str:
+    parameters = task.parameters.get("engine_parameters")
+    filter_parenthetical_content = isinstance(parameters, dict) and bool(
+        parameters.get("max_length_to_filter_parenthesis")
+    )
+    return text_verifier.verification_expected_text(
+        task.input_text,
+        engine_id=task.engine_id,
+        filter_parenthetical_content=filter_parenthetical_content,
+    )
+
+
+def verification_expected_text_for_result(result_id: str, *, input_text: str, engine_id: str) -> str:
+    for row in db.list_all("tasks", "created_at", False, limit=-1):
+        task = GenerationTask(**row)
+        if task.result_id == result_id:
+            return verification_expected_text_for_task(task)
+    return text_verifier.verification_expected_text(input_text, engine_id=engine_id)
+
+
 def _save_history_verification(result_id: str | None, report: TTSVerificationResponse | None, error: str | None = None) -> None:
     if not result_id:
         return
@@ -364,7 +384,7 @@ def _refresh_seed_audio_verification(task: GenerationTask) -> GenerationTask:
     report = task.verification
     if task.engine_id != text_verifier.SEED_AUDIO_ENGINE_ID or report is None:
         return task
-    expected = text_verifier.verification_expected_text(task.input_text, engine_id=task.engine_id)
+    expected = verification_expected_text_for_task(task)
     if report.expected_text == expected:
         return task
     if expected:
@@ -422,7 +442,7 @@ def _verify_task_output(task: GenerationTask, *, asr_engine_id: str = "qwen3-asr
     audio_path = history_store.audio_path(task.result_id)
     if not audio_path:
         raise ValueError("结果音频不存在")
-    expected_text = text_verifier.verification_expected_text(task.input_text, engine_id=task.engine_id)
+    expected_text = verification_expected_text_for_task(task)
     if task.engine_id == text_verifier.SEED_AUDIO_ENGINE_ID and not expected_text:
         return text_verifier.skipped_non_speech_report(
             original_prompt=task.input_text,
@@ -599,6 +619,19 @@ async def submit(
 ) -> str:
     if engine_policy.is_single_generation_only(req.engine_id) and task_type != "single":
         raise AppException(400, "SINGLE_GENERATION_ONLY", "Seed Audio 1.0 暂只支持单次生成")
+    if req.engine_id == "cosyvoice-zero-shot":
+        reference_audio = _resolve_reference(req)
+        if not reference_audio:
+            raise AppException(400, "REFERENCE_AUDIO_REQUIRED", "该引擎需要参考音频")
+        voice = voice_store.get_voice(req.voice_id) if req.voice_id else None
+        reference_text = req.ref_text or (voice.reference_text if voice else None)
+        if not (reference_text or "").strip():
+            raise AppException(400, "REFERENCE_TEXT_REQUIRED", "该引擎需要参考台词")
+        try:
+            cosyvoice_constraints.validate_zero_shot_reference_audio(reference_audio)
+        except ValueError as exc:
+            code, _, message = str(exc).partition(": ")
+            raise AppException(400, code, message or "CosyVoice Zero-Shot 参考音频不符合官方要求") from exc
     start_worker()
     task = GenerationTask(
         task_type=task_type,
@@ -905,11 +938,21 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
     if req.engine_id in {"indextts-v2", "confucius4-mlx-int8"} and not ref:
         message = "Confucius4-TTS 需要参考音频" if req.engine_id == "confucius4-mlx-int8" else "IndexTTS v2 需要参考音频"
         raise AppException(400, "REFERENCE_AUDIO_REQUIRED", message)
+    if req.engine_id == "indextts-v2" and req.emotion_mode.value == "emotion_text":
+        raise AppException(400, "INDEXTTS_EMOTION_TEXT_UNSUPPORTED", "IndexTTS 当前只支持选择内置情绪或跟随参考音色，不支持自由文字情绪指令")
     if req.engine_id in {"f5-tts", "cosyvoice-zero-shot"}:
         if not ref:
             raise AppException(400, "REFERENCE_AUDIO_REQUIRED", "该引擎需要参考音频")
         if not (ref_text or "").strip():
             raise AppException(400, "REFERENCE_TEXT_REQUIRED", "该引擎需要参考台词")
+    if req.engine_id == "cosyvoice-zero-shot":
+        try:
+            cosyvoice_constraints.validate_zero_shot_reference_audio(ref)
+        except ValueError as exc:
+            code, _, message = str(exc).partition(": ")
+            raise AppException(400, code, message or "CosyVoice Zero-Shot 参考音频不符合官方要求") from exc
+    if req.engine_id == "qwen3-tts-mlx-0.6b" and ref and not (ref_text or "").strip():
+        raise AppException(400, "REFERENCE_TEXT_REQUIRED", "Qwen3 参考音色需要参考音频对应的准确台词")
     if engine_request_builder.is_mimo_tts_request(req.engine_id):
         return engine_request_builder.build_mimo_tts_single_kwargs(
             req,
@@ -918,7 +961,9 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
             idempotency_marker=_mimo_idempotency_marker(req),
         )
     model_dir = str(settings_store.model_path(req.engine_id))
-    if req.engine_id in {"emotivoice", "cosyvoice-sft"}:
+    if req.engine_id == "emotivoice":
+        return engine_request_builder.build_emotivoice_single_kwargs(req, output_path)
+    if req.engine_id == "cosyvoice-sft":
         return engine_request_builder.build_preset_voice_single_kwargs(req, output_path)
     if req.engine_id == "f5-tts":
         return engine_request_builder.build_f5_tts_single_kwargs(
@@ -979,6 +1024,13 @@ def _postprocess_audio(task: GenerationTask, req: GenerateRequest, result: dict,
     if not final_path.exists() or final_path.stat().st_size <= 0:
         raise RuntimeError(f"生成完成但结果音频不存在：{final_path}")
     return final_path
+
+
+def _direct_cloud_output_format(req: GenerateRequest) -> str:
+    """Return a provider-native format only when that exact engine supports it."""
+    if req.engine_id in {"doubao-tts-preset", "doubao-tts-voiceclone"} and req.output_format in {"wav", "mp3", "pcm", "ogg_opus"}:
+        return req.output_format
+    return "wav"
 
 
 def _save_history(task: GenerationTask, req: GenerateRequest, final_path: Path, audio_id: str, result: dict) -> HistoryItem:
@@ -1172,7 +1224,9 @@ async def _process(task: GenerationTask) -> None:
         await _update_status(task, progress=0.24)
         settings_store.ensure_directories()
         audio_id = task.task_id
-        direct_cloud_format = req.output_format if req.engine_id in {"doubao-tts-preset", "doubao-tts-voiceclone"} and req.output_format in {"wav", "mp3"} else "wav"
+        # 豆包 TTS 2.0 原生支持这四种格式；不要为了通用导出层而把
+        # PCM/OGG Opus 悄悄转成 WAV，用户选择的格式必须如实交给官方。
+        direct_cloud_format = _direct_cloud_output_format(req)
         wav_path = settings_store.output_dir() / f"{audio_id}.{direct_cloud_format}"
 
         # Stage 2: 引擎执行

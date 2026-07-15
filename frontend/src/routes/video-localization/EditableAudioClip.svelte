@@ -4,13 +4,15 @@
 
 	let {
 		clip,
-		audioSrc,
+		waveformSrc,
 		label,
 		tone,
 		left,
 		width,
 		dragging = false,
+		selected = false,
 		locked = false,
+		processing = false,
 		startMs,
 		endMs,
 		sourceStartMs = 0,
@@ -20,19 +22,24 @@
 		timelineScrollLeft = 0,
 		timelineViewportWidth = 0,
 		onMove,
+		onSelect,
 		onTrimStart,
 		onTrimEnd,
 		onDelete,
-		onAnalysis
+		onAnalysis,
+		onWaveformError = undefined,
+		onWaveformReady = undefined
 	}: {
 		clip: VideoLocalizationTimelineClip;
-		audioSrc: string;
+		waveformSrc: string;
 		label: string;
 		tone: 'source' | 'vocals' | 'music' | 'dub';
 		left: number;
 		width: number;
 		dragging?: boolean;
+		selected?: boolean;
 		locked?: boolean;
+		processing?: boolean;
 		startMs: number;
 		endMs: number;
 		sourceStartMs?: number;
@@ -42,21 +49,28 @@
 		timelineScrollLeft?: number;
 		timelineViewportWidth?: number;
 		onMove: (event: PointerEvent) => void;
+		onSelect: () => void;
 		onTrimStart: (event: PointerEvent) => void;
 		onTrimEnd: (event: PointerEvent) => void;
 		onDelete: () => void;
 		onAnalysis: (bars: number[], durationSeconds: number) => void;
+		onWaveformError?: () => void;
+		onWaveformReady?: () => void;
 	} = $props();
 </script>
 
 <div
 	class="audio-clip tone-{tone}"
 	class:dragging
+	class:selected
 	class:locked
+	class:processing
+	data-audio-clip-id={clip.clip_id}
 	role="button"
 	tabindex="0"
 	style={`left:${left}%;width:${width}%`}
 	onpointerdown={(event) => {
+		if (event.button === 0 && !(event.target as HTMLElement).closest('.clip-delete')) onSelect();
 		if (!(event.target as HTMLElement).closest('.clip-label')) return;
 		if (locked) { event.preventDefault(); event.stopPropagation(); return; }
 		onMove(event);
@@ -65,7 +79,7 @@
 	aria-disabled={locked}
 >
 	<ClipWaveform
-		{audioSrc}
+		{waveformSrc}
 		{sourceStartMs}
 		{sourceEndMs}
 		{tone}
@@ -76,6 +90,8 @@
 		clipStartMs={startMs}
 		clipEndMs={endMs}
 		{onAnalysis}
+		onLoadError={onWaveformError}
+		onLoadSuccess={onWaveformReady}
 	/>
 	<span
 		class="clip-handle start"
@@ -128,8 +144,24 @@
 		cursor: grabbing;
 	}
 
+	.audio-clip.selected {
+		border-color: #f4d36b;
+		box-shadow: 0 0 0 1px rgba(244, 211, 107, 0.48), 0 5px 14px rgba(0, 0, 0, 0.24);
+	}
+
 	.audio-clip.locked {
 		cursor: default;
+	}
+
+	.audio-clip.processing::after {
+		content: "";
+		position: absolute;
+		inset: 0;
+		z-index: 3;
+		pointer-events: none;
+		background: repeating-linear-gradient(115deg, transparent 0 9px, rgba(129, 205, 224, 0.17) 9px 15px, transparent 15px 24px);
+		background-size: 42px 100%;
+		animation: clip-processing 1.15s linear infinite;
 	}
 
 	.audio-clip.locked .clip-handle {
@@ -204,4 +236,7 @@
 	.audio-clip:hover .clip-delete,
 	.clip-delete:focus-visible { opacity: 1; }
 	.clip-delete:disabled { display: none; }
+
+	@keyframes clip-processing { to { background-position: 42px 0; } }
+	@media (prefers-reduced-motion: reduce) { .audio-clip.processing::after { animation: none; } }
 </style>

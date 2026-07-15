@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
-from app.services import audio_tools, confucius4_paths, doubao_client, engine_runtime_paths, qwen3_tts_paths
+from app.services import audio_tools, confucius4_paths, cosyvoice_worker, doubao_client, engine_runtime_paths, qwen3_tts_paths
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -26,6 +26,16 @@ if str(BACKEND_ROOT) not in sys.path:
 logger = logging.getLogger(__name__)
 _model_cache: dict = {}
 _model_cache_lock = threading.Lock()
+OMNIVOICE_MODEL_ID = "k2-fsa/OmniVoice"
+OMNIVOICE_REQUIRED_FILES = (
+    "config.json",
+    "model.safetensors",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "audio_tokenizer/config.json",
+    "audio_tokenizer/model.safetensors",
+    "audio_tokenizer/preprocessor_config.json",
+)
 DEFAULT_EXTERNAL_ROOTS = {
     "emotivoice": engine_runtime_paths.managed_engine_root("emotivoice"),
     "f5-tts": engine_runtime_paths.managed_engine_root("f5-tts"),
@@ -33,6 +43,59 @@ DEFAULT_EXTERNAL_ROOTS = {
     "cosyvoice-zero-shot": engine_runtime_paths.managed_engine_root("cosyvoice-zero-shot"),
     "qwen3-tts-mlx-0.6b": qwen3_tts_paths.DEFAULT_ROOT,
 }
+
+
+def _huggingface_hub_cache_dir() -> Path:
+    if configured := os.environ.get("HF_HUB_CACHE"):
+        return Path(configured).expanduser()
+    if configured := os.environ.get("HUGGINGFACE_HUB_CACHE"):
+        return Path(configured).expanduser()
+    if configured := os.environ.get("HF_HOME"):
+        return Path(configured).expanduser() / "hub"
+    cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")).expanduser()
+    return cache_home / "huggingface" / "hub"
+
+
+def omnivoice_local_snapshot() -> Path:
+    repository = _huggingface_hub_cache_dir() / "models--k2-fsa--OmniVoice"
+    snapshot_root = repository / "snapshots"
+    candidates: list[Path] = []
+
+    main_ref = repository / "refs" / "main"
+    try:
+        revision = main_ref.read_text(encoding="utf-8").strip()
+    except OSError:
+        revision = ""
+    if revision:
+        candidates.append(snapshot_root / revision)
+
+    try:
+        snapshots = sorted(
+            (path for path in snapshot_root.iterdir() if path.is_dir()),
+            key=lambda path: (path.stat().st_mtime, path.name),
+            reverse=True,
+        )
+    except OSError:
+        snapshots = []
+    candidates.extend(path for path in snapshots if path not in candidates)
+
+    incomplete: list[tuple[Path, list[str]]] = []
+    for snapshot in candidates:
+        missing = [name for name in OMNIVOICE_REQUIRED_FILES if not (snapshot / name).is_file()]
+        if not missing:
+            return snapshot.resolve()
+        incomplete.append((snapshot, missing))
+
+    if incomplete:
+        snapshot, missing = incomplete[0]
+        raise RuntimeError(
+            f"本地 OmniVoice 模型快照不完整：{snapshot}；缺少文件：{', '.join(missing)}。"
+            f"请手动重新下载 {OMNIVOICE_MODEL_ID}；运行时不会自动联网下载。"
+        )
+    raise RuntimeError(
+        f"未找到本地 OmniVoice 模型快照：{snapshot_root}。"
+        f"请先手动下载 {OMNIVOICE_MODEL_ID}；运行时不会自动联网下载。"
+    )
 
 
 def evict_cache(engine_id: str) -> None:
@@ -171,6 +234,13 @@ def _build_omnivoice_kwargs(**kwargs):
     duration = kwargs.pop("duration", None)
     audio_chunk_duration = kwargs.pop("audio_chunk_duration", None)
     audio_chunk_threshold = kwargs.pop("audio_chunk_threshold", None)
+    t_shift = kwargs.pop("t_shift", None)
+    layer_penalty_factor = kwargs.pop("layer_penalty_factor", None)
+    position_temperature = kwargs.pop("position_temperature", None)
+    class_temperature = kwargs.pop("class_temperature", None)
+    denoise = kwargs.pop("denoise", None)
+    preprocess_prompt = kwargs.pop("preprocess_prompt", None)
+    postprocess_output = kwargs.pop("postprocess_output", None)
 
     gen_kwargs = {"text": text}
     if language and language != "auto":
@@ -190,6 +260,20 @@ def _build_omnivoice_kwargs(**kwargs):
         generation_config["audio_chunk_duration"] = float(audio_chunk_duration)
     if audio_chunk_threshold is not None:
         generation_config["audio_chunk_threshold"] = float(audio_chunk_threshold)
+    if t_shift is not None:
+        generation_config["t_shift"] = float(t_shift)
+    if layer_penalty_factor is not None:
+        generation_config["layer_penalty_factor"] = float(layer_penalty_factor)
+    if position_temperature is not None:
+        generation_config["position_temperature"] = float(position_temperature)
+    if class_temperature is not None:
+        generation_config["class_temperature"] = float(class_temperature)
+    if denoise is not None:
+        generation_config["denoise"] = bool(denoise)
+    if preprocess_prompt is not None:
+        generation_config["preprocess_prompt"] = bool(preprocess_prompt)
+    if postprocess_output is not None:
+        generation_config["postprocess_output"] = bool(postprocess_output)
     if generation_config:
         gen_kwargs["generation_config"] = generation_config
 
@@ -211,7 +295,7 @@ def run_omnivoice(**kwargs):
 
                 load_kwargs["attn_implementation"] = "eager"
                 load_kwargs["dtype"] = torch.float32
-            model = OmniVoice.from_pretrained("k2-fsa/OmniVoice", **load_kwargs)
+            model = OmniVoice.from_pretrained(str(omnivoice_local_snapshot()), **load_kwargs)
             _model_cache[engine_id] = model
     if isinstance(gen_kwargs.get("generation_config"), dict):
         from omnivoice.models.omnivoice import OmniVoiceGenerationConfig
@@ -285,6 +369,10 @@ def _build_doubao_kwargs(**kwargs):
         "speaker": kwargs.get("speaker") or "zh_female_vv_uranus_bigtts",
         "resource_id": kwargs.get("resource_id") or "seed-tts-2.0",
         "style_instruction": kwargs.get("style_instruction"),
+        # Keep the engine-builder contract intact.  This is consumed by the
+        # provider as req_params.additions.explicit_language; omitting it here
+        # made the visible "指定朗读语言" control a no-op for single tasks.
+        "explicit_language": kwargs.get("explicit_language"),
         "speed": kwargs.get("speed"),
         "sample_rate": kwargs.get("sample_rate") or doubao_client.DEFAULT_TTS_SAMPLE_RATE,
         "bit_rate": kwargs.get("bit_rate") or doubao_client.DEFAULT_TTS_BIT_RATE,
@@ -293,6 +381,15 @@ def _build_doubao_kwargs(**kwargs):
         "enable_subtitle": bool(kwargs.get("enable_subtitle")),
         "silence_duration": kwargs.get("silence_duration") or 0,
         "aigc_watermark": bool(kwargs.get("aigc_watermark")),
+        "max_length_to_filter_parenthesis": kwargs.get("max_length_to_filter_parenthesis"),
+        "disable_markdown_filter": bool(kwargs.get("disable_markdown_filter")),
+        "latex_parser_mode": kwargs.get("latex_parser_mode"),
+        "aigc_metadata_enable": bool(kwargs.get("aigc_metadata_enable")),
+        "content_producer": kwargs.get("content_producer"),
+        "produce_id": kwargs.get("produce_id"),
+        "content_propagator": kwargs.get("content_propagator"),
+        "propagate_id": kwargs.get("propagate_id"),
+        "tone_fidelity": bool(kwargs.get("tone_fidelity")),
     }
 
 
@@ -379,13 +476,18 @@ def _build_confucius4_mlx_kwargs(**kwargs):
     ref_audio = kwargs.pop("reference_audio", None)
     model_dir = confucius4_paths.model_dir(kwargs.pop("model_dir", None))
     runtime_root = Path(kwargs.pop("runtime_root", None) or confucius4_paths.runtime_root())
-    language = str(kwargs.pop("language", "zh") or "zh")
+    language = confucius4_paths.require_supported_language(kwargs.pop("language", "zh"))
     temperature = float(kwargs.pop("temperature", 0.8) or 0.8)
     top_k = int(kwargs.pop("top_k", 30) or 30)
-    top_p = float(kwargs.pop("top_p", 0.8) or 0.8)
+    # ``0`` is a deliberate, valid sampling value.  Do not use ``or`` here:
+    # it silently turned an explicit 0 into the 0.8 default.
+    raw_top_p = kwargs.pop("top_p", 0.8)
+    top_p = 0.8 if raw_top_p is None else float(raw_top_p)
     repetition_penalty = float(kwargs.pop("repetition_penalty", 10.0) or 10.0)
     diffusion_steps = int(kwargs.pop("diffusion_steps", 25) or 25)
-    cfg_rate = float(kwargs.pop("cfg_rate", 0.7) or 0.7)
+    # The same applies to cfg_rate: zero means no CFG guidance, not "unset".
+    raw_cfg_rate = kwargs.pop("cfg_rate", 0.7)
+    cfg_rate = 0.7 if raw_cfg_rate is None else float(raw_cfg_rate)
     seed = int(kwargs.pop("seed", 0) or 0)
     return engine_id, output_path, text, ref_audio, model_dir, runtime_root, language, temperature, top_k, top_p, repetition_penalty, diffusion_steps, cfg_rate, seed
 
@@ -518,9 +620,12 @@ def _build_qwen3_tts_kwargs(**kwargs):
     text = kwargs.pop("text").strip()
     ref_audio = kwargs.pop("reference_audio", None)
     ref_text = (kwargs.pop("ref_text", None) or "").strip()
-    language = str(kwargs.pop("language", "zh") or "zh")
+    language = _normalize_qwen3_language(kwargs.pop("language", "chinese"))
     speaker_id = str(kwargs.pop("speaker_id", "") or "Vivian")
-    instruction = str(kwargs.pop("style_instruction", "") or "Normal tone")
+    # CustomVoice accepts ``instruct`` for acting/style. It shares the same
+    # upstream slot as VoiceDesign, so the request builder removes it from the
+    # other two routes before this point.
+    instruction = str(kwargs.pop("style_instruction", "") or "").strip() or "Normal tone"
     voice_design_prompt = str(kwargs.pop("voice_design_prompt", "") or "").strip()
     speed = float(kwargs.pop("speed", 1.0) or 1.0)
     temperature = float(kwargs.pop("temperature", 0.7) or 0.7)
@@ -528,13 +633,28 @@ def _build_qwen3_tts_kwargs(**kwargs):
     top_k = int(kwargs.pop("top_k", 50) or 50)
     repetition_penalty = float(kwargs.pop("repetition_penalty", 1.1) or 1.1)
     max_tokens = int(kwargs.pop("max_tokens", 1200) or 1200)
-    cfg_scale = kwargs.pop("cfg_scale", None)
-    ddpm_steps = kwargs.pop("ddpm_steps", None)
-    return root, output_path, text, ref_audio, ref_text, language, speaker_id, instruction, voice_design_prompt, speed, temperature, top_p, top_k, repetition_penalty, max_tokens, cfg_scale, ddpm_steps
+    # Legacy payloads can still contain these generic fields.  The active MLX
+    # Qwen3 runtime does not expose them, so explicitly discard them instead
+    # of silently creating a false "advanced control" path.
+    kwargs.pop("cfg_scale", None)
+    kwargs.pop("ddpm_steps", None)
+    return root, output_path, text, ref_audio, ref_text, language, speaker_id, instruction, voice_design_prompt, speed, temperature, top_p, top_k, repetition_penalty, max_tokens
+
+
+def _normalize_qwen3_language(value: object) -> str:
+    """Map legacy UI/API short codes to the MLX Qwen3 model's real IDs."""
+    raw = str(value or "chinese").strip().lower()
+    aliases = {
+        "zh": "chinese", "zh-cn": "chinese", "cn": "chinese",
+        "en": "english", "ja": "japanese", "jp": "japanese", "ko": "korean",
+        "de": "german", "it": "italian", "pt": "portuguese", "es": "spanish",
+        "fr": "french", "ru": "russian",
+    }
+    return aliases.get(raw, raw if raw in {"auto", "chinese", "english", "japanese", "korean", "german", "italian", "portuguese", "spanish", "french", "russian"} else "auto")
 
 
 def run_qwen3_tts(**kwargs):
-    root, output_path, text, ref_audio, ref_text, language, speaker_id, instruction, voice_design_prompt, speed, temperature, top_p, top_k, repetition_penalty, max_tokens, cfg_scale, ddpm_steps = _build_qwen3_tts_kwargs(**kwargs)
+    root, output_path, text, ref_audio, ref_text, language, speaker_id, instruction, voice_design_prompt, speed, temperature, top_p, top_k, repetition_penalty, max_tokens = _build_qwen3_tts_kwargs(**kwargs)
     if not text:
         raise RuntimeError("Text is empty")
     python = _external_python(root)
@@ -545,7 +665,7 @@ def run_qwen3_tts(**kwargs):
     if ref_audio and not Path(ref_audio).exists():
         raise RuntimeError("REFERENCE_AUDIO_NOT_FOUND")
     if ref_audio and not ref_text:
-        ref_text = "."
+        raise RuntimeError("REFERENCE_TEXT_REQUIRED")
     payload = {
         "text": text,
         "reference_audio": ref_audio,
@@ -560,8 +680,6 @@ def run_qwen3_tts(**kwargs):
         "top_k": top_k,
         "repetition_penalty": repetition_penalty,
         "max_tokens": max_tokens,
-        "cfg_scale": cfg_scale,
-        "ddpm_steps": ddpm_steps,
         "model_dir": str(model_dir),
         "output_path": output_path,
     }
@@ -593,13 +711,9 @@ with tempfile.TemporaryDirectory(prefix="voice-studio-qwen3-") as tmp:
         "play": False,
         "verbose": False,
     }
-    if payload.get("cfg_scale") is not None:
-        kwargs["cfg_scale"] = payload["cfg_scale"]
-    if payload.get("ddpm_steps") is not None:
-        kwargs["ddpm_steps"] = payload["ddpm_steps"]
     if payload.get("reference_audio"):
         kwargs["ref_audio"] = payload["reference_audio"]
-        kwargs["ref_text"] = payload.get("ref_text") or "."
+        kwargs["ref_text"] = payload["ref_text"]
     elif payload.get("voice_design_prompt"):
         kwargs["instruct"] = payload["voice_design_prompt"]
     else:
@@ -618,6 +732,13 @@ with tempfile.TemporaryDirectory(prefix="voice-studio-qwen3-") as tmp:
         payload_path = Path(tmp) / "payload.json"
         payload_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         _run_external([python, "-c", script, str(payload_path)], root)
+    # The current MLX Qwen3 runtime accepts ``speed`` but documents it as not
+    # natively supported yet.  Apply the selected speed after generation so the
+    # visible control has the promised, audible duration change without
+    # changing pitch.  Keep passing the field upstream for forward
+    # compatibility once the runtime implements native speed control.
+    if abs(speed - 1.0) >= 1e-3:
+        audio_tools.time_stretch_file(output_path, speed)
     meta = _audio_meta(output_path, 24000)
     meta.update({"output_path": output_path, "generation_time_ms": int((time.perf_counter() - start) * 1000)})
     return meta
@@ -631,11 +752,12 @@ def _build_f5_tts_kwargs(**kwargs):
     ref_audio = kwargs.pop("reference_audio", None)
     ref_text = (kwargs.pop("ref_text", None) or "").strip()
     speed = float(kwargs.pop("speed", 1.0) or 1.0)
-    nfe_step = int(kwargs.pop("nfe_step", 16) or 16)
-    cfg_strength = float(kwargs.pop("cfg_strength", 1.5) or 1.5)
+    nfe_step = int(kwargs.pop("nfe_step", 32) or 32)
+    cfg_strength = float(kwargs.pop("cfg_strength", 2.0) or 2.0)
     target_rms = float(kwargs.pop("target_rms", 0.1) or 0.1)
     cross_fade_duration = float(kwargs.pop("cross_fade_duration", 0.15) or 0.15)
-    sway_sampling_coef = float(kwargs.pop("sway_sampling_coef", -1.0) or -1.0)
+    raw_sway_sampling_coef = kwargs.pop("sway_sampling_coef", -1.0)
+    sway_sampling_coef = -1.0 if raw_sway_sampling_coef is None else float(raw_sway_sampling_coef)
     fix_duration_raw = float(kwargs.pop("fix_duration", 0.0) or 0.0)
     fix_duration = fix_duration_raw if fix_duration_raw > 0 else None
     remove_silence = bool(kwargs.pop("remove_silence", False))
@@ -718,7 +840,7 @@ def run_cosyvoice_sft(**kwargs):
     if not text:
         raise RuntimeError("Text is empty")
     python = _external_python(root)
-    model_dir = root / "pretrained_models" / "CosyVoice-300M-SFT"
+    model_dir = cosyvoice_worker.model_directory(root, "cosyvoice-sft")
     payload = {
         "text": text,
         "speaker_id": speaker_id,
@@ -741,9 +863,18 @@ from cosyvoice.cli.cosyvoice import AutoModel
 payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 model = AutoModel(model_dir=payload["model_dir"])
 speakers = model.list_available_spks()
-speaker = payload["speaker_id"] if payload["speaker_id"] in speakers else speakers[0]
+speaker_id = str(payload["speaker_id"] or "中文女").strip() or "中文女"
+available_speakers = [str(item).strip() for item in speakers if str(item).strip()]
+if speaker_id not in speakers:
+    preview = "、".join(available_speakers[:12]) or "无"
+    if len(available_speakers) > 12:
+        preview += " 等"
+    raise RuntimeError(
+        f"COSYVOICE_SPEAKER_NOT_FOUND: 未找到官方预置音色“{speaker_id}”。"
+        f"请从音色列表中重新选择；当前模型可用音色：{preview}。"
+    )
 chunks = []
-for item in model.inference_sft(payload["text"], speaker, stream=False, speed=payload["speed"]):
+for item in model.inference_sft(payload["text"], speaker_id, stream=False, speed=payload["speed"]):
     speech = item["tts_speech"].detach().cpu()
     if speech.ndim == 1:
         speech = speech.unsqueeze(0)
@@ -782,7 +913,7 @@ def run_cosyvoice_zero_shot(**kwargs):
     if not text:
         raise RuntimeError("Text is empty")
     python = _external_python(root)
-    model_dir = root / "pretrained_models" / "CosyVoice-300M-SFT"
+    model_dir = cosyvoice_worker.model_directory(root, "cosyvoice-zero-shot")
     payload = {
         "text": text,
         "reference_audio": ref_audio,

@@ -8,8 +8,10 @@
 		VideoLocalizationReferenceClipUpdate,
 		VideoLocalizationVoiceRecipe
 	} from '$lib/api/types';
-	import { AudioLines, Captions, Palette, WandSparkles } from 'lucide-svelte';
-	import { candidateAudioUrl, durationLabel, msLabel, referenceAudioUrl, referenceCoverUrl, statusLabel, timeLabel } from './utils';
+	import { AudioLines, Captions, CheckCircle2, ListTodo, Palette, WandSparkles } from 'lucide-svelte';
+	import TaskProgressPanel from './TaskProgressPanel.svelte';
+	import type { ActivityTask } from './activity-notice';
+	import { candidateAudioUrl, durationLabel, msLabel, referenceAudioUrl, referenceCoverUrl, timeLabel } from './utils';
 	import {
 		SUBTITLE_SOURCE_LABELS,
 		SUBTITLE_STYLE_LABELS,
@@ -32,6 +34,7 @@
 		onSectionChange,
 		onUpdateCue,
 		onSaveCue,
+		onConfirmCueTiming,
 		onDeleteCue,
 		onUpdateSubtitlePreview,
 		onCreateReferenceCandidates,
@@ -48,9 +51,14 @@
 		onApplyGeneratedCandidate,
 		creatingReferences,
 		savingCue,
+		confirmingCueTiming,
 		referenceUpdatingId,
 		candidateApplyingId,
-		generatingVoice
+		generatingVoice,
+		taskHistory = [],
+		onCancelTask = undefined,
+		subtitleRuntimeBusy = false,
+		taskCenterPulseKey = 0
 	}: {
 		draft: VideoLocalizationDraft | null;
 		projectId: string;
@@ -58,13 +66,14 @@
 		selectionRange: { start_ms: number; end_ms: number } | null;
 		selectedVoiceId: string;
 		selectedRecipeId: string;
-		inspectorSection?: 'voice' | 'generate' | 'subtitle' | 'style';
+		inspectorSection?: 'tasks' | 'voice' | 'generate' | 'subtitle' | 'style';
 		inspectorVoiceTab?: 'library' | 'save-selection';
 		subtitlePreview?: SubtitlePreviewState;
 		onSelectedVoiceIdChange: (voiceId: string) => void;
-		onSectionChange: (section: 'voice' | 'generate' | 'subtitle' | 'style') => void;
+		onSectionChange: (section: 'tasks' | 'voice' | 'generate' | 'subtitle' | 'style') => void;
 		onUpdateCue: (patch: Partial<VideoLocalizationCue>) => void;
 		onSaveCue: () => void;
+		onConfirmCueTiming: () => void;
 		onDeleteCue: () => void;
 		onUpdateSubtitlePreview: (patch: Partial<SubtitlePreviewState>) => void;
 		onCreateReferenceCandidates: () => void | Promise<void>;
@@ -81,9 +90,14 @@
 		onApplyGeneratedCandidate: (candidateId: string) => void | Promise<void>;
 		creatingReferences: boolean;
 		savingCue: boolean;
+		confirmingCueTiming: boolean;
 		referenceUpdatingId: string;
 		candidateApplyingId: string;
 		generatingVoice: boolean;
+		taskHistory?: ActivityTask[];
+		onCancelTask?: (task: ActivityTask) => void | Promise<void>;
+		subtitleRuntimeBusy?: boolean;
+		taskCenterPulseKey?: number;
 	} = $props();
 
 	let activeTab = $state<'library' | 'save-selection'>('library');
@@ -102,7 +116,7 @@
 	let recipeDescription = $state('');
 	let recipeTags = $state('');
 	let recipeSnapshotText = $state('');
-	let activeSection = $state<'voice' | 'generate' | 'subtitle' | 'style'>('subtitle');
+	let activeSection = $state<'tasks' | 'voice' | 'generate' | 'subtitle' | 'style'>('subtitle');
 
 	const selectedVoice = $derived(
 		(draft?.reference_clips ?? []).find((clip) => clip.reference_clip_id === selectedVoiceId) ?? draft?.reference_clips[0] ?? null
@@ -122,6 +136,7 @@
 		(draft?.generated_candidates ?? []).filter((candidate) => candidate.recipe_id === selectedRecipe?.recipe_id)
 	);
 	const canGenerateVoice = $derived(Boolean(selectedVoice?.audio_path && selectedCue?.tts_recommended_text?.trim()));
+	const selectedReviewSegments = $derived(reviewSegmentsForCue(draft, selectedCue));
 	const canSaveSelection = $derived(
 		Boolean(
 			selectionRange &&
@@ -130,6 +145,42 @@
 				draft?.stems.vocals_clean_path
 		)
 	);
+
+	function reviewSegmentsForCue(currentDraft: VideoLocalizationDraft | null, cue: VideoLocalizationCue | null) {
+		if (!currentDraft?.transcription || !cue) return [];
+		const wordIds = new Set(cue.source_word_ids ?? []);
+		const segmentIds = new Set(
+			currentDraft.transcription.words
+				.filter((word) => wordIds.has(word.word_id))
+				.map((word) => word.segment_id)
+		);
+		if (!segmentIds.size && cue.start_ms !== null && cue.end_ms !== null) {
+			for (const segment of currentDraft.transcription.segments) {
+				if (segment.end_ms > cue.start_ms && segment.start_ms < cue.end_ms) segmentIds.add(segment.segment_id);
+			}
+		}
+		return currentDraft.transcription.segments.filter((segment) => segmentIds.has(segment.segment_id));
+	}
+
+	function reviewReasonLabel(reason: string | null | undefined) {
+		const labels: Record<string, string> = {
+			'llm_review_rejected:numbers_changed': '候选修改了数字或数值',
+				'llm_review_rejected:negation_changed': '候选修改了否定关系',
+				'llm_review_rejected:language_changed': '候选改变了原文语言',
+				'llm_review_rejected:too_different': '候选改写幅度过大',
+				'llm_review_rejected:empty_text': '候选为空，已保留原始识别文本'
+		};
+		return reason ? labels[reason] ?? reason : '';
+	}
+
+	function subtitleStatusLabel(status: VideoLocalizationCue['review_status']) {
+		return {
+			ready: '字幕已校对',
+			needs_review: '待校对',
+			blocked: '阻断',
+			locked: '已锁定'
+		}[status];
+	}
 	const saveSelectionHint = $derived(selectionHint());
 
 	function selectVoice(clip: VideoLocalizationReferenceClip) {
@@ -254,13 +305,20 @@
 	});
 </script>
 
-<aside class="inspector">
+<aside class="inspector" class:tasks-view={activeSection === 'tasks'}>
 	<div class="inspector-mode-tabs" aria-label="右侧检查器">
+		<button class:active={activeSection === 'tasks'} type="button" data-tooltip="任务：查看后台处理进度、每一步状态和历史结果。" onclick={() => onSectionChange('tasks')}><ListTodo size={14} /><span>任务</span></button>
+		<button class:active={activeSection === 'subtitle'} type="button" data-tooltip="字幕：编辑时间线中当前选中的字幕片段。" onclick={() => onSectionChange('subtitle')}><Captions size={14} /><span>字幕</span></button>
 		<button class:active={activeSection === 'voice'} type="button" data-tooltip="音色：管理项目样音，或把当前音频选区保存为音色。" onclick={() => onSectionChange('voice')}><AudioLines size={14} /><span>音色</span></button>
 		<button class:active={activeSection === 'generate'} type="button" data-tooltip="生成：使用当前音色和参数组生成所选字幕的配音。" onclick={() => onSectionChange('generate')}><WandSparkles size={14} /><span>生成</span></button>
-		<button class:active={activeSection === 'subtitle'} type="button" data-tooltip="字幕：编辑时间线中当前选中的字幕片段。" onclick={() => onSectionChange('subtitle')}><Captions size={14} /><span>字幕</span></button>
 		<button class:active={activeSection === 'style'} type="button" data-tooltip="样式：调整视频预览中的字幕位置和外观。" onclick={() => onSectionChange('style')}><Palette size={14} /><span>样式</span></button>
 	</div>
+
+	{#if activeSection === 'tasks'}
+		<div class="task-view-content">
+			<TaskProgressPanel tasks={taskHistory} {onCancelTask} pulseKey={taskCenterPulseKey} full />
+		</div>
+	{/if}
 
 	{#if activeSection === 'voice'}
 		<div class="inspector-tabs">
@@ -395,22 +453,41 @@
 	{/if}
 
 	{#if activeSection === 'generate'}
-	<section class="inspector-panel voice-lab-panel">
-		<div class="panel-head">
-			<h2>音色生成</h2>
-			<span>{selectedVoice ? voiceTitle(selectedVoice) : '未选择音色'}</span>
-		</div>
-		<div class="voice-lab">
-			<div class="voice-route">
-				<div>
-					<span>当前音色</span>
-					<strong>{selectedVoice ? voiceTitle(selectedVoice) : '从音色库选择'}</strong>
-				</div>
-				<div>
-					<span>当前字幕</span>
-					<strong>{selectedCue?.cue_id ?? '未选择字幕'}</strong>
-				</div>
+		<section class="inspector-panel voice-lab-panel">
+			<div class="panel-head">
+				<h2>配音生成</h2>
+				<span>{selectedVoice ? voiceTitle(selectedVoice) : '未选择音色'}</span>
 			</div>
+			<div class="voice-lab">
+				<div class="dubbing-stage-note">
+					<strong>配音阶段</strong>
+					<span>这里的台词和路线只用于生成声音，不影响字幕校对与 SRT 导出。</span>
+				</div>
+				<div class="voice-route">
+					<div>
+						<span>当前音色</span>
+						<strong>{selectedVoice ? voiceTitle(selectedVoice) : '从音色库选择'}</strong>
+					</div>
+					<div>
+						<span>当前字幕</span>
+						<strong>{selectedCue?.cue_id ?? '未选择字幕'}</strong>
+					</div>
+				</div>
+				<div class="dubbing-fields">
+					<label class="field compact-field">
+						<span>配音台词（TTS）</span>
+						<textarea rows="3" value={selectedCue?.tts_recommended_text ?? ''} placeholder="进入配音阶段后填写；字幕阶段无需准备" disabled={!selectedCue} oninput={(event) => onUpdateCue({ tts_recommended_text: event.currentTarget.value })}></textarea>
+					</label>
+					<label class="field compact-field">
+						<span>配音路线</span>
+						<select value={selectedCue?.audio_route ?? 'manual_review'} disabled={!selectedCue} onchange={(event) => onUpdateCue({ audio_route: event.currentTarget.value as VideoLocalizationCue['audio_route'] })}>
+							<option value="clone_from_source">克隆源声音</option>
+							<option value="preset_tts">预设 TTS</option>
+							<option value="preserve_original_audio">保留原声</option>
+							<option value="manual_review">人工复核</option>
+						</select>
+					</label>
+				</div>
 			<div class="recipe-list">
 				{#if selectedVoiceRecipes.length}
 					{#each selectedVoiceRecipes as recipe}
@@ -479,7 +556,7 @@
 						{#if candidateAudioUrl(projectId, candidate)}
 							<audio controls preload="metadata" src={candidateAudioUrl(projectId, candidate)}></audio>
 						{/if}
-						<button type="button" data-tooltip="采用候选：把这个声音设为当前字幕版本并替换中文配音轨片段。" disabled={isAppliedCandidate(candidate) || candidate.status !== 'success' || candidateApplyingId === candidate.candidate_id} onclick={() => onApplyGeneratedCandidate(candidate.candidate_id)}>
+						<button type="button" data-tooltip="采用候选：把这个声音设为当前字幕版本并替换合成配音轨片段。" disabled={isAppliedCandidate(candidate) || candidate.status !== 'success' || candidateApplyingId === candidate.candidate_id} onclick={() => onApplyGeneratedCandidate(candidate.candidate_id)}>
 							{candidateApplyingId === candidate.candidate_id ? '应用中' : isAppliedCandidate(candidate) ? '已采用' : '采用'}
 						</button>
 					</div>
@@ -491,64 +568,77 @@
 	{/if}
 
 	{#if activeSection === 'subtitle'}
-	<section class="inspector-panel">
+	<section class="inspector-panel" class:runtime-locked={subtitleRuntimeBusy} aria-busy={subtitleRuntimeBusy}>
 		<div class="panel-head">
 			<h2>字幕编辑{selectedCue ? `：${selectedCue.cue_id}` : ''}</h2>
-			<span>{selectedCue ? statusLabel(selectedCue.review_status) : '未选择'}</span>
+				<span>{selectedCue ? subtitleStatusLabel(selectedCue.review_status) : '未选择'}</span>
 		</div>
 		{#if selectedCue}
 			<div class="cue-meta">
 				<span>{timeLabel(selectedCue)}</span>
-				<span>参考音：{selectedCue.reference_clip_id || '未绑定'}</span>
+				<div class="timing-meta">
+					<span class:timing-low={selectedCue.timing_confidence === 'low'}>时间置信度：{selectedCue.timing_confidence ?? '未评估'}</span>
+					{#if selectedCue.quality_flags.includes('manual_timing_verified')}
+						<span class="timing-verified"><CheckCircle2 size={12} /> 已试听确认</span>
+					{:else if selectedCue.timing_confidence === 'low' || selectedCue.quality_flags.includes('timing_review_required')}
+						<button class="confirm-timing" type="button" data-tooltip="确认时间码：试听当前片段并确认出入点准确后，解除低置信时间阻断。" onclick={onConfirmCueTiming} disabled={confirmingCueTiming || subtitleRuntimeBusy}>
+							<CheckCircle2 size={12} /> {confirmingCueTiming ? '确认中' : '确认时间码'}
+						</button>
+					{/if}
+				</div>
 			</div>
+			{#if selectedCue.source_text_raw || selectedReviewSegments.length}
+				<details class="asr-audit" open>
+					<summary>识别与校对依据</summary>
+					<div class="audit-row">
+						<span>原始 ASR</span>
+						<p>{selectedCue.source_text_raw || selectedReviewSegments.map((segment) => segment.raw_text).join(' ')}</p>
+					</div>
+					<div class="audit-row accepted">
+						<span>当前采用</span>
+						<p>{selectedCue.en_subtitle_text || '尚无文本'}</p>
+					</div>
+					{#each selectedReviewSegments.filter((segment) => segment.review_rejection_reason && segment.review_candidate_text) as segment}
+						<div class="audit-row rejected">
+							<span>已拒绝候选 · {reviewReasonLabel(segment.review_rejection_reason)}</span>
+							<p>{segment.review_candidate_text}</p>
+						</div>
+					{/each}
+				</details>
+			{/if}
 			<div class="editor-grid time-grid">
 				<label class="field">
 					<span>入点 ms</span>
-					<input type="number" min="0" step="100" value={selectedCue.start_ms ?? ''} oninput={(event) => onUpdateCue({ start_ms: event.currentTarget.value ? Number(event.currentTarget.value) : null })} />
+					<input type="number" min="0" step="100" value={selectedCue.start_ms ?? ''} disabled={subtitleRuntimeBusy} oninput={(event) => onUpdateCue({ start_ms: event.currentTarget.value ? Number(event.currentTarget.value) : null })} />
 				</label>
 				<label class="field">
 					<span>出点 ms</span>
-					<input type="number" min="0" step="100" value={selectedCue.end_ms ?? ''} oninput={(event) => onUpdateCue({ end_ms: event.currentTarget.value ? Number(event.currentTarget.value) : null })} />
+					<input type="number" min="0" step="100" value={selectedCue.end_ms ?? ''} disabled={subtitleRuntimeBusy} oninput={(event) => onUpdateCue({ end_ms: event.currentTarget.value ? Number(event.currentTarget.value) : null })} />
 				</label>
 			</div>
 			<label class="field">
 				<span>原文/ASR</span>
-				<textarea rows="3" value={selectedCue.en_subtitle_text ?? ''} oninput={(event) => onUpdateCue({ en_subtitle_text: event.currentTarget.value })}></textarea>
+			<textarea class="subtitle-textarea" rows="1" value={selectedCue.en_subtitle_text ?? ''} disabled={subtitleRuntimeBusy} oninput={(event) => onUpdateCue({ en_subtitle_text: event.currentTarget.value })}></textarea>
 			</label>
 			<label class="field">
 				<span>本土化字幕</span>
-				<textarea rows="3" value={selectedCue.zh_localized_subtitle_text ?? ''} oninput={(event) => onUpdateCue({ zh_localized_subtitle_text: event.currentTarget.value })}></textarea>
+			<textarea class="subtitle-textarea" rows="1" value={selectedCue.zh_localized_subtitle_text ?? ''} disabled={subtitleRuntimeBusy} oninput={(event) => onUpdateCue({ zh_localized_subtitle_text: event.currentTarget.value })}></textarea>
 			</label>
 			<label class="field">
-				<span>TTS 文本</span>
-				<textarea rows="3" value={selectedCue.tts_recommended_text ?? ''} oninput={(event) => onUpdateCue({ tts_recommended_text: event.currentTarget.value })}></textarea>
+				<span>字幕状态</span>
+			<select value={selectedCue.review_status} disabled={subtitleRuntimeBusy} onchange={(event) => onUpdateCue({ review_status: event.currentTarget.value as VideoLocalizationCue['review_status'] })}>
+					<option value="needs_review">待校对</option>
+					<option value="ready">已校对</option>
+					<option value="blocked">阻断</option>
+					<option value="locked">已锁定</option>
+				</select>
 			</label>
-			<div class="editor-grid">
-				<label class="field">
-					<span>状态</span>
-					<select value={selectedCue.review_status} onchange={(event) => onUpdateCue({ review_status: event.currentTarget.value as VideoLocalizationCue['review_status'] })}>
-						<option value="needs_review">待校对</option>
-						<option value="ready">可生成</option>
-						<option value="blocked">阻断</option>
-						<option value="locked">已锁定</option>
-					</select>
-				</label>
-				<label class="field">
-					<span>音频路线</span>
-					<select value={selectedCue.audio_route} onchange={(event) => onUpdateCue({ audio_route: event.currentTarget.value as VideoLocalizationCue['audio_route'] })}>
-						<option value="clone_from_source">克隆源声音</option>
-						<option value="preset_tts">预设 TTS</option>
-						<option value="preserve_original_audio">保留原声</option>
-						<option value="manual_review">人工复核</option>
-					</select>
-				</label>
-			</div>
 			<div class="cue-actions">
-				<button class="save-btn" type="button" data-tooltip="保存字幕：保存当前片段的时间码、文本、说话人和音频路线。" onclick={onSaveCue} disabled={savingCue}>{savingCue ? '保存中' : '保存字幕'}</button>
-				<button class="danger-btn" type="button" data-tooltip="删除片段：从字幕轨移除当前字幕片段。" onclick={onDeleteCue}>删除片段</button>
+				<button class="save-btn" type="button" data-tooltip="保存字幕：保存当前片段的时间码、字幕文本和校对状态。" onclick={onSaveCue} disabled={savingCue || subtitleRuntimeBusy}>{savingCue ? '保存中' : subtitleRuntimeBusy ? '任务处理中' : '保存字幕'}</button>
+				<button class="danger-btn" type="button" data-tooltip="删除片段：从字幕轨移除当前字幕片段。" onclick={onDeleteCue} disabled={subtitleRuntimeBusy}>删除片段</button>
 			</div>
 		{:else}
-			<p class="empty-text">点击时间线上的字幕片段后，这里会同步显示原文/ASR、本土化字幕和 TTS 文本。</p>
+			<p class="empty-text">点击时间线上的字幕片段后，这里会同步显示原文/ASR 与本土化字幕。</p>
 		{/if}
 	</section>
 	{/if}
@@ -615,8 +705,22 @@
 		background:
 			linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 180px),
 			#161a1f;
-		max-height: calc(100vh - 96px);
+		max-height: calc(100dvh - 108px);
 		overflow: auto;
+	}
+
+	.inspector.tasks-view {
+		height: calc(100dvh - 108px);
+		min-height: 0;
+		grid-template-rows: auto minmax(0, 1fr);
+		align-content: stretch;
+		overflow: hidden;
+	}
+
+	.task-view-content {
+		min-width: 0;
+		min-height: 0;
+		overflow: hidden;
 	}
 
 	.inspector-tabs {
@@ -634,7 +738,7 @@
 		top: 0;
 		z-index: 3;
 		display: grid;
-		grid-template-columns: repeat(4, 1fr);
+		grid-template-columns: repeat(5, 1fr);
 		gap: 4px;
 		padding: 5px;
 		border: 1px solid var(--line);
@@ -677,6 +781,11 @@
 			linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent),
 			#1c2126;
 		overflow: hidden;
+	}
+
+	.inspector-panel.runtime-locked {
+		border-color: rgba(82, 149, 169, 0.42);
+		box-shadow: inset 0 0 0 1px rgba(82, 149, 169, 0.08);
 	}
 
 	.panel-head {
@@ -882,9 +991,91 @@
 
 	.cue-meta {
 		display: flex;
+		align-items: center;
 		justify-content: space-between;
 		gap: 8px;
 		border-bottom: 1px solid #303941;
+	}
+
+	.cue-meta .timing-low {
+		color: #efa3a9;
+	}
+
+	.timing-meta,
+	.timing-verified,
+	.confirm-timing {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+	}
+
+	.timing-meta {
+		justify-content: flex-end;
+		flex-wrap: wrap;
+	}
+
+	.timing-verified {
+		color: #79d7bd;
+	}
+
+	.confirm-timing {
+		min-height: 24px;
+		padding: 2px 7px;
+		border: 1px solid #45665e;
+		border-radius: 6px;
+		background: #17332f;
+		color: #bceee4;
+		font-size: 11px;
+		cursor: pointer;
+	}
+
+	.confirm-timing:disabled {
+		opacity: 0.55;
+		cursor: not-allowed;
+	}
+
+	.asr-audit {
+		margin: 8px 11px 2px;
+		border: 1px solid #303941;
+		border-radius: 7px;
+		background: #14191e;
+		overflow: hidden;
+	}
+
+	.asr-audit summary {
+		padding: 7px 8px;
+		color: #b8c3c8;
+		font-size: 11px;
+		font-weight: 760;
+		cursor: pointer;
+	}
+
+	.audit-row {
+		display: grid;
+		gap: 3px;
+		padding: 7px 8px;
+		border-top: 1px solid rgba(255, 255, 255, 0.06);
+	}
+
+	.audit-row span {
+		color: #87949b;
+		font-size: 10px;
+	}
+
+	.audit-row p {
+		margin: 0;
+		color: #d8e0e3;
+		font-size: 11px;
+		line-height: 1.45;
+	}
+
+	.audit-row.accepted {
+		border-left: 2px solid rgba(73, 167, 132, 0.72);
+	}
+
+	.audit-row.rejected {
+		border-left: 2px solid rgba(198, 82, 91, 0.72);
+		background: rgba(101, 35, 42, 0.12);
 	}
 
 	.field {
@@ -904,6 +1095,13 @@
 		padding: 8px;
 		resize: vertical;
 		font-size: 12px;
+	}
+
+	.field textarea.subtitle-textarea {
+		min-height: 30px;
+		height: 30px;
+		resize: vertical;
+		line-height: 18px;
 	}
 
 	.field input[type='range'] {
@@ -931,6 +1129,34 @@
 		display: grid;
 		gap: 9px;
 		padding: 10px 11px;
+	}
+
+	.dubbing-stage-note {
+		display: grid;
+		gap: 2px;
+		padding: 8px 9px;
+		border-left: 2px solid rgba(87, 208, 200, 0.72);
+		background: rgba(87, 208, 200, 0.07);
+	}
+
+	.dubbing-stage-note strong {
+		color: #d5fffb;
+		font-size: 11px;
+	}
+
+	.dubbing-stage-note span {
+		color: #95aaa9;
+		font-size: 10px;
+		line-height: 1.4;
+	}
+
+	.dubbing-fields {
+		display: grid;
+		gap: 7px;
+		padding: 9px;
+		border: 1px solid #303941;
+		border-radius: 7px;
+		background: #14191e;
 	}
 
 	.voice-route {
@@ -1121,6 +1347,14 @@
 			align-items: start;
 		}
 
+		.inspector.tasks-view {
+			height: min(720px, calc(100vh - 64px));
+			max-height: none;
+			grid-template-columns: 1fr;
+			grid-template-rows: auto minmax(0, 1fr);
+			align-items: stretch;
+		}
+
 		.inspector-mode-tabs,
 		.inspector-tabs {
 			grid-column: 1 / -1;
@@ -1130,6 +1364,10 @@
 	@media (max-width: 900px) {
 		.inspector {
 			grid-template-columns: 1fr;
+		}
+
+		.inspector.tasks-view {
+			height: min(640px, calc(100vh - 32px));
 		}
 	}
 

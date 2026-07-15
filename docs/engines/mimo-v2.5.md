@@ -58,7 +58,9 @@ MiMo V2.5 在本项目中拆成三种 TTS 入口。正文统一放合成文本�
 | Preset / VoiceClone | `style_instruction` | 空 | 描述怎么读，例如“温柔、语速稍慢、重点句停顿”。 |
 | VoiceDesign | `voice_design_prompt` | 中年男性，声线沉稳偏正式，吐字工整，语速适中。 | 描述要生成的声音本身，不是正文。 |
 | VoiceDesign | `optimize_text_preview` | `false` | 是否让云端先润色播报文本。 |
-| 全部 TTS | `temperature` / `top_p` | `0.6` / `0.95` | 官方超参，默认偏稳定。 |
+| 全部 TTS | 输出格式 | `wav` | 当前只开放官方非流式示例明确覆盖的 WAV；有效 Key 完成 MP3/FLAC 实测前不承诺其他格式。 |
+
+`temperature`、`top_p` 虽是 MiMo 通用聊天接口可能接受的字段，但官方 TTS 使用说明没有给出其对语音的专属默认值、范围或听感效果。本项目不把它们展示为 TTS 控件，也不发送，避免出现“滑块能调但不知道是否真的影响声音”的假参数。
 
 内置预设：MiMo 稳定口播、MiMo 温柔女声、MiMo 角色试音、MiMo 复刻讲述。生成页“一键重置参数”会恢复当前 MiMo 变体的默认值。
 

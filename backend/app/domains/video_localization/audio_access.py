@@ -41,6 +41,20 @@ def tts_audio_path(draft: VideoLocalizationDraft, cue_id: str) -> Path | None:
     return tts_pipeline.tts_audio_path(draft, cue_id)
 
 
+def timeline_clip_audio_path(draft: VideoLocalizationDraft, clip_id: str) -> Path | None:
+    if clip_id == "media_original":
+        return source_audio_path(draft)
+    if clip_id == "media_vocals":
+        return stem_audio_path(draft, "vocals")
+    if clip_id == "media_background":
+        return stem_audio_path(draft, "background")
+    clip = next((dict(item) for item in draft.timeline_clips if dict(item).get("clip_id") == clip_id), None)
+    if not clip or not clip.get("audio_path"):
+        return None
+    path = Path(str(clip["audio_path"]))
+    return path if path.exists() else None
+
+
 def reference_clip_audio_path(draft: VideoLocalizationDraft, reference_clip_id: str) -> Path | None:
     clip = next((item for item in draft.reference_clips if item.reference_clip_id == reference_clip_id), None)
     if not clip or not clip.audio_path:

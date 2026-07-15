@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
@@ -36,8 +37,8 @@ async def get_audio(result_id: str, download: bool = False, filename: str | None
     if not path:
         raise AppException(404, "AUDIO_NOT_FOUND", "Audio not found")
     if download:
-        return FileResponse(path, filename=_safe_download_filename(filename, path.name))
-    return FileResponse(path)
+        return FileResponse(path, filename=_safe_download_filename(filename, path.name), media_type=_history_audio_media_type(path))
+    return FileResponse(path, media_type=_history_audio_media_type(path))
 
 
 @router.get("/{result_id}/waveform", response_model=WaveformPeaksResponse)
@@ -53,3 +54,10 @@ def _safe_download_filename(filename: str | None, fallback: str) -> str:
         return fallback
     value = "".join("_" if ch in '\\/:*?"<>|\0\r\n\t' else ch for ch in filename).strip(" .")
     return value[:120] or fallback
+
+
+def _history_audio_media_type(path: Path) -> str | None:
+    """Map internal provider format labels to browser-recognized media types."""
+    if path.suffix.lower() == ".ogg_opus":
+        return "audio/ogg"
+    return None

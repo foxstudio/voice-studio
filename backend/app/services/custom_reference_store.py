@@ -63,18 +63,40 @@ def promote_voice_file(file_id: str) -> VoiceFile | None:
     destination_root = settings_store.voice_dir().expanduser().resolve(strict=False)
     destination_root.mkdir(parents=True, exist_ok=True)
     destination = destination_root / source.name
+    source_media = owned_source_media_path(voice_file)
+    destination_media = destination_root / source_media.name if source_media else None
 
     if not source.exists():
         if destination.exists():
-            updated = voice_file.model_copy(update={"path": str(destination)})
+            updated = voice_file.model_copy(
+                update={
+                    "path": str(destination),
+                    "source_media_path": str(destination_media) if destination_media and destination_media.exists() else voice_file.source_media_path,
+                }
+            )
             db.upsert("voice_files", updated.file_id, updated.model_dump())
             return updated
         raise FileNotFoundError(f"Custom reference audio not found: {source}")
     if destination.exists():
         raise FileExistsError(f"Voice library destination already exists: {destination}")
+    if destination_media and destination_media.exists():
+        raise FileExistsError(f"Voice library source-media destination already exists: {destination_media}")
 
     shutil.copy2(source, destination)
-    updated = voice_file.model_copy(update={"path": str(destination)})
+    try:
+        if source_media and destination_media:
+            shutil.copy2(source_media, destination_media)
+        updated = voice_file.model_copy(
+            update={
+                "path": str(destination),
+                "source_media_path": str(destination_media) if destination_media else voice_file.source_media_path,
+            }
+        )
+    except Exception:
+        destination.unlink(missing_ok=True)
+        if destination_media:
+            destination_media.unlink(missing_ok=True)
+        raise
     try:
         with db.conn() as connection:
             _replace_path_references(connection, str(source), str(destination))
@@ -84,8 +106,12 @@ def promote_voice_file(file_id: str) -> VoiceFile | None:
             )
     except Exception:
         destination.unlink(missing_ok=True)
+        if destination_media:
+            destination_media.unlink(missing_ok=True)
         raise
     source.unlink(missing_ok=True)
+    if source_media:
+        source_media.unlink(missing_ok=True)
     return updated
 
 
@@ -111,6 +137,9 @@ def delete_if_unreferenced(
 
     owned_path = _resolved(voice_file.path)
     owned_path.unlink(missing_ok=True)
+    source_media = owned_source_media_path(voice_file)
+    if source_media:
+        source_media.unlink(missing_ok=True)
     db.delete_one("voice_files", "file_id", voice_file.file_id)
     return voice_file.file_id
 
@@ -196,6 +225,23 @@ def _is_owned_voice_file(voice_file: VoiceFile) -> bool:
     if not is_managed_custom_path(voice_file.path):
         return False
     return _resolved(voice_file.path).stem == voice_file.file_id
+
+
+def owned_source_media_path(voice_file: VoiceFile) -> Path | None:
+    """Return the paired source video only when it belongs to this voice file.
+
+    The pair can live in the temporary custom-upload directory or, after
+    registration, in the durable voice-library directory.  Callers must still
+    verify the audio file belongs to the directory they are allowed to delete.
+    """
+
+    if not voice_file.source_media_path:
+        return None
+    candidate = _resolved(voice_file.source_media_path)
+    audio_path = _resolved(voice_file.path)
+    if candidate.parent != audio_path.parent or candidate.stem != voice_file.file_id:
+        return None
+    return candidate
 
 
 def _collect_managed_paths(value: Any, output: set[Path]) -> None:

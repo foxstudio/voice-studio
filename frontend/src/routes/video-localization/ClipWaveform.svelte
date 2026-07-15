@@ -3,11 +3,17 @@
 
 	type PeakLevel = {
 		values: Float32Array;
-		samplesPerPeak: number;
+		msPerPeak: number;
+	};
+
+	type WaveformResponse = {
+		peaks: number[];
+		duration: number;
+		bins: number;
 	};
 
 	let {
-		audioSrc,
+		waveformSrc,
 		sourceStartMs = 0,
 		sourceEndMs = null,
 		tone = 'dub',
@@ -17,9 +23,11 @@
 		timelineDurationMs = 0,
 		clipStartMs = 0,
 		clipEndMs = null,
-		onAnalysis = undefined
+		onAnalysis = undefined,
+		onLoadError = undefined,
+		onLoadSuccess = undefined
 	}: {
-		audioSrc: string;
+		waveformSrc: string;
 		sourceStartMs?: number;
 		sourceEndMs?: number | null;
 		tone?: 'source' | 'vocals' | 'music' | 'dub';
@@ -30,6 +38,8 @@
 		clipStartMs?: number;
 		clipEndMs?: number | null;
 		onAnalysis?: (bars: number[], durationSeconds: number) => void;
+		onLoadError?: () => void;
+		onLoadSuccess?: () => void;
 	} = $props();
 
 	let waveformEl: HTMLDivElement;
@@ -39,18 +49,17 @@
 	let canvasLeft = $state(0);
 	let canvasWidth = $state(0);
 	let dataRevision = $state(0);
+	let waveformLoading = $state(false);
+	let waveformError = $state(false);
 	let loadSeq = 0;
 	let drawFrame = 0;
 	let audioDurationSeconds = 0;
-	let sourceSampleRate = 0;
-	let sourceSampleLength = 0;
 	let peakLevels: PeakLevel[] = [];
 
-	const BASE_PEAK_MS = 10;
 	const MAX_ANALYSIS_BARS = 180_000;
 
 	$effect(() => {
-		const url = audioSrc;
+		const url = waveformSrc;
 		const seq = ++loadSeq;
 		const controller = new AbortController();
 		void untrack(() => loadClipWaveform(url, seq, controller.signal));
@@ -88,67 +97,69 @@
 
 	async function loadClipWaveform(url: string, seq: number, signal: AbortSignal) {
 		clearWaveformData();
+		waveformError = false;
+		waveformLoading = Boolean(url);
 		if (!url) {
 			onAnalysis?.([], 0);
+			waveformLoading = false;
 			return;
 		}
 
-		let audioContext: AudioContext | null = null;
-		try {
-			const response = await fetch(url, { signal });
-			if (!response.ok) throw new Error(`HTTP ${response.status}`);
-			const encoded = await response.arrayBuffer();
-			if (seq !== loadSeq || signal.aborted) return;
+		let lastError: unknown = null;
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			try {
+				const response = await fetch(url, { signal });
+				if (!response.ok) throw new Error(`HTTP ${response.status}`);
+				const payload = (await response.json()) as WaveformResponse;
+				if (seq !== loadSeq || signal.aborted) return;
 
-			audioContext = new AudioContext();
-			const decoded = await audioContext.decodeAudioData(encoded);
-			if (seq !== loadSeq || signal.aborted) return;
-
-			peakLevels = await buildPeakPyramid(decoded, seq, signal);
-			if (seq !== loadSeq || signal.aborted) return;
-
-			audioDurationSeconds = decoded.duration;
-			sourceSampleRate = decoded.sampleRate;
-			sourceSampleLength = decoded.length;
-			dataRevision += 1;
-			onAnalysis?.(buildAnalysisBars(peakLevels[0]?.values ?? new Float32Array()), decoded.duration);
-		} catch (error) {
-			if (seq !== loadSeq || signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return;
-			clearWaveformData();
-			onAnalysis?.([], 0);
-		} finally {
-			if (audioContext) void audioContext.close();
+				const duration = Number(payload.duration);
+				if (!Number.isFinite(duration) || duration <= 0 || !Array.isArray(payload.peaks) || !payload.peaks.length) {
+					throw new Error('Invalid waveform payload');
+				}
+				const base = Float32Array.from(payload.peaks, (value) => clamp(Number(value), 0, 1));
+				peakLevels = buildPeakPyramid(base, duration);
+				audioDurationSeconds = duration;
+				dataRevision += 1;
+				onAnalysis?.(buildAnalysisBars(base), duration);
+				onLoadSuccess?.();
+				waveformLoading = false;
+				return;
+			} catch (error) {
+				if (seq !== loadSeq || signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return;
+				lastError = error;
+				if (attempt < 2) await waitForRetry(220 * (attempt + 1), signal);
+			}
 		}
+
+		if (seq !== loadSeq || signal.aborted) return;
+		console.warn('Timeline clip waveform failed', { url, error: lastError });
+		clearWaveformData();
+		waveformError = true;
+		waveformLoading = false;
+		onAnalysis?.([], 0);
+		onLoadError?.();
 	}
 
-	async function buildPeakPyramid(buffer: AudioBuffer, seq: number, signal: AbortSignal) {
-		const decodedChannels = Array.from({ length: buffer.numberOfChannels }, (_, index) => buffer.getChannelData(index));
-		const samplesPerPeak = Math.max(1, Math.round(buffer.sampleRate * (BASE_PEAK_MS / 1000)));
-		const peakCount = Math.ceil(buffer.length / samplesPerPeak);
-		const base = new Float32Array(peakCount);
+	function waitForRetry(delayMs: number, signal: AbortSignal) {
+		return new Promise<void>((resolve) => {
+			const timer = window.setTimeout(resolve, delayMs);
+			signal.addEventListener('abort', () => {
+				window.clearTimeout(timer);
+				resolve();
+			}, { once: true });
+		});
+	}
 
-		for (let peakIndex = 0; peakIndex < peakCount; peakIndex += 1) {
-			const start = peakIndex * samplesPerPeak;
-			const end = Math.min(buffer.length, start + samplesPerPeak);
-			let peak = 0;
-			for (const channel of decodedChannels) {
-				for (let sample = start; sample < end; sample += 1) peak = Math.max(peak, Math.abs(channel[sample] ?? 0));
-			}
-			base[peakIndex] = Math.min(1, peak);
-			if (peakIndex > 0 && peakIndex % 4096 === 0) {
-				await nextAnimationFrame();
-				if (seq !== loadSeq || signal.aborted) return [];
-			}
-		}
-
-		const levels: PeakLevel[] = [{ values: base, samplesPerPeak }];
+	function buildPeakPyramid(base: Float32Array, durationSeconds: number) {
+		const levels: PeakLevel[] = [{ values: base, msPerPeak: (durationSeconds * 1000) / base.length }];
 		while (levels[levels.length - 1].values.length > 1) {
 			const previous = levels[levels.length - 1];
 			const values = new Float32Array(Math.ceil(previous.values.length / 2));
 			for (let index = 0; index < values.length; index += 1) {
 				values[index] = Math.max(previous.values[index * 2] ?? 0, previous.values[index * 2 + 1] ?? 0);
 			}
-			levels.push({ values, samplesPerPeak: previous.samplesPerPeak * 2 });
+			levels.push({ values, msPerPeak: previous.msPerPeak * 2 });
 		}
 		return levels;
 	}
@@ -168,8 +179,6 @@
 
 	function clearWaveformData() {
 		audioDurationSeconds = 0;
-		sourceSampleRate = 0;
-		sourceSampleLength = 0;
 		peakLevels = [];
 		dataRevision += 1;
 	}
@@ -246,18 +255,16 @@
 	}
 
 	function peakBetween(startMs: number, endMs: number) {
-		if (!sourceSampleRate || !sourceSampleLength || !peakLevels.length) return 0;
-		const sampleStart = clamp(Math.floor((startMs / 1000) * sourceSampleRate), 0, sourceSampleLength - 1);
-		const sampleEnd = clamp(Math.ceil((endMs / 1000) * sourceSampleRate), sampleStart + 1, sourceSampleLength);
-		const sampleSpan = sampleEnd - sampleStart;
+		if (!peakLevels.length) return 0;
+		const spanMs = Math.max(0.001, endMs - startMs);
 
 		let level = peakLevels[0];
 		for (const candidate of peakLevels) {
-			if (candidate.samplesPerPeak > sampleSpan) break;
+			if (candidate.msPerPeak > spanMs) break;
 			level = candidate;
 		}
-		const from = Math.floor(sampleStart / level.samplesPerPeak);
-		const to = Math.min(level.values.length, Math.ceil(sampleEnd / level.samplesPerPeak));
+		const from = clamp(Math.floor(startMs / level.msPerPeak), 0, level.values.length - 1);
+		const to = clamp(Math.ceil(endMs / level.msPerPeak), from + 1, level.values.length);
 		let peak = 0;
 		for (let index = from; index < to; index += 1) peak = Math.max(peak, level.values[index] ?? 0);
 		return peak;
@@ -267,12 +274,9 @@
 		return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
 	}
 
-	function nextAnimationFrame() {
-		return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-	}
 </script>
 
-<div class="clip-waveform tone-{tone}" bind:this={waveformEl} aria-hidden="true">
+<div class="clip-waveform tone-{tone}" class:loading={waveformLoading} class:error={waveformError} bind:this={waveformEl} aria-hidden="true">
 	<canvas bind:this={canvasEl} style={`left:${canvasLeft}px;width:${canvasWidth}px`} class:hidden={canvasWidth <= 0}></canvas>
 </div>
 
@@ -283,6 +287,20 @@
 		overflow: hidden;
 		opacity: 0.68;
 		pointer-events: none;
+	}
+
+	.clip-waveform.loading {
+		background: repeating-linear-gradient(90deg, transparent 0 10px, color-mix(in srgb, var(--waveform-color) 20%, transparent) 10px 11px, transparent 11px 17px);
+		background-size: 34px 100%;
+		animation: waveform-loading 0.8s linear infinite;
+	}
+
+	.clip-waveform.error {
+		background: repeating-linear-gradient(-45deg, transparent 0 7px, rgba(255, 120, 120, 0.18) 7px 8px);
+	}
+
+	@keyframes waveform-loading {
+		to { background-position: 34px 0; }
 	}
 
 	.clip-waveform canvas {

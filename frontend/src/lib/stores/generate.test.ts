@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createGenerateStore, REFERENCE_VOICE_ENGINE_IDS } from './generate';
+import { createGenerateStore, pickEngineSpecificParameters, REFERENCE_VOICE_ENGINE_IDS } from './generate';
 import type { EngineDetail, ParameterSchema, VoiceAsset } from '$lib/api/types';
 
 function parameter(partial: Partial<ParameterSchema> & Pick<ParameterSchema, 'key' | 'label' | 'type'>): ParameterSchema {
@@ -100,8 +100,8 @@ describe('generate store custom reference voice requests', () => {
 		});
 		unsubscribe();
 	});
-	it('sends custom audio and transcript for every reference voice engine', () => {
-		for (const engineId of REFERENCE_VOICE_ENGINE_IDS) {
+	it('sends custom audio and transcript for every engine that accepts a direct reference upload', () => {
+		for (const engineId of REFERENCE_VOICE_ENGINE_IDS.filter((engineId) => engineId !== 'doubao-tts-voiceclone')) {
 			const store = createGenerateStore();
 
 			store.update((state) => ({
@@ -136,6 +136,27 @@ describe('generate store custom reference voice requests', () => {
 		}
 	});
 
+	it('does not send a raw custom reference to Doubao voice clone', () => {
+		const store = createGenerateStore();
+
+		store.update((state) => ({
+			...state,
+			engines: [engineDetail('doubao-tts-voiceclone')],
+			engineId: 'doubao-tts-voiceclone',
+			voiceSource: 'reference_audio',
+			customVoiceReferenceAudioPath: '/tmp/custom-reference.wav',
+			customVoiceSourceAudioPath: '/tmp/original-source.wav',
+			customVoiceTranscript: '这段台词不能直接发给豆包复刻合成。'
+		}));
+
+		const request = store.toRequest();
+
+		expect(request.voice_source).toBe('voice_library');
+		expect(request.reference_audio_path).toBeNull();
+		expect(request.ref_text).toBeNull();
+		expect(request.custom_reference_source_audio_path).toBeNull();
+	});
+
 	it('applies Confucius4 manifest defaults including seed', () => {
 		const store = createGenerateStore();
 
@@ -167,6 +188,28 @@ describe('generate store custom reference voice requests', () => {
 		expect(request.diffusion_steps).toBe(25);
 		expect(request.cfg_rate).toBe(0.7);
 		expect(request.seed).toBe(0);
+	});
+
+	it('resets F5 developer values from the active manifest instead of retaining a previous value', () => {
+		const store = createGenerateStore();
+		store.update((state) => ({
+			...state,
+			engines: [
+				engineDetail('f5-tts', [
+					parameter({ key: 'sway_sampling_coef', label: '采样摆动', type: 'slider', default: -1, min: -1, max: 1, step: 0.1, level: 'developer' }),
+					parameter({ key: 'fix_duration', label: '固定总时长', type: 'number', default: 0, min: 0, max: 600, step: 0.1, level: 'developer' })
+				]),
+			],
+			swaySamplingCoef: 0.7,
+			fixDuration: 24
+		}));
+
+		store.setEngine('f5-tts');
+		const unsubscribe = store.subscribe((state) => {
+			expect(state.swaySamplingCoef).toBe(-1);
+			expect(state.fixDuration).toBe(0);
+		});
+		unsubscribe();
 	});
 
 	it('round-trips the official Doubao TTS audio parameters only when declared', () => {
@@ -215,6 +258,29 @@ describe('generate store custom reference voice requests', () => {
 			expect(value.doubaoAigcWatermark).toBe(false);
 		});
 		unsubscribe();
+	});
+
+	it('keeps model-specific preset parameters while ignoring shared request fields', () => {
+		const store = createGenerateStore();
+		const schema = [
+			parameter({ key: 'speaker_id', label: '音色', type: 'select', default: 'speaker-1' }),
+			parameter({ key: 'speed', label: '语速', type: 'slider', default: 1 }),
+			parameter({ key: 'max_length_to_filter_parenthesis', label: '不朗读圆括号内容', type: 'toggle', default: false, level: 'advanced' }),
+			parameter({ key: 'latex_parser_mode', label: '公式朗读', type: 'select', default: 'off', level: 'advanced' })
+		];
+		store.update((state) => ({ ...state, engines: [engineDetail('doubao-tts-preset', schema)] }));
+
+		const parameters = pickEngineSpecificParameters({
+			speaker_id: 'speaker-2',
+			speed: 1.2,
+			max_length_to_filter_parenthesis: true,
+			latex_parser_mode: 'enhanced'
+		});
+		expect(parameters).toEqual({ max_length_to_filter_parenthesis: true, latex_parser_mode: 'enhanced' });
+
+		store.setEngine('doubao-tts-preset');
+		store.fromRequest({ ...store.toRequest(), text: '测试文本', speaker_id: 'speaker-2', speed: 1.2, engine_parameters: parameters });
+		expect(store.toRequest().engine_parameters).toEqual({ max_length_to_filter_parenthesis: true, latex_parser_mode: 'enhanced' });
 	});
 
 	it('uses high-quality Doubao defaults while preserving explicit historical values', () => {

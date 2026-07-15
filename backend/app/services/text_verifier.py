@@ -28,6 +28,7 @@ _VERIFICATION_CONTROL_TAG_RE = re.compile(
 SEED_AUDIO_ENGINE_ID = "doubao-seed-audio-1.0"
 _SEED_AUDIO_SPOKEN_RE = re.compile(r'“([^”]+)”|"([^"]+)"')
 _SEED_AUDIO_NON_SPOKEN_LINE_RE = re.compile(r"^(?:音效|音乐|配乐|背景|结尾)")
+_PARENTHETICAL_CONTENT_RE = re.compile(r"[（(][^（）()]*[)）]")
 
 
 def seed_audio_spoken_text(prompt_text: str) -> str:
@@ -49,10 +50,20 @@ def seed_audio_spoken_text(prompt_text: str) -> str:
     return "\n".join(spoken)
 
 
-def verification_expected_text(expected_text: str, *, engine_id: str | None = None) -> str:
+def verification_expected_text(
+    expected_text: str,
+    *,
+    engine_id: str | None = None,
+    filter_parenthetical_content: bool = False,
+) -> str:
     if engine_id == SEED_AUDIO_ENGINE_ID:
         return seed_audio_spoken_text(expected_text)
-    return expected_text.strip()
+    value = expected_text.strip()
+    if filter_parenthetical_content:
+        # Match the provider's user-visible “不朗读圆括号内容” control so a
+        # successful filtered annotation cannot be misreported as ASR loss.
+        value = _PARENTHETICAL_CONTENT_RE.sub("", value)
+    return value.strip()
 
 
 def skipped_non_speech_report(

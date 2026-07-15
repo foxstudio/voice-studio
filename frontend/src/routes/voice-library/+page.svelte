@@ -224,6 +224,11 @@
 			uploadMessage = binding?.reason || '当前音色不能训练豆包云端音色';
 			return;
 		}
+		const trainingLanguage = voice.default_language === 'en' ? 'en' : voice.default_language === 'zh' ? 'zh' : '';
+		if (!trainingLanguage) {
+			uploadMessage = '豆包声音复刻 2.0 目前只支持中文或英文参考音频，请先在音色信息中确认语言。';
+			return;
+		}
 		const ok = window.confirm(`豆包音色训练会把「${voice.name}」的参考音频上传到火山引擎云端。确认继续吗？`);
 		if (!ok) return;
 		doubaoCloneStatus = new Map([...doubaoCloneStatus, [voice.voice_id, 'training']]);
@@ -231,7 +236,7 @@
 			const result = await Api.trainDoubaoVoiceClone(voice.voice_id, {
 				confirm_upload: true,
 				demo_text: voice.reference_text || '这是豆包云端音色训练试听。',
-				language: voice.default_language || 'zh',
+				language: trainingLanguage,
 				enable_audio_denoise: true,
 				disable_volume_normalization: false
 			});
@@ -323,7 +328,7 @@
 		if (file) {
 			const uploaded = await Api.uploadVoice(file);
 			ids = editingVoice ? [...ids, uploaded.file_id] : [uploaded.file_id];
-			uploadMessage = uploaded.quality.warnings.join('；') || '音频已上传';
+			uploadMessage = uploaded.quality.warnings.join('；') || (uploaded.source_kind === 'video' ? '视频已抽取为参考音频' : '音频已上传');
 		}
 		const payload = {
 			name,
@@ -825,9 +830,9 @@
 					<div class="field">
 						<label for="voice-file">{editingVoice ? '追加参考音频' : '参考音频'}</label>
 						<div class="file-row">
-							<label class="btn file-picker" for="voice-file"><Upload size={14} /> 选择音频</label>
+							<label class="btn file-picker" for="voice-file"><Upload size={14} /> 选择音频或视频</label>
 							<span class="muted file-name">{file?.name ?? '未选择文件'}</span>
-							<input id="voice-file" class="sr-only" type="file" accept="audio/*" onchange={(e) => (file = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)} />
+							<input id="voice-file" class="sr-only" type="file" accept="audio/*,video/mp4,video/quicktime,video/webm,video/x-matroska,.mp4,.mov,.m4v,.webm,.mkv" onchange={(e) => (file = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)} />
 						</div>
 					</div>
 					{#if uploadMessage}<p class="muted"><Check size={13} /> {uploadMessage}</p>{/if}

@@ -3,6 +3,7 @@
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import { Api } from '$lib/api';
 	import { engineStatusLabel } from '$lib/labels';
+	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { initTooltips } from '$lib/tooltip';
 	import { Menu } from 'lucide-svelte';
@@ -12,6 +13,7 @@
 	let engines = $state<Record<string, string>>({});
 	let sidebarCollapsed = $state(false);
 	let sidebarMobileOpen = $state(false);
+	let showGlobalEngineStatus = $derived(page.url.pathname !== '/video-localization');
 
 	function checkHealth() {
 		return Api.health()
@@ -63,6 +65,8 @@
 	}
 </script>
 
+<svelte:head><link rel="icon" href="/voice-studio-mark.png" /></svelte:head>
+
 <div class="app-shell" class:sidebar-collapsed={sidebarCollapsed} class:sidebar-mobile-open={sidebarMobileOpen}>
 	{#if sidebarMobileOpen}
 		<div
@@ -87,9 +91,11 @@
 					<Menu size={18} />
 				</button>
 				<span class="badge" class:ok={status === 'ok'} class:fail={status === 'offline'}>接口 {status === 'ok' ? '正常' : status === 'offline' ? '离线' : '检查中'}</span>
-				{#each Object.entries(engines) as [id, state]}
-					<span class="badge engine-status-badge" class:ok={state === 'loaded'} title={`${id}: ${engineStatusLabel(state)}`}>{id}: {engineStatusLabel(state)}</span>
-				{/each}
+				{#if showGlobalEngineStatus}
+					{#each Object.entries(engines) as [id, state]}
+						<span class="badge engine-status-badge" class:ok={state === 'loaded'} title={`${id}: ${engineStatusLabel(state)}`}>{id}: {engineStatusLabel(state)}</span>
+					{/each}
+				{/if}
 			</div>
 			<span class="muted">本地语音工作台</span>
 		</header>

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, File, UploadFile
+import asyncio
+from typing import Literal
+
+from fastapi import APIRouter, Body, File, Query, UploadFile
+from pydantic import BaseModel
 
 from app.api.video_localization_responses import audio_file_response, download_file_response, json_attachment, require_resource, srt_attachment
 from app.domains.video_localization import operation_queue
@@ -8,6 +12,7 @@ from app.domains.video_localization import service as video_localization_service
 from app.errors import AppException
 from app.domains.video_localization.schemas import (
     BatchTask,
+    VideoLocalizationCueTimingConfirmationRequest,
     VideoLocalizationCueUpdate,
     VideoLocalizationDraft,
     VideoLocalizationOperation,
@@ -16,12 +21,19 @@ from app.domains.video_localization.schemas import (
     VideoLocalizationReferenceClipUpdate,
     VideoLocalizationSpeakerCreate,
     VideoLocalizationSpeakerUpdate,
+    VideoLocalizationSubtitleCueUpdate,
     VideoLocalizationSubtitleImportRequest,
 )
 from app.schemas.voice_studio import Project
-from app.services import batch_queue
+from app.services import batch_queue, waveform_cache
 
 router = APIRouter()
+
+
+class WaveformPeaksResponse(BaseModel):
+    peaks: list[float]
+    duration: float
+    bins: int
 
 
 @router.post("/video-localization/sync-projects", response_model=list[Project])
@@ -37,7 +49,7 @@ async def get_video_localization(project_id: str):
 
 @router.put("/{project_id}/video-localization", response_model=VideoLocalizationDraft)
 async def put_video_localization(project_id: str, draft: VideoLocalizationDraft):
-    updated = video_localization_service.save_video_localization(project_id, draft)
+    updated = video_localization_service.replace_video_localization_from_client(project_id, draft)
     return require_resource(updated)
 
 
@@ -126,8 +138,17 @@ async def get_video_localization_stem_audio(project_id: str, kind: str):
 
 
 @router.post("/{project_id}/video-localization/asr/en", response_model=VideoLocalizationDraft)
-async def transcribe_video_localization_english(project_id: str):
-    updated = video_localization_service.transcribe_english_source_audio(project_id)
+async def transcribe_video_localization_english(
+    project_id: str,
+    source_track_id: Literal["auto", "original", "vocals", "dub"] = Query(default="auto"),
+    segmentation_profile_id: Literal["generic_zh", "short_video_large_text", "conservative_release"] = Query(default="generic_zh"),
+):
+    updated = await asyncio.to_thread(
+        video_localization_service.transcribe_english_source_audio,
+        project_id,
+        source_track_id=source_track_id,
+        segmentation_profile_id=segmentation_profile_id,
+    )
     return require_resource(updated)
 
 
@@ -152,6 +173,38 @@ async def delete_video_localization_reference_clip(project_id: str, reference_cl
 @router.patch("/{project_id}/video-localization/cues/{cue_id}", response_model=VideoLocalizationDraft)
 async def update_video_localization_cue(project_id: str, cue_id: str, patch: VideoLocalizationCueUpdate):
     updated = video_localization_service.update_cue(project_id, cue_id, patch)
+    return require_resource(updated)
+
+
+@router.post(
+    "/{project_id}/video-localization/cues/{cue_id}/timing-confirmation",
+    response_model=VideoLocalizationDraft,
+)
+async def confirm_video_localization_cue_timing(
+    project_id: str,
+    cue_id: str,
+    request: VideoLocalizationCueTimingConfirmationRequest,
+):
+    updated = video_localization_service.update_cue(
+        project_id,
+        cue_id,
+        VideoLocalizationCueUpdate(
+            confirm_timing=True,
+            expected_start_ms=request.start_ms,
+            expected_end_ms=request.end_ms,
+            timing_confirmation_method=request.confirmation_method,
+        ),
+    )
+    return require_resource(updated)
+
+
+@router.patch("/{project_id}/video-localization/localized-subtitles/{subtitle_id}", response_model=VideoLocalizationDraft)
+async def update_video_localization_localized_subtitle(
+    project_id: str,
+    subtitle_id: str,
+    patch: VideoLocalizationSubtitleCueUpdate,
+):
+    updated = video_localization_service.update_localized_subtitle(project_id, subtitle_id, patch)
     return require_resource(updated)
 
 
@@ -215,6 +268,25 @@ async def get_video_localization_timeline_clip_audio(project_id: str, clip_id: s
     return audio_file_response(audio_path, code="VIDEO_LOCALIZATION_TIMELINE_CLIP_AUDIO_NOT_FOUND", message="Timeline clip audio not found")
 
 
+@router.get("/{project_id}/video-localization/timeline-clips/{clip_id}/waveform", response_model=WaveformPeaksResponse)
+async def get_video_localization_timeline_clip_waveform(
+    project_id: str,
+    clip_id: str,
+    bins: int | None = Query(default=None, ge=waveform_cache.MIN_BINS, le=waveform_cache.MAX_BINS),
+):
+    audio_path = video_localization_service.timeline_clip_audio_file(project_id, clip_id)
+    if not audio_path:
+        raise AppException(404, "VIDEO_LOCALIZATION_TIMELINE_CLIP_AUDIO_NOT_FOUND", "Timeline clip audio not found")
+    cache_id = f"video-localization-{project_id}-{clip_id}"
+    return await asyncio.to_thread(
+        waveform_cache.waveform_peaks,
+        audio_path,
+        result_id=cache_id,
+        bins=bins,
+        max_bins=waveform_cache.MAX_BINS,
+    )
+
+
 @router.get("/{project_id}/video-localization/cues/{cue_id}/source-audio")
 async def get_video_localization_cue_source_audio(project_id: str, cue_id: str):
     audio_path = video_localization_service.source_cue_audio_file(project_id, cue_id)
@@ -239,6 +311,12 @@ async def export_video_localization_subtitles(project_id: str, kind: str):
     srt = require_resource(srt)
     filename = f"{project_id}-video-localization-{kind}.srt"
     return srt_attachment(srt, filename=filename)
+
+
+@router.delete("/{project_id}/video-localization/subtitles/{kind}", response_model=VideoLocalizationDraft)
+async def clear_video_localization_subtitles(project_id: str, kind: Literal["en", "zh"]):
+    updated = video_localization_service.clear_subtitles(project_id, kind)
+    return require_resource(updated)
 
 
 @router.post("/{project_id}/video-localization/subtitles/{kind}/import", response_model=VideoLocalizationDraft)

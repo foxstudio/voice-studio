@@ -27,25 +27,8 @@
 		generateBusy = false
 	}: Props = $props();
 
-	const isCosyVoice = $derived(
-		engineId === 'cosyvoice-sft' || engineId === 'cosyvoice-zero-shot'
-	);
 	const isOmniVoice = $derived(engineId === 'omnivoice');
 	const tagTools = $derived.by<TagTool[]>(() => {
-		if (isCosyVoice) {
-			return [
-				{
-					label: '停顿',
-					insert: '<|pause_300|>',
-					hint: '在文本中插入 CosyVoice 停顿标签，控制语速节奏和自然停顿'
-				},
-				{
-					label: '笑声',
-					insert: '<laughter>',
-					hint: '在文本中插入 CosyVoice 笑声标签，生成自然的笑声效果'
-				}
-			];
-		}
 		if (isOmniVoice) {
 			return [
 				{

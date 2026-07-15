@@ -69,9 +69,14 @@ def audio_file_data_url(path: str, *, error_prefix: str = "MIMO_VOICECLONE") -> 
     if not mime_type:
         raise ValueError(f"{error_prefix}_AUDIO_FORMAT_UNSUPPORTED")
     data = audio_path.read_bytes()
-    if len(data) > _MAX_AUDIO_DATA_URL_BYTES:
+    prefix = f"data:{mime_type};base64,"
+    # MiMo limits the complete data URL, not the source file.  Base64 expands
+    # audio by roughly one third, so a 9 MiB source file could previously pass
+    # our check and still be rejected remotely.
+    encoded = base64.b64encode(data)
+    if len(prefix.encode("ascii")) + len(encoded) > _MAX_AUDIO_DATA_URL_BYTES:
         raise ValueError(f"{error_prefix}_AUDIO_TOO_LARGE")
-    return f"data:{mime_type};base64,{base64.b64encode(data).decode('utf-8')}"
+    return prefix + encoded.decode("ascii")
 
 
 def build_tts_payload(

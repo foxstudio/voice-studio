@@ -2,7 +2,7 @@
 	import { Api } from '$lib/api';
 	import { ApiError } from '$lib/api/client';
 	import type { EngineAudioDiagnosis, EngineDetail, EngineInstallation, VoiceAsset } from '$lib/api/types';
-	import { Activity, ExternalLink, FolderSymlink, Play, RotateCcw, Search, Square, Volume2 } from 'lucide-svelte';
+	import { Activity, Download, ExternalLink, FolderSymlink, Play, RotateCcw, Search, Square, Volume2 } from 'lucide-svelte';
 	import { capabilityLabel, engineStatusLabel } from '$lib/labels';
 
 	type EngineCheckCard = {
@@ -252,8 +252,9 @@
 		</div>
 	</section>
 		<section class="grid">
-				{#each visibleEngines as engine}
-					{@const installation = installationMap.get(engine.manifest.engine_id)}
+					{#each visibleEngines as engine}
+						{@const installation = installationMap.get(engine.manifest.engine_id)}
+						{@const domesticSource = installation?.download_sources.find((source) => source.region === 'cn' && source.preferred)}
 					<article class={`card stack engine-surface ${engine.manifest.engine_type === 'cloud' ? 'engine-cloud' : 'engine-local'}`}>
 				<div class="row engine-card-head">
 					<h2>{engine.manifest.display_name}</h2>
@@ -269,6 +270,7 @@
 						<div class="installation-line">
 							<span class="badge" class:ok={installation.installed}>{installation.installed ? '已发现本地文件' : '需要安装'}</span>
 							<span class="installation-path" title={installation.preferred_path ?? ''}><FolderSymlink size={13} /> {installation.preferred_path}</span>
+							{#if domesticSource}<a class="btn mini-btn" href={domesticSource.url} target="_blank" rel="noreferrer" data-tooltip={`${domesticSource.label}。${domesticSource.compatibility_note} ${installation.download_policy}`}><Download size={13} /> 国内模型</a>{/if}
 							<a class="btn mini-btn" href={installation.source_url} target="_blank" rel="noreferrer" data-tooltip={`${installation.source_label}。${installation.license_note}`}><ExternalLink size={13} /> 官方来源</a>
 						</div>
 					{/if}

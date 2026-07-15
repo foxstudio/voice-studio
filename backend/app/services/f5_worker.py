@@ -54,7 +54,14 @@ for line in sys.stdin:
                 cfg_strength=payload["cfg_strength"],
                 target_rms=payload["target_rms"],
                 cross_fade_duration=payload["cross_fade_duration"],
-                sway_sampling_coef=payload.get("sway_sampling_coef") or -1.0,
+                # ``0`` is a valid F5 setting.  Only fall back when the
+                # field is absent/null; using ``or -1.0`` silently changed
+                # the user's zero to the F5 default in persistent mode.
+                sway_sampling_coef=(
+                    payload.get("sway_sampling_coef")
+                    if payload.get("sway_sampling_coef") is not None
+                    else -1.0
+                ),
                 fix_duration=payload.get("fix_duration") or None,
                 remove_silence=payload["remove_silence"],
                 seed=payload["seed"],

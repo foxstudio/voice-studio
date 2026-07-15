@@ -8,6 +8,7 @@ class identity unchanged.
 from __future__ import annotations
 
 import uuid
+import math
 import os
 import urllib.parse
 from datetime import datetime
@@ -194,7 +195,9 @@ class AppSettings(BaseModel):
     default_output_format: Literal["wav", "mp3", "flac"] = "wav"
     device: Literal["auto", "mps", "cpu"] = "auto"
     cloud_enabled: bool = False
-    mimo_base_url: str = "https://token-plan-cn.xiaomimimo.com/v1"
+    # The public MiMo API endpoint. Token Plan subscribers can still enter a
+    # token-plan-{region} endpoint explicitly in Settings.
+    mimo_base_url: str = "https://api.xiaomimimo.com/v1"
     mimo_api_key_configured: bool = False
     mimo_default_voice: str = "mimo_default"
     mimo_voiceclone_confirm_upload: bool = True
@@ -228,14 +231,97 @@ class AppSettings(BaseModel):
         return value.rstrip("/")
 
 
+class AppSettingsPatch(AppSettings):
+    """Compatibility PATCH body; only ``model_fields_set`` is persisted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class LlmProviderProfile(BaseModel):
+    profile_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    name: str = Field(min_length=1, max_length=80)
+    protocol: Literal["openai_compatible"] = "openai_compatible"
+    base_url: str = Field(min_length=1, max_length=500)
+    model_id: str = Field(default="", max_length=200)
+    enabled: bool = True
+    api_key_configured: bool = False
+
+    @field_validator("name", "base_url", "model_id")
+    @classmethod
+    def strip_llm_profile_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class LlmProviderProfileUpsert(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    protocol: Literal["openai_compatible"] = "openai_compatible"
+    base_url: str = Field(min_length=1, max_length=500)
+    model_id: str = Field(default="", max_length=200)
+    enabled: bool = True
+    api_key: str | None = None
+    clear_api_key: bool = False
+    make_default: bool = False
+
+    @field_validator("name", "base_url", "model_id")
+    @classmethod
+    def strip_llm_upsert_text(cls, value: str) -> str:
+        return value.strip()
+
+
+class LlmProviderListResponse(BaseModel):
+    profiles: list[LlmProviderProfile] = Field(default_factory=list)
+    default_profile_id: str | None = None
+
+
+class LlmModelInfo(BaseModel):
+    model_id: str
+    owned_by: str | None = None
+
+
+class LlmModelListResponse(BaseModel):
+    profile_id: str
+    models: list[LlmModelInfo] = Field(default_factory=list)
+
+
+class LlmConnectionTestResponse(BaseModel):
+    profile_id: str
+    status: Literal["connected"] = "connected"
+    models_count: int = 0
+    selected_model_available: bool | None = None
+    message: str
+
+
+class CloudConnectionTestResponse(BaseModel):
+    provider: Literal["mimo", "doubao", "volcengine_directory"]
+    status: Literal["connected"] = "connected"
+    message: str
+    verified_scopes: list[str] = Field(default_factory=list)
+    billing_effect: Literal["none", "minimal"] = "none"
+    models_count: int | None = None
+    request_id: str | None = None
+    logid: str | None = None
+
+
 class MimoSecretUpdate(BaseModel):
     api_key: str | None = None
     clear: bool = False
+
+    @model_validator(mode="after")
+    def reject_replace_and_clear(self):
+        if self.clear and self.api_key is not None and self.api_key.strip():
+            raise ValueError("api_key 与 clear 不能同时提交")
+        return self
 
 
 class DoubaoSecretUpdate(BaseModel):
     api_key: str | None = None
     clear: bool = False
+
+    @model_validator(mode="after")
+    def reject_replace_and_clear(self):
+        if self.clear and self.api_key is not None and self.api_key.strip():
+            raise ValueError("api_key 与 clear 不能同时提交")
+        return self
 
 
 class VolcengineDirectorySecretUpdate(BaseModel):
@@ -243,6 +329,18 @@ class VolcengineDirectorySecretUpdate(BaseModel):
     secret_access_key: str | None = None
     clear_access_key_id: bool = False
     clear_secret_access_key: bool = False
+
+    @model_validator(mode="after")
+    def reject_replace_and_clear(self):
+        if self.clear_access_key_id and self.access_key_id is not None and self.access_key_id.strip():
+            raise ValueError("access_key_id 与 clear_access_key_id 不能同时提交")
+        if (
+            self.clear_secret_access_key
+            and self.secret_access_key is not None
+            and self.secret_access_key.strip()
+        ):
+            raise ValueError("secret_access_key 与 clear_secret_access_key 不能同时提交")
+        return self
 
 
 class DoubaoVoiceCloneTrainRequest(BaseModel):
@@ -253,6 +351,16 @@ class DoubaoVoiceCloneTrainRequest(BaseModel):
     enable_audio_denoise: bool = True
     disable_volume_normalization: bool = False
     confirm_upload: bool = False
+
+    @field_validator("language")
+    @classmethod
+    def normalize_doubao_clone_language(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"zh", "zh-cn", "cn", "chinese", "中文"}:
+            return "zh"
+        if normalized in {"en", "en-us", "english", "英文"}:
+            return "en"
+        raise ValueError("豆包声音复刻 2.0 训练音频只支持中文或英文")
 
 
 class VoiceAssetCreate(BaseModel):
@@ -325,6 +433,11 @@ class VoiceFile(BaseModel):
     duration_ms: int | None = None
     sample_rate: int | None = None
     size_bytes: int = 0
+    # For a video import, ``path`` is always the extracted audio used by TTS.
+    # The managed source video is retained only so the pair can move and expire
+    # together.
+    source_media_path: str | None = None
+    source_media_name: str | None = None
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -473,13 +586,22 @@ class GenerateRequest(BaseModel):
     prompt: str | None = None
     nfe_step: int = Field(default=32, ge=4, le=64)
     cfg_strength: float = Field(default=2.0, ge=0.1, le=5.0)
-    target_rms: float = Field(default=0.1, ge=0.01, le=1.0)
+    # The F5 UI exposes 0.01–0.5 as the tested safe range.  Keep the API
+    # contract identical so batch/API callers cannot request an unchecked
+    # louder value that the visible product does not offer.
+    target_rms: float = Field(default=0.1, ge=0.01, le=0.5)
     cross_fade_duration: float = Field(default=0.15, ge=0.0, le=1.0)
     sway_sampling_coef: float = Field(default=-1.0, ge=-1.0, le=1.0)
-    fix_duration: float = Field(default=0.0, ge=0.0, le=600.0)
+    # F5 currently supports a 30 s reference+generation total per inference
+    # chunk.  The long-text wrapper runs this per chunk, not as a whole-file
+    # duration target, so accepting 600 s here was a false promise.
+    fix_duration: float = Field(default=0.0, ge=0.0, le=30.0)
     remove_silence: bool = False
     emo_alpha: float = Field(default=0.6, ge=0, le=1)
-    speed: float = Field(default=1.0, ge=0.5, le=3.0)
+    # Every visible engine control and the IndexTTS/MLX runtime currently
+    # share this safe range.  Do not accept 2.01–3.0 here: the UI cannot set
+    # it and IndexTTS would only fail after the task had already queued.
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
     pitch_rate: int | None = Field(default=None, ge=-12, le=12)
     sample_rate: Literal[8000, 16000, 22050, 24000, 32000, 44100, 48000] | None = None
     bit_rate: int | None = Field(default=None, ge=64000, le=160000)
@@ -489,10 +611,18 @@ class GenerateRequest(BaseModel):
     aigc_watermark: bool = False
     temperature: float = Field(default=0.8, ge=0.1, le=2.0)
     top_p: float = Field(default=0.8, ge=0.0, le=1.0)
-    top_k: int = Field(default=30, ge=1, le=100)
+    # Qwen3-TTS MLX supports up to 200 candidates. Other engines expose their
+    # narrower safe ranges in their own manifests, so the shared API must not
+    # reject a valid Qwen setting from the visible control.
+    top_k: int = Field(default=30, ge=1, le=200)
     repetition_penalty: float = Field(default=10.0, ge=1.0, le=20.0)
     seed: int | None = None
-    max_mel_tokens: int = Field(default=800, ge=100, le=2500)
+    # Keep the API default aligned with the IndexTTS manifest and generate-page
+    # reset value. A lower API-only default silently shortened direct API jobs.
+    # IndexTTS v2's shipped position embedding table is sized for 1815 mel
+    # tokens.  A larger API-only value is not a usable option; it can fail in
+    # inference after a user has waited for the job to start.
+    max_mel_tokens: int = Field(default=1500, ge=100, le=1815)
     max_text_tokens_per_segment: int = Field(default=120, ge=10, le=500)
     interval_silence: int = Field(default=200, ge=0, le=2000)
     segment_overlap_ms: int = Field(default=50, ge=0, le=500)
@@ -505,7 +635,25 @@ class GenerateRequest(BaseModel):
     max_tokens: int = Field(default=1200, ge=100, le=4096)
     cfg_scale: float | None = Field(default=None, ge=0.0, le=20.0)
     ddpm_steps: int | None = Field(default=None, ge=1, le=200)
-    output_format: Literal["wav", "mp3", "flac"] = "wav"
+    output_format: Literal["wav", "mp3", "flac", "pcm", "ogg_opus"] = "wav"
+
+    @model_validator(mode="after")
+    def validate_mimo_output_format(self):
+        if self.output_format in {"pcm", "ogg_opus"} and self.engine_id not in {"doubao-tts-preset", "doubao-tts-voiceclone"}:
+            raise PydanticCustomError(
+                "provider_output_format_unsupported",
+                "PCM 和 OGG Opus 目前只由豆包 TTS 2.0 直出；其他引擎请选 WAV、MP3 或 FLAC",
+            )
+        if self.engine_id in {"mimo-v2.5-tts", "mimo-v2.5-tts-preset", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"} and self.output_format != "wav":
+            # BatchGenerateRequest historically defaults to MP3 for local
+            # engines.  A caller that omitted this generic field should get
+            # MiMo's verified WAV default, while an explicit MP3/FLAC request
+            # must still be rejected instead of creating a mislabeled file.
+            if "output_format" not in self.model_fields_set:
+                self.output_format = "wav"
+            else:
+                raise PydanticCustomError("mimo_output_format_unsupported", "MiMo TTS 当前仅支持 WAV 输出")
+        return self
 
 
 class GenerateResponse(BaseModel):
@@ -517,7 +665,7 @@ class GeneratePlanRequest(BaseModel):
     text: str
     engine_id: str = "indextts-v2"
     planner_mode: Literal["auto", "rules", "llm"] = "auto"
-    target_format: Literal["wav", "mp3", "flac"] = "mp3"
+    target_format: Literal["wav", "mp3", "flac", "pcm", "ogg_opus"] = "mp3"
 
 
 class PlannedTextSegment(BaseModel):
@@ -590,6 +738,8 @@ class LongformGenerateRequest(BaseModel):
     def reject_single_only_engines(self):
         if self.generate_request.engine_id == "doubao-seed-audio-1.0":
             raise PydanticCustomError("single_generation_only", "Seed Audio 1.0 暂只支持单次生成")
+        if self.generate_request.output_format in {"pcm", "ogg_opus"}:
+            raise PydanticCustomError("longform_output_format_unsupported", "长文本合并暂不支持 PCM 或 OGG Opus；请使用 WAV、MP3 或 FLAC")
         return self
 
 
@@ -648,7 +798,7 @@ class BatchSegmentInput(BaseModel):
     style_instruction: str | None = None
     voice_design_prompt: str | None = None
     mimo_voice: str | None = None
-    speed: float | None = Field(default=None, ge=0.5, le=3.0)
+    speed: float | None = Field(default=None, ge=0.5, le=2.0)
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -663,7 +813,7 @@ class BatchGenerateRequest(BaseModel):
     ref_text: str | None = None
     language: str = "zh"
     output_dir: str | None = None
-    output_format: Literal["wav", "mp3", "flac"] = "mp3"
+    output_format: Literal["wav", "mp3", "flac", "pcm", "ogg_opus"] = "mp3"
     partial_success: bool = False
     segments: list[BatchSegmentInput]
     parameters: dict[str, Any] = Field(default_factory=dict)
@@ -674,6 +824,19 @@ class BatchGenerateRequest(BaseModel):
             segment.engine_id == "doubao-seed-audio-1.0" for segment in self.segments
         ):
             raise PydanticCustomError("single_generation_only", "Seed Audio 1.0 暂只支持单次生成")
+        if self.output_format in {"pcm", "ogg_opus"} and self.engine_id not in {"doubao-tts-preset", "doubao-tts-voiceclone"}:
+            raise PydanticCustomError(
+                "provider_output_format_unsupported",
+                "PCM 和 OGG Opus 目前只由豆包 TTS 2.0 直出；其他引擎请选 WAV、MP3 或 FLAC",
+            )
+        if self.engine_id in {"mimo-v2.5-tts", "mimo-v2.5-tts-preset", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"} and self.output_format != "wav":
+            # BatchGenerateRequest defaults to MP3 for the legacy local-model
+            # flow.  If no format was supplied, normalize MiMo to its verified
+            # WAV default; explicit MP3/FLAC requests remain a clear error.
+            if "output_format" not in self.model_fields_set:
+                self.output_format = "wav"
+            else:
+                raise PydanticCustomError("mimo_output_format_unsupported", "MiMo TTS 当前仅支持 WAV 输出")
         return self
 
 
@@ -863,6 +1026,8 @@ class VideoLocalizationSourceMedia(VideoLocalizationExtensibleModel):
     height: int | None = Field(default=None, ge=0)
     frame_rate: float | None = Field(default=None, ge=0)
     imported_at: str | None = None
+    content_sha256: str | None = None
+    audio_sha256: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -873,6 +1038,9 @@ class VideoLocalizationStems(VideoLocalizationExtensibleModel):
     separation_engine_id: str | None = None
     separation_status: Literal["pending", "running", "completed", "failed", "cancelled", "skipped"] = "pending"
     quality_flags: list[str] = Field(default_factory=list)
+    original_audio_sha256: str | None = None
+    vocals_clean_sha256: str | None = None
+    background_sha256: str | None = None
 
 
 class VideoLocalizationTimeRange(VideoLocalizationExtensibleModel):
@@ -974,6 +1142,143 @@ class VideoLocalizationReferenceClipUpdate(BaseModel):
     notes: str | None = None
 
 
+class VideoLocalizationTranscriptSegment(VideoLocalizationExtensibleModel):
+    segment_id: str
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+    raw_text: str
+    corrected_text: str | None = None
+    review_candidate_text: str | None = None
+    review_rejection_reason: str | None = None
+    review_confidence: float | None = Field(default=None, ge=0, le=1)
+    review_flags: list[str] = Field(default_factory=list)
+    review_operations: list["VideoLocalizationTranscriptEditOperation"] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_time_range(self):
+        if self.end_ms < self.start_ms:
+            raise PydanticCustomError("invalid_time_range", "end_ms must be greater than or equal to start_ms")
+        return self
+
+
+class VideoLocalizationTranscriptEditOperation(VideoLocalizationExtensibleModel):
+    start_word_id: str
+    end_word_id: str
+    source_text: str
+    replacement_text: str
+    reason: str = ""
+    confidence: float = Field(ge=0, le=1)
+    status: Literal["accepted", "rejected"] = "rejected"
+    rejection_reason: str | None = None
+
+
+class VideoLocalizationAlignedWord(VideoLocalizationExtensibleModel):
+    word_id: str
+    segment_id: str
+    text: str
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+    timing_confidence: Literal["high", "medium", "low"] = "low"
+    timing_source: Literal["forced_aligner", "asr_segment_interpolation"] = "asr_segment_interpolation"
+
+    @model_validator(mode="after")
+    def validate_time_range(self):
+        if self.end_ms < self.start_ms:
+            raise PydanticCustomError("invalid_time_range", "end_ms must be greater than or equal to start_ms")
+        return self
+
+
+class VideoLocalizationAudioBoundaryEvidence(VideoLocalizationExtensibleModel):
+    boundary_id: str
+    left_word_id: str
+    right_word_id: str
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+    gap_ms: int = Field(ge=0)
+    low_energy_ms: int = Field(ge=0)
+    low_energy_ratio: float = Field(ge=0, le=1)
+    gap_rms_dbfs: float
+    speech_reference_dbfs: float
+    noise_floor_dbfs: float
+    energy_drop_db: float
+    confidence: Literal["none", "low", "medium", "high"] = "none"
+    analysis_version: str = "energy-pause-v1"
+
+    @model_validator(mode="after")
+    def validate_time_range(self):
+        if self.end_ms < self.start_ms:
+            raise PydanticCustomError("invalid_time_range", "end_ms must be greater than or equal to start_ms")
+        if self.gap_ms != self.end_ms - self.start_ms:
+            raise PydanticCustomError("invalid_gap_duration", "gap_ms must match end_ms - start_ms")
+        if self.low_energy_ms > self.gap_ms:
+            raise PydanticCustomError("invalid_low_energy_duration", "low_energy_ms must not exceed gap_ms")
+        if self.boundary_id != f"{self.left_word_id}:{self.right_word_id}":
+            raise PydanticCustomError("invalid_boundary_id", "boundary_id must match the adjacent word IDs")
+        db_values = (
+            self.gap_rms_dbfs,
+            self.speech_reference_dbfs,
+            self.noise_floor_dbfs,
+            self.energy_drop_db,
+        )
+        if not all(math.isfinite(value) for value in db_values):
+            raise PydanticCustomError("invalid_audio_boundary_db", "audio boundary dB values must be finite")
+        return self
+
+
+class VideoLocalizationBoundaryReview(VideoLocalizationExtensibleModel):
+    boundary_id: str
+    left_word_id: str
+    right_word_id: str
+    decision: Literal["prefer", "allow", "avoid"]
+    confidence: float = Field(ge=0, le=1)
+    reason: str = ""
+    prompt_version: str = "boundary-review-v1"
+    model_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_boundary_id(self):
+        if self.boundary_id != f"{self.left_word_id}:{self.right_word_id}":
+            raise PydanticCustomError("invalid_boundary_id", "boundary_id must match the adjacent word IDs")
+        return self
+
+
+class VideoLocalizationTranscriptionState(VideoLocalizationExtensibleModel):
+    revision_id: str = Field(default_factory=new_id)
+    language: str = "en"
+    source_track_id: str | None = None
+    source_audio_sha256: str | None = None
+    alignment_source_track_id: str | None = None
+    alignment_audio_sha256: str | None = None
+    engine_id: str | None = None
+    raw_text: str = ""
+    corrected_text: str = ""
+    segments: list[VideoLocalizationTranscriptSegment] = Field(default_factory=list)
+    words: list[VideoLocalizationAlignedWord] = Field(default_factory=list)
+    review_status: Literal["not_configured", "skipped", "completed", "partial", "failed"] = "not_configured"
+    review_profile_id: str | None = None
+    review_model_id: str | None = None
+    review_prompt_version: str | None = None
+    review_error: str | None = None
+    alignment_status: Literal["not_run", "completed", "partial", "failed"] = "not_run"
+    alignment_engine_id: str | None = None
+    alignment_error: str | None = None
+    timing_confidence: Literal["high", "medium", "low"] = "low"
+    audio_boundary_status: Literal["not_run", "completed", "failed", "skipped"] = "not_run"
+    audio_boundary_analysis_version: str | None = None
+    audio_boundary_error: str | None = None
+    audio_boundary_features: list[VideoLocalizationAudioBoundaryEvidence] = Field(default_factory=list)
+    boundary_review_status: Literal["not_configured", "skipped", "completed", "partial", "failed"] = "not_configured"
+    boundary_review_profile_id: str | None = None
+    boundary_review_model_id: str | None = None
+    boundary_review_prompt_version: str | None = None
+    boundary_review_error: str | None = None
+    boundary_reviews: list[VideoLocalizationBoundaryReview] = Field(default_factory=list)
+    speech_onset_by_word_id: dict[str, int] = Field(default_factory=dict)
+    segmentation_profile_id: Literal["generic_zh", "short_video_large_text", "conservative_release"] = "generic_zh"
+    quality_flags: list[str] = Field(default_factory=list)
+    created_at: str = Field(default_factory=now_iso)
+
+
 class VideoLocalizationCue(VideoLocalizationExtensibleModel):
     cue_id: str
     speaker_id: str | None = None
@@ -992,6 +1297,17 @@ class VideoLocalizationCue(VideoLocalizationExtensibleModel):
     tts_attempted_at: str | None = None
     source_duration_ms: int | None = Field(default=None, ge=0)
     generated_duration_ms: int | None = Field(default=None, ge=0)
+    source_word_ids: list[str] = Field(default_factory=list)
+    source_text_raw: str | None = None
+    timing_confidence: Literal["high", "medium", "low"] | None = None
+    transcription_revision_id: str | None = None
+    manual_timing_revision: int = Field(default=0, ge=0)
+    manual_timing_review_status: Literal["not_reviewed", "required", "confirmed"] = "not_reviewed"
+    manual_timing_confirmed_revision: int | None = Field(default=None, ge=0)
+    manual_timing_confirmed_at: str | None = None
+    manual_timing_confirmed_start_ms: int | None = Field(default=None, ge=0)
+    manual_timing_confirmed_end_ms: int | None = Field(default=None, ge=0)
+    manual_timing_confirmation_method: Literal["auditioned"] | None = None
     review_status: Literal["needs_review", "ready", "blocked", "locked"] = "needs_review"
     quality_flags: list[str] = Field(default_factory=list)
     notes: str | None = None
@@ -999,6 +1315,36 @@ class VideoLocalizationCue(VideoLocalizationExtensibleModel):
     @model_validator(mode="after")
     def validate_time_range(self):
         if self.start_ms is not None and self.end_ms is not None and self.end_ms < self.start_ms:
+            raise PydanticCustomError("invalid_time_range", "end_ms must be greater than or equal to start_ms")
+        if self.manual_timing_review_status == "confirmed":
+            confirmation_complete = (
+                self.start_ms is not None
+                and self.end_ms is not None
+                and self.manual_timing_confirmed_at is not None
+                and self.manual_timing_confirmation_method == "auditioned"
+                and self.manual_timing_confirmed_revision == self.manual_timing_revision
+                and self.manual_timing_confirmed_start_ms == self.start_ms
+                and self.manual_timing_confirmed_end_ms == self.end_ms
+            )
+            if not confirmation_complete:
+                raise PydanticCustomError(
+                    "invalid_manual_timing_confirmation",
+                    "confirmed manual timing review must match the current cue timing and revision",
+                )
+        return self
+
+
+class VideoLocalizationSubtitleCue(VideoLocalizationExtensibleModel):
+    subtitle_id: str
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+    text: str = Field(min_length=1)
+    linked_cue_id: str | None = None
+    quality_flags: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_time_range(self):
+        if self.end_ms < self.start_ms:
             raise PydanticCustomError("invalid_time_range", "end_ms must be greater than or equal to start_ms")
         return self
 
@@ -1015,6 +1361,27 @@ class VideoLocalizationCueUpdate(BaseModel):
     review_status: Literal["needs_review", "ready", "blocked", "locked"] | None = None
     quality_flags: list[str] | None = None
     notes: str | None = None
+    confirm_timing: bool = False
+    expected_start_ms: int | None = Field(default=None, ge=0)
+    expected_end_ms: int | None = Field(default=None, ge=0)
+    timing_confirmation_method: Literal["auditioned"] = "auditioned"
+
+
+class VideoLocalizationCueTimingConfirmationRequest(BaseModel):
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+    confirmation_method: Literal["auditioned"] = "auditioned"
+
+    @model_validator(mode="after")
+    def validate_time_range(self):
+        if self.end_ms <= self.start_ms:
+            raise PydanticCustomError("invalid_time_range", "end_ms must be greater than start_ms")
+        return self
+
+
+class VideoLocalizationSubtitleCueUpdate(BaseModel):
+    start_ms: int | None = Field(default=None, ge=0)
+    end_ms: int | None = Field(default=None, ge=0)
 
 
 class VideoLocalizationSubtitleImportRequest(BaseModel):
@@ -1071,6 +1438,14 @@ class VideoLocalizationOperationRequest(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
+class VideoLocalizationGlossaryEntry(VideoLocalizationExtensibleModel):
+    glossary_id: str = Field(default_factory=new_id)
+    source_text: str = Field(min_length=1)
+    corrected_source_text: str | None = None
+    zh_text: str | None = None
+    notes: str | None = None
+
+
 class VideoLocalizationDraft(BaseModel):
     project_type: Literal["video_localization"] = "video_localization"
     schema_version: str = "v1"
@@ -1080,9 +1455,13 @@ class VideoLocalizationDraft(BaseModel):
     speakers: list[VideoLocalizationSpeaker] = Field(default_factory=list)
     reference_clips: list[VideoLocalizationReferenceClip] = Field(default_factory=list)
     cues: list[VideoLocalizationCue] = Field(default_factory=list)
+    transcription: VideoLocalizationTranscriptionState | None = None
+    localized_subtitles: list[VideoLocalizationSubtitleCue] = Field(default_factory=list)
     quality_gate: VideoLocalizationQualityGate = Field(default_factory=VideoLocalizationQualityGate)
     exports: VideoLocalizationExportState = Field(default_factory=VideoLocalizationExportState)
     operations: list[VideoLocalizationOperation] = Field(default_factory=list)
+    glossary: list[VideoLocalizationGlossaryEntry] = Field(default_factory=list)
+    scene_context: str = ""
     ui_state: dict[str, Any] = Field(default_factory=dict)
     project_voice_samples: list[dict[str, Any]] = Field(default_factory=list)
     voice_recipes: list[dict[str, Any]] = Field(default_factory=list)
