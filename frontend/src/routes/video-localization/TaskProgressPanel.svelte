@@ -171,7 +171,11 @@
 									{/if}
 								</div>
 								<div class="task-details">
-									{#if meta.length}<div class="task-meta">{meta.join(' · ')}</div>{/if}
+									{#if meta.length}
+										<div class="task-meta" aria-label={meta.join('，')}>
+											{#each meta as item}<span>{item}</span>{/each}
+										</div>
+									{/if}
 									<div class="task-stage">
 										<span>{task.stage || activityTaskStatusLabel(task.status)}</span>
 										{#if progress !== null}<strong>{progress}%</strong>{/if}
@@ -235,7 +239,11 @@
 								</button>
 								{#if expanded}
 									<div class="task-details history-details">
-										{#if meta.length}<div class="task-meta">{meta.join(' · ')}</div>{/if}
+										{#if meta.length}
+											<div class="task-meta" aria-label={meta.join('，')}>
+												{#each meta as item}<span>{item}</span>{/each}
+											</div>
+										{/if}
 										<div class="task-stage"><span>{task.stage || activityTaskStatusLabel(task.status)}</span></div>
 										{#if task.steps?.length}
 											<ul class="task-steps" aria-label={`${displayLabel(task)}处理步骤`}>
@@ -375,7 +383,9 @@
 		gap: 6px;
 		padding: 0 8px 10px 32px;
 	}
-	.task-meta { overflow: hidden; color: #74848c; font-size: 9.5px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+	.task-meta { min-width: 0; display: flex; flex-wrap: wrap; gap: 2px 0; color: #74848c; font-size: 9.5px; line-height: 1.45; }
+	.task-meta span { display: inline-flex; align-items: baseline; white-space: nowrap; }
+	.task-meta span:not(:last-child)::after { content: '·'; margin: 0 6px; color: #4f5e65; }
 	.task-stage { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #9baab1; font-size: 10px; line-height: 1.4; }
 	.task-stage span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.task-stage strong { flex: 0 0 auto; color: #b4d8e2; font-size: 9.5px; }
