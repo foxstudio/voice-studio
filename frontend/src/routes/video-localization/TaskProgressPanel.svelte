@@ -184,14 +184,14 @@
 											{#each task.steps as step (step.id)}
 												{@const timing = stepTiming(step, task)}
 												<li class:current={step.status === 'running'} class:step-failed={step.status === 'failed'}>
-													<span class="task-step-state" class:spinning={step.status === 'running'} aria-hidden="true">
+													<span class="task-step-state" class:step-spinning={step.status === 'running'} aria-hidden="true">
 														{#if step.status === 'success'}<Check size={10} />
 														{:else if step.status === 'running'}<LoaderCircle size={10} />
 														{:else if step.status === 'failed'}<AlertTriangle size={10} />
 														{:else if step.status === 'cancelled'}<CircleOff size={10} />
 														{:else}<Circle size={8} />{/if}
 													</span>
-													<span>{step.label}</span>
+													<span class="task-step-label">{step.label}</span>
 													<span class="task-step-summary">
 														{#if timing}<b>{timing}</b>{/if}
 														<em>{stepStateLabel(step)}</em>
@@ -248,7 +248,7 @@
 															{:else if step.status === 'cancelled'}<CircleOff size={10} />
 															{:else}<Circle size={8} />{/if}
 														</span>
-														<span>{step.label}</span>
+														<span class="task-step-label">{step.label}</span>
 														<span class="task-step-summary">
 															{#if timing}<b>{timing}</b>{/if}
 															<em>{stepStateLabel(step)}</em>
@@ -307,7 +307,7 @@
 		white-space: nowrap;
 	}
 
-	.task-center-head strong { font-size: 11px; }
+	.task-center-head strong { font-size: 11.5px; }
 	.task-center-mark { display: grid; place-items: center; color: #71b8cd; }
 	.active .task-center-mark { animation: task-spin 900ms linear infinite; }
 	.summary-count { color: #7f9098; font-size: 9.5px; }
@@ -330,8 +330,8 @@
 		background: transparent;
 		color: #8b9aa1;
 	}
-	.task-group-head strong { color: #aebbc1; font-size: 9.5px; font-weight: 750; }
-	.task-group-head span { font-size: 8.5px; }
+	.task-group-head strong { color: #aebbc1; font-size: 10px; font-weight: 700; }
+	.task-group-head span { font-size: 9px; }
 
 	.task-list { display: grid; }
 	.task-row {
@@ -349,8 +349,8 @@
 		grid-template-columns: 18px minmax(0, 1fr) auto;
 		align-items: center;
 		gap: 6px;
-		min-height: 34px;
-		padding: 5px 8px 3px;
+		min-height: 38px;
+		padding: 6px 8px 4px;
 	}
 	.task-state { display: grid; place-items: center; color: #6f8088; }
 	.running .task-state { color: #72b9ce; }
@@ -363,36 +363,39 @@
 		min-width: 0;
 		overflow: hidden;
 		color: #d5dfe3;
-		font-size: 10.5px;
+		font-size: 11.5px;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.task-title span { flex: 0 0 auto; color: #78909a; font-size: 8.5px; }
+	.task-title span { flex: 0 0 auto; color: #78909a; font-size: 9.5px; }
 
 	.task-details {
 		min-width: 0;
 		display: grid;
-		gap: 5px;
-		padding: 0 8px 9px 32px;
+		gap: 6px;
+		padding: 0 8px 10px 32px;
 	}
-	.task-meta { overflow: hidden; color: #74848c; font-size: 8.5px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
-	.task-stage { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #93a2a9; font-size: 9.5px; line-height: 1.35; }
+	.task-meta { overflow: hidden; color: #74848c; font-size: 9.5px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+	.task-stage { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #9baab1; font-size: 10px; line-height: 1.4; }
 	.task-stage span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.task-stage strong { flex: 0 0 auto; color: #a9ccd6; font-size: 9px; }
+	.task-stage strong { flex: 0 0 auto; color: #b4d8e2; font-size: 9.5px; }
 	.task-details small { color: #c28d8f; font-size: 9px; line-height: 1.45; }
 
 	.task-meter { height: 3px; border-radius: 2px; background: #263238; overflow: hidden; }
 	.task-meter i { display: block; height: 100%; background: #65afc5; transition: width 180ms ease; }
 
-	.task-steps { display: grid; gap: 1px; margin: 1px 0 0; padding: 5px 0 0; border-top: 1px solid rgba(255, 255, 255, 0.05); list-style: none; }
-	.task-steps li { min-width: 0; display: grid; grid-template-columns: 13px minmax(0, 1fr) auto; align-items: center; gap: 4px; min-height: 17px; color: #728087; font-size: 8.5px; }
+	.task-steps { display: grid; gap: 0; margin: 1px 0 0; padding: 7px 0 0; border-top: 1px solid rgba(255, 255, 255, 0.055); list-style: none; }
+	.task-steps li { position: relative; min-width: 0; display: grid; grid-template-columns: 15px minmax(0, 1fr) auto; align-items: center; gap: 6px; min-height: 22px; color: #78878e; font-size: 9.5px; }
 	.task-steps li.current { color: #a9ccd6; }
 	.task-steps li.step-failed { color: #d89496; }
-	.task-step-summary { min-width: 0; display: flex; align-items: baseline; justify-content: flex-end; gap: 5px; white-space: nowrap; }
-	.task-step-summary b { color: #8fa1a9; font-size: 8px; font-weight: 650; }
-	.task-step-summary em { color: #65747b; font-size: 8px; font-style: normal; }
+	.task-step-label { min-width: 0; overflow: hidden; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+	.task-step-summary { min-width: 0; display: flex; align-items: baseline; justify-content: flex-end; gap: 6px; white-space: nowrap; }
+	.task-step-summary b { color: #91a2aa; font-size: 9px; font-weight: 600; }
+	.task-step-summary em { min-width: 28px; color: #697980; font-size: 9px; font-style: normal; text-align: right; }
 	.task-steps li.current .task-step-summary b { color: #a9ccd6; }
-	.task-step-state { display: grid; place-items: center; color: #64747b; }
+	.task-step-state { position: relative; z-index: 1; display: grid; place-items: center; color: #64747b; }
+	.task-step-state.step-spinning :global(svg) { animation: task-spin 900ms linear infinite; }
+	.task-steps li:not(:last-child) .task-step-state::after { content: ''; position: absolute; top: 13px; left: 7px; width: 1px; height: 10px; background: #354147; }
 	.task-steps li.current .task-step-state { color: #72b9ce; }
 
 	.task-stop {
@@ -427,8 +430,8 @@
 	}
 	.history-summary:hover { background: rgba(255, 255, 255, 0.025); }
 	.history-time { display: grid; justify-items: end; gap: 2px; white-space: nowrap; }
-	.history-time b { color: #8b9aa1; font-size: 8px; font-weight: 650; }
-	.history-time time { color: #697880; font-size: 8px; }
+	.history-time b { color: #8b9aa1; font-size: 9px; font-weight: 650; }
+	.history-time time { color: #697880; font-size: 9px; }
 	.history-chevron { display: grid; place-items: center; color: #61727a; transition: transform 140ms ease; }
 	.history-row.expanded .history-chevron { transform: rotate(90deg); }
 	.history-details { padding-top: 1px; }

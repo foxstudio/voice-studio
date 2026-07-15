@@ -91,7 +91,7 @@ describe('activity notice tasks', () => {
 		expect(second).toMatchObject({ engineId: 'faster-whisper-turbo', sourceTrackId: 'vocals', resultCount: 9 });
 		expect(activityTaskSourceLabel(second.sourceTrackId)).toBe('人声音轨');
 		expect(activityTaskResultLabel(first)).toBe('12 条字幕');
-		expect(first.steps).toHaveLength(6);
+		expect(first.steps).toHaveLength(7);
 		expect(first.steps?.every((step) => step.status === 'success')).toBe(true);
 	});
 
@@ -104,7 +104,26 @@ describe('activity notice tasks', () => {
 			created_at: '2026-07-15T08:00:00Z', started_at: '2026-07-15T08:00:01Z', completed_at: null
 		});
 
-		expect(task.steps?.map((step) => step.status)).toEqual(['success', 'success', 'success', 'running', 'todo', 'todo']);
+		expect(task.steps?.map((step) => step.status)).toEqual(['success', 'success', 'success', 'success', 'running', 'todo', 'todo']);
+	});
+
+	it('shows web research as its own ASR step', () => {
+		const task = operationActivityTask({
+			operation_id: 'asr-research', project_id: 'project', kind: 'english_asr', status: 'running',
+			label: '听写字幕', progress: 0.3, error_code: null, error_message: null, cancel_requested: false,
+			parameters: {}, result_summary: { stage: '正在判断是否需要联网核验' },
+			created_at: '2026-07-15T08:00:00Z', started_at: '2026-07-15T08:00:01Z', completed_at: null
+		});
+
+		expect(task.steps?.map((step) => [step.id, step.status])).toEqual([
+			['recognize', 'success'],
+			['research', 'running'],
+			['review', 'todo'],
+			['timestamps', 'todo'],
+			['boundaries', 'todo'],
+			['boundary-review', 'todo'],
+			['subtitles', 'todo']
+		]);
 	});
 
 	it('maps completed ASR stage timings to their exact todo steps', () => {
@@ -117,6 +136,7 @@ describe('activity notice tasks', () => {
 				llm_model_id: 'deepseek-chat',
 				stage_timings: {
 					asr: { duration_ms: 12_345 },
+					web_research: { duration_ms: 1_000, status: 'completed', source_count: 3 },
 					text_review: { duration_ms: 60_000 },
 					alignment: { duration_ms: 2_500 },
 					audio_boundaries: { duration_ms: 1_250 },
@@ -134,15 +154,16 @@ describe('activity notice tasks', () => {
 
 		expect(task.steps?.map(({ id, durationMs }) => [id, durationMs])).toEqual([
 			['recognize', 12_345],
+			['research', 1_000],
 			['review', 60_000],
 			['timestamps', 2_500],
 			['boundaries', 1_250],
 			['boundary-review', 8_750],
-			['subtitles', 1_500]
+			['subtitles', 500]
 		]);
-		expect(task.steps?.[4]).toMatchObject({ roundCount: 2, batchCount: 3 });
+		expect(task.steps?.[5]).toMatchObject({ roundCount: 2, batchCount: 3 });
 		expect(task.semanticModelId).toBe('deepseek-chat');
-		expect(activityTaskStepTimingLabel(task.steps![4], task)).toBe('8 秒 · 2 轮 · 3 批');
+		expect(activityTaskStepTimingLabel(task.steps![5], task)).toBe('8 秒 · 2 轮 · 3 批');
 	});
 
 	it('does not invent partial history timings and labels a live fallback as total operation time', () => {
@@ -153,13 +174,13 @@ describe('activity notice tasks', () => {
 			created_at: '2026-07-15T08:00:00Z', started_at: '2026-07-15T08:00:01Z', completed_at: null
 		});
 
-		expect(task.steps?.[3].durationMs).toBeUndefined();
+		expect(task.steps?.[4].durationMs).toBeUndefined();
 		expect(activityTaskStepTimingLabel(
-			task.steps![3],
+			task.steps![4],
 			task,
 			Date.parse('2026-07-15T08:01:09Z')
 		)).toBe('总计 1 分 8 秒');
-		expect(activityTaskStepTimingLabel(task.steps![4], task)).toBe('');
+		expect(activityTaskStepTimingLabel(task.steps![5], task)).toBe('');
 	});
 
 	it('formats running and completed task durations without inventing missing end times', () => {

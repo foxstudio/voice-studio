@@ -67,6 +67,7 @@ const AREAS = new Set<ActivityTaskScope['area']>(['project', 'timeline', 'voice'
 
 const ASR_STEP_DEFINITIONS = [
 	{ id: 'recognize', label: '识别人声内容', stages: ['准备处理', '识别人声'], timingStages: ['asr'] },
+	{ id: 'research', label: '核验专名与背景', stages: ['判断是否需要联网核验', '联网核验'], timingStages: ['web_research'] },
 	{ id: 'review', label: '校对识别文本', stages: ['校对识别', '文本校对'], timingStages: ['text_review'] },
 	{ id: 'timestamps', label: '生成逐词时间码', stages: ['逐词时间码', '强制对齐'], timingStages: ['alignment'] },
 	{ id: 'boundaries', label: '分析声学边界', stages: ['声学边界'], timingStages: ['audio_boundaries'] },
@@ -123,8 +124,8 @@ function asrCurrentStepIndex(operation: VideoLocalizationOperation, stage: strin
 	if (matched >= 0) return matched;
 	const previewPhase = operation.result_summary?.preview_phase;
 	if (previewPhase === 'asr_draft') return 0;
-	if (previewPhase === 'text_review') return 1;
-	if (previewPhase === 'timing_segmentation') return 3;
+	if (previewPhase === 'text_review') return ASR_STEP_DEFINITIONS.findIndex((step) => step.id === 'review');
+	if (previewPhase === 'timing_segmentation') return ASR_STEP_DEFINITIONS.findIndex((step) => step.id === 'boundaries');
 	return 0;
 }
 

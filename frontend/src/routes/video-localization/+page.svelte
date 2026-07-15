@@ -94,6 +94,7 @@
 <script lang="ts">
 	import { Api } from '$lib/api';
 	import { ApiError } from '$lib/api/client';
+	import { withoutSubtitleTrack } from './subtitle-track-clear';
 	import type {
 		BatchTask,
 		GenerateRequest,
@@ -1500,7 +1501,7 @@
 		foregroundTasks = [...foregroundTasks, {
 			id: taskId,
 			label: `清空${label}`,
-			stage: '保存并删除字幕',
+			stage: '正在完成后台清理',
 			progress: null,
 			status: 'running',
 			scope: {
@@ -1511,19 +1512,41 @@
 			}
 		}];
 		error = '';
+		const previousDraft = draft;
+		const previousSelectedCueId = selectedCueId;
+		const previousDraftOnlyCueIds = draftOnlyCueIds;
+		if (autoSaveTimer) clearTimeout(autoSaveTimer);
+		autoSaveTimer = null;
+		const pendingSave = autoSaveStatus === 'dirty' || autoSaveStatus === 'failed' || autoSaveStatus === 'saving'
+			? runDraftAutosave()
+			: Promise.resolve();
+		draft = withoutSubtitleTrack(draft, track);
+		if (track === 'asr') {
+			selectedCueId = '';
+			draftOnlyCueIds = [];
+		}
+		message = `${label}已从时间线移除，正在后台清理`;
 		try {
-			if (autoSaveTimer) clearTimeout(autoSaveTimer);
-			autoSaveTimer = null;
-			await runDraftAutosave();
-			if (autoSaveStatus === 'failed') return;
+			await pendingSave;
+			if (autoSaveStatus === 'failed') throw new Error('自动保存失败，字幕未删除');
+			if (draft) draft = withoutSubtitleTrack(draft, track);
 			draft = await Api.clearVideoLocalizationSubtitles(projectId, track === 'asr' ? 'en' : 'zh');
 			if (track === 'asr') {
 				selectedCueId = '';
 				draftOnlyCueIds = [];
 			}
 			message = `${label}已清空`;
-			setTimeout(() => (message = ''), 1800);
 		} catch (e) {
+			try {
+				draft = await Api.videoLocalizationDraft(projectId);
+			} catch {
+				draft = previousDraft;
+			}
+			if (track === 'asr') {
+				const restoredCueIds = new Set(draft?.cues.map((cue) => cue.cue_id) ?? []);
+				selectedCueId = restoredCueIds.has(previousSelectedCueId) ? previousSelectedCueId : '';
+				draftOnlyCueIds = previousDraftOnlyCueIds.filter((cueId) => restoredCueIds.has(cueId));
+			}
 			error = (e as Error).message || `${label}清空失败`;
 		} finally {
 			foregroundTasks = foregroundTasks.filter((task) => task.id !== taskId);
