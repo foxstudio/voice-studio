@@ -363,6 +363,39 @@ def test_truncated_reasoning_batch_splits_without_discarding_valid_boundaries(mo
     assert batch_sizes.count(1) == 4
 
 
+def test_compact_review_batch_deduplicates_shared_context_words():
+    batch = [
+        {
+            "boundary_id": "word_1:word_2",
+            "left_word_id": "word_1",
+            "right_word_id": "word_2",
+            "left_context": [{"word_id": "word_1", "text": "Seedance"}],
+            "right_context": [{"word_id": "word_2", "text": "works"}],
+            "nearby_boundaries": [],
+            "features": {"word_gap_ms": 100},
+        },
+        {
+            "boundary_id": "word_2:word_3",
+            "left_word_id": "word_2",
+            "right_word_id": "word_3",
+            "left_context": [{"word_id": "word_2", "text": "works"}],
+            "right_context": [{"word_id": "word_3", "text": "well"}],
+            "nearby_boundaries": [],
+            "features": {"word_gap_ms": 120},
+        },
+    ]
+
+    candidates, words = boundary_review._compact_review_batch(batch)
+
+    assert [item["boundary_id"] for item in candidates] == ["word_1:word_2", "word_2:word_3"]
+    assert words == [
+        {"word_id": "word_1", "text": "Seedance"},
+        {"word_id": "word_2", "text": "works"},
+        {"word_id": "word_3", "text": "well"},
+    ]
+    assert all("left_context" not in item and "right_context" not in item for item in candidates)
+
+
 def test_repeated_timeout_stops_without_recursive_call_amplification(monkeypatch):
     from app.services import llm_runtime
 

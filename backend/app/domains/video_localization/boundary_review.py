@@ -17,7 +17,7 @@ from app.services import settings_store
 
 
 PROMPT_VERSION = "boundary-review-v2"
-BATCH_SIZE = 4
+BATCH_SIZE = 8
 MAX_PARALLEL_BATCHES = 4
 MAX_REVIEW_ROUNDS = 2
 MAX_ATTEMPTS = 2
@@ -362,6 +362,7 @@ def _review_batch(
     from app.services import llm_runtime
 
     expected_ids = [str(item["boundary_id"]) for item in batch]
+    compact_candidates, context_words = _compact_review_batch(batch)
     payload = {
         "task": PROMPT_VERSION,
         "language": language,
@@ -399,7 +400,8 @@ def _review_batch(
             "pause_rule": "Pause is supporting evidence only. Never prefer a boundary solely because silence is present.",
             "forbidden": ["editing transcript text", "timestamps", "translation", "summarization"],
         },
-        "candidates": batch,
+        "context_words": context_words,
+        "candidates": compact_candidates,
         "output": (
             "Return {boundaries:[{boundary_id,decision,confidence,reason_code,recommended_boundary_id,"
             "protected_start_word_id,protected_end_word_id}]}. Optional repair fields may be null. reason_code must be one of "
@@ -420,7 +422,7 @@ def _review_batch(
                 user_payload=payload,
                 profile_id=profile_id,
                 temperature=0.0,
-                max_tokens=min(MAX_OUTPUT_TOKENS, max(MIN_OUTPUT_TOKENS, len(batch) * 320)),
+                max_tokens=min(MAX_OUTPUT_TOKENS, max(MIN_OUTPUT_TOKENS, len(batch) * 640)),
                 timeout=REQUEST_TIMEOUT_SECONDS,
                 allow_array=True,
             )
@@ -490,6 +492,43 @@ def _review_batch(
         )
         reviews.extend(_repair_reviews(item, candidate, model_id=model_id))
     return _merge_reviews(reviews), None
+
+
+def _compact_review_batch(
+    batch: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Share repeated word context once instead of repeating it per boundary."""
+
+    context_words: list[dict[str, object]] = []
+    seen_word_ids: set[str] = set()
+    compact_candidates: list[dict[str, object]] = []
+    for candidate in batch:
+        for word in [*(candidate.get("left_context") or []), *(candidate.get("right_context") or [])]:
+            if not isinstance(word, dict):
+                continue
+            word_id = str(word.get("word_id") or "")
+            if not word_id or word_id in seen_word_ids:
+                continue
+            seen_word_ids.add(word_id)
+            context_words.append({"word_id": word_id, "text": str(word.get("text") or "")})
+        compact_candidates.append(
+            {
+                "boundary_id": candidate.get("boundary_id"),
+                "left_word_id": candidate.get("left_word_id"),
+                "right_word_id": candidate.get("right_word_id"),
+                "nearby_boundaries": [
+                    {
+                        "boundary_id": nearby.get("boundary_id"),
+                        "left_word_id": nearby.get("left_word_id"),
+                        "right_word_id": nearby.get("right_word_id"),
+                    }
+                    for nearby in (candidate.get("nearby_boundaries") or [])
+                    if isinstance(nearby, dict)
+                ],
+                "features": candidate.get("features") or {},
+            }
+        )
+    return compact_candidates, context_words
 
 
 def _review_batch_with_timing(

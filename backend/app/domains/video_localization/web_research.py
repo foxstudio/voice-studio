@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.domains.video_localization.schemas import (
     VideoLocalizationResearchQuery,
@@ -43,6 +43,24 @@ class PlannedQuery(BaseModel):
     category: Literal["proper_noun", "background", "culture", "persona"] = "background"
     reason: str = Field(default="", max_length=500)
     target_terms: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def normalize_category(cls, value):
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().casefold()
+        aliases = {
+            "product": "proper_noun",
+            "company": "proper_noun",
+            "person": "proper_noun",
+            "place": "proper_noun",
+            "event": "background",
+            "history": "background",
+            "cultural_reference": "culture",
+            "speaker": "persona",
+        }
+        return aliases.get(normalized, normalized)
 
 
 class ResearchPlan(BaseModel):
@@ -101,7 +119,10 @@ def research_transcript(
                 "scene_context": scene_context.strip()[:3000] or None,
                 "transcript": transcript[:MAX_TRANSCRIPT_CHARS],
                 "limits": {"max_queries": search_settings.max_queries, "max_target_terms_per_query": 8},
-                "output": "Return {needs_research,reason,queries:[{query,category,reason,target_terms}]}",
+                "output": (
+                    "Return {needs_research,reason,queries:[{query,category,reason,target_terms}]}. "
+                    "category must be exactly proper_noun, background, culture, or persona."
+                ),
             },
             profile_id=profile.profile_id,
             temperature=0.0,

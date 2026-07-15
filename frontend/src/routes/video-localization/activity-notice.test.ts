@@ -49,6 +49,18 @@ describe('activity notice tasks', () => {
 		expect(activityTaskSummary([task]).text).toBe('分离人声与背景音乐 · 准备处理');
 	});
 
+	it('does not confuse source media duration with operation elapsed time', () => {
+		const task = operationActivityTask({
+			operation_id: 'source-audio', project_id: 'project', kind: 'source_audio', status: 'success',
+			label: null, progress: 1, error_code: null, error_message: null, cancel_requested: false,
+			result_summary: { duration_ms: 665_000 }, parameters: {},
+			created_at: '2026-07-15T08:00:00Z', started_at: '2026-07-15T08:00:01Z', completed_at: '2026-07-15T08:00:04Z'
+		});
+
+		expect(task.durationMs).toBeNull();
+		expect(activityTaskElapsedMs(task)).toBe(3_000);
+	});
+
 	it('maps operation scope to the tracks that must be temporarily locked', () => {
 		const task = operationActivityTask({
 			operation_id: 'op-3', project_id: 'project', kind: 'english_asr', status: 'running',
@@ -133,7 +145,17 @@ describe('activity notice tasks', () => {
 			parameters: {},
 			result_summary: {
 				duration_ms: 86_345,
+				task_duration_ms: 86_345,
 				llm_model_id: 'deepseek-chat',
+				task_stage_timings: {
+					asr: { duration_ms: 12_345 },
+					web_research: { duration_ms: 1_000 },
+					text_review: { duration_ms: 60_000 },
+					alignment: { duration_ms: 2_500 },
+					audio_boundaries: { duration_ms: 1_250 },
+					boundary_review: { duration_ms: 8_750 },
+					subtitle_track: { duration_ms: 500 }
+				},
 				stage_timings: {
 					asr: { duration_ms: 12_345 },
 					web_research: { duration_ms: 1_000, status: 'completed', source_count: 3 },
@@ -166,20 +188,29 @@ describe('activity notice tasks', () => {
 		expect(activityTaskStepTimingLabel(task.steps![5], task)).toBe('8 秒 · 2 轮 · 3 批');
 	});
 
-	it('does not invent partial history timings and labels a live fallback as total operation time', () => {
+	it('derives only the current step elapsed time from completed live step timings', () => {
 		const task = operationActivityTask({
 			operation_id: 'asr-live', project_id: 'project', kind: 'english_asr', status: 'running',
 			label: '听写字幕', progress: 0.74, error_code: null, error_message: null, cancel_requested: false,
-			parameters: {}, result_summary: { stage: '正在分析停顿与声学边界' },
+			parameters: {}, result_summary: {
+				stage: '正在分析停顿与声学边界',
+				task_stage_timings: {
+					asr: { duration_ms: 12_000 },
+					web_research: { duration_ms: 1_000 },
+					text_review: { duration_ms: 20_000 },
+					alignment: { duration_ms: 2_500 },
+					audio_boundaries: { duration_ms: 1_000, running: true }
+				}
+			},
 			created_at: '2026-07-15T08:00:00Z', started_at: '2026-07-15T08:00:01Z', completed_at: null
 		});
 
-		expect(task.steps?.[4].durationMs).toBeUndefined();
+		expect(task.steps?.[4].durationMs).toBe(1_000);
 		expect(activityTaskStepTimingLabel(
 			task.steps![4],
 			task,
 			Date.parse('2026-07-15T08:01:09Z')
-		)).toBe('总计 1 分 8 秒');
+		)).toBe('32 秒');
 		expect(activityTaskStepTimingLabel(task.steps![5], task)).toBe('');
 	});
 

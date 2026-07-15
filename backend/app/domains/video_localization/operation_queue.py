@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import queue
 import threading
+import time
 
 from app.domains.video_localization import operation_state
 from app.domains.video_localization import service
@@ -22,6 +23,63 @@ _queued_operation_ids: set[str] = set()
 _ACTIVE_STATUSES = operation_state.ACTIVE_STATUSES
 _TERMINAL_STATUSES = operation_state.TERMINAL_STATUSES
 _KIND_LABELS = operation_state.KIND_LABELS
+
+
+def _asr_stage_id(stage: str) -> str:
+    normalized = str(stage or "")
+    for stage_id, markers in (
+        ("web_research", ("联网核验",)),
+        ("text_review", ("校对识别", "文本校对")),
+        ("alignment", ("逐词时间码", "强制对齐")),
+        ("audio_boundaries", ("声学边界",)),
+        ("boundary_review", ("字幕断句", "复核断句")),
+        ("subtitle_track", ("生成字幕轨",)),
+    ):
+        if any(marker in normalized for marker in markers):
+            return stage_id
+    return "asr"
+
+
+class _AsrStageTimer:
+    """Continuously attributes operation wall time to exactly one ASR step."""
+
+    def __init__(self, *, clock=time.perf_counter):
+        self._clock = clock
+        self._current_stage_id = "asr"
+        self._current_started_at = clock()
+        self._completed: dict[str, int] = {}
+
+    def update(self, stage: str) -> dict[str, dict[str, int | bool]]:
+        now = self._clock()
+        next_stage_id = _asr_stage_id(stage)
+        if next_stage_id != self._current_stage_id:
+            self._completed[self._current_stage_id] = self._elapsed_ms(now)
+            self._current_stage_id = next_stage_id
+            self._current_started_at = now
+        return self.snapshot(now=now)
+
+    def snapshot(self, *, now: float | None = None) -> dict[str, dict[str, int | bool]]:
+        observed_at = self._clock() if now is None else now
+        timings: dict[str, dict[str, int | bool]] = {
+            stage_id: {"duration_ms": duration_ms}
+            for stage_id, duration_ms in self._completed.items()
+        }
+        timings[self._current_stage_id] = {
+            "duration_ms": self._elapsed_ms(observed_at),
+            "running": True,
+        }
+        return timings
+
+    def finish(self) -> dict[str, dict[str, int]]:
+        now = self._clock()
+        self._completed[self._current_stage_id] = self._elapsed_ms(now)
+        return {
+            stage_id: {"duration_ms": duration_ms}
+            for stage_id, duration_ms in self._completed.items()
+        }
+
+    def _elapsed_ms(self, now: float) -> int:
+        return max(0, round((now - self._current_started_at) * 1000))
 
 
 def start_worker() -> None:
@@ -157,6 +215,7 @@ def _process(operation_id: str) -> None:
         started_at=now_iso(),
         result_summary={"stage": "准备处理"},
     )
+    asr_stage_timer: _AsrStageTimer | None = None
     try:
         if operation.kind == "source_audio":
             updated = service.extract_source_audio(project_id)
@@ -168,19 +227,28 @@ def _process(operation_id: str) -> None:
             engine_id = str(operation.parameters.get("engine_id") or source_pipeline.DEFAULT_ENGLISH_ASR_ENGINE_ID)
             source_track_id = str(operation.parameters.get("source_track_id") or "auto")
             segmentation_profile_id = str(operation.parameters.get("segmentation_profile_id") or "generic_zh")
-            updated = service.transcribe_english_source_audio(
-                project_id,
-                engine_id=engine_id,
-                source_track_id=source_track_id,
-                is_cancelled=lambda: operation_state.operation_was_cancelled(get_operation(project_id, operation_id)),
-                on_progress=lambda progress, stage: _mark_operation(
+            asr_stage_timer = _AsrStageTimer()
+
+            def report_asr_progress(progress: float, stage: str) -> None:
+                assert asr_stage_timer is not None
+                _mark_operation(
                     project_id,
                     operation_id,
                     kind=operation.kind,
                     status="running",
                     progress=progress,
-                    result_summary={"stage": stage},
-                ),
+                    result_summary={
+                        "stage": stage,
+                        "task_stage_timings": asr_stage_timer.update(stage),
+                    },
+                )
+
+            updated = service.transcribe_english_source_audio(
+                project_id,
+                engine_id=engine_id,
+                source_track_id=source_track_id,
+                is_cancelled=lambda: operation_state.operation_was_cancelled(get_operation(project_id, operation_id)),
+                on_progress=report_asr_progress,
                 on_preview=lambda phase, cues: _mark_operation(
                     project_id,
                     operation_id,
@@ -191,6 +259,11 @@ def _process(operation_id: str) -> None:
                 segmentation_profile_id=segmentation_profile_id,
             )
             summary = operation_state.english_asr_summary(updated)
+            task_stage_timings = asr_stage_timer.finish()
+            summary["task_stage_timings"] = task_stage_timings
+            summary["task_duration_ms"] = sum(
+                int(item.get("duration_ms") or 0) for item in task_stage_timings.values()
+            )
         elif operation.kind == "reference_clips":
             updated = service.create_reference_clips_from_cues(project_id)
             summary = operation_state.reference_clips_summary(updated)

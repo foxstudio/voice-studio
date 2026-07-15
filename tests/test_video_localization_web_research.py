@@ -76,6 +76,24 @@ def test_research_skips_llm_when_disabled(monkeypatch):
     assert result.status == "disabled"
 
 
+def test_research_plan_normalizes_common_model_category_aliases():
+    plan = web_research.ResearchPlan.model_validate(
+        {
+            "needs_research": True,
+            "queries": [
+                {
+                    "query": "Seedance 2.0 official product",
+                    "category": "product",
+                    "reason": "verify product spelling",
+                    "target_terms": ["Seedance"],
+                }
+            ],
+        }
+    )
+
+    assert plan.queries[0].category == "proper_noun"
+
+
 def test_research_zero_results_is_completed_without_evidence(monkeypatch):
     settings = WebSearchSettings(enabled=True, provider="wikipedia", max_queries=1)
     profile = LlmProviderProfile(

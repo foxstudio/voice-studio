@@ -1830,6 +1830,25 @@ def test_video_localization_operation_progress_merges_into_latest_draft(tmp_path
     assert latest_operation.result_summary == {"stage": "正在生成逐词时间码"}
 
 
+def test_asr_stage_timer_records_non_overlapping_step_durations():
+    now = [10.0]
+    timer = video_localization_operation_queue._AsrStageTimer(clock=lambda: now[0])
+
+    now[0] = 12.5
+    timer.update("正在判断是否需要联网核验")
+    now[0] = 13.0
+    timer.update("正在校对识别文本")
+    now[0] = 16.25
+    timings = timer.finish()
+
+    assert timings == {
+        "asr": {"duration_ms": 2500},
+        "web_research": {"duration_ms": 500},
+        "text_review": {"duration_ms": 3250},
+    }
+    assert sum(item["duration_ms"] for item in timings.values()) == 6250
+
+
 def test_video_localization_operation_persists_asr_preview_phases(tmp_path: Path, monkeypatch):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "ASR 预览阶段", "description": ""}).json()

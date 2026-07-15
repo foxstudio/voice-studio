@@ -41,6 +41,7 @@ export type ActivityTask = {
 	sourceTrackId?: string | null;
 	resultCount?: number | null;
 	resultUnit?: string;
+	durationMs?: number | null;
 	steps?: ActivityTaskStep[];
 };
 
@@ -132,12 +133,14 @@ function asrCurrentStepIndex(operation: VideoLocalizationOperation, stage: strin
 function operationSteps(operation: VideoLocalizationOperation, stage: string): ActivityTaskStep[] | undefined {
 	if (operation.kind !== 'english_asr') return undefined;
 	const currentIndex = asrCurrentStepIndex(operation, stage);
-	const stageTimings = recordValue(operation.result_summary?.stage_timings);
-	const boundaryCounts = boundaryReviewCounts(stageTimings);
+	const diagnosticStageTimings = recordValue(operation.result_summary?.stage_timings);
+	const taskStageTimings = recordValue(operation.result_summary?.task_stage_timings);
+	const stageTimings = taskStageTimings ?? diagnosticStageTimings;
+	const boundaryCounts = boundaryReviewCounts(diagnosticStageTimings);
 	const legacyMeasuredDurations = ASR_STEP_DEFINITIONS
 		.filter((step) => step.id !== 'subtitles')
 		.flatMap((step) => step.timingStages)
-		.map((stageId) => numberValue(recordValue(stageTimings?.[stageId])?.duration_ms));
+		.map((stageId) => numberValue(recordValue(diagnosticStageTimings?.[stageId])?.duration_ms));
 	const measuredStageDuration = legacyMeasuredDurations.reduce<number>((total, duration) => total + (duration ?? 0), 0);
 	const operationDuration = numberValue(operation.result_summary?.duration_ms);
 	const legacySubtitleTrackDuration = operationDuration === null || legacyMeasuredDurations.some((duration) => duration === null)
@@ -228,6 +231,10 @@ export function operationActivityTask(operation: VideoLocalizationOperation, can
 		sourceTrackId: stringValue(operation.result_summary?.source_track_id) ?? stringValue(operation.parameters?.source_track_id),
 		resultCount: result.count,
 		resultUnit: result.unit,
+		durationMs: numberValue(
+			operation.result_summary?.task_duration_ms
+			?? (operation.kind === 'english_asr' ? operation.result_summary?.duration_ms : null)
+		),
 		steps: operationSteps(operation, stage)
 	};
 }
@@ -278,6 +285,9 @@ function validTimeMs(value: string | null | undefined) {
 }
 
 export function activityTaskElapsedMs(task: ActivityTask, nowMs = Date.now()) {
+	if (!isActiveActivityTask(task) && typeof task.durationMs === 'number' && Number.isFinite(task.durationMs)) {
+		return Math.max(0, task.durationMs);
+	}
 	const start = validTimeMs(task.startedAt) ?? validTimeMs(task.createdAt);
 	if (start === null) return null;
 	const end = isActiveActivityTask(task) ? nowMs : validTimeMs(task.completedAt);
@@ -298,15 +308,21 @@ export function formatActivityTaskDuration(valueMs: number | null | undefined) {
 }
 
 export function activityTaskStepTimingLabel(step: ActivityTaskStep, task?: ActivityTask, nowMs = Date.now()) {
-	const duration = formatActivityTaskDuration(step.durationMs);
+	let durationMs = step.durationMs;
+	if (step.status === 'running' && task) {
+		const taskElapsedMs = activityTaskElapsedMs(task, nowMs);
+		const completedStepMs = (task.steps ?? [])
+			.filter((candidate) => candidate.status === 'success')
+			.reduce((total, candidate) => total + (candidate.durationMs ?? 0), 0);
+		if (taskElapsedMs !== null) durationMs = Math.max(durationMs ?? 0, taskElapsedMs - completedStepMs);
+	}
+	const duration = formatActivityTaskDuration(durationMs);
 	const counts = [
 		step.roundCount && step.roundCount > 0 ? `${step.roundCount} 轮` : '',
 		step.batchCount && step.batchCount > 0 ? `${step.batchCount} 批` : ''
 	].filter(Boolean);
 	if (duration) return [duration, ...counts].join(' · ');
-	if (step.status !== 'running' || !task) return counts.join(' · ');
-	const elapsed = formatActivityTaskDuration(activityTaskElapsedMs(task, nowMs));
-	return elapsed ? `总计 ${elapsed}` : '';
+	return counts.join(' · ');
 }
 
 export function formatActivityTaskTime(value: string | null | undefined) {
