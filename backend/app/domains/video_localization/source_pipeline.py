@@ -12,7 +12,7 @@ from fastapi import UploadFile
 
 from app.domains.video_localization import cues as cue_tools
 from app.domains.video_localization import media_assets
-from app.domains.video_localization import subtitle_segmentation, transcription
+from app.domains.video_localization import project_manifest, subtitle_segmentation, transcription
 from app.errors import AppException
 from app.domains.video_localization.schemas import VideoLocalizationCue, VideoLocalizationDraft, now_iso
 from app.services import asr_service, audio_tools
@@ -259,6 +259,7 @@ def with_english_asr(
     draft: VideoLocalizationDraft,
     engine_id: str = DEFAULT_ENGLISH_ASR_ENGINE_ID,
     source_track_id: EnglishAsrSourceTrackId | str = "auto",
+    project_id: str | None = None,
     segmentation_profile_id: str = subtitle_segmentation.DEFAULT_PROFILE_ID,
     progress_callback: Callable[[float, str], None] | None = None,
     is_cancelled: Callable[[], bool] | None = None,
@@ -302,6 +303,9 @@ def with_english_asr(
             duration_ms=asr_duration_ms,
             glossary=draft.glossary,
             scene_context=_transcription_scene_context(draft),
+            research_cache_dir=(
+                project_manifest.ensure_project_layout(project_id)["research_cache"] if project_id else None
+            ),
             segmentation_profile_id=subtitle_segmentation.resolve_profile(segmentation_profile_id).profile_id,
             existing_boundary_reviews=previous_transcription.boundary_reviews
             if can_reuse_boundary_reviews and previous_transcription

@@ -294,6 +294,61 @@ class LlmConnectionTestResponse(BaseModel):
     message: str
 
 
+class WebSearchSettings(BaseModel):
+    enabled: bool = False
+    provider: Literal["wikipedia", "tavily", "searxng"] = "wikipedia"
+    base_url: str = ""
+    api_key_configured: bool = False
+    max_queries: int = Field(default=3, ge=1, le=3)
+    max_results_per_query: int = Field(default=5, ge=1, le=8)
+
+    @field_validator("base_url")
+    @classmethod
+    def strip_search_base_url(cls, value: str) -> str:
+        return value.strip().rstrip("/")
+
+
+class WebSearchSettingsUpdate(BaseModel):
+    enabled: bool = False
+    provider: Literal["wikipedia", "tavily", "searxng"] = "wikipedia"
+    base_url: str = ""
+    api_key: str | None = None
+    clear_api_key: bool = False
+    max_queries: int = Field(default=3, ge=1, le=3)
+    max_results_per_query: int = Field(default=5, ge=1, le=8)
+
+    @field_validator("base_url")
+    @classmethod
+    def strip_search_update_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        if not normalized:
+            return ""
+        parsed = urllib.parse.urlparse(normalized)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("SearXNG 地址必须是没有账号、密码、查询参数或片段的 HTTP(S) 地址")
+        return normalized
+
+    @model_validator(mode="after")
+    def reject_search_key_replace_and_clear(self):
+        if self.clear_api_key and self.api_key is not None and self.api_key.strip():
+            raise ValueError("api_key 与 clear_api_key 不能同时提交")
+        return self
+
+
+class WebSearchTestResponse(BaseModel):
+    provider: Literal["wikipedia", "tavily", "searxng"]
+    status: Literal["connected"] = "connected"
+    result_count: int = 0
+    message: str
+
+
 class CloudConnectionTestResponse(BaseModel):
     provider: Literal["mimo", "doubao", "volcengine_directory"]
     status: Literal["connected"] = "connected"
@@ -1173,6 +1228,39 @@ class VideoLocalizationTranscriptEditOperation(VideoLocalizationExtensibleModel)
     confidence: float = Field(ge=0, le=1)
     status: Literal["accepted", "rejected"] = "rejected"
     rejection_reason: str | None = None
+    evidence_source_ids: list[str] = Field(default_factory=list)
+
+
+class VideoLocalizationResearchQuery(VideoLocalizationExtensibleModel):
+    query_id: str
+    query: str
+    category: Literal["proper_noun", "background", "culture", "persona"] = "background"
+    reason: str = ""
+    target_terms: list[str] = Field(default_factory=list)
+
+
+class VideoLocalizationResearchSource(VideoLocalizationExtensibleModel):
+    source_id: str
+    query_id: str
+    title: str
+    url: str
+    snippet: str = ""
+    provider: str
+    retrieved_at: str = Field(default_factory=now_iso)
+
+
+class VideoLocalizationResearchState(VideoLocalizationExtensibleModel):
+    status: Literal["disabled", "not_configured", "not_needed", "completed", "partial", "failed"] = "disabled"
+    prompt_version: str | None = None
+    profile_id: str | None = None
+    model_id: str | None = None
+    provider: str | None = None
+    reason: str = ""
+    queries: list[VideoLocalizationResearchQuery] = Field(default_factory=list)
+    sources: list[VideoLocalizationResearchSource] = Field(default_factory=list)
+    cache_hits: int = 0
+    duration_ms: int = 0
+    error: str | None = None
 
 
 class VideoLocalizationAlignedWord(VideoLocalizationExtensibleModel):
@@ -1262,6 +1350,7 @@ class VideoLocalizationTranscriptionState(VideoLocalizationExtensibleModel):
     review_model_id: str | None = None
     review_prompt_version: str | None = None
     review_error: str | None = None
+    research: VideoLocalizationResearchState = Field(default_factory=VideoLocalizationResearchState)
     alignment_status: Literal["not_run", "completed", "partial", "failed"] = "not_run"
     alignment_engine_id: str | None = None
     alignment_error: str | None = None

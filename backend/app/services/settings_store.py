@@ -12,8 +12,10 @@ from app.schemas.voice_studio import (
     LlmProviderListResponse,
     LlmProviderProfile,
     LlmProviderProfileUpsert,
+    WebSearchSettings,
+    WebSearchSettingsUpdate,
 )
-from app.services import database as db, settings_llm, settings_preferences, settings_secrets, settings_storage
+from app.services import database as db, settings_llm, settings_preferences, settings_search, settings_secrets, settings_storage
 from app.services.paths import PROJECT_ROOT, expand_path
 
 
@@ -101,6 +103,18 @@ def set_default_llm_profile(profile_id: str) -> LlmProviderListResponse:
 
 def delete_llm_profile(profile_id: str) -> LlmProviderListResponse:
     return settings_llm.delete_profile(profile_id)
+
+
+def web_search_settings() -> WebSearchSettings:
+    return settings_search.get()
+
+
+def web_search_api_key() -> str | None:
+    return settings_search.api_key()
+
+
+def update_web_search_settings(data: WebSearchSettingsUpdate) -> WebSearchSettings:
+    return settings_search.update(data)
 
 
 def ensure_directories(settings: AppSettings | None = None) -> None:

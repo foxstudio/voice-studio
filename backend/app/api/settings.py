@@ -16,10 +16,13 @@ from app.schemas.voice_studio import (
     LlmModelListResponse,
     LlmProviderListResponse,
     LlmProviderProfileUpsert,
+    WebSearchSettings,
+    WebSearchSettingsUpdate,
+    WebSearchTestResponse,
     MimoSecretUpdate,
     VolcengineDirectorySecretUpdate,
 )
-from app.services import cloud_connection_tests, llm_provider, llm_runtime, settings_store
+from app.services import cloud_connection_tests, llm_provider, llm_runtime, settings_store, web_search
 
 router = APIRouter()
 
@@ -225,6 +228,27 @@ async def test_llm_profile(profile_id: str):
         response_verified=True,
         billing_effect="minimal",
         message=f"模型 {profile.model_id} 响应正常；本次为最小生成测试，已产生少量用量",
+    )
+
+
+@router.get("/web-search", response_model=WebSearchSettings)
+async def get_web_search_settings():
+    return settings_store.web_search_settings()
+
+
+@router.put("/web-search", response_model=WebSearchSettings)
+async def save_web_search_settings(data: WebSearchSettingsUpdate):
+    return settings_store.update_web_search_settings(data)
+
+
+@router.post("/web-search/test", response_model=WebSearchTestResponse)
+async def test_web_search_settings():
+    settings = settings_store.web_search_settings()
+    results = web_search.search(settings, "Voice Studio subtitle localization", api_key=settings_store.web_search_api_key())
+    return WebSearchTestResponse(
+        provider=settings.provider,
+        result_count=len(results),
+        message=f"搜索连接正常，返回 {len(results)} 条结果",
     )
 
 

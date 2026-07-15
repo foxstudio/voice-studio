@@ -2089,6 +2089,7 @@ def test_video_localization_async_asr_uses_requested_vocals_track(tmp_path: Path
     assert progress_stages == [
         "准备处理",
         "正在识别人声内容",
+        "正在判断是否需要联网核验",
         "正在校对识别文本",
         "正在生成逐词时间码",
         "正在分析停顿与声学边界",

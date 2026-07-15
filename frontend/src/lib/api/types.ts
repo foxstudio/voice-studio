@@ -201,6 +201,34 @@ export interface LlmConnectionTestResponse {
 	message: string;
 }
 
+export type WebSearchProvider = 'wikipedia' | 'tavily' | 'searxng';
+
+export interface WebSearchSettings {
+	enabled: boolean;
+	provider: WebSearchProvider;
+	base_url: string;
+	api_key_configured: boolean;
+	max_queries: number;
+	max_results_per_query: number;
+}
+
+export interface WebSearchSettingsUpdate {
+	enabled: boolean;
+	provider: WebSearchProvider;
+	base_url: string;
+	api_key?: string | null;
+	clear_api_key?: boolean;
+	max_queries: number;
+	max_results_per_query: number;
+}
+
+export interface WebSearchTestResponse {
+	provider: WebSearchProvider;
+	status: 'connected';
+	result_count: number;
+	message: string;
+}
+
 export type CloudProviderId = 'mimo' | 'doubao' | 'volcengine_directory';
 
 export interface CloudConnectionTestResponse {

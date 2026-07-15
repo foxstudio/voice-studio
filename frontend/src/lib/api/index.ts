@@ -28,6 +28,9 @@ import type {
 	LlmModelListResponse,
 	LlmProviderListResponse,
 	LlmProviderProfileUpsert,
+	WebSearchSettings,
+	WebSearchSettingsUpdate,
+	WebSearchTestResponse,
 	PresetTemplate,
 	PresetTemplateInput,
 	Project,
@@ -95,6 +98,9 @@ export const Api = {
 		api.post<LlmModelListResponse>(`/settings/llm-profiles/${encodeURIComponent(id)}/models`),
 	testLlmProfile: (id: string) =>
 		api.post<LlmConnectionTestResponse>(`/settings/llm-profiles/${encodeURIComponent(id)}/test`),
+	webSearchSettings: () => api.get<WebSearchSettings>('/settings/web-search'),
+	saveWebSearchSettings: (body: WebSearchSettingsUpdate) => api.put<WebSearchSettings>('/settings/web-search', body),
+	testWebSearch: () => api.post<WebSearchTestResponse>('/settings/web-search/test'),
 	engines: () => api.get<EngineDetail[]>('/engines'),
 	engineInstallations: () => api.get<EngineInstallation[]>('/engines/installations'),
 	engineSpeakers: (id: string, params: { q?: string; gender?: 'all' | 'F' | 'M'; limit?: number } = {}) => {

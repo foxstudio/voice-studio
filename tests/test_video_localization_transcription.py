@@ -163,11 +163,12 @@ def test_transcribe_and_process_returns_state_and_reports_stage_progress(monkeyp
     assert boundary_review_kwargs["existing_reviews"] == [existing_review]
     assert alignment_inputs == [alignment_audio_path]
     assert boundary_inputs == [audio_path]
-    assert [value for value, _stage in progress] == [0.15, 0.38, 0.58, 0.74, 0.82, 0.96]
+    assert [value for value, _stage in progress] == [0.15, 0.30, 0.40, 0.58, 0.74, 0.82, 0.96]
     assert progress[-1][1] == "正在生成字幕轨"
     assert result.pipeline_timing["total_duration_ms"] >= 0
     assert set(result.pipeline_timing["stages"]) == {
         "asr",
+        "web_research",
         "text_review",
         "alignment",
         "audio_boundaries",
@@ -1199,6 +1200,60 @@ def test_align_segments_stops_restarting_worker_after_first_failure(monkeypatch,
 
 def test_display_tokens_keep_decimal_version_as_one_alignment_token():
     assert transcription._display_tokens("Seedance 2.0 in 4K.") == ["Seedance", "2.0", "in", "4K."]
+
+
+@pytest.mark.parametrize(
+    ("source_text", "source_title", "source_snippet", "expected_text", "expected_error", "evidence_ids"),
+    [
+        ("seed ants", "Seedance 2.0", "AI video generation model", "Seedance", None, ["source_1"]),
+        ("seed ants", "Unrelated video tools", "A general editing guide", "Seedance", None, []),
+        (
+            "scale",
+            "Seedance 2.0",
+            "AI video generation model",
+            "scale",
+            "llm_review_rejected:unsupported_proper_noun",
+            ["source_1"],
+        ),
+    ],
+)
+def test_review_research_is_audited_but_cannot_override_acoustic_guard(
+    source_text,
+    source_title,
+    source_snippet,
+    expected_text,
+    expected_error,
+    evidence_ids,
+):
+    segment = _segment("asr_0001", source_text)
+    source_tokens = transcription._review_tokens([segment])[segment.segment_id]
+    proposed = [
+        transcription.ProposedTranscriptEdit(
+            start_word_id=source_tokens[0][0],
+            end_word_id=source_tokens[-1][0],
+            replacement_text="Seedance",
+            reason="search evidence",
+            confidence=0.9,
+            evidence_source_ids=["source_1"],
+        )
+    ]
+
+    candidate, operations, error = transcription._apply_review_operations(
+        segment,
+        source_tokens,
+        proposed,
+        research_sources={
+            "source_1": {
+                "source_id": "source_1",
+                "title": source_title,
+                "snippet": source_snippet,
+            }
+        },
+    )
+
+    assert candidate == expected_text
+    assert error == expected_error
+    assert operations[0].evidence_source_ids == evidence_ids
 
 
 def test_review_segments_rejects_unrelated_brand_promotion_of_common_word(monkeypatch):

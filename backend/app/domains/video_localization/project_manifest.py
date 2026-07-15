@@ -134,6 +134,8 @@ def ensure_project_layout(project_id: str) -> dict[str, Path]:
         "tts": root / "tts",
         "cue_source_audio": root / "cue-source-audio",
         "exports": root / "exports",
+        "research": root / "research",
+        "research_cache": root / "research" / "cache",
         "autosave": root / "autosave",
     }
     for path in directories.values():

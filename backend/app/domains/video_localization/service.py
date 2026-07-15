@@ -243,6 +243,7 @@ def transcribe_english_source_audio(
         draft,
         engine_id,
         source_track_id,
+        project_id=project_id,
         segmentation_profile_id=segmentation_profile_id,
         progress_callback=on_progress,
         is_cancelled=is_cancelled,

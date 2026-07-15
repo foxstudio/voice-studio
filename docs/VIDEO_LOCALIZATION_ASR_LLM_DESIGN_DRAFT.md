@@ -31,6 +31,10 @@ register, habitual phrasing, humor, restraint, and other speaking traits.
     vocals for recognition and acoustic pause analysis, while forced alignment
     uses the original mix. Store independent track IDs and SHA-256 fingerprints
     for both inputs; never imply they are the same source.
+11. Web research is a project-level evidence stage, not a tool call inside
+    every subtitle batch. The LLM first decides whether research is necessary
+    and emits at most three queries. Search results keep source IDs and URLs
+    and never edit subtitle text directly.
 
 ## Processing Layers
 
@@ -71,6 +75,85 @@ The LLM must not:
 
 LLM boundary decisions reference stable word IDs. Transcript changes are
 validated as explicit edits and then re-aligned to audio.
+
+## Optional Web Research
+
+The source-language path may run one bounded research pass after raw ASR and
+before transcript correction:
+
+```text
+raw transcript + scene context
+  -> LLM research plan (needed or not, max 3 queries)
+  -> configured search provider
+  -> title/snippet/URL evidence bundle
+  -> conservative transcript review with source IDs
+```
+
+Tavily is the recommended general provider; its official free plan currently
+offers 1,000 credits per month without a credit card. Wikipedia is the no-key
+fallback with narrower coverage. SearXNG supports a user-controlled or
+self-hosted JSON endpoint.
+
+Search is independent from the OpenAI-compatible LLM connection. Snippets are
+untrusted input. A proper-name edit still needs to be acoustically plausible
+and must cite returned source IDs whose title or snippet contains the proposed
+name. Research can guide a correction but cannot bypass the deterministic
+acoustic-similarity guard. Queries containing URLs, email addresses, credential
+labels, or long secret-like tokens are dropped before leaving the machine.
+Sanitized results are cached under the project `research/cache` directory for
+seven days; stale entries are removed and each project keeps at most 256 files.
+
+The same adapter can later build a separate localization research bundle for
+author/work background, character identity, relationships, speaking habits,
+cultural references, and terminology. Source correction evidence and Chinese
+localization evidence must remain separately attributable.
+
+## Boundary Review Optimization
+
+The current per-candidate LLM protocol is correct but inefficient: a boundary
+selected after the first review can trigger another round, and every candidate
+returns a verbose object. The next revision should process bounded transcript
+windows and return sparse output only: protected word spans, preferred
+sentence/clause boundaries, and genuinely uncertain IDs. The deterministic
+global optimizer can then run once without iterative boundary-set churn.
+
+### SaT evaluation
+
+On 2026-07-15, `segment-any-text/sat-3l-sm` ONNX was evaluated in an isolated
+environment against the real 2,068-word transcript:
+
+- model plus tokenizer cache: about 421 MB;
+- first load including download: about 56 seconds;
+- one 11,130-character probability pass: 0.39-0.46 seconds;
+- repeated inference was bit-for-bit stable;
+- sentence ends scored near 1, while continuations such as
+  `definitely | should` and `should | not` scored near 0.
+
+It is a strong deterministic sentence-boundary signal, but not a complete
+subtitle segmenter. Length-constrained splitting still produced boundaries
+such as `but | Seedance` and `from | the generated environment`. It therefore
+remains an optional prior, not a production dependency or implicit download.
+The temporary test model was not promoted into the managed model directory.
+
+## Final Localized Subtitle Timing
+
+The final Chinese SRT must use accepted synthesized dub audio as timing truth,
+not inherit English timestamps as if both performances had identical rhythm:
+
+```text
+locked Chinese localization text
+  -> accepted TTS clips on the dub timeline
+  -> render the complete dub track with real gaps
+  -> verify text coverage with Chinese ASR
+  -> forced-align locked Chinese text to final dub audio
+  -> segment using Chinese semantics, pauses, CPS and line limits
+  -> write the independent localized subtitle track
+  -> overlap, coverage, duration and playback QC
+```
+
+Before this stage is implemented, the dub renderer must stop silently clipping
+audio that exceeds a cue window. The workflow also needs an independent
+`localized_alignment` state so it cannot overwrite source transcription data.
 
 ## Prompt Families
 

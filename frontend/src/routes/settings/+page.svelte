@@ -26,6 +26,7 @@
 	} from 'lucide-svelte';
 	import { onMount, tick } from 'svelte';
 	import LlmSettings from './components/LlmSettings.svelte';
+	import SearchSettings from './components/SearchSettings.svelte';
 	import SettingsCheck from './components/SettingsCheck.svelte';
 	import SettingsField from './components/SettingsField.svelte';
 	import SettingsRow from './components/SettingsRow.svelte';
@@ -50,7 +51,7 @@
 	const searchItems: { section: SectionId; target: string; title: string; description: string; keywords: string; content?: string }[] = [
 		{ section: 'common', target: 'common-title', title: '新任务的默认设置', description: '创建新任务时自动带入，之后仍可单独修改', keywords: '常用设置 默认值 状态', content: '本机服务 运行正常 连接异常 默认引擎 默认音色 默认语言 输出格式 计算设备 云端引擎' },
 		{ section: 'cloud', target: 'cloud-title', title: '按服务管理连接', description: '管理云端服务地址、密钥、上传提醒和连接测试', keywords: '云服务 云端 连接 密钥', content: 'Xiaomi MiMo API 豆包语音 官方音色目录凭据 Base URL API Key Resource ID AK SK 测试连接' },
-		{ section: 'ai', target: 'ai-title', title: '语言模型连接', description: '管理 OpenAI Compatible 服务配置与连接测试', keywords: 'AI 助手 语言模型 LLM', content: '配置名称 接口协议 Base URL API Key 模型 ID 启用此服务 默认服务 清除已保存 Key 测试连接 保存配置' },
+		{ section: 'ai', target: 'ai-title', title: '语言模型与联网检索', description: '管理模型连接与按需背景检索', keywords: 'AI 助手 语言模型 LLM 搜索 Tavily Wikipedia SearXNG', content: '配置名称 接口协议 Base URL API Key 模型 ID 启用此服务 默认服务 按需联网检索' },
 		{ section: 'files', target: 'files-title', title: '输出位置与空间占用', description: '修改常用文件位置，查看占用并清理允许删除的内容', keywords: '文件与存储 路径 空间 清理', content: '音色库目录 生成输出目录 导出目录 项目目录 存储概览 打开位置 快捷清理' },
 		{ section: 'advanced', target: 'advanced-title', title: '运行目录', description: '管理模型、缓存和日志位置，数据根目录保持只读', keywords: '高级设置 目录 路径', content: '数据根目录 模型目录 缓存目录 日志目录 密钥只保存在本机' },
 		{ section: 'common', target: 'default-engine', title: '默认引擎', description: '设置新任务使用的语音合成引擎', keywords: 'tts indextts 引擎 合成' },
@@ -487,6 +488,7 @@
 					<section class="content-section" aria-labelledby="ai-title">
 						<div class="section-heading"><div><h2 id="ai-title">语言模型连接</h2><span>这里只管理连接；配置成功不代表业务功能已经接入。</span></div></div>
 						<LlmSettings />
+						<SearchSettings />
 					</section>
 				{:else if activeSection === 'files'}
 					<section class="content-section" aria-labelledby="files-title" oninput={markDirty} onchange={markDirty}>
