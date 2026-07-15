@@ -159,7 +159,11 @@ def test_cosyvoice_sft_manifest_lists_every_speaker_in_the_installed_sft_model()
     assert speakers == {"中文女", "中文男", "粤语女", "日语男", "韩语女", "英文女", "英文男"}
 
 
-def test_f5_fix_duration_and_fallback_defaults_match_the_visible_contract():
+def test_f5_fix_duration_and_fallback_defaults_match_the_visible_contract(tmp_path, monkeypatch):
+    runtime_root = tmp_path / "F5-TTS"
+    runtime_root.mkdir()
+    monkeypatch.setenv("VOICE_STUDIO_F5_TTS_ROOT", str(runtime_root))
+
     request = GenerateRequest(text="F5 时长范围对账。", engine_id="f5-tts", fix_duration=30.0)
     assert request.fix_duration == 30.0
     with pytest.raises(ValueError):
@@ -199,7 +203,9 @@ def test_mimo_batch_falls_back_to_official_default_base_url(monkeypatch):
 
 
 def test_f5_single_batch_worker_payload_contract(tmp_path, monkeypatch):
-    monkeypatch.setenv("VOICE_STUDIO_F5_TTS_ROOT", str(tmp_path / "F5-TTS"))
+    runtime_root = tmp_path / "F5-TTS"
+    runtime_root.mkdir()
+    monkeypatch.setenv("VOICE_STUDIO_F5_TTS_ROOT", str(runtime_root))
 
     params = {
         "speed": 1.23,
@@ -271,7 +277,9 @@ def test_f5_single_batch_worker_payload_contract(tmp_path, monkeypatch):
 
 
 def test_cosyvoice_zero_shot_single_batch_worker_contract(tmp_path, monkeypatch):
-    monkeypatch.setenv("VOICE_STUDIO_COSYVOICE_ROOT", str(tmp_path / "CosyVoice"))
+    runtime_root = tmp_path / "CosyVoice"
+    runtime_root.mkdir()
+    monkeypatch.setenv("VOICE_STUDIO_COSYVOICE_ROOT", str(runtime_root))
 
     params = {
         "speed": 1.15,
@@ -376,7 +384,9 @@ def test_cosyvoice_sft_single_and_batch_keep_the_selected_speaker_id(tmp_path, m
     Do not replace it with a default while building either request type: that
     would make a failed selection look like a successful generation.
     """
-    monkeypatch.setenv("VOICE_STUDIO_COSYVOICE_ROOT", str(tmp_path / "CosyVoice"))
+    runtime_root = tmp_path / "CosyVoice"
+    runtime_root.mkdir()
+    monkeypatch.setenv("VOICE_STUDIO_COSYVOICE_ROOT", str(runtime_root))
     requested_speaker_id = "不存在的音色"
     req = GenerateRequest(
         text="测试文本-单次",
@@ -674,7 +684,9 @@ def test_confucius4_language_options_match_the_pinned_runtime_and_reject_fallbac
 
 
 def test_qwen3_tts_single_batch_worker_payload_contract(tmp_path, monkeypatch):
-    monkeypatch.setenv("VOICE_STUDIO_QWEN3_TTS_ROOT", str(inference_runner.qwen3_tts_paths.DEFAULT_ROOT))
+    runtime_root = tmp_path / "qwen3-tts-runtime"
+    runtime_root.mkdir()
+    monkeypatch.setenv("VOICE_STUDIO_QWEN3_TTS_ROOT", str(runtime_root))
 
     # The visible Qwen control allows 200 candidates, so the shared request
     # schema must accept the same upper bound instead of rejecting it at 100.
@@ -732,7 +744,7 @@ def test_qwen3_tts_single_batch_worker_payload_contract(tmp_path, monkeypatch):
         assert "ddpm_steps" not in payload
 
         root, out, parsed_text, ref_audio, ref_text, language, speaker_id, instruction, voice_design_prompt, speed, temperature, top_p, top_k, repetition_penalty, max_tokens = inference_runner._build_qwen3_tts_kwargs(**payload)
-        assert root == inference_runner.qwen3_tts_paths.DEFAULT_ROOT
+        assert root == runtime_root
         assert out == payload["output_path"]
         assert parsed_text == text
         assert ref_audio == reference_audio_path

@@ -379,7 +379,7 @@ def test_original_name_is_bounded(client):
 def test_main_app_registers_seed_asset_routes():
     from app.main import app
 
-    paths = {route.path for route in app.routes}
+    paths = set(app.openapi()["paths"])
     assert "/api/seed-audio/assets/image" in paths
     assert "/api/seed-audio/assets/{file_id}" in paths
 

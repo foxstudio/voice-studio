@@ -119,6 +119,10 @@ def _external_root(engine_id: str) -> Path:
     return engine_runtime_paths.resolve_engine_root(engine_id)
 
 
+def _configured_external_root(engine_id: str) -> Path:
+    return engine_runtime_paths.resolve_engine_root(engine_id, require_existing=False)
+
+
 def _external_python(root: Path) -> str:
     python = root / ".venv" / "bin" / "python"
     if not python.exists():
@@ -615,7 +619,7 @@ def run_confucius4_mlx(**kwargs):
 
 
 def _build_qwen3_tts_kwargs(**kwargs):
-    root = _external_root(qwen3_tts_paths.ENGINE_ID)
+    root = _configured_external_root(qwen3_tts_paths.ENGINE_ID)
     output_path = kwargs.pop("output_path")
     text = kwargs.pop("text").strip()
     ref_audio = kwargs.pop("reference_audio", None)
@@ -655,6 +659,7 @@ def _normalize_qwen3_language(value: object) -> str:
 
 def run_qwen3_tts(**kwargs):
     root, output_path, text, ref_audio, ref_text, language, speaker_id, instruction, voice_design_prompt, speed, temperature, top_p, top_k, repetition_penalty, max_tokens = _build_qwen3_tts_kwargs(**kwargs)
+    root = _external_root(qwen3_tts_paths.ENGINE_ID)
     if not text:
         raise RuntimeError("Text is empty")
     python = _external_python(root)
@@ -746,7 +751,7 @@ with tempfile.TemporaryDirectory(prefix="voice-studio-qwen3-") as tmp:
 
 
 def _build_f5_tts_kwargs(**kwargs):
-    root = _external_root("f5-tts")
+    root = _configured_external_root("f5-tts")
     output_path = kwargs.pop("output_path")
     text = kwargs.pop("text").strip()
     ref_audio = kwargs.pop("reference_audio", None)
@@ -766,6 +771,7 @@ def _build_f5_tts_kwargs(**kwargs):
 
 def run_f5_tts(**kwargs):
     root, output_path, text, ref_audio, ref_text, speed, nfe_step, cfg_strength, target_rms, cross_fade_duration, sway_sampling_coef, fix_duration, remove_silence, seed = _build_f5_tts_kwargs(**kwargs)
+    root = _external_root("f5-tts")
     if not ref_audio:
         raise RuntimeError("REFERENCE_AUDIO_REQUIRED")
     if not ref_text:
@@ -828,7 +834,7 @@ model.infer(
 
 
 def _build_cosyvoice_sft_kwargs(**kwargs):
-    root = _external_root("cosyvoice-sft")
+    root = _configured_external_root("cosyvoice-sft")
     output_path = kwargs.pop("output_path")
     text = kwargs.pop("text").strip()
     speaker_id = str(kwargs.pop("speaker_id", "") or "中文女")
@@ -837,6 +843,7 @@ def _build_cosyvoice_sft_kwargs(**kwargs):
 
 def run_cosyvoice_sft(**kwargs):
     root, output_path, text, speaker_id, speed = _build_cosyvoice_sft_kwargs(**kwargs)
+    root = _external_root("cosyvoice-sft")
     if not text:
         raise RuntimeError("Text is empty")
     python = _external_python(root)
@@ -896,7 +903,7 @@ torchaudio.save(payload["output_path"], speech, model.sample_rate)
 
 
 def _build_cosyvoice_zero_shot_kwargs(**kwargs):
-    root = _external_root("cosyvoice-zero-shot")
+    root = _configured_external_root("cosyvoice-zero-shot")
     output_path = kwargs.pop("output_path")
     text = kwargs.pop("text").strip()
     ref_audio = kwargs.pop("reference_audio", None)
@@ -906,6 +913,7 @@ def _build_cosyvoice_zero_shot_kwargs(**kwargs):
 
 def run_cosyvoice_zero_shot(**kwargs):
     root, output_path, text, ref_audio, ref_text, speed = _build_cosyvoice_zero_shot_kwargs(**kwargs)
+    root = _external_root("cosyvoice-zero-shot")
     if not ref_audio:
         raise RuntimeError("REFERENCE_AUDIO_REQUIRED")
     if not ref_text:
