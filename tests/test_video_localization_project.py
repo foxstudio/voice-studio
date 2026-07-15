@@ -135,8 +135,25 @@ def test_video_localization_asr_operation_summary_distinguishes_raw_segments_fro
                         "candidate_count": 3,
                         "batch_count": 2,
                         "round_count": 2,
+                        "profile_id": "subtitle-review",
+                        "model_id": "deepseek-chat",
                         "rounds": [
-                            {"round": 1, "candidate_count": 2, "batch_count": 1, "duration_ms": 700},
+                            {
+                                "round": 1,
+                                "candidate_count": 2,
+                                "batch_count": 1,
+                                "duration_ms": 700,
+                                "batches": [
+                                    {
+                                        "round": 1,
+                                        "batch": 1,
+                                        "candidate_count": 2,
+                                        "duration_ms": 700,
+                                        "status": "success",
+                                        "attempt_count": 1,
+                                    }
+                                ],
+                            },
                             {"round": 2, "candidate_count": 1, "batch_count": 1, "duration_ms": 500},
                         ],
                     }
@@ -166,8 +183,11 @@ def test_video_localization_asr_operation_summary_distinguishes_raw_segments_fro
     assert summary["segment_count"] == 1
     assert summary["cue_count"] == 3
     assert summary["duration_ms"] == 4321
+    assert summary["llm_profile_id"] == "subtitle-review"
+    assert summary["llm_model_id"] == "deepseek-chat"
     assert summary["stage_timings"]["boundary_review"]["candidate_count"] == 3
     assert [item["candidate_count"] for item in summary["boundary_review_rounds"]] == [2, 1]
+    assert summary["stage_timings"]["boundary_review"]["rounds"][0]["batches"][0]["status"] == "success"
 
 
 def test_video_localization_asr_rerun_reuses_replaceable_cue_ids():
@@ -1720,6 +1740,7 @@ def test_video_localization_english_asr_creates_cue_draft(tmp_path: Path, monkey
     assert [cue["en_subtitle_text"] for cue in body["cues"]] == ["We shipped the first localization pass"]
     assert body["cues"][0]["start_ms"] == 0
     assert body["cues"][0]["end_ms"] == 4200
+    assert body["transcription"]["pipeline_timing"]["stages"]["subtitle_track"]["cue_count"] == 1
     assert "generated_by_asr" in body["cues"][0]["quality_flags"]
     blocker_codes = {issue["code"] for issue in body["quality_gate"]["blockers"]}
     assert "CUE_SPEAKER_MISSING" not in blocker_codes

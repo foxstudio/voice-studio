@@ -108,6 +108,17 @@ def test_boundary_review_uses_stable_word_ids_and_audio_as_supporting_evidence(m
     assert "timestamps" in captured["user_payload"]["policy"]["forbidden"]
     assert captured["timeout"] == boundary_review.REQUEST_TIMEOUT_SECONDS
     assert boundary_review.MIN_OUTPUT_TOKENS <= captured["max_tokens"] <= boundary_review.MAX_OUTPUT_TOKENS
+    assert metadata["rounds"][0]["batches"] == [
+        {
+            "round": 1,
+            "batch": 1,
+            "candidate_count": 1,
+            "duration_ms": metadata["rounds"][0]["batches"][0]["duration_ms"],
+            "status": "success",
+            "attempt_count": 1,
+        }
+    ]
+    assert metadata["rounds"][0]["batches"][0]["duration_ms"] >= 0
 
 
 def test_boundary_review_rejects_missing_or_reordered_ids(monkeypatch):
@@ -133,6 +144,13 @@ def test_boundary_review_rejects_missing_or_reordered_ids(monkeypatch):
     assert reviews == []
     assert metadata["status"] == "failed"
     assert metadata["quality_flags"] == ["boundary_review_failed"]
+    failed_batch = metadata["rounds"][0]["batches"][0]
+    assert failed_batch["round"] == 1
+    assert failed_batch["batch"] == 1
+    assert failed_batch["candidate_count"] == 1
+    assert failed_batch["status"] == "failed"
+    assert failed_batch["attempt_count"] == boundary_review.MAX_ATTEMPTS
+    assert failed_batch["duration_ms"] >= 0
 
 
 def test_boundary_review_is_optional_without_llm(monkeypatch):
@@ -390,6 +408,60 @@ def test_repeated_timeout_splits_batch_without_discarding_valid_boundaries(monke
     assert [item.boundary_id for item in reviews] == [item["boundary_id"] for item in candidates]
     assert batch_sizes.count(2) == boundary_review.MAX_ATTEMPTS
     assert batch_sizes.count(1) == 2
+
+
+def test_boundary_review_records_split_recovery_as_batch_fallback(monkeypatch):
+    from app.services import llm_runtime
+
+    candidates = [
+        {
+            "boundary_id": f"word_{index:06d}:word_{index + 1:06d}",
+            "left_word_id": f"word_{index:06d}",
+            "right_word_id": f"word_{index + 1:06d}",
+            "left_context": [],
+            "right_context": [],
+            "features": {},
+        }
+        for index in range(1, 3)
+    ]
+
+    def complete_json(**kwargs):
+        batch = kwargs["user_payload"]["candidates"]
+        if len(batch) > 1:
+            raise llm_runtime.LlmRuntimeError("truncated", code="llm_output_truncated", status_code=502)
+        return {
+            "boundaries": [
+                {
+                    "boundary_id": batch[0]["boundary_id"],
+                    "decision": "allow",
+                    "confidence": 0.5,
+                    "reason_code": "unclear",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm_runtime, "complete_json", complete_json)
+
+    reviews, error, timing = boundary_review._review_batch_with_timing(
+        candidates,
+        round_number=2,
+        batch_number=3,
+        language="en",
+        profile_id="review",
+        model_id="review-model",
+    )
+
+    assert error is None
+    assert len(reviews) == 2
+    assert timing == {
+        "round": 2,
+        "batch": 3,
+        "candidate_count": 2,
+        "duration_ms": timing["duration_ms"],
+        "status": "fallback",
+        "attempt_count": 3,
+    }
+    assert timing["duration_ms"] >= 0
 
 
 def test_boundary_review_includes_length_driven_boundary_without_pause_or_punctuation(monkeypatch):

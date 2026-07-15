@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import partial
 from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -160,13 +159,6 @@ def review_candidate_boundaries(
             "quality_flags": ["boundary_review_not_configured"],
         }
 
-    worker = partial(
-        _review_batch,
-        language=language,
-        profile_id=profile.profile_id,
-        model_id=profile.model_id,
-        is_cancelled=is_cancelled,
-    )
     adjacent_pairs = {(left.word_id, right.word_id) for left, right in zip(words, words[1:])}
     existing_by_pair = {
         (review.left_word_id, review.right_word_id): review
@@ -185,7 +177,7 @@ def review_candidate_boundaries(
     candidate_count = 0
     completed_batches = 0
     review_round_count = 0
-    round_summaries: list[dict[str, int]] = []
+    round_summaries: list[dict[str, Any]] = []
     stop_reason = "no_candidates"
 
     if reviews:
@@ -223,8 +215,22 @@ def review_candidate_boundaries(
         attempted_pairs.update((str(item["left_word_id"]), str(item["right_word_id"])) for item in pending)
         batches = [pending[start : start + BATCH_SIZE] for start in range(0, len(pending), BATCH_SIZE)]
         with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_BATCHES, len(batches))) as executor:
-            futures = {executor.submit(worker, batch): index for index, batch in enumerate(batches)}
-            batch_results: list[tuple[list[VideoLocalizationBoundaryReview], str | None] | None] = [None] * len(batches)
+            futures = {
+                executor.submit(
+                    _review_batch_with_timing,
+                    batch,
+                    round_number=review_round_count,
+                    batch_number=index + 1,
+                    language=language,
+                    profile_id=profile.profile_id,
+                    model_id=profile.model_id,
+                    is_cancelled=is_cancelled,
+                ): index
+                for index, batch in enumerate(batches)
+            }
+            batch_results: list[
+                tuple[list[VideoLocalizationBoundaryReview], str | None, dict[str, Any]] | None
+            ] = [None] * len(batches)
             completed_in_round = 0
             completed_review_count = 0
             for future in as_completed(futures):
@@ -242,11 +248,11 @@ def review_candidate_boundaries(
                 _ensure_active(is_cancelled)
 
         completed_results = [result for result in batch_results if result is not None]
-        round_reviews = [review for batch_reviews, _error in completed_results for review in batch_reviews]
+        round_reviews = [review for batch_reviews, _error, _timing in completed_results for review in batch_reviews]
         reviews = _merge_reviews([*reviews, *round_reviews])
-        round_failures = [error for _batch_reviews, error in completed_results if error]
+        round_failures = [error for _batch_reviews, error, _timing in completed_results if error]
         failures.extend(round_failures)
-        completed_batches += sum(1 for _batch_reviews, error in completed_results if not error)
+        completed_batches += sum(1 for _batch_reviews, error, _timing in completed_results if not error)
         selected_after_round = _baseline_boundary_pairs(
             words,
             audio_features,
@@ -260,9 +266,10 @@ def review_candidate_boundaries(
                 "round": review_round_count,
                 "candidate_count": len(pending),
                 "batch_count": len(batches),
-                "completed_batch_count": sum(1 for _batch_reviews, error in completed_results if not error),
-                "failed_batch_count": sum(1 for _batch_reviews, error in completed_results if error),
+                "completed_batch_count": sum(1 for _batch_reviews, error, _timing in completed_results if not error),
+                "failed_batch_count": sum(1 for _batch_reviews, error, _timing in completed_results if error),
                 "duration_ms": _elapsed_ms(round_started_at),
+                "batches": [timing for _batch_reviews, _error, timing in completed_results],
             }
         )
         if not round_reviews:
@@ -350,6 +357,7 @@ def _review_batch(
     profile_id: str,
     model_id: str,
     is_cancelled: Callable[[], bool] | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> tuple[list[VideoLocalizationBoundaryReview], str | None]:
     from app.services import llm_runtime
 
@@ -404,6 +412,8 @@ def _review_batch(
     last_error: Exception | None = None
     for attempt in range(MAX_ATTEMPTS):
         _ensure_active(is_cancelled)
+        if diagnostics is not None:
+            diagnostics["attempt_count"] = int(diagnostics.get("attempt_count") or 0) + 1
         try:
             raw = llm_runtime.complete_json(
                 system_prompt=_system_prompt(language),
@@ -436,6 +446,8 @@ def _review_batch(
         # JSON. Splitting keeps the result useful instead of discarding the
         # complete semantic pass because one batch was truncated.
         if _should_split_batch(last_error) and len(batch) > 1:
+            if diagnostics is not None:
+                diagnostics["used_fallback"] = True
             midpoint = len(batch) // 2
             left_reviews, left_error = _review_batch(
                 batch[:midpoint],
@@ -443,6 +455,7 @@ def _review_batch(
                 profile_id=profile_id,
                 model_id=model_id,
                 is_cancelled=is_cancelled,
+                diagnostics=diagnostics,
             )
             right_reviews, right_error = _review_batch(
                 batch[midpoint:],
@@ -450,6 +463,7 @@ def _review_batch(
                 profile_id=profile_id,
                 model_id=model_id,
                 is_cancelled=is_cancelled,
+                diagnostics=diagnostics,
             )
             errors = [item for item in (left_error, right_error) if item]
             return left_reviews + right_reviews, "; ".join(errors) if errors else None
@@ -476,6 +490,38 @@ def _review_batch(
         )
         reviews.extend(_repair_reviews(item, candidate, model_id=model_id))
     return _merge_reviews(reviews), None
+
+
+def _review_batch_with_timing(
+    batch: list[dict[str, object]],
+    *,
+    round_number: int,
+    batch_number: int,
+    language: str,
+    profile_id: str,
+    model_id: str,
+    is_cancelled: Callable[[], bool] | None = None,
+) -> tuple[list[VideoLocalizationBoundaryReview], str | None, dict[str, Any]]:
+    started_at = time.perf_counter()
+    diagnostics: dict[str, Any] = {"attempt_count": 0, "used_fallback": False}
+    reviews, error = _review_batch(
+        batch,
+        language=language,
+        profile_id=profile_id,
+        model_id=model_id,
+        is_cancelled=is_cancelled,
+        diagnostics=diagnostics,
+    )
+    status = "failed" if error else "fallback" if diagnostics["used_fallback"] else "success"
+    timing = {
+        "round": round_number,
+        "batch": batch_number,
+        "candidate_count": len(batch),
+        "duration_ms": _elapsed_ms(started_at),
+        "status": status,
+        "attempt_count": diagnostics["attempt_count"],
+    }
+    return reviews, error, timing
 
 
 def _is_output_truncated(exc: Exception | None) -> bool:

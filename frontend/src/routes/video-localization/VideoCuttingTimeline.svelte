@@ -43,6 +43,8 @@
 		onTimelineZoomChange,
 		onToggleSubtitleSource,
 		onSeekTimeline,
+		onSelectionRangeChange = undefined,
+		onSelectionRangeCommit = undefined,
 		onUpdateCueTime,
 		onUpdateLocalizedSubtitleTime,
 		onClearSubtitleTrack,
@@ -96,6 +98,8 @@
 		onTimelineZoomChange: (zoom: number) => void;
 		onToggleSubtitleSource: (source: SubtitlePreviewSource) => void;
 		onSeekTimeline: (timeMs: number) => void;
+		onSelectionRangeChange?: (range: { startMs: number; endMs: number } | null) => void;
+		onSelectionRangeCommit?: (range: { startMs: number; endMs: number }) => void;
 		onUpdateCueTime: (cueId: string, startMs: number, endMs: number) => void;
 		onUpdateLocalizedSubtitleTime: (subtitleId: string, startMs: number, endMs: number) => void;
 		onClearSubtitleTrack: (track: SubtitleTrackKind) => void | Promise<void>;
@@ -165,6 +169,7 @@
 	let preserveRangeOnCueSelection = false;
 	let rangeStartMs = $state<number | null>(null);
 	let rangeEndMs = $state<number | null>(null);
+	let lastSelectionRangeKey = '';
 	const MIN_RANGE_DURATION_MS = MIN_SUBTITLE_DURATION_MS;
 	let labelColumnWidth = $state(236);
 	let editingTrackId = $state<VideoLocalizationTrackId | null>(null);
@@ -614,6 +619,14 @@
 		rangeEndMs = null;
 	}
 
+	function currentSelectionRange() {
+		if (!hasRangeSelection) return null;
+		return {
+			startMs: Math.min(rangeStartValue, rangeEndValue),
+			endMs: Math.max(rangeStartValue, rangeEndValue)
+		};
+	}
+
 	function setRangeFromSelectedCue() {
 		if (!selectedCue || selectedCue.start_ms === null || selectedCue.end_ms === null) return;
 		rangeStartMs = selectedCue.start_ms;
@@ -835,6 +848,7 @@
 	}
 
 	function endTimelinePointerWork() {
+		const committedRange = rangeCreateState?.moved ? currentSelectionRange() : null;
 		endCueDrag();
 		endClipDrag();
 		if (rangeCreateState && !rangeCreateState.moved) {
@@ -846,6 +860,7 @@
 		timelineSeekDrag = false;
 		timelinePanState = null;
 		selectionDrag = null;
+		if (committedRange) onSelectionRangeCommit?.(committedRange);
 	}
 
 	function timeFromPointer(event: PointerEvent | MouseEvent) {
@@ -1175,6 +1190,16 @@
 	});
 
 	$effect(() => {
+		rangeStartMs;
+		rangeEndMs;
+		const range = currentSelectionRange();
+		const key = range ? `${range.startMs}:${range.endMs}` : 'none';
+		if (key === lastSelectionRangeKey) return;
+		lastSelectionRangeKey = key;
+		onSelectionRangeChange?.(range);
+	});
+
+	$effect(() => {
 		timelineZoom;
 		requestAnimationFrame(() => updateTimelineViewport());
 	});
@@ -1213,7 +1238,7 @@
 				type="button"
 				aria-label={hoverScrubEnabled ? '关闭鼠标预听' : '启用鼠标预听'}
 				aria-pressed={hoverScrubEnabled}
-				data-tooltip={hoverScrubEnabled ? '鼠标预听已启用｜在时间线移动鼠标即可预览画面、声音和字幕；播放时不会抢占播放头。' : '启用鼠标预听｜无需点击，在时间线上移动鼠标即可快速试听。'}
+				data-tooltip={hoverScrubEnabled ? '鼠标预听已启用｜移动鼠标可预览画面、声音和字幕；拖拽创建选区后会自动循环播放。' : '启用鼠标预听｜移动鼠标可快速试听，拖拽选区后自动循环播放。'}
 				onclick={() => onHoverScrubChange?.(!hoverScrubEnabled)}
 			><MousePointer2 size={13} /></button>
 			<span class="toolbar-divider" aria-hidden="true"></span>

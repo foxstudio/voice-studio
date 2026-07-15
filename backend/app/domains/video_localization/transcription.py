@@ -154,6 +154,9 @@ def transcribe_and_process(
     stage_timings["text_review"] = {
         "duration_ms": _elapsed_ms(stage_started_at),
         "batch_count": int(review_meta.get("batch_count") or 0),
+        "batches": review_meta.get("batches") or [],
+        "profile_id": review_meta.get("profile_id"),
+        "model_id": review_meta.get("model_id"),
     }
     _report_preview(preview_callback, "text_review", reviewed_segments, corrected=True)
     ensure_active()
@@ -201,6 +204,8 @@ def transcribe_and_process(
         "round_count": int(boundary_review_meta.get("review_round_count") or 0),
         "reused_review_count": int(boundary_review_meta.get("reused_review_count") or 0),
         "rounds": boundary_review_meta.get("rounds") or [],
+        "profile_id": boundary_review_meta.get("profile_id"),
+        "model_id": boundary_review_meta.get("model_id"),
     }
     ensure_active()
     _report_progress(progress_callback, 0.96, "正在生成字幕轨")
@@ -436,6 +441,7 @@ def review_segments(
         return [], {
             "status": "skipped",
             "batch_count": 0,
+            "batches": [],
             "duration_ms": _elapsed_ms(started_at),
             "quality_flags": ["transcript_empty"],
         }
@@ -451,6 +457,7 @@ def review_segments(
         return reviewed_segments, {
             "status": "not_configured",
             "batch_count": 0,
+            "batches": [],
             "duration_ms": _elapsed_ms(started_at),
             "quality_flags": quality_flags,
         }
@@ -505,16 +512,16 @@ def review_segments(
         jobs.append((batch, payload))
 
     worker = partial(
-        _request_transcript_review_batch,
+        _request_transcript_review_batch_with_timing,
         language=language,
         profile_id=profile.profile_id,
         is_cancelled=is_cancelled,
     )
     with ThreadPoolExecutor(max_workers=min(REVIEW_MAX_PARALLEL_BATCHES, len(jobs))) as executor:
-        results = list(executor.map(worker, jobs))
+        results = list(executor.map(worker, enumerate(jobs, start=1)))
     _ensure_active(is_cancelled)
 
-    for (batch, _payload), (parsed, last_error) in zip(jobs, results):
+    for (batch, _payload), (parsed, last_error, _timing) in zip(jobs, results):
         if parsed is not None and last_error is None:
             prepared = []
             for source, reviewed in zip(batch, parsed.segments):
@@ -601,6 +608,7 @@ def review_segments(
         "profile_id": profile.profile_id,
         "model_id": profile.model_id,
         "batch_count": total_batches,
+        "batches": [timing for _parsed, _error, timing in results],
         "duration_ms": _elapsed_ms(started_at),
         "error": failures[0][:500] if failures else None,
         "quality_flags": flags,
@@ -613,6 +621,7 @@ def _request_transcript_review_batch(
     language: str,
     profile_id: str,
     is_cancelled: Callable[[], bool] | None = None,
+    diagnostics: dict[str, int] | None = None,
 ) -> tuple[TranscriptReviewResponse | None, Exception | None]:
     from app.services import llm_runtime
 
@@ -622,6 +631,8 @@ def _request_transcript_review_batch(
     parsed: TranscriptReviewResponse | None = None
     for attempt in range(REVIEW_MAX_ATTEMPTS):
         _ensure_active(is_cancelled)
+        if diagnostics is not None:
+            diagnostics["attempt_count"] = diagnostics.get("attempt_count", 0) + 1
         try:
             raw = llm_runtime.complete_json(
                 system_prompt=_review_system_prompt(language),
@@ -646,6 +657,34 @@ def _request_transcript_review_batch(
             if attempt + 1 >= REVIEW_MAX_ATTEMPTS or not _review_error_retryable(exc):
                 break
     return parsed, last_error
+
+
+def _request_transcript_review_batch_with_timing(
+    indexed_job: tuple[int, tuple[list[VideoLocalizationTranscriptSegment], dict[str, Any]]],
+    *,
+    language: str,
+    profile_id: str,
+    is_cancelled: Callable[[], bool] | None = None,
+) -> tuple[TranscriptReviewResponse | None, Exception | None, dict[str, Any]]:
+    batch_number, job = indexed_job
+    batch, _payload = job
+    started_at = time.perf_counter()
+    diagnostics = {"attempt_count": 0}
+    parsed, error = _request_transcript_review_batch(
+        job,
+        language=language,
+        profile_id=profile_id,
+        is_cancelled=is_cancelled,
+        diagnostics=diagnostics,
+    )
+    timing = {
+        "batch": batch_number,
+        "item_count": len(batch),
+        "duration_ms": _elapsed_ms(started_at),
+        "status": "success" if parsed is not None and error is None else "failed",
+        "attempt_count": diagnostics["attempt_count"],
+    }
+    return parsed, error, timing
 
 
 def _review_error_retryable(exc: Exception) -> bool:

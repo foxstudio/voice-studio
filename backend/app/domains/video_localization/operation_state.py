@@ -187,6 +187,7 @@ def english_asr_summary(draft: VideoLocalizationDraft | None) -> dict:
     boundary_review_timing = (
         stages.get("boundary_review") if isinstance(stages.get("boundary_review"), dict) else {}
     )
+    text_review_timing = stages.get("text_review") if isinstance(stages.get("text_review"), dict) else {}
     return {
         "engine_id": draft.source_media.metadata.get("english_asr_engine_id"),
         "source_track_id": draft.source_media.metadata.get("english_asr_source_track_id"),
@@ -199,6 +200,8 @@ def english_asr_summary(draft: VideoLocalizationDraft | None) -> dict:
         "boundary_review_count": draft.source_media.metadata.get("english_asr_boundary_review_count"),
         "boundary_review_prompt_version": draft.source_media.metadata.get("english_asr_boundary_review_prompt_version"),
         "duration_ms": pipeline_timing.get("total_duration_ms"),
+        "llm_profile_id": boundary_review_timing.get("profile_id") or text_review_timing.get("profile_id"),
+        "llm_model_id": boundary_review_timing.get("model_id") or text_review_timing.get("model_id"),
         "stage_timings": stages,
         "boundary_review_rounds": boundary_review_timing.get("rounds", []),
     }

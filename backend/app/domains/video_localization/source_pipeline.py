@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
+import time
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -314,6 +315,7 @@ def with_english_asr(
     finally:
         if resolved_track_id == "dub":
             audio_path.unlink(missing_ok=True)
+    subtitle_track_started_at = time.perf_counter()
     preserved_cues = [cue for cue in draft.cues if not cue_tools.is_replaceable_asr_candidate(cue)]
     generated_cues = subtitle_segmentation.cues_from_transcription(
         transcript,
@@ -338,6 +340,17 @@ def with_english_asr(
                 if cue.start_ms is not None and cue.end_ms is not None
             ],
         )
+
+    subtitle_track_duration_ms = max(0, int(round((time.perf_counter() - subtitle_track_started_at) * 1000)))
+    pipeline_timing = dict(transcript.pipeline_timing or {})
+    pipeline_stages = dict(pipeline_timing.get("stages") or {})
+    pipeline_stages["subtitle_track"] = {
+        "duration_ms": subtitle_track_duration_ms,
+        "cue_count": len(generated_cues),
+    }
+    pipeline_timing["stages"] = pipeline_stages
+    pipeline_timing["total_duration_ms"] = int(pipeline_timing.get("total_duration_ms") or 0) + subtitle_track_duration_ms
+    transcript = transcript.model_copy(update={"pipeline_timing": pipeline_timing})
 
     source_media = draft.source_media.model_copy(
         update={

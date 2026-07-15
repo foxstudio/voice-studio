@@ -8,6 +8,7 @@
 		activityTaskElapsedMs,
 		activityTaskResultLabel,
 		activityTaskSourceLabel,
+		activityTaskStepTimingLabel,
 		activityTaskStatusLabel,
 		formatActivityTaskTime,
 		formatActivityTaskDuration,
@@ -106,6 +107,7 @@
 			elapsed ? `耗时 ${elapsed}` : '',
 			source ? `来源 ${source}` : '',
 			task.engineId ? `引擎 ${task.engineId}` : '',
+			task.semanticModelId ? `语义模型 ${task.semanticModelId}` : '',
 			result ? `结果 ${result}` : ''
 		].filter(Boolean);
 	}
@@ -122,6 +124,10 @@
 			failed: '失败',
 			cancelled: '已取消'
 		}[step.status];
+	}
+
+	function stepTiming(step: ActivityTaskStep, task: ActivityTask) {
+		return activityTaskStepTimingLabel(step, task, nowMs);
 	}
 </script>
 
@@ -176,6 +182,7 @@
 									{#if task.steps?.length}
 										<ul class="task-steps" aria-label={`${displayLabel(task)}处理步骤`}>
 											{#each task.steps as step (step.id)}
+												{@const timing = stepTiming(step, task)}
 												<li class:current={step.status === 'running'} class:step-failed={step.status === 'failed'}>
 													<span class="task-step-state" class:spinning={step.status === 'running'} aria-hidden="true">
 														{#if step.status === 'success'}<Check size={10} />
@@ -185,7 +192,10 @@
 														{:else}<Circle size={8} />{/if}
 													</span>
 													<span>{step.label}</span>
-													<em>{stepStateLabel(step)}</em>
+													<span class="task-step-summary">
+														{#if timing}<b>{timing}</b>{/if}
+														<em>{stepStateLabel(step)}</em>
+													</span>
 												</li>
 											{/each}
 										</ul>
@@ -230,6 +240,7 @@
 										{#if task.steps?.length}
 											<ul class="task-steps" aria-label={`${displayLabel(task)}处理步骤`}>
 												{#each task.steps as step (step.id)}
+													{@const timing = stepTiming(step, task)}
 													<li class:step-failed={step.status === 'failed'}>
 														<span class="task-step-state" aria-hidden="true">
 															{#if step.status === 'success'}<Check size={10} />
@@ -238,7 +249,10 @@
 															{:else}<Circle size={8} />{/if}
 														</span>
 														<span>{step.label}</span>
-														<em>{stepStateLabel(step)}</em>
+														<span class="task-step-summary">
+															{#if timing}<b>{timing}</b>{/if}
+															<em>{stepStateLabel(step)}</em>
+														</span>
 													</li>
 												{/each}
 											</ul>
@@ -374,7 +388,10 @@
 	.task-steps li { min-width: 0; display: grid; grid-template-columns: 13px minmax(0, 1fr) auto; align-items: center; gap: 4px; min-height: 17px; color: #728087; font-size: 8.5px; }
 	.task-steps li.current { color: #a9ccd6; }
 	.task-steps li.step-failed { color: #d89496; }
-	.task-steps li em { color: #65747b; font-size: 8px; font-style: normal; }
+	.task-step-summary { min-width: 0; display: flex; align-items: baseline; justify-content: flex-end; gap: 5px; white-space: nowrap; }
+	.task-step-summary b { color: #8fa1a9; font-size: 8px; font-weight: 650; }
+	.task-step-summary em { color: #65747b; font-size: 8px; font-style: normal; }
+	.task-steps li.current .task-step-summary b { color: #a9ccd6; }
 	.task-step-state { display: grid; place-items: center; color: #64747b; }
 	.task-steps li.current .task-step-state { color: #72b9ce; }
 

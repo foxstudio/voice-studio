@@ -6,6 +6,7 @@ import {
 	activityTaskProgress,
 	activityTaskResultLabel,
 	activityTaskSourceLabel,
+	activityTaskStepTimingLabel,
 	activityTaskSummary,
 	formatActivityTaskDuration,
 	operationActivityTask
@@ -90,7 +91,7 @@ describe('activity notice tasks', () => {
 		expect(second).toMatchObject({ engineId: 'faster-whisper-turbo', sourceTrackId: 'vocals', resultCount: 9 });
 		expect(activityTaskSourceLabel(second.sourceTrackId)).toBe('人声音轨');
 		expect(activityTaskResultLabel(first)).toBe('12 条字幕');
-		expect(first.steps).toHaveLength(5);
+		expect(first.steps).toHaveLength(6);
 		expect(first.steps?.every((step) => step.status === 'success')).toBe(true);
 	});
 
@@ -103,7 +104,62 @@ describe('activity notice tasks', () => {
 			created_at: '2026-07-15T08:00:00Z', started_at: '2026-07-15T08:00:01Z', completed_at: null
 		});
 
-		expect(task.steps?.map((step) => step.status)).toEqual(['success', 'success', 'success', 'running', 'todo']);
+		expect(task.steps?.map((step) => step.status)).toEqual(['success', 'success', 'success', 'running', 'todo', 'todo']);
+	});
+
+	it('maps completed ASR stage timings to their exact todo steps', () => {
+		const task = operationActivityTask({
+			operation_id: 'asr-timed', project_id: 'project', kind: 'english_asr', status: 'success',
+			label: '听写字幕', progress: 1, error_code: null, error_message: null, cancel_requested: false,
+			parameters: {},
+			result_summary: {
+				duration_ms: 86_345,
+				llm_model_id: 'deepseek-chat',
+				stage_timings: {
+					asr: { duration_ms: 12_345 },
+					text_review: { duration_ms: 60_000 },
+					alignment: { duration_ms: 2_500 },
+					audio_boundaries: { duration_ms: 1_250 },
+					boundary_review: {
+						duration_ms: 8_750,
+						rounds: [
+							{ duration_ms: 5_000, batch_count: 2 },
+							{ duration_ms: 3_000, batch_count: 1 }
+						]
+					}
+				}
+			},
+			created_at: '2026-07-15T08:00:00Z', started_at: '2026-07-15T08:00:01Z', completed_at: '2026-07-15T08:02:00Z'
+		});
+
+		expect(task.steps?.map(({ id, durationMs }) => [id, durationMs])).toEqual([
+			['recognize', 12_345],
+			['review', 60_000],
+			['timestamps', 2_500],
+			['boundaries', 1_250],
+			['boundary-review', 8_750],
+			['subtitles', 1_500]
+		]);
+		expect(task.steps?.[4]).toMatchObject({ roundCount: 2, batchCount: 3 });
+		expect(task.semanticModelId).toBe('deepseek-chat');
+		expect(activityTaskStepTimingLabel(task.steps![4], task)).toBe('8 秒 · 2 轮 · 3 批');
+	});
+
+	it('does not invent partial history timings and labels a live fallback as total operation time', () => {
+		const task = operationActivityTask({
+			operation_id: 'asr-live', project_id: 'project', kind: 'english_asr', status: 'running',
+			label: '听写字幕', progress: 0.74, error_code: null, error_message: null, cancel_requested: false,
+			parameters: {}, result_summary: { stage: '正在分析停顿与声学边界' },
+			created_at: '2026-07-15T08:00:00Z', started_at: '2026-07-15T08:00:01Z', completed_at: null
+		});
+
+		expect(task.steps?.[3].durationMs).toBeUndefined();
+		expect(activityTaskStepTimingLabel(
+			task.steps![3],
+			task,
+			Date.parse('2026-07-15T08:01:09Z')
+		)).toBe('总计 1 分 8 秒');
+		expect(activityTaskStepTimingLabel(task.steps![4], task)).toBe('');
 	});
 
 	it('formats running and completed task durations without inventing missing end times', () => {

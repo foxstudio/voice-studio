@@ -1,5 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { resolveSelectionPlayback, resolveSelectionReleasePlayback } from './selection-playback';
+import { resolveSelectionPlayback, resolveSelectionReleasePlayback, selectionForPlaybackAtTime } from './selection-playback';
+
+describe('selectionForPlaybackAtTime', () => {
+	it('activates the loop when playback starts inside the selection', () => {
+		expect(selectionForPlaybackAtTime(7, 5, 12)).toEqual({ start: 5, end: 12 });
+	});
+
+	it('keeps normal playback when the playhead starts outside the selection', () => {
+		expect(selectionForPlaybackAtTime(3, 5, 12)).toBeNull();
+		expect(selectionForPlaybackAtTime(13, 5, 12)).toBeNull();
+	});
+
+	it('treats IN and OUT as valid playback start positions', () => {
+		expect(selectionForPlaybackAtTime(5, 5, 12)).toEqual({ start: 5, end: 12 });
+		expect(selectionForPlaybackAtTime(12, 5, 12)).toEqual({ start: 5, end: 12 });
+	});
+
+	it('rejects empty and invalid selections', () => {
+		expect(selectionForPlaybackAtTime(5, 5, 5)).toBeNull();
+		expect(selectionForPlaybackAtTime(5, Number.NaN, 8)).toBeNull();
+	});
+});
 
 describe('resolveSelectionPlayback', () => {
 	it('keeps playback seamless when the current playhead remains inside the new selection', () => {

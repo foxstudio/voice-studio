@@ -6,6 +6,7 @@
 
 	type PlaybackController = {
 		playPause: () => void;
+		play: () => void;
 		seek: (timeMs: number) => void;
 		scrub: (timeMs: number) => void;
 		endScrub: () => void;
@@ -19,6 +20,7 @@
 		importing = false,
 		subtitlePreview = defaultSubtitlePreviewState(),
 		trackStates = defaultTrackStates(),
+		playbackLoopRange = null,
 		onRequestImport = () => {},
 		onImportFile = () => {},
 		onVideoTimeUpdate = () => {},
@@ -32,6 +34,7 @@
 		importing?: boolean;
 		subtitlePreview?: SubtitlePreviewState;
 		trackStates?: VideoLocalizationTrackStates;
+		playbackLoopRange?: { start_ms: number; end_ms: number } | null;
 		onRequestImport?: () => void;
 		onImportFile?: (file: File) => void;
 		onVideoTimeUpdate?: (timeMs: number) => void;
@@ -92,7 +95,7 @@
 	});
 
 	onMount(() => {
-		onControllerReady({ playPause: playPauseFromGesture, seek: seekPreview, scrub: scrubPreview, endScrub: endScrubPreview });
+		onControllerReady({ playPause: playPauseFromGesture, play: playFromGesture, seek: seekPreview, scrub: scrubPreview, endScrub: endScrubPreview });
 		return () => onControllerReady(null);
 	});
 
@@ -310,10 +313,18 @@
 			previewVideoEl.pause();
 			return;
 		}
+		playFromGesture();
+	}
+
+	function playFromGesture() {
+		if (!previewVideoEl || !previewVideoEl.paused) return;
 		if (mixAudioContext?.state === 'suspended') void mixAudioContext.resume();
 		const videoPlayRequest = previewVideoEl.play();
 		syncAuxiliaryTracks(true);
-		void videoPlayRequest;
+		void videoPlayRequest.catch((error: unknown) => {
+			if (error instanceof DOMException && error.name === 'AbortError') return;
+			if (previewVideoEl) previewVideoEl.dataset.playbackError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+		});
 	}
 
 	function handleVideoPlay() {
@@ -357,6 +368,7 @@
 	function handleVideoTimeUpdate(event: Event) {
 		const video = event.currentTarget as HTMLVideoElement;
 		if (hoverScrubbing) return;
+		if (enforcePlaybackLoop(video)) return;
 		onPlaybackStateChange(!video.paused && !video.ended);
 		onVideoTimeUpdate(Math.round(video.currentTime * 1000));
 		if (!video.paused) syncAuxiliaryTracks(true);
@@ -369,12 +381,27 @@
 				playbackFrame = 0;
 				return;
 			}
+			if (enforcePlaybackLoop(previewVideoEl)) {
+				playbackFrame = requestAnimationFrame(tick);
+				return;
+			}
 			onPlaybackStateChange(!previewVideoEl.ended);
 			onVideoTimeUpdate(Math.round(previewVideoEl.currentTime * 1000));
 			syncAuxiliaryTracks(false);
 			playbackFrame = requestAnimationFrame(tick);
 		};
 		playbackFrame = requestAnimationFrame(tick);
+	}
+
+	function enforcePlaybackLoop(video: HTMLVideoElement) {
+		const range = playbackLoopRange;
+		if (!range || video.paused || range.end_ms <= range.start_ms) return false;
+		if (video.currentTime * 1000 + 24 < range.end_ms) return false;
+		const startMs = Math.max(0, Math.round(range.start_ms));
+		video.currentTime = startMs / 1000;
+		onVideoTimeUpdate(startMs);
+		syncAuxiliaryTracks(true);
+		return true;
 	}
 
 	function stopPlaybackClock() {

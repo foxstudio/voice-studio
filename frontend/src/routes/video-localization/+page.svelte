@@ -131,6 +131,7 @@
 		X
 	} from 'lucide-svelte';
 	import { onMount } from 'svelte';
+	import { selectionForPlaybackAtTime } from '$lib/audio/selection-playback';
 	import { downloadBlob, downloadJson, downloadText } from './downloads';
 	import {
 		batchProjectId,
@@ -222,8 +223,10 @@
 	let previewTimeMs = $state(0);
 	let hoverPreviewTimeMs = $state<number | null>(null);
 	let previewPlaying = $state(false);
+	let timelineSelectionRange = $state<{ start_ms: number; end_ms: number } | null>(null);
+	let activePlaybackLoopRange = $state<{ start_ms: number; end_ms: number } | null>(null);
 	let audioSelectionRange = $state<{ start_ms: number; end_ms: number } | null>(null);
-	let previewPlaybackController: { playPause: () => void; seek: (timeMs: number) => void; scrub: (timeMs: number) => void; endScrub: () => void } | null = null;
+	let previewPlaybackController: { playPause: () => void; play: () => void; seek: (timeMs: number) => void; scrub: (timeMs: number) => void; endScrub: () => void } | null = null;
 	let autoSaveStatus = $state<'idle' | 'dirty' | 'saving' | 'saved' | 'failed'>('idle');
 	let autoSaveScope = $state<'ui' | 'draft' | null>(null);
 	let pendingUiStatePatch = $state<Record<string, unknown>>({});
@@ -2136,6 +2139,7 @@
 		updateDraftUiState({ timeline_hover_scrub_enabled: enabled });
 		if (!enabled) {
 			hoverPreviewTimeMs = null;
+			activePlaybackLoopRange = null;
 			previewPlaybackController?.endScrub();
 		}
 	}
@@ -2213,6 +2217,25 @@
 		if (playing) hoverPreviewTimeMs = null;
 	}
 
+	function updateTimelineSelectionRange(range: { startMs: number; endMs: number } | null) {
+		timelineSelectionRange = range ? { start_ms: range.startMs, end_ms: range.endMs } : null;
+		if (!range) {
+			activePlaybackLoopRange = null;
+			return;
+		}
+		if (activePlaybackLoopRange) activePlaybackLoopRange = { start_ms: range.startMs, end_ms: range.endMs };
+	}
+
+	function playCommittedTimelineSelection(range: { startMs: number; endMs: number }) {
+		if (!hoverScrubEnabled) return;
+		hoverPreviewTimeMs = null;
+		previewPlaybackController?.endScrub();
+		activePlaybackLoopRange = { start_ms: range.startMs, end_ms: range.endMs };
+		previewTimeMs = range.startMs;
+		previewPlaybackController?.seek(range.startMs);
+		previewPlaybackController?.play();
+	}
+
 	function seekPreview(timeMs: number) {
 		const boundedTimeMs = Math.max(0, Math.round(timeMs));
 		previewTimeMs = boundedTimeMs;
@@ -2221,10 +2244,18 @@
 
 	function handleTimelineTransport(action: 'start' | 'play-pause' | 'next') {
 		if (action === 'play-pause') {
+			if (!previewPlaying) {
+				const range = timelineSelectionRange;
+				const selected = range
+					? selectionForPlaybackAtTime(previewTimeMs, range.start_ms, range.end_ms)
+					: null;
+				activePlaybackLoopRange = selected ? { start_ms: selected.start, end_ms: selected.end } : null;
+			}
 			previewPlaybackController?.playPause();
 			return;
 		}
 		if (action === 'start') {
+			activePlaybackLoopRange = null;
 			seekPreview(0);
 			return;
 		}
@@ -2232,11 +2263,16 @@
 			.filter((cue) => cue.start_ms !== null && cue.start_ms > previewTimeMs + 80)
 			.sort((a, b) => (a.start_ms ?? 0) - (b.start_ms ?? 0))[0];
 		const nextTimeMs = nextCue?.start_ms ?? draft?.source_media.duration_ms ?? 0;
+		activePlaybackLoopRange = null;
 		seekPreview(nextTimeMs);
 		if (nextCue) selectCue(nextCue.cue_id);
 	}
 
 	function seekTimeline(timeMs: number) {
+		if (
+			activePlaybackLoopRange &&
+			!selectionForPlaybackAtTime(timeMs, activePlaybackLoopRange.start_ms, activePlaybackLoopRange.end_ms)
+		) activePlaybackLoopRange = null;
 		seekPreview(timeMs);
 	}
 
@@ -2529,6 +2565,7 @@
 				{importing}
 				{subtitlePreview}
 				{trackStates}
+				playbackLoopRange={activePlaybackLoopRange}
 				onRequestImport={() => videoInput?.click()}
 				onImportFile={importVideoFile}
 				onVideoTimeUpdate={updatePreviewTime}
@@ -2567,6 +2604,8 @@
 				onTimelineZoomChange={updateTimelineZoom}
 				onToggleSubtitleSource={toggleSubtitleSource}
 				onSeekTimeline={seekTimeline}
+				onSelectionRangeChange={updateTimelineSelectionRange}
+				onSelectionRangeCommit={playCommittedTimelineSelection}
 				onUpdateCueTime={updateCueTimeFromTimeline}
 				onUpdateLocalizedSubtitleTime={updateLocalizedSubtitleTime}
 					onClearSubtitleTrack={clearSubtitleTrack}

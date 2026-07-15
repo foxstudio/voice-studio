@@ -69,7 +69,22 @@ def test_transcribe_and_process_returns_state_and_reports_stage_progress(monkeyp
         "review_segments",
         lambda segments, **_kwargs: (
             segments,
-            {"status": "not_configured", "quality_flags": ["llm_review_not_configured"]},
+            {
+                "status": "completed",
+                "batch_count": 1,
+                "profile_id": "review-profile",
+                "model_id": "review-model",
+                "batches": [
+                    {
+                        "batch": 1,
+                        "item_count": 1,
+                        "duration_ms": 11,
+                        "status": "success",
+                        "attempt_count": 1,
+                    }
+                ],
+                "quality_flags": [],
+            },
         ),
     )
 
@@ -89,7 +104,32 @@ def test_transcribe_and_process_returns_state_and_reports_stage_progress(monkeyp
 
     def fake_boundary_review(*_args, **kwargs):
         boundary_review_kwargs.update(kwargs)
-        return [], {"status": "skipped", "quality_flags": []}
+        return [], {
+            "status": "completed",
+            "review_batch_count": 1,
+            "review_round_count": 1,
+            "profile_id": "review-profile",
+            "model_id": "review-model",
+            "rounds": [
+                {
+                    "round": 1,
+                    "candidate_count": 1,
+                    "batch_count": 1,
+                    "duration_ms": 13,
+                    "batches": [
+                        {
+                            "round": 1,
+                            "batch": 1,
+                            "candidate_count": 1,
+                            "duration_ms": 13,
+                            "status": "success",
+                            "attempt_count": 1,
+                        }
+                    ],
+                }
+            ],
+            "quality_flags": [],
+        }
 
     monkeypatch.setattr(transcription.boundary_review, "review_candidate_boundaries", fake_boundary_review)
     monkeypatch.setattr(transcription.media_assets, "file_sha256", lambda path: Path(path).name)
@@ -133,7 +173,10 @@ def test_transcribe_and_process_returns_state_and_reports_stage_progress(monkeyp
         "audio_boundaries",
         "boundary_review",
     }
-    assert result.pipeline_timing["stages"]["boundary_review"]["rounds"] == []
+    assert result.pipeline_timing["stages"]["text_review"]["batches"][0]["duration_ms"] == 11
+    assert result.pipeline_timing["stages"]["text_review"]["model_id"] == "review-model"
+    assert result.pipeline_timing["stages"]["boundary_review"]["rounds"][0]["batches"][0]["duration_ms"] == 13
+    assert result.pipeline_timing["stages"]["boundary_review"]["model_id"] == "review-model"
     assert result.model_dump()["pipeline_timing"] == result.pipeline_timing
 
 
@@ -608,6 +651,10 @@ def test_review_segments_rejects_missing_or_reordered_ids(monkeypatch):
     assert metadata["status"] == "failed"
     assert reviewed[0].corrected_text == "Original text."
     assert "llm_review_failed" in reviewed[0].review_flags
+    assert metadata["batches"][0]["status"] == "failed"
+    assert metadata["batches"][0]["item_count"] == 1
+    assert metadata["batches"][0]["attempt_count"] == transcription.REVIEW_MAX_ATTEMPTS
+    assert metadata["batches"][0]["duration_ms"] >= 0
 
 
 def test_review_segments_retries_once_after_invalid_json(monkeypatch):
@@ -638,6 +685,16 @@ def test_review_segments_retries_once_after_invalid_json(monkeypatch):
     assert len(calls) == 2
     assert metadata["status"] == "completed"
     assert reviewed[0].corrected_text == "Corrected text."
+    assert metadata["batches"] == [
+        {
+            "batch": 1,
+            "item_count": 1,
+            "duration_ms": metadata["batches"][0]["duration_ms"],
+            "status": "success",
+            "attempt_count": 2,
+        }
+    ]
+    assert metadata["batches"][0]["duration_ms"] >= 0
 
 
 def test_review_segments_runs_independent_batches_in_parallel(monkeypatch):

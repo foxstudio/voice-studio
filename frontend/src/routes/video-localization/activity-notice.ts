@@ -9,6 +9,9 @@ export type ActivityTaskStep = {
 	id: string;
 	label: string;
 	status: ActivityTaskStepStatus;
+	durationMs?: number;
+	roundCount?: number;
+	batchCount?: number;
 };
 
 export type ActivityTaskScope = {
@@ -34,6 +37,7 @@ export type ActivityTask = {
 	startedAt?: string | null;
 	completedAt?: string | null;
 	engineId?: string | null;
+	semanticModelId?: string | null;
 	sourceTrackId?: string | null;
 	resultCount?: number | null;
 	resultUnit?: string;
@@ -62,11 +66,12 @@ const TRACK_IDS = new Set<VideoLocalizationTrackId>(['original', 'vocals', 'back
 const AREAS = new Set<ActivityTaskScope['area']>(['project', 'timeline', 'voice', 'generate', 'subtitle']);
 
 const ASR_STEP_DEFINITIONS = [
-	{ id: 'recognize', label: '识别人声内容', stages: ['准备处理', '识别人声'] },
-	{ id: 'review', label: '校对识别文本', stages: ['校对识别', '文本校对'] },
-	{ id: 'timestamps', label: '生成逐词时间码', stages: ['逐词时间码', '强制对齐'] },
-	{ id: 'boundaries', label: '分析边界并复核断句', stages: ['声学边界', '字幕断句', '复核断句'] },
-	{ id: 'subtitles', label: '生成字幕轨', stages: ['生成字幕轨'] }
+	{ id: 'recognize', label: '识别人声内容', stages: ['准备处理', '识别人声'], timingStages: ['asr'] },
+	{ id: 'review', label: '校对识别文本', stages: ['校对识别', '文本校对'], timingStages: ['text_review'] },
+	{ id: 'timestamps', label: '生成逐词时间码', stages: ['逐词时间码', '强制对齐'], timingStages: ['alignment'] },
+	{ id: 'boundaries', label: '分析声学边界', stages: ['声学边界'], timingStages: ['audio_boundaries'] },
+	{ id: 'boundary-review', label: '复核字幕断句', stages: ['字幕断句', '复核断句'], timingStages: ['boundary_review'] },
+	{ id: 'subtitles', label: '生成并写入字幕轨', stages: ['生成字幕轨'], timingStages: ['subtitle_track'] }
 ] as const;
 
 const TRACK_LABELS: Record<string, string> = {
@@ -88,25 +93,77 @@ function numberValue(value: unknown): number | null {
 	return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null;
 }
 
+function recordValue(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === 'object' && !Array.isArray(value)
+		? value as Record<string, unknown>
+		: null;
+}
+
+function stageDurationMs(stageTimings: Record<string, unknown> | null, stageIds: readonly string[]) {
+	if (!stageTimings || !stageIds.length) return null;
+	const durations = stageIds.map((stageId) => numberValue(recordValue(stageTimings[stageId])?.duration_ms));
+	if (durations.some((duration) => duration === null)) return null;
+	return durations.reduce<number>((total, duration) => total + (duration ?? 0), 0);
+}
+
+function boundaryReviewCounts(stageTimings: Record<string, unknown> | null) {
+	const timing = recordValue(stageTimings?.boundary_review);
+	const rounds = Array.isArray(timing?.rounds) ? timing.rounds : null;
+	const roundCount = numberValue(timing?.round_count) ?? (rounds ? rounds.length : null);
+	const roundBatchCounts = rounds?.map((round) => numberValue(recordValue(round)?.batch_count)) ?? [];
+	const batchCount = numberValue(timing?.batch_count)
+		?? (roundBatchCounts.length && roundBatchCounts.every((count) => count !== null)
+			? roundBatchCounts.reduce<number>((total, count) => total + (count ?? 0), 0)
+			: null);
+	return { roundCount, batchCount };
+}
+
 function asrCurrentStepIndex(operation: VideoLocalizationOperation, stage: string) {
+	const matched = ASR_STEP_DEFINITIONS.findIndex((step) => step.stages.some((candidate) => stage.includes(candidate)));
+	if (matched >= 0) return matched;
 	const previewPhase = operation.result_summary?.preview_phase;
 	if (previewPhase === 'asr_draft') return 0;
 	if (previewPhase === 'text_review') return 1;
 	if (previewPhase === 'timing_segmentation') return 3;
-	const matched = ASR_STEP_DEFINITIONS.findIndex((step) => step.stages.some((candidate) => stage.includes(candidate)));
-	return matched >= 0 ? matched : 0;
+	return 0;
 }
 
 function operationSteps(operation: VideoLocalizationOperation, stage: string): ActivityTaskStep[] | undefined {
 	if (operation.kind !== 'english_asr') return undefined;
 	const currentIndex = asrCurrentStepIndex(operation, stage);
+	const stageTimings = recordValue(operation.result_summary?.stage_timings);
+	const boundaryCounts = boundaryReviewCounts(stageTimings);
+	const legacyMeasuredDurations = ASR_STEP_DEFINITIONS
+		.filter((step) => step.id !== 'subtitles')
+		.flatMap((step) => step.timingStages)
+		.map((stageId) => numberValue(recordValue(stageTimings?.[stageId])?.duration_ms));
+	const measuredStageDuration = legacyMeasuredDurations.reduce<number>((total, duration) => total + (duration ?? 0), 0);
+	const operationDuration = numberValue(operation.result_summary?.duration_ms);
+	const legacySubtitleTrackDuration = operationDuration === null || legacyMeasuredDurations.some((duration) => duration === null)
+		? null
+		: Math.max(0, operationDuration - measuredStageDuration);
 	return ASR_STEP_DEFINITIONS.map((step, index) => {
 		let status: ActivityTaskStepStatus = 'todo';
 		if (operation.status === 'success') status = 'success';
 		else if (operation.status === 'running') status = index < currentIndex ? 'success' : index === currentIndex ? 'running' : 'todo';
 		else if (operation.status === 'failed') status = index < currentIndex ? 'success' : index === currentIndex ? 'failed' : 'todo';
 		else if (operation.status === 'cancelled') status = index < currentIndex ? 'success' : index === currentIndex ? 'cancelled' : 'todo';
-		return { id: step.id, label: step.label, status };
+		const recordedDurationMs = stageDurationMs(stageTimings, step.timingStages);
+		const durationMs = step.id === 'subtitles' && recordedDurationMs === null
+			? legacySubtitleTrackDuration
+			: recordedDurationMs;
+		return {
+			id: step.id,
+			label: step.label,
+			status,
+			...(durationMs === null ? {} : { durationMs }),
+			...(step.id === 'boundary-review' && boundaryCounts.roundCount !== null
+				? { roundCount: boundaryCounts.roundCount }
+				: {}),
+			...(step.id === 'boundary-review' && boundaryCounts.batchCount !== null
+				? { batchCount: boundaryCounts.batchCount }
+				: {})
+		};
 	});
 }
 
@@ -166,6 +223,7 @@ export function operationActivityTask(operation: VideoLocalizationOperation, can
 		startedAt: operation.started_at,
 		completedAt: operation.completed_at,
 		engineId: stringValue(operation.result_summary?.engine_id) ?? stringValue(operation.parameters?.engine_id),
+		semanticModelId: stringValue(operation.result_summary?.llm_model_id),
 		sourceTrackId: stringValue(operation.result_summary?.source_track_id) ?? stringValue(operation.parameters?.source_track_id),
 		resultCount: result.count,
 		resultUnit: result.unit,
@@ -236,6 +294,18 @@ export function formatActivityTaskDuration(valueMs: number | null | undefined) {
 	const hours = Math.floor(totalMinutes / 60);
 	const minutes = totalMinutes % 60;
 	return minutes ? `${hours} 小时 ${minutes} 分` : `${hours} 小时`;
+}
+
+export function activityTaskStepTimingLabel(step: ActivityTaskStep, task?: ActivityTask, nowMs = Date.now()) {
+	const duration = formatActivityTaskDuration(step.durationMs);
+	const counts = [
+		step.roundCount && step.roundCount > 0 ? `${step.roundCount} 轮` : '',
+		step.batchCount && step.batchCount > 0 ? `${step.batchCount} 批` : ''
+	].filter(Boolean);
+	if (duration) return [duration, ...counts].join(' · ');
+	if (step.status !== 'running' || !task) return counts.join(' · ');
+	const elapsed = formatActivityTaskDuration(activityTaskElapsedMs(task, nowMs));
+	return elapsed ? `总计 ${elapsed}` : '';
 }
 
 export function formatActivityTaskTime(value: string | null | undefined) {

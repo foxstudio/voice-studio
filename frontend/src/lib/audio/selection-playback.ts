@@ -9,6 +9,24 @@ export type SelectionPlaybackDecision = {
 	atSelectionEnd: boolean;
 };
 
+export type PlaybackSelection = {
+	start: number;
+	end: number;
+};
+
+/**
+ * Enable selection looping only when playback is started from inside the
+ * settled IN/OUT range. A range can stay visible without constraining normal
+ * playback that starts elsewhere on the timeline.
+ */
+export function selectionForPlaybackAtTime(currentTime: number, start: number, end: number): PlaybackSelection | null {
+	const selectionStart = Math.min(start, end);
+	const selectionEnd = Math.max(start, end);
+	if (![currentTime, selectionStart, selectionEnd].every(Number.isFinite) || selectionEnd <= selectionStart) return null;
+	if (currentTime < selectionStart || currentTime > selectionEnd) return null;
+	return { start: selectionStart, end: selectionEnd };
+}
+
 /**
  * Decide where a preview resumes when a user releases an IN/OUT control.
  *
