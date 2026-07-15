@@ -10,7 +10,7 @@
 	import ActivityNotice from './ActivityNotice.svelte';
 	import { activityTaskAffectsTrack, type ActivityTask } from './activity-notice';
 	import type { AsrOperationPreview } from './asr-operation-preview';
-	import { isRepeatedTimelinePress, timelinePointerIntent, type TimelinePointerPress } from './timeline-interaction';
+	import { timelinePointerIntent } from './timeline-interaction';
 	import EditableAudioClip from './EditableAudioClip.svelte';
 
 	let {
@@ -162,7 +162,6 @@
 	let seekAnimationFrame = 0;
 	let selectionDrag = $state<'start' | 'end' | null>(null);
 	let rangeCreateState = $state<{ startX: number; startMs: number; moved: boolean } | null>(null);
-	let preserveRangeOnDoubleClick = false;
 	let preserveRangeOnCueSelection = false;
 	let rangeStartMs = $state<number | null>(null);
 	let rangeEndMs = $state<number | null>(null);
@@ -183,7 +182,6 @@
 	let selectedTimelineItem = $state<{ kind: 'subtitle' | 'audio'; trackId: VideoLocalizationTrackId; itemId: string } | null>(null);
 	let hoverTimeMs = $state<number | null>(null);
 	let hoverScrubFrame = 0;
-	let lastPrimaryPointerDown: TimelinePointerPress | null = null;
 	const DEFAULT_TRACK_HEIGHTS: Record<VideoLocalizationTrackId, number> = {
 		original: 58,
 		vocals: 58,
@@ -728,18 +726,8 @@
 		const overTrack = Boolean(target.closest('[data-track-row]'));
 		const overTimeline = Boolean(target.closest('.timeline-ruler') || overTrack);
 		const interactive = isTimelineInteractiveTarget(target);
-		const now = Date.now();
-		const currentPress = { time: now, x: event.clientX, y: event.clientY };
-		const eligiblePrimaryPress = event.button === 0 && overTrack && !interactive;
-		const manualDoublePress = eligiblePrimaryPress && isRepeatedTimelinePress(lastPrimaryPointerDown, currentPress);
-		if (eligiblePrimaryPress) {
-			lastPrimaryPointerDown = manualDoublePress ? null : currentPress;
-		} else if (event.button === 0) {
-			lastPrimaryPointerDown = null;
-		}
 		const intent = timelinePointerIntent({
 			button: event.button,
-			clickCount: event.detail >= 2 || manualDoublePress ? 2 : 1,
 			overTimeline,
 			overTrack,
 			interactive
@@ -772,10 +760,6 @@
 	function handleTimelineDoubleClick(event: MouseEvent) {
 		if (isTimelineInteractiveTarget(event.target as HTMLElement)) return;
 		event.preventDefault();
-		if (preserveRangeOnDoubleClick) {
-			preserveRangeOnDoubleClick = false;
-			return;
-		}
 		clearSelection();
 	}
 
@@ -853,9 +837,9 @@
 	function endTimelinePointerWork() {
 		endCueDrag();
 		endClipDrag();
-		if (rangeCreateState?.moved) {
-			preserveRangeOnDoubleClick = true;
-			setTimeout(() => (preserveRangeOnDoubleClick = false), 350);
+		if (rangeCreateState && !rangeCreateState.moved) {
+			clearTimelineItemSelection();
+			scheduleTimelineSeek(rangeCreateState.startMs, true);
 		}
 		if (timelineSeekDrag) scheduleTimelineSeek(pendingSeekMs, true);
 		rangeCreateState = null;
