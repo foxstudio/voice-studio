@@ -174,7 +174,16 @@ def test_video_localization_asr_operation_summary_distinguishes_raw_segments_fro
         update={
             "source_media": source_media,
             "transcription": transcription,
-            "cues": [VideoLocalizationCue(cue_id=f"cue_{index:04d}") for index in range(1, 4)],
+            "cues": [
+                VideoLocalizationCue(
+                    cue_id=f"cue_{index:04d}",
+                    start_ms=(index - 1) * 500,
+                    end_ms=index * 500,
+                    en_subtitle_text=f"Subtitle {index}",
+                    quality_flags=["generated_by_asr"],
+                )
+                for index in range(1, 4)
+            ],
         }
     )
 
@@ -188,6 +197,21 @@ def test_video_localization_asr_operation_summary_distinguishes_raw_segments_fro
     assert summary["stage_timings"]["boundary_review"]["candidate_count"] == 3
     assert [item["candidate_count"] for item in summary["boundary_review_rounds"]] == [2, 1]
     assert summary["stage_timings"]["boundary_review"]["rounds"][0]["batches"][0]["status"] == "success"
+    assert set(summary["task_step_results"]) == {
+        "asr",
+        "web_research",
+        "text_review",
+        "alignment",
+        "audio_boundaries",
+        "boundary_review",
+        "subtitle_track",
+    }
+    assert summary["task_step_results"]["asr"]["status"] == "success"
+    assert summary["task_step_results"]["asr"]["sections"][0]["items"][0]["text"] == "Concurrent ASR result."
+    assert summary["task_step_results"]["subtitle_track"]["status"] == "success"
+    assert {item["label"]: item["value"] for item in summary["task_step_results"]["subtitle_track"]["metrics"]}[
+        "字幕数量"
+    ] == "3"
 
 
 def test_video_localization_asr_rerun_reuses_replaceable_cue_ids():

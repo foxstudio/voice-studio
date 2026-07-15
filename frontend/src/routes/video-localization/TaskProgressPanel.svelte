@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { AlertTriangle, Check, ChevronDown, ChevronRight, Circle, CircleOff, CircleStop, Clock3, LoaderCircle } from 'lucide-svelte';
+	import { AlertTriangle, Check, ChevronDown, ChevronRight, Circle, CircleOff, CircleStop, Clock3, Info, LoaderCircle } from 'lucide-svelte';
 	import { untrack } from 'svelte';
 	import { hoverTooltip } from '$lib/components/shared/hover-tooltip';
 	import {
@@ -16,6 +16,7 @@
 		type ActivityTask,
 		type ActivityTaskStep
 	} from './activity-notice';
+	import TaskStepResultDialog from './TaskStepResultDialog.svelte';
 
 	let {
 		tasks = [],
@@ -33,6 +34,7 @@
 	let highlightedTaskId = $state('');
 	let expandedHistoryIds = $state<string[]>([]);
 	let showAllHistory = $state(false);
+	let selectedResult = $state<{ taskId: string; stepId: string } | null>(null);
 	let handledPulseKey = 0;
 	let nowMs = $state(Date.now());
 
@@ -51,6 +53,12 @@
 	const visibleHistoryTasks = $derived(showAllHistory ? historyTasks : historyTasks.slice(0, availableHistorySlots));
 	const visibleTasks = $derived([...visibleActiveTasks, ...visibleHistoryTasks]);
 	const hiddenHistoryCount = $derived(Math.max(0, historyTasks.length - visibleHistoryTasks.length));
+	const selectedResultContext = $derived.by(() => {
+		if (!selectedResult) return null;
+		const task = uniqueTasks.find((item) => item.id === selectedResult?.taskId);
+		const step = task?.steps?.find((item) => item.id === selectedResult?.stepId);
+		return task && step?.result ? { task, step } : null;
+	});
 
 	$effect(() => {
 		if (!activeTasks.length) return;
@@ -129,6 +137,11 @@
 	function stepTiming(step: ActivityTaskStep, task: ActivityTask) {
 		return activityTaskStepTimingLabel(step, task, nowMs);
 	}
+
+	function showStepResult(task: ActivityTask, step: ActivityTaskStep) {
+		if (!step.result) return;
+		selectedResult = { taskId: task.id, stepId: step.id };
+	}
 </script>
 
 <section class="task-center" class:active={activeTasks.length > 0} class:pulsing class:full aria-label="后台任务进度">
@@ -196,10 +209,20 @@
 														{:else}<Circle size={8} />{/if}
 													</span>
 													<span class="task-step-label">{step.label}</span>
-													<span class="task-step-summary">
-														{#if timing}<b>{timing}</b>{/if}
-														<em>{stepStateLabel(step)}</em>
-													</span>
+											<span class="task-step-summary">
+												{#if timing}<b>{timing}</b>{/if}
+												<em>{stepStateLabel(step)}</em>
+												{#if step.result}
+													<button
+														class="step-result-trigger"
+														type="button"
+														aria-label={`查看“${step.label}”的结果`}
+														aria-haspopup="dialog"
+														use:hoverTooltip={`查看结果｜核对“${step.label}”实际产出的内容和质量状态。`}
+														onclick={() => showStepResult(task, step)}
+													><Info size={11} /></button>
+												{/if}
+											</span>
 												</li>
 											{/each}
 										</ul>
@@ -257,10 +280,20 @@
 															{:else}<Circle size={8} />{/if}
 														</span>
 														<span class="task-step-label">{step.label}</span>
-														<span class="task-step-summary">
-															{#if timing}<b>{timing}</b>{/if}
-															<em>{stepStateLabel(step)}</em>
-														</span>
+												<span class="task-step-summary">
+													{#if timing}<b>{timing}</b>{/if}
+													<em>{stepStateLabel(step)}</em>
+													{#if step.result}
+														<button
+															class="step-result-trigger"
+															type="button"
+															aria-label={`查看“${step.label}”的结果`}
+															aria-haspopup="dialog"
+															use:hoverTooltip={`查看结果｜核对“${step.label}”实际产出的内容和质量状态。`}
+															onclick={() => showStepResult(task, step)}
+														><Info size={11} /></button>
+													{/if}
+												</span>
 													</li>
 												{/each}
 											</ul>
@@ -284,6 +317,15 @@
 		<div class="task-center-empty">导入、分离、ASR 字幕和配音生成任务会按时间显示在这里。</div>
 	{/if}
 </section>
+
+{#if selectedResultContext?.step.result}
+	<TaskStepResultDialog
+		stepLabel={selectedResultContext.step.label}
+		result={selectedResultContext.step.result}
+		durationLabel={stepTiming(selectedResultContext.step, selectedResultContext.task)}
+		onClose={() => (selectedResult = null)}
+	/>
+{/if}
 
 <style>
 	.task-center {
@@ -402,6 +444,22 @@
 	.task-step-summary { min-width: 0; display: flex; align-items: baseline; justify-content: flex-end; gap: 6px; white-space: nowrap; }
 	.task-step-summary b { color: #91a2aa; font-size: 9px; font-weight: 600; }
 	.task-step-summary em { min-width: 28px; color: #697980; font-size: 9px; font-style: normal; text-align: right; }
+	.step-result-trigger {
+		width: 18px;
+		height: 18px;
+		display: grid;
+		place-items: center;
+		flex: 0 0 auto;
+		padding: 0;
+		border: 0;
+		border-radius: 4px;
+		background: transparent;
+		color: #718188;
+		line-height: 0;
+		cursor: pointer;
+	}
+	.step-result-trigger:hover { background: #273238; color: #9bc8d5; }
+	.step-result-trigger:focus-visible { outline: 1px solid #69abc0; outline-offset: 1px; }
 	.task-steps li.current .task-step-summary b { color: #a9ccd6; }
 	.task-step-state { position: relative; z-index: 1; display: grid; place-items: center; color: #64747b; }
 	.task-step-state.step-spinning :global(svg) { animation: task-spin 900ms linear infinite; }

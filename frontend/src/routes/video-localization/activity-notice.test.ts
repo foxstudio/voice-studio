@@ -169,6 +169,25 @@ describe('activity notice tasks', () => {
 							{ duration_ms: 3_000, batch_count: 1 }
 						]
 					}
+				},
+				task_step_results: {
+					asr: {
+						status: 'success',
+						summary: '识别到 185 个原始语音片段。',
+						metrics: [{ label: '原始片段', value: '185' }],
+						sections: [{
+							title: '识别样例',
+							items: [{ title: '片段 1', text: 'A sample result.', meta: '00:00.000 - 00:01.200' }]
+						}],
+						notes: []
+					},
+					web_research: {
+						status: 'warning',
+						summary: '联网核验部分完成。',
+						metrics: [{ label: '资料来源', value: 3 }],
+						sections: [{ title: '参考来源', items: [{ title: 'Source', url: 'https://example.com' }] }],
+						notes: ['一个查询未返回结果']
+					}
 				}
 			},
 			created_at: '2026-07-15T08:00:00Z', started_at: '2026-07-15T08:00:01Z', completed_at: '2026-07-15T08:02:00Z'
@@ -184,6 +203,17 @@ describe('activity notice tasks', () => {
 			['subtitles', 500]
 		]);
 		expect(task.steps?.[5]).toMatchObject({ roundCount: 2, batchCount: 3 });
+		expect(task.steps?.[0].result).toMatchObject({
+			status: 'success',
+			summary: '识别到 185 个原始语音片段。',
+			metrics: [{ label: '原始片段', value: '185' }]
+		});
+		expect(task.steps?.[1].result).toMatchObject({
+			status: 'warning',
+			sections: [{ title: '参考来源', items: [{ title: 'Source', url: 'https://example.com' }] }],
+			notes: ['一个查询未返回结果']
+		});
+		expect(task.steps?.[2].result?.summary).toContain('旧任务仅保留了状态和统计');
 		expect(task.semanticModelId).toBe('deepseek-chat');
 		expect(activityTaskStepTimingLabel(task.steps![5], task)).toBe('8 秒 · 2 轮 · 3 批');
 	});

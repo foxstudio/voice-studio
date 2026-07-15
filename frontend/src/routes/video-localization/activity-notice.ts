@@ -5,6 +5,35 @@ export type ActivityTaskStatus = 'queued' | 'running' | 'success' | 'failed' | '
 
 export type ActivityTaskStepStatus = 'todo' | 'running' | 'success' | 'failed' | 'cancelled';
 
+export type ActivityTaskStepResultStatus = 'running' | 'success' | 'warning' | 'failed' | 'skipped';
+
+export type ActivityTaskStepResultMetric = {
+	label: string;
+	value: string;
+};
+
+export type ActivityTaskStepResultItem = {
+	title?: string;
+	text?: string;
+	before?: string;
+	after?: string;
+	meta?: string;
+	url?: string;
+};
+
+export type ActivityTaskStepResultSection = {
+	title: string;
+	items: ActivityTaskStepResultItem[];
+};
+
+export type ActivityTaskStepResult = {
+	status: ActivityTaskStepResultStatus;
+	summary: string;
+	metrics: ActivityTaskStepResultMetric[];
+	sections: ActivityTaskStepResultSection[];
+	notes: string[];
+};
+
 export type ActivityTaskStep = {
 	id: string;
 	label: string;
@@ -12,6 +41,7 @@ export type ActivityTaskStep = {
 	durationMs?: number;
 	roundCount?: number;
 	batchCount?: number;
+	result?: ActivityTaskStepResult;
 };
 
 export type ActivityTaskScope = {
@@ -101,6 +131,98 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 		: null;
 }
 
+function stringList(value: unknown, limit = 8) {
+	return Array.isArray(value)
+		? value.map(stringValue).filter((item): item is string => item !== null).slice(0, limit)
+		: [];
+}
+
+function stepResultStatus(value: unknown, fallback: ActivityTaskStepStatus): ActivityTaskStepResultStatus {
+	if (value === 'success' || value === 'warning' || value === 'failed' || value === 'skipped' || value === 'running') return value;
+	if (fallback === 'running') return 'running';
+	if (fallback === 'failed' || fallback === 'cancelled') return 'failed';
+	return 'success';
+}
+
+function normalizeStepResult(value: unknown, fallbackStatus: ActivityTaskStepStatus): ActivityTaskStepResult | null {
+	const result = recordValue(value);
+	if (!result) return null;
+	const summary = stringValue(result.summary);
+	if (!summary) return null;
+	const metrics = Array.isArray(result.metrics)
+		? result.metrics.flatMap((entry) => {
+			const metric = recordValue(entry);
+			const label = stringValue(metric?.label);
+			const metricValue = stringValue(metric?.value) ?? numberValue(metric?.value)?.toString() ?? null;
+			return label && metricValue !== null ? [{ label, value: metricValue }] : [];
+		}).slice(0, 12)
+		: [];
+	const sections = Array.isArray(result.sections)
+		? result.sections.flatMap((entry) => {
+			const section = recordValue(entry);
+			const title = stringValue(section?.title);
+			if (!title || !Array.isArray(section?.items)) return [];
+			const items = section.items.flatMap((rawItem) => {
+				const item = recordValue(rawItem);
+				if (!item) return [];
+				const normalized = {
+					title: stringValue(item.title) ?? undefined,
+					text: stringValue(item.text) ?? undefined,
+					before: stringValue(item.before) ?? undefined,
+					after: stringValue(item.after) ?? undefined,
+					meta: stringValue(item.meta) ?? undefined,
+					url: stringValue(item.url) ?? undefined
+				};
+				return Object.values(normalized).some(Boolean) ? [normalized] : [];
+			}).slice(0, 6);
+			return items.length ? [{ title, items }] : [];
+		}).slice(0, 4)
+		: [];
+	return {
+		status: stepResultStatus(result.status, fallbackStatus),
+		summary,
+		metrics,
+		sections,
+		notes: stringList(result.notes, 6)
+	};
+}
+
+const TIMING_METRIC_LABELS: Record<string, string> = {
+	segment_count: '原始片段',
+	query_count: '搜索查询',
+	source_count: '资料来源',
+	cache_hits: '缓存命中',
+	batch_count: '请求批次',
+	word_count: '逐词时间码',
+	boundary_count: '边界数量',
+	refined_onset_count: '修正入点',
+	candidate_count: '候选边界',
+	round_count: '复核轮数',
+	cue_count: '字幕数量'
+};
+
+function fallbackStepResult(
+	stepLabel: string,
+	status: ActivityTaskStepStatus,
+	timing: Record<string, unknown> | null
+): ActivityTaskStepResult | undefined {
+	if (status === 'todo') return undefined;
+	const metrics = Object.entries(TIMING_METRIC_LABELS).flatMap(([key, label]) => {
+		const value = numberValue(timing?.[key]);
+		return value === null ? [] : [{ label, value: value.toString() }];
+	});
+	const running = status === 'running';
+	return {
+		status: stepResultStatus(null, status),
+		summary: running
+			? `${stepLabel}正在处理，步骤完成后会补充可核验的结果。`
+			: `该步骤已${status === 'success' ? '完成' : '结束'}。这条旧任务仅保留了状态和统计，没有保存详细产物。`,
+		metrics,
+		sections: [],
+		notes: []
+	};
+}
+
 function stageDurationMs(stageTimings: Record<string, unknown> | null, stageIds: readonly string[]) {
 	if (!stageTimings || !stageIds.length) return null;
 	const durations = stageIds.map((stageId) => numberValue(recordValue(stageTimings[stageId])?.duration_ms));
@@ -136,6 +258,7 @@ function operationSteps(operation: VideoLocalizationOperation, stage: string): A
 	const diagnosticStageTimings = recordValue(operation.result_summary?.stage_timings);
 	const taskStageTimings = recordValue(operation.result_summary?.task_stage_timings);
 	const stageTimings = taskStageTimings ?? diagnosticStageTimings;
+	const rawStepResults = recordValue(operation.result_summary?.task_step_results);
 	const boundaryCounts = boundaryReviewCounts(diagnosticStageTimings);
 	const legacyMeasuredDurations = ASR_STEP_DEFINITIONS
 		.filter((step) => step.id !== 'subtitles')
@@ -156,6 +279,9 @@ function operationSteps(operation: VideoLocalizationOperation, stage: string): A
 		const durationMs = step.id === 'subtitles' && recordedDurationMs === null
 			? legacySubtitleTrackDuration
 			: recordedDurationMs;
+		const timing = step.timingStages.length === 1 ? recordValue(diagnosticStageTimings?.[step.timingStages[0]]) : null;
+		const result = normalizeStepResult(rawStepResults?.[step.timingStages[0]], status)
+			?? fallbackStepResult(step.label, status, timing);
 		return {
 			id: step.id,
 			label: step.label,
@@ -166,7 +292,8 @@ function operationSteps(operation: VideoLocalizationOperation, stage: string): A
 				: {}),
 			...(step.id === 'boundary-review' && boundaryCounts.batchCount !== null
 				? { batchCount: boundaryCounts.batchCount }
-				: {})
+				: {}),
+			...(result ? { result } : {})
 		};
 	});
 }

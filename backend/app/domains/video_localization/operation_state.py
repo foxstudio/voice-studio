@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 from app.errors import AppException
+from app.domains.video_localization import asr_step_results
 from app.domains.video_localization.schemas import VideoLocalizationDraft, VideoLocalizationOperation
 
 OperationKind = Literal["source_audio", "stems", "english_asr", "reference_clips"]
@@ -188,7 +189,7 @@ def english_asr_summary(draft: VideoLocalizationDraft | None) -> dict:
         stages.get("boundary_review") if isinstance(stages.get("boundary_review"), dict) else {}
     )
     text_review_timing = stages.get("text_review") if isinstance(stages.get("text_review"), dict) else {}
-    return {
+    summary = {
         "engine_id": draft.source_media.metadata.get("english_asr_engine_id"),
         "source_track_id": draft.source_media.metadata.get("english_asr_source_track_id"),
         "segment_count": draft.source_media.metadata.get("english_asr_raw_segment_count"),
@@ -205,6 +206,8 @@ def english_asr_summary(draft: VideoLocalizationDraft | None) -> dict:
         "stage_timings": stages,
         "boundary_review_rounds": boundary_review_timing.get("rounds", []),
     }
+    summary["task_step_results"] = asr_step_results.build_asr_step_results(draft, stages)
+    return summary
 
 
 def reference_clips_summary(draft: VideoLocalizationDraft | None) -> dict:
