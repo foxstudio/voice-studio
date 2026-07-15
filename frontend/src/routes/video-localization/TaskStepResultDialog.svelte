@@ -144,6 +144,7 @@
 										{#if item.before}<p><b>识别原文</b><span>{item.before}</span></p>{/if}
 										{#if item.after}<p><b>校对结果</b><span>{item.after}</span></p>{/if}
 									</div>
+									{#if item.text}<p class="item-detail">{item.text}</p>{/if}
 								{:else if item.text}
 									<p class="item-text">{item.text}</p>
 								{/if}
@@ -237,6 +238,7 @@
 	.comparison p { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 8px; }
 	.comparison b { color: #73848b; font-size: 9px; font-weight: 600; }
 	.comparison p:last-child span { color: #cad8dc; }
+	.item-detail { margin: 7px 0 0; padding-left: 70px; color: #87979e; font-size: 9.5px; line-height: 1.55; overflow-wrap: anywhere; }
 	.result-item a { width: fit-content; display: inline-flex; align-items: center; gap: 4px; margin-top: 7px; color: #72b8cc; font-size: 9.5px; text-decoration: none; }
 	.result-item a:hover { color: #a4d8e6; text-decoration: underline; }
 	.result-notes { color: #d7af73; }

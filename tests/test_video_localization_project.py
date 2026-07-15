@@ -29,7 +29,11 @@ from app.schemas.voice_studio import (  # noqa: E402
     VideoLocalizationCue,
     VideoLocalizationDraft,
     VideoLocalizationOperation,
+    VideoLocalizationResearchQuery,
+    VideoLocalizationResearchSource,
+    VideoLocalizationResearchState,
     VideoLocalizationTranscriptSegment,
+    VideoLocalizationTranscriptEditOperation,
     VideoLocalizationTranscriptionState,
 )
 from app.domains.video_localization import media_assets  # noqa: E402
@@ -125,8 +129,51 @@ def _completed_asr_result(draft, engine_id: str = "qwen3-asr-mlx"):
 
 def test_video_localization_asr_operation_summary_distinguishes_raw_segments_from_cues():
     draft = _completed_asr_result(VideoLocalizationDraft())
+    reviewed_segment = draft.transcription.segments[0].model_copy(
+        update={
+            "corrected_text": "Concurrent Seedance result.",
+            "review_operations": [
+                VideoLocalizationTranscriptEditOperation(
+                    start_word_id="word_0002",
+                    end_word_id="word_0002",
+                    source_text="ASR",
+                    replacement_text="Seedance",
+                    reason="官方产品名称核验",
+                    confidence=0.96,
+                    status="accepted",
+                    evidence_source_ids=["source_01"],
+                )
+            ],
+        }
+    )
+    research = VideoLocalizationResearchState(
+        status="completed",
+        provider="web-search",
+        queries=[
+            VideoLocalizationResearchQuery(
+                query_id="query_01",
+                query="Seedance official product name",
+                category="proper_noun",
+                reason="确认产品专名拼写",
+                target_terms=["Seedance"],
+            )
+        ],
+        sources=[
+            VideoLocalizationResearchSource(
+                source_id="source_01",
+                query_id="query_01",
+                title="Seedance 官方产品页",
+                url="https://example.com/seedance",
+                snippet="Seedance product documentation",
+                provider="web-search",
+            )
+        ],
+    )
     transcription = draft.transcription.model_copy(
         update={
+            "segments": [reviewed_segment],
+            "review_status": "completed",
+            "research": research,
             "pipeline_timing": {
                 "total_duration_ms": 4321,
                 "stages": {
@@ -208,6 +255,11 @@ def test_video_localization_asr_operation_summary_distinguishes_raw_segments_fro
     }
     assert summary["task_step_results"]["asr"]["status"] == "success"
     assert summary["task_step_results"]["asr"]["sections"][0]["items"][0]["text"] == "Concurrent ASR result."
+    research_result = summary["task_step_results"]["web_research"]
+    assert {item["label"]: item["value"] for item in research_result["metrics"]}["支持修改"] == "1"
+    assert research_result["sections"][1]["title"] == "对文本校对的作用"
+    assert research_result["sections"][1]["items"][0]["title"] == "ASR → Seedance"
+    assert "Seedance 官方产品页" in summary["task_step_results"]["text_review"]["sections"][0]["items"][0]["text"]
     assert summary["task_step_results"]["subtitle_track"]["status"] == "success"
     assert {item["label"]: item["value"] for item in summary["task_step_results"]["subtitle_track"]["metrics"]}[
         "字幕数量"

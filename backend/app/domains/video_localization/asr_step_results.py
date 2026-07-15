@@ -42,7 +42,7 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
         {
             "title": _compact_text(item.query, 180),
             "text": _compact_text(item.reason),
-            "meta": f"{item.category} · {', '.join(item.target_terms[:4])}".strip(" ·"),
+            "meta": f"{_research_category_label(item.category)} · {', '.join(item.target_terms[:4])}".strip(" ·"),
         }
         for item in research.queries[:5]
     ]
@@ -55,16 +55,51 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
         }
         for item in research.sources[:5]
     ]
+    research_source_by_id = {item.source_id: item for item in research.sources}
+    research_edits = [
+        operation
+        for segment in segments
+        for operation in segment.review_operations
+        if operation.status == "accepted" and operation.evidence_source_ids
+    ]
+    research_effects = []
+    for operation in research_edits[:5]:
+        cited_sources = [
+            research_source_by_id[source_id]
+            for source_id in operation.evidence_source_ids
+            if source_id in research_source_by_id
+        ]
+        research_effects.append(
+            {
+                "title": _compact_text(f"{operation.source_text} → {operation.replacement_text}", 180),
+                "text": _compact_text(operation.reason) or "联网资料为这项文本修正提供了参考。",
+                "meta": " · ".join(
+                    [
+                        f"引用 {len(cited_sources)} 条来源",
+                        *[_compact_text(source.title, 60) for source in cited_sources[:2]],
+                    ]
+                ),
+                **({"url": _compact_text(cited_sources[0].url, 600)} if cited_sources else {}),
+            }
+        )
+    research_summary = _research_summary(research.status, len(research.queries), len(research.sources), research.reason)
+    if research_edits:
+        research_summary = f"{research_summary} 其中 {len(research_edits)} 项文本修正引用了联网资料。"
     research_result = {
         "status": _result_status(research.status),
-        "summary": _research_summary(research.status, len(research.queries), len(research.sources), research.reason),
+        "summary": research_summary,
         "metrics": _metrics(
             ("判断结果", _status_label(research.status)),
             ("搜索查询", len(research.queries)),
             ("资料来源", len(research.sources)),
             ("缓存命中", research.cache_hits),
+            ("支持修改", len(research_edits)),
         ),
-        "sections": _sections(("搜索问题", research_queries), ("参考来源", research_sources)),
+        "sections": _sections(
+            ("搜索问题", research_queries),
+            ("对文本校对的作用", research_effects),
+            ("参考来源", research_sources),
+        ),
         "notes": _notes(research.error),
     }
 
@@ -83,15 +118,28 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
         for segment in segments
         for operation in segment.review_operations
     )
-    correction_samples = [
-        {
-            "title": f"片段 {index}",
-            "before": _compact_text(segment.raw_text),
-            "after": _compact_text(segment.corrected_text or segment.raw_text),
-            "meta": _time_range(segment.start_ms, segment.end_ms),
-        }
-        for index, segment in enumerate(changed_segments[:5], start=1)
-    ]
+    correction_samples = []
+    for index, segment in enumerate(changed_segments[:5], start=1):
+        accepted_operations = [operation for operation in segment.review_operations if operation.status == "accepted"]
+        reasons = list(dict.fromkeys(_compact_text(operation.reason, 120) for operation in accepted_operations if operation.reason))
+        cited_titles = list(
+            dict.fromkeys(
+                _compact_text(research_source_by_id[source_id].title, 80)
+                for operation in accepted_operations
+                for source_id in operation.evidence_source_ids
+                if source_id in research_source_by_id
+            )
+        )
+        detail_parts = [*reasons[:2], *([f"参考来源：{'、'.join(cited_titles[:2])}"] if cited_titles else [])]
+        correction_samples.append(
+            {
+                "title": f"片段 {index}",
+                "before": _compact_text(segment.raw_text),
+                "after": _compact_text(segment.corrected_text or segment.raw_text),
+                "text": "；".join(detail_parts),
+                "meta": _time_range(segment.start_ms, segment.end_ms),
+            }
+        )
     review_result = {
         "status": _result_status(transcription.review_status),
         "summary": _review_summary(transcription.review_status, len(changed_segments), len(segments)),
@@ -292,6 +340,15 @@ def _decision_label(value: str) -> str:
     return {"prefer": "建议断开", "allow": "允许断开", "avoid": "避免断开"}.get(value, value)
 
 
+def _research_category_label(value: str) -> str:
+    return {
+        "proper_noun": "专名核验",
+        "background": "背景资料",
+        "culture": "文化背景",
+        "persona": "人物表达",
+    }.get(value, value)
+
+
 def _research_summary(status: str, query_count: int, source_count: int, reason: str) -> str:
     if status == "completed":
         return f"完成 {query_count} 个搜索问题，获得 {source_count} 条参考来源。"
@@ -345,4 +402,3 @@ def _cue_time_range(cues: list) -> str:
     if not cues or cues[0].start_ms is None or cues[-1].end_ms is None:
         return "未记录"
     return _time_range(cues[0].start_ms, cues[-1].end_ms)
-

@@ -208,21 +208,23 @@
 														{:else if step.status === 'cancelled'}<CircleOff size={10} />
 														{:else}<Circle size={8} />{/if}
 													</span>
-													<span class="task-step-label">{step.label}</span>
-											<span class="task-step-summary">
-												{#if timing}<b>{timing}</b>{/if}
-												<em>{stepStateLabel(step)}</em>
-												{#if step.result}
-													<button
-														class="step-result-trigger"
-														type="button"
-														aria-label={`查看“${step.label}”的结果`}
-														aria-haspopup="dialog"
-														use:hoverTooltip={`查看结果｜核对“${step.label}”实际产出的内容和质量状态。`}
-														onclick={() => showStepResult(task, step)}
-													><Info size={11} /></button>
-												{/if}
-											</span>
+													<span class="task-step-name">
+														<span class="task-step-label">{step.label}</span>
+														{#if step.result}
+															<button
+																class="step-result-trigger"
+																type="button"
+																aria-label={`查看“${step.label}”的结果`}
+																aria-haspopup="dialog"
+																use:hoverTooltip={`查看结果｜核对“${step.label}”实际产出的内容和质量状态。`}
+																onclick={() => showStepResult(task, step)}
+															><Info size={11} /></button>
+														{/if}
+													</span>
+													<span class="task-step-summary">
+														{#if timing}<b>{timing}</b>{/if}
+														<em>{stepStateLabel(step)}</em>
+													</span>
 												</li>
 											{/each}
 										</ul>
@@ -279,21 +281,23 @@
 															{:else if step.status === 'cancelled'}<CircleOff size={10} />
 															{:else}<Circle size={8} />{/if}
 														</span>
-														<span class="task-step-label">{step.label}</span>
-												<span class="task-step-summary">
-													{#if timing}<b>{timing}</b>{/if}
-													<em>{stepStateLabel(step)}</em>
-													{#if step.result}
-														<button
-															class="step-result-trigger"
-															type="button"
-															aria-label={`查看“${step.label}”的结果`}
-															aria-haspopup="dialog"
-															use:hoverTooltip={`查看结果｜核对“${step.label}”实际产出的内容和质量状态。`}
-															onclick={() => showStepResult(task, step)}
-														><Info size={11} /></button>
-													{/if}
-												</span>
+														<span class="task-step-name">
+															<span class="task-step-label">{step.label}</span>
+															{#if step.result}
+																<button
+																	class="step-result-trigger"
+																	type="button"
+																	aria-label={`查看“${step.label}”的结果`}
+																	aria-haspopup="dialog"
+																	use:hoverTooltip={`查看结果｜核对“${step.label}”实际产出的内容和质量状态。`}
+																	onclick={() => showStepResult(task, step)}
+																><Info size={11} /></button>
+															{/if}
+														</span>
+														<span class="task-step-summary">
+															{#if timing}<b>{timing}</b>{/if}
+															<em>{stepStateLabel(step)}</em>
+														</span>
 													</li>
 												{/each}
 											</ul>
@@ -440,6 +444,7 @@
 	.task-steps li { position: relative; min-width: 0; display: grid; grid-template-columns: 15px minmax(0, 1fr) auto; align-items: center; gap: 6px; min-height: 22px; color: #78878e; font-size: 9.5px; }
 	.task-steps li.current { color: #a9ccd6; }
 	.task-steps li.step-failed { color: #d89496; }
+	.task-step-name { min-width: 0; display: flex; align-items: center; gap: 3px; }
 	.task-step-label { min-width: 0; overflow: hidden; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 	.task-step-summary { min-width: 0; display: flex; align-items: baseline; justify-content: flex-end; gap: 6px; white-space: nowrap; }
 	.task-step-summary b { color: #91a2aa; font-size: 9px; font-weight: 600; }
