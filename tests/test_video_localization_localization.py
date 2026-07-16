@@ -92,6 +92,48 @@ def test_quality_review_batches_obey_item_and_text_limits(monkeypatch):
     assert [item["id"] for batch in batches for item in batch] == [item["id"] for item in items]
 
 
+def test_quality_review_splits_a_batch_after_invalid_json(monkeypatch):
+    items = [
+        {
+            "id": f"localized_{index:04d}",
+            "source_text": f"Source {index}",
+            "display_text": f"字幕 {index}",
+            "tts_text": f"字幕 {index}。",
+            "start_ms": index * 1000,
+            "end_ms": index * 1000 + 900,
+        }
+        for index in range(1, 5)
+    ]
+    calls: list[list[str]] = []
+
+    def complete_json(**kwargs):
+        ids = [item["id"] for item in kwargs["user_payload"]["items"]]
+        calls.append(ids)
+        if len(ids) == 4:
+            raise LlmRuntimeError("invalid json", code="llm_json_invalid", status_code=502)
+        return {"checked_ids": ids, "changes": []}
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+    reviewed, changes = localization._quality_review(
+        items,
+        draft=_draft(),
+        context={},
+        profile_id="llm_default",
+        source_language="en",
+        target_language="zh-Hans",
+        is_cancelled=None,
+        on_batch=lambda _completed, _total: None,
+    )
+
+    assert calls == [
+        ["localized_0001", "localized_0002", "localized_0003", "localized_0004"],
+        ["localized_0001", "localized_0002"],
+        ["localized_0003", "localized_0004"],
+    ]
+    assert reviewed == items
+    assert changes == []
+
+
 def test_source_fingerprint_tracks_speaker_profile_and_word_timing():
     draft = VideoLocalizationDraft.model_validate(
         {

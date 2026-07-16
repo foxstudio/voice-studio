@@ -104,6 +104,17 @@ class _AsrStageTimer(_StageTimer):
         super().__init__(_asr_stage_id, clock=clock)
 
 
+def _finish_stage_timings(stage_timer: _StageTimer | None, summary: dict) -> dict:
+    if stage_timer is None:
+        return summary
+    timings = stage_timer.finish()
+    return {
+        **summary,
+        "task_stage_timings": timings,
+        "task_duration_ms": sum(int(item.get("duration_ms") or 0) for item in timings.values()),
+    }
+
+
 class _OperationCommitGate:
     """Linearizes cancellation against one operation's final draft commit."""
 
@@ -351,9 +362,7 @@ def _process(operation_id: str) -> None:
                 segmentation_profile_id=segmentation_profile_id,
             )
             summary = operation_state.english_asr_summary(updated)
-            task_stage_timings = stage_timer.finish()
-            summary["task_stage_timings"] = task_stage_timings
-            summary["task_duration_ms"] = sum(int(item.get("duration_ms") or 0) for item in task_stage_timings.values())
+            summary = _finish_stage_timings(stage_timer, summary)
         elif operation.kind == "localization_draft":
             stage_timer = _StageTimer(_localization_stage_id)
 
@@ -390,9 +399,7 @@ def _process(operation_id: str) -> None:
                 ),
                 commit_guard=commit_gate.commit,
             )
-            task_stage_timings = stage_timer.finish()
-            summary["task_stage_timings"] = task_stage_timings
-            summary["task_duration_ms"] = sum(int(item.get("duration_ms") or 0) for item in task_stage_timings.values())
+            summary = _finish_stage_timings(stage_timer, summary)
         elif operation.kind == "reference_clips":
             updated = service.create_reference_clips_from_cues(project_id)
             summary = operation_state.reference_clips_summary(updated)
@@ -404,6 +411,10 @@ def _process(operation_id: str) -> None:
             raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
         latest = get_operation(project_id, operation_id)
         if operation_state.operation_was_cancelled(latest):
+            cancellation_summary = _finish_stage_timings(
+                stage_timer,
+                dict(latest.result_summary if latest is not None else {}),
+            )
             _mark_operation(
                 project_id,
                 operation_id,
@@ -412,6 +423,7 @@ def _process(operation_id: str) -> None:
                 progress=1.0,
                 completed_at=now_iso(),
                 error_message="已取消，任务结果未作为成功状态保留。",
+                result_summary=cancellation_summary,
             )
             return
         _mark_operation(
@@ -426,6 +438,10 @@ def _process(operation_id: str) -> None:
     except AppException as exc:
         latest = get_operation(project_id, operation_id)
         if operation_state.operation_was_cancelled(latest):
+            cancellation_summary = _finish_stage_timings(
+                stage_timer,
+                dict(latest.result_summary if latest is not None else {}),
+            )
             _mark_operation(
                 project_id,
                 operation_id,
@@ -434,9 +450,13 @@ def _process(operation_id: str) -> None:
                 progress=1.0,
                 completed_at=now_iso(),
                 error_message="已取消，失败结果未保留。",
+                result_summary=cancellation_summary,
             )
             return
-        failure_summary = dict(latest.result_summary if latest is not None else {})
+        failure_summary = _finish_stage_timings(
+            stage_timer,
+            dict(latest.result_summary if latest is not None else {}),
+        )
         if exc.detail_dict:
             failure_summary["error_detail"] = exc.detail_dict
         _mark_kind_failed(project_id, operation.kind, exc.code, exc.message)
@@ -454,6 +474,10 @@ def _process(operation_id: str) -> None:
     except Exception as exc:
         latest = get_operation(project_id, operation_id)
         if operation_state.operation_was_cancelled(latest):
+            cancellation_summary = _finish_stage_timings(
+                stage_timer,
+                dict(latest.result_summary if latest is not None else {}),
+            )
             _mark_operation(
                 project_id,
                 operation_id,
@@ -462,8 +486,13 @@ def _process(operation_id: str) -> None:
                 progress=1.0,
                 completed_at=now_iso(),
                 error_message="已取消，失败结果未保留。",
+                result_summary=cancellation_summary,
             )
             return
+        failure_summary = _finish_stage_timings(
+            stage_timer,
+            dict(latest.result_summary if latest is not None else {}),
+        )
         _mark_kind_failed(project_id, operation.kind, "VIDEO_LOCALIZATION_OPERATION_FAILED", str(exc))
         _mark_operation(
             project_id,
@@ -474,6 +503,7 @@ def _process(operation_id: str) -> None:
             completed_at=now_iso(),
             error_code="VIDEO_LOCALIZATION_OPERATION_FAILED",
             error_message=str(exc),
+            result_summary=failure_summary,
         )
 
 

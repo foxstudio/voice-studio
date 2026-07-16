@@ -2234,6 +2234,13 @@ def test_video_localization_failed_operation_keeps_structured_error_detail(tmp_p
         "source_numbers": ["100%"],
         "display_numbers": [],
     }
+    assert set(completed.result_summary["task_stage_timings"]) == {"prepare_context", "localize"}
+    assert all(
+        "running" not in timing for timing in completed.result_summary["task_stage_timings"].values()
+    )
+    assert completed.result_summary["task_duration_ms"] == sum(
+        timing["duration_ms"] for timing in completed.result_summary["task_stage_timings"].values()
+    )
 
 
 def test_video_localization_localization_does_not_commit_after_source_changes(tmp_path: Path, monkeypatch):

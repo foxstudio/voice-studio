@@ -21,7 +21,7 @@ from app.services import llm_runtime, settings_store, web_search
 
 LOCALIZATION_PROMPT_VERSION = "localization-draft-v3"
 LOCALIZATION_BATCH_MAX_CUES = 64
-LOCALIZATION_BATCH_MAX_WORDS = 320
+LOCALIZATION_BATCH_MAX_WORDS = 280
 LOCALIZATION_BATCH_MAX_SOURCE_CHARS = 3200
 QUALITY_REVIEW_BATCH_MAX_ITEMS = 60
 QUALITY_REVIEW_BATCH_MAX_TEXT_CHARS = 12_000
@@ -1454,7 +1454,13 @@ def _quality_review(
                     timeout=timeout,
                 )
             except llm_runtime.LlmRuntimeError as exc:
-                if exc.code not in {"llm_output_truncated", "llm_timeout", "llm_response_too_large"} or len(items) <= 1:
+                if exc.code not in {
+                    "llm_output_truncated",
+                    "llm_timeout",
+                    "llm_response_too_large",
+                    "llm_json_invalid",
+                    "llm_json_not_object",
+                } or len(items) <= 1:
                     raise
                 raw = None
 

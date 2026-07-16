@@ -239,7 +239,9 @@
 	let timelineRedoStack = $state<TimelineSnapshot[]>([]);
 	let videoInput: HTMLInputElement | null = null;
 	let localizationSrtInput: HTMLInputElement | null = null;
-	let operationPollingTimer: ReturnType<typeof setInterval> | null = null;
+	let operationPollingTimer: ReturnType<typeof setTimeout> | null = null;
+	let operationPollingInFlight = false;
+	let operationPollingGeneration = 0;
 	let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
 	let message = $state('');
 	let error = $state('');
@@ -404,7 +406,9 @@
 	onMount(() => {
 		void loadAsrEngineHealth();
 		loadProjects();
+		document.addEventListener('visibilitychange', handleOperationVisibilityChange);
 		return () => {
+			document.removeEventListener('visibilitychange', handleOperationVisibilityChange);
 			stopOperationPolling();
 			if (autoSaveTimer) clearTimeout(autoSaveTimer);
 		};
@@ -520,12 +524,15 @@
 			return;
 		}
 		try {
-			operations = sortOperations(await Api.videoLocalizationOperations(nextProjectId));
+			const latest = sortOperations(await Api.videoLocalizationOperations(nextProjectId));
+			if (projectId !== nextProjectId) return;
+			operations = latest;
 			if (operations.some((operation) => isActiveOperation(operation))) startOperationPolling();
 			else stopOperationPolling();
 		} catch {
-			operations = [];
-			stopOperationPolling();
+			if (projectId === nextProjectId && operations.some((operation) => isActiveOperation(operation))) {
+				startOperationPolling(3000);
+			}
 		}
 	}
 
@@ -2130,7 +2137,9 @@
 
 	async function refreshDraftOnly() {
 		if (!projectId) return;
-		const loadedDraft = await Api.videoLocalizationDraft(projectId);
+		const refreshingProjectId = projectId;
+		const loadedDraft = await Api.videoLocalizationDraft(refreshingProjectId);
+		if (projectId !== refreshingProjectId) return;
 		const editableDraft = withEditableMediaClips(loadedDraft);
 		const addedMediaClips = editableDraft.timeline_clips.length > loadedDraft.timeline_clips.length;
 		draft = editableDraft;
@@ -2536,34 +2545,53 @@
 		draftOnlyCueIds = [];
 	}
 
-	function startOperationPolling() {
-		if (operationPollingTimer) return;
-		operationPollingTimer = setInterval(() => {
-			void pollOperations();
-		}, 1500);
+	function startOperationPolling(delayMs = 1500) {
+		if (!projectId || operationPollingTimer || document.visibilityState === 'hidden') return;
+		const expectedProjectId = projectId;
+		const expectedGeneration = operationPollingGeneration;
+		operationPollingTimer = setTimeout(() => {
+			operationPollingTimer = null;
+			void pollOperations(expectedProjectId, expectedGeneration);
+		}, delayMs);
 	}
 
 	function stopOperationPolling() {
-		if (!operationPollingTimer) return;
-		clearInterval(operationPollingTimer);
+		operationPollingGeneration += 1;
+		if (operationPollingTimer) clearTimeout(operationPollingTimer);
 		operationPollingTimer = null;
 	}
 
-	async function pollOperations() {
-		if (!projectId) {
-			stopOperationPolling();
+	function handleOperationVisibilityChange() {
+		if (document.visibilityState === 'hidden') {
+			if (operationPollingTimer) clearTimeout(operationPollingTimer);
+			operationPollingTimer = null;
 			return;
 		}
+		if (operations.some((operation) => isActiveOperation(operation))) startOperationPolling(0);
+	}
+
+	async function pollOperations(expectedProjectId = projectId, expectedGeneration = operationPollingGeneration) {
+		if (!expectedProjectId || expectedProjectId !== projectId || expectedGeneration !== operationPollingGeneration) return;
+		if (operationPollingInFlight) {
+			startOperationPolling(250);
+			return;
+		}
+		operationPollingInFlight = true;
+		let retryDelay = 1500;
+		let shouldContinue = false;
 		try {
 			const previousById = new Map(operations.map((operation) => [operation.operation_id, operation]));
-			const latest = sortOperations(await Api.videoLocalizationOperations(projectId));
+			const latest = sortOperations(await Api.videoLocalizationOperations(expectedProjectId));
+			if (expectedProjectId !== projectId || expectedGeneration !== operationPollingGeneration) return;
 			const terminalTransition = latest.find((operation) => {
 				const previous = previousById.get(operation.operation_id);
 				return Boolean(previous && isActiveOperation(previous) && !isActiveOperation(operation));
 			});
 			operations = latest;
 			if (terminalTransition) await refreshDraftOnly();
-			if (!latest.some((operation) => isActiveOperation(operation))) stopOperationPolling();
+			if (expectedProjectId !== projectId || expectedGeneration !== operationPollingGeneration) return;
+			shouldContinue = latest.some((operation) => isActiveOperation(operation));
+			if (!shouldContinue) stopOperationPolling();
 			if (terminalTransition?.status === 'failed' && terminalTransition.error_message) {
 				operationErrorId = terminalTransition.operation_id;
 				operationErrorMessage = terminalTransition.error_message;
@@ -2578,8 +2606,19 @@
 				operationErrorMessage = '';
 			}
 		} catch (e) {
-			error = (e as Error).message || '刷新任务状态失败';
-			stopOperationPolling();
+			if (expectedProjectId !== projectId || expectedGeneration !== operationPollingGeneration) return;
+			error = (e as Error).message || '刷新任务状态失败，正在重试';
+			shouldContinue = true;
+			retryDelay = 3000;
+		} finally {
+			operationPollingInFlight = false;
+			if (
+				shouldContinue &&
+				expectedProjectId === projectId &&
+				expectedGeneration === operationPollingGeneration
+			) {
+				startOperationPolling(retryDelay);
+			}
 		}
 	}
 
