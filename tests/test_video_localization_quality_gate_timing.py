@@ -401,7 +401,7 @@ def test_quality_gate_checks_localized_text_stored_directly_on_cue():
     }.issubset(_codes(gate.warnings))
 
 
-def test_quality_gate_checks_asr_cue_chinese_even_when_linked_track_exists():
+def test_quality_gate_uses_localized_track_instead_of_asr_cue_mirror():
     cue = _cue("cue_01", 0, 1000)
     cue["zh_localized_subtitle_text"] = "一二三四五六七八九十甲乙丙"
     draft = _draft(
@@ -420,7 +420,7 @@ def test_quality_gate_checks_asr_cue_chinese_even_when_linked_track_exists():
 
     gate = evaluate_quality_gate(draft)
 
-    assert "LOCALIZED_SUBTITLE_CPS_HARD_LIMIT" in _codes(gate.blockers)
+    assert "LOCALIZED_SUBTITLE_CPS_HARD_LIMIT" not in _codes(gate.blockers)
 
 
 def test_quality_gate_warns_when_localized_cue_has_more_than_two_lines():

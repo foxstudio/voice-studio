@@ -7,10 +7,14 @@ describe('timeline context menu', () => {
 		locked: false,
 		canGenerateAsr: true,
 		asrBusy: false,
+		canGenerateLocalization: true,
+		localizationBusy: false,
 		trackBusy: false,
 		asrUnavailableReason: '',
+		localizationUnavailableReason: '',
 		hasSelectionPoints: false,
 		onGenerateAsr: vi.fn(),
+		onGenerateLocalization: vi.fn(),
 		onClearSubtitleTrack: vi.fn(),
 		onDeleteSubtitleItem: vi.fn(),
 		onDeleteAudioClip: vi.fn(),
@@ -57,7 +61,8 @@ describe('timeline context menu', () => {
 		]);
 	});
 
-	it('keeps localized track cleanup and short-gap commands available', () => {
+	it('keeps localization generation, cleanup and short-gap commands available', async () => {
+		const generate = vi.fn();
 		const target: TimelineContextMenuTarget = {
 			kind: 'track',
 			hit: 'empty',
@@ -65,10 +70,50 @@ describe('timeline context menu', () => {
 			subtitleTrack: 'localized',
 			timeMs: 0
 		};
-		const items = buildTimelineContextMenuItems(target, context({ itemCount: 4 }));
-		expect(items).toHaveLength(5);
-		expect(items[0].id).toBe('fill-localized-subtitle-gaps');
-		expect(items[1].id).toBe('clear-localized-subtitle-track');
+		const items = buildTimelineContextMenuItems(target, context({ itemCount: 4, onGenerateLocalization: generate }));
+		expect(items).toHaveLength(6);
+		expect(items[0]).toMatchObject({
+			id: 'generate-localized-subtitles',
+			label: '重新生成本土化字幕初稿',
+			disabled: false
+		});
+		expect(items[1]).toMatchObject({ id: 'fill-localized-subtitle-gaps', separatorBefore: true });
+		expect(items[2].id).toBe('clear-localized-subtitle-track');
+		await items[0].onSelect();
+		expect(generate).toHaveBeenCalledOnce();
+	});
+
+	it('keeps localization generation visible with its unmet prerequisite', () => {
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'track', hit: 'empty', trackId: 'localizedSubtitles', subtitleTrack: 'localized', timeMs: 0 },
+			context({
+				itemCount: 0,
+				canGenerateLocalization: false,
+				localizationUnavailableReason: 'ASR 字幕轨为空'
+			})
+		);
+
+		expect(items[0]).toMatchObject({
+			id: 'generate-localized-subtitles',
+			label: '生成本土化字幕初稿',
+			disabled: true,
+			description: 'ASR 字幕轨为空'
+		});
+	});
+
+	it('locks every localized subtitle mutation while a localization task is running', () => {
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'subtitle-clip', trackId: 'localizedSubtitles', subtitleTrack: 'localized', itemId: 'localized_01', timeMs: 0 },
+			context({ localizationBusy: true })
+		);
+		const mutationIds = new Set([
+			'delete-localized-subtitle-localized_01',
+			'generate-localized-subtitles',
+			'fill-localized-subtitle-gaps',
+			'clear-localized-subtitle-track'
+		]);
+		expect(items.filter((item) => mutationIds.has(item.id)).every((item) => item.disabled)).toBe(true);
+		expect(items.find((item) => item.id === 'set-selection-start')?.disabled).not.toBe(true);
 	});
 
 	it('deletes the selected audio clip without exposing subtitle commands', async () => {

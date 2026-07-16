@@ -1431,7 +1431,18 @@ class VideoLocalizationSubtitleCue(VideoLocalizationExtensibleModel):
     start_ms: int = Field(ge=0)
     end_ms: int = Field(ge=0)
     text: str = Field(min_length=1)
+    tts_text: str | None = None
+    tts_result_id: str | None = None
+    tts_audio_path: str | None = None
+    tts_batch_task_id: str | None = None
+    tts_batch_status: str | None = None
+    tts_batch_error: str | None = None
+    tts_attempted_at: str | None = None
+    generated_duration_ms: int | None = Field(default=None, ge=0)
     linked_cue_id: str | None = None
+    source_cue_ids: list[str] = Field(default_factory=list)
+    source_word_ids: list[str] = Field(default_factory=list)
+    adaptation_note: str | None = None
     quality_flags: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -1474,6 +1485,8 @@ class VideoLocalizationCueTimingConfirmationRequest(BaseModel):
 class VideoLocalizationSubtitleCueUpdate(BaseModel):
     start_ms: int | None = Field(default=None, ge=0)
     end_ms: int | None = Field(default=None, ge=0)
+    text: str | None = Field(default=None, min_length=1)
+    tts_text: str | None = Field(default=None, min_length=1)
 
 
 class VideoLocalizationSubtitleImportRequest(BaseModel):
@@ -1511,7 +1524,7 @@ class VideoLocalizationExportState(VideoLocalizationExtensibleModel):
 class VideoLocalizationOperation(VideoLocalizationExtensibleModel):
     operation_id: str = Field(default_factory=new_id)
     project_id: str
-    kind: Literal["source_audio", "stems", "english_asr", "reference_clips"]
+    kind: Literal["source_audio", "stems", "english_asr", "localization_draft", "reference_clips"]
     status: Literal["queued", "running", "success", "failed", "cancelled"] = "queued"
     label: str | None = None
     progress: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -1526,7 +1539,7 @@ class VideoLocalizationOperation(VideoLocalizationExtensibleModel):
 
 
 class VideoLocalizationOperationRequest(BaseModel):
-    kind: Literal["source_audio", "stems", "english_asr", "reference_clips"]
+    kind: Literal["source_audio", "stems", "english_asr", "localization_draft", "reference_clips"]
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -1549,6 +1562,7 @@ class VideoLocalizationDraft(BaseModel):
     cues: list[VideoLocalizationCue] = Field(default_factory=list)
     transcription: VideoLocalizationTranscriptionState | None = None
     localized_subtitles: list[VideoLocalizationSubtitleCue] = Field(default_factory=list)
+    localization_state: dict[str, Any] = Field(default_factory=dict)
     quality_gate: VideoLocalizationQualityGate = Field(default_factory=VideoLocalizationQualityGate)
     exports: VideoLocalizationExportState = Field(default_factory=VideoLocalizationExportState)
     operations: list[VideoLocalizationOperation] = Field(default_factory=list)

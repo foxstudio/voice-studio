@@ -571,6 +571,8 @@ export interface VideoLocalizationGeneratedCandidate {
 export interface VideoLocalizationTimelineClip {
 	clip_id: string;
 	cue_id?: string | null;
+	subtitle_id?: string | null;
+	source_cue_ids?: string[];
 	candidate_id?: string | null;
 	track_id: string;
 	start_ms?: number | null;
@@ -728,13 +730,24 @@ export interface VideoLocalizationSubtitleCue {
 	start_ms: number;
 	end_ms: number;
 	text: string;
+	tts_text?: string | null;
+	tts_result_id?: string | null;
+	tts_audio_path?: string | null;
+	tts_batch_task_id?: string | null;
+	tts_batch_status?: string | null;
+	tts_batch_error?: string | null;
+	tts_attempted_at?: string | null;
+	generated_duration_ms?: number | null;
 	linked_cue_id?: string | null;
+	source_cue_ids?: string[];
+	source_word_ids?: string[];
+	adaptation_note?: string | null;
 	quality_flags: string[];
 	[key: string]: unknown;
 }
 
 export type VideoLocalizationSubtitleCueUpdate = Partial<
-	Pick<VideoLocalizationSubtitleCue, 'start_ms' | 'end_ms'>
+	Pick<VideoLocalizationSubtitleCue, 'start_ms' | 'end_ms' | 'text' | 'tts_text'>
 >;
 
 export type VideoLocalizationCueUpdate = Partial<
@@ -788,7 +801,7 @@ export interface VideoLocalizationExportState {
 export interface VideoLocalizationOperation {
 	operation_id: string;
 	project_id: string;
-	kind: 'source_audio' | 'stems' | 'english_asr' | 'reference_clips';
+	kind: 'source_audio' | 'stems' | 'english_asr' | 'localization_draft' | 'reference_clips';
 	status: 'queued' | 'running' | 'success' | 'failed' | 'cancelled';
 	label: string | null;
 	progress: number;
@@ -814,6 +827,7 @@ export interface VideoLocalizationDraft {
 	cues: VideoLocalizationCue[];
 	transcription: VideoLocalizationTranscriptionState | null;
 	localized_subtitles: VideoLocalizationSubtitleCue[];
+	localization_state?: Record<string, unknown>;
 	quality_gate: VideoLocalizationQualityGate;
 	exports: VideoLocalizationExportState;
 	operations: VideoLocalizationOperation[];

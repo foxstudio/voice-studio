@@ -97,8 +97,7 @@ def import_srt(
     _assert_entries_do_not_overlap(entries)
 
     if kind == "zh":
-        # Localized subtitles stay independent from downstream dubbing copy.
-        return _import_localized_subtitles(draft, entries)
+        return _import_localized_subtitles(draft, entries, overwrite_tts=overwrite_tts)
 
     if not draft.cues:
         if kind == "en":
@@ -159,16 +158,34 @@ def with_updated_localized_subtitle(
         raise AppException(404, "VIDEO_LOCALIZATION_LOCALIZED_SUBTITLE_NOT_FOUND", "本土化字幕不存在。")
 
     _assert_localized_subtitle_track_valid(next_subtitles, focus_subtitle_id=subtitle_id)
-    return draft.model_copy(update={"localized_subtitles": _sort_localized_subtitles(next_subtitles)})
+    ordered = _sort_localized_subtitles(next_subtitles)
+    return draft.model_copy(
+        update={
+            "localized_subtitles": ordered,
+            "cues": _sync_changed_localized_subtitle_to_cues(draft.cues, ordered, subtitle_id),
+        }
+    )
 
 
 def without_localized_subtitle_track(draft: VideoLocalizationDraft) -> VideoLocalizationDraft:
-    return draft.model_copy(update={"localized_subtitles": []})
+    next_cues = [
+        cue.model_copy(
+            update={
+                "zh_localized_subtitle_text": None,
+                "tts_recommended_text": None,
+                "quality_flags": _without_localization_flags(cue.quality_flags),
+            }
+        )
+        for cue in draft.cues
+    ]
+    return draft.model_copy(update={"localized_subtitles": [], "cues": next_cues, "localization_state": {}})
 
 
 def _import_localized_subtitles(
     draft: VideoLocalizationDraft,
     entries: list[dict[str, int | str]],
+    *,
+    overwrite_tts: bool,
 ) -> VideoLocalizationDraft:
     subtitles = [
         VideoLocalizationSubtitleCue(
@@ -176,18 +193,104 @@ def _import_localized_subtitles(
             start_ms=int(entry["start_ms"]),
             end_ms=int(entry["end_ms"]),
             text=str(entry["text"]),
+            tts_text=str(entry["text"]) if overwrite_tts else None,
             quality_flags=["zh_srt_import"],
         )
         for index, entry in enumerate(entries, start=1)
     ]
     _assert_localized_subtitle_track_valid(subtitles)
-    next_subtitles, next_cues = _mirror_localized_subtitles_to_cues(draft.cues, subtitles)
-    return draft.model_copy(update={"localized_subtitles": next_subtitles, "cues": next_cues})
+    base_cues = [
+        cue.model_copy(
+            update={
+                "zh_localized_subtitle_text": None,
+                **(
+                    {
+                        "tts_recommended_text": None,
+                        "tts_result_id": None,
+                        "tts_audio_path": None,
+                        "tts_batch_task_id": None,
+                        "tts_batch_status": None,
+                        "tts_batch_error": None,
+                        "tts_attempted_at": None,
+                        "generated_duration_ms": None,
+                    }
+                    if overwrite_tts
+                    else {}
+                ),
+                "quality_flags": _without_localization_flags(cue.quality_flags),
+            }
+        )
+        for cue in draft.cues
+    ]
+    next_subtitles, next_cues = _mirror_localized_subtitles_to_cues(
+        base_cues,
+        subtitles,
+        sync_tts=overwrite_tts,
+        preserve_tts=not overwrite_tts,
+    )
+    return draft.model_copy(update={"localized_subtitles": next_subtitles, "cues": next_cues, "localization_state": {}})
+
+
+def _sync_changed_localized_subtitle_to_cues(
+    cues: list[VideoLocalizationCue],
+    subtitles: list[VideoLocalizationSubtitleCue],
+    changed_subtitle_id: str,
+) -> list[VideoLocalizationCue]:
+    changed = next((item for item in subtitles if item.subtitle_id == changed_subtitle_id), None)
+    if changed is None:
+        return cues
+    changed_cue_ids = _localized_subtitle_source_cue_ids(changed)
+    if not changed_cue_ids:
+        return cues
+
+    next_cues: list[VideoLocalizationCue] = []
+    for cue in cues:
+        if cue.cue_id not in changed_cue_ids:
+            next_cues.append(cue)
+            continue
+        related = [
+            item
+            for item in subtitles
+            if cue.cue_id in _localized_subtitle_source_cue_ids(item)
+        ]
+        display_text = "\n".join(item.text.strip() for item in related if item.text.strip()) or None
+        tts_parts = [item.tts_text.strip() for item in related if item.tts_text and item.tts_text.strip()]
+        tts_text = "\n".join(tts_parts) if tts_parts else None
+        update: dict[str, object] = {
+            "zh_localized_subtitle_text": display_text,
+            "quality_flags": _merged_flags(cue.quality_flags, ["localized_track_sync"]),
+        }
+        if any(item.tts_text is not None for item in related):
+            update["tts_recommended_text"] = tts_text
+        next_cues.append(cue.model_copy(update=update))
+    return next_cues
+
+
+def _localized_subtitle_source_cue_ids(subtitle: VideoLocalizationSubtitleCue) -> list[str]:
+    return list(dict.fromkeys(subtitle.source_cue_ids or ([subtitle.linked_cue_id] if subtitle.linked_cue_id else [])))
+
+
+def _without_localization_flags(flags: list[str]) -> list[str]:
+    return [
+        flag
+        for flag in flags
+        if flag not in {
+            "zh_srt_import",
+            "localized_track_sync",
+            "tts_batch_submitted",
+            "tts_failed",
+            "tts_generated",
+        }
+        and not flag.startswith("localization")
+    ]
 
 
 def _mirror_localized_subtitles_to_cues(
     cues: list[VideoLocalizationCue],
     subtitles: list[VideoLocalizationSubtitleCue],
+    *,
+    sync_tts: bool = False,
+    preserve_tts: bool = False,
 ) -> tuple[list[VideoLocalizationSubtitleCue], list[VideoLocalizationCue]]:
     if not cues or not subtitles:
         return subtitles, cues
@@ -201,63 +304,92 @@ def _mirror_localized_subtitles_to_cues(
         return subtitles, cues
 
     assignments = _match_localized_subtitles_to_cues(subtitles, timed_cues)
-    cue_updates: dict[int, VideoLocalizationCue] = {}
+    subtitles_by_cue_index: dict[int, list[VideoLocalizationSubtitleCue]] = {}
     next_subtitles: list[VideoLocalizationSubtitleCue] = []
 
     for subtitle_index, subtitle in enumerate(subtitles):
-        matched = assignments.get(subtitle_index)
-        if matched is None:
-            next_subtitles.append(subtitle.model_copy(update={"linked_cue_id": None}))
+        matched_cues = assignments.get(subtitle_index, [])
+        if not matched_cues:
+            next_subtitles.append(subtitle.model_copy(update={"linked_cue_id": None, "source_cue_ids": []}))
             continue
 
-        cue_index, cue = matched
-        text = (subtitle.text or "").strip()
-        cue_updates[cue_index] = cue.model_copy(
+        primary_cue = matched_cues[0][1]
+        preserved_tts = (
+            primary_cue.tts_recommended_text.strip()
+            if preserve_tts and primary_cue.tts_recommended_text
+            else None
+        )
+        linked_subtitle = subtitle.model_copy(
             update={
-                "zh_localized_subtitle_text": text or cue.zh_localized_subtitle_text,
-                "quality_flags": _merged_flags(cue.quality_flags, ["zh_srt_import"]),
+                "linked_cue_id": primary_cue.cue_id,
+                "source_cue_ids": [cue.cue_id for _cue_index, cue in matched_cues],
+                "tts_text": subtitle.tts_text or preserved_tts,
+                "quality_flags": _merged_flags(subtitle.quality_flags, ["linked_by_timing"]),
             }
         )
-        next_subtitles.append(
-            subtitle.model_copy(
-                update={
-                    "linked_cue_id": cue.cue_id,
-                    "quality_flags": _merged_flags(subtitle.quality_flags, ["linked_by_timing"]),
-                }
-            )
-        )
+        next_subtitles.append(linked_subtitle)
+        for cue_index, _cue in matched_cues:
+            subtitles_by_cue_index.setdefault(cue_index, []).append(linked_subtitle)
 
-    next_cues = [cue_updates.get(index, cue) for index, cue in enumerate(cues)]
+    next_cues: list[VideoLocalizationCue] = []
+    for cue_index, cue in enumerate(cues):
+        related = subtitles_by_cue_index.get(cue_index)
+        if not related:
+            next_cues.append(cue)
+            continue
+        display_text = "\n".join(item.text.strip() for item in related if item.text.strip()) or None
+        cue_update: dict[str, object] = {
+            "zh_localized_subtitle_text": display_text,
+            "quality_flags": _merged_flags(cue.quality_flags, ["zh_srt_import"]),
+        }
+        if sync_tts:
+            tts_parts = [item.tts_text.strip() for item in related if item.tts_text and item.tts_text.strip()]
+            cue_update["tts_recommended_text"] = "\n".join(tts_parts) if tts_parts else None
+        next_cues.append(cue.model_copy(update=cue_update))
     return next_subtitles, next_cues
 
 
 def _match_localized_subtitles_to_cues(
     subtitles: list[VideoLocalizationSubtitleCue],
     timed_cues: list[tuple[int, VideoLocalizationCue]],
-) -> dict[int, tuple[int, VideoLocalizationCue]]:
-    remaining = {cue_index for cue_index, _cue in timed_cues}
-    cue_by_index = {cue_index: cue for cue_index, cue in timed_cues}
-    assignments: dict[int, tuple[int, VideoLocalizationCue]] = {}
+) -> dict[int, list[tuple[int, VideoLocalizationCue]]]:
+    assignments: dict[int, list[tuple[int, VideoLocalizationCue]]] = {}
+    ordered_cues = sorted(
+        timed_cues,
+        key=lambda item: (item[1].start_ms or 0, item[1].end_ms or 0, item[0]),
+    )
 
     ordered_subtitles = sorted(
         enumerate(subtitles),
         key=lambda item: (item[1].start_ms, item[1].end_ms, item[1].subtitle_id),
     )
     for original_index, subtitle in ordered_subtitles:
-        candidates = [cue_by_index[cue_index] for cue_index in remaining]
-        if not candidates:
-            break
-        matched_cue = max(
-            candidates,
-            key=lambda cue: _matching_score(subtitle.start_ms, subtitle.end_ms, cue.start_ms or 0, cue.end_ms or 0),
-        )
-        overlap_ms = max(0, min(subtitle.end_ms, matched_cue.end_ms or 0) - max(subtitle.start_ms, matched_cue.start_ms or 0))
-        gap_ms = _timing_gap(subtitle.start_ms, subtitle.end_ms, matched_cue.start_ms or 0, matched_cue.end_ms or 0)
-        if overlap_ms <= 0 and gap_ms > MAX_NEAREST_CUE_MATCH_GAP_MS:
+        overlapping = [
+            (cue_index, cue)
+            for cue_index, cue in ordered_cues
+            if min(subtitle.end_ms, cue.end_ms or 0) > max(subtitle.start_ms, cue.start_ms or 0)
+        ]
+        if overlapping:
+            assignments[original_index] = overlapping
             continue
-        cue_index = next(index for index, cue in timed_cues if cue.cue_id == matched_cue.cue_id)
-        remaining.discard(cue_index)
-        assignments[original_index] = (cue_index, matched_cue)
+
+        cue_index, matched_cue = max(
+            ordered_cues,
+            key=lambda item: _matching_score(
+                subtitle.start_ms,
+                subtitle.end_ms,
+                item[1].start_ms or 0,
+                item[1].end_ms or 0,
+            ),
+        )
+        gap_ms = _timing_gap(
+            subtitle.start_ms,
+            subtitle.end_ms,
+            matched_cue.start_ms or 0,
+            matched_cue.end_ms or 0,
+        )
+        if gap_ms <= MAX_NEAREST_CUE_MATCH_GAP_MS:
+            assignments[original_index] = [(cue_index, matched_cue)]
     return assignments
 
 

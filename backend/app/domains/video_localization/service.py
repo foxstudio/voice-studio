@@ -13,6 +13,7 @@ from app.domains.video_localization import draft_store
 from app.domains.video_localization import exporting
 from app.domains.video_localization import localization
 from app.domains.video_localization import media_assets
+from app.domains.video_localization import operation_state
 from app.domains.video_localization import project_manifest
 from app.domains.video_localization import quality_gate
 from app.domains.video_localization import reference_clips
@@ -28,6 +29,7 @@ from app.domains.video_localization.schemas import (
     VideoLocalizationCueUpdate,
     VideoLocalizationDraft,
     VideoLocalizationExport,
+    VideoLocalizationOperation,
     VideoLocalizationReferenceClipCreate,
     VideoLocalizationReferenceClipUpdate,
     VideoLocalizationSpeakerCreate,
@@ -35,7 +37,7 @@ from app.domains.video_localization.schemas import (
     VideoLocalizationSubtitleCueUpdate,
     VideoLocalizationSubtitleImportRequest,
 )
-from app.services import project_store
+from app.services import llm_runtime, project_store
 
 VIDEO_LOCALIZATION_KEY = draft_store.VIDEO_LOCALIZATION_KEY
 _DRAFT_WRITE_LOCK = threading.RLock()
@@ -43,6 +45,17 @@ _DRAFT_WRITE_LOCK = threading.RLock()
 
 def get_video_localization(project_id: str) -> VideoLocalizationDraft | None:
     return draft_store.get(project_id)
+
+
+def submit_operation(
+    project_id: str,
+    kind: operation_state.OperationKind,
+    parameters: dict | None = None,
+) -> VideoLocalizationOperation | None:
+    from app.domains.video_localization import operation_queue
+
+    with _DRAFT_WRITE_LOCK:
+        return operation_queue.submit(project_id, kind, parameters)
 
 
 def sync_local_projects() -> list[Project]:
@@ -95,7 +108,48 @@ def replace_video_localization_from_client(
         if current and current.updated_at and draft.updated_at and current.updated_at != draft.updated_at:
             raise AppException(409, "VIDEO_LOCALIZATION_DRAFT_CONFLICT", "Project changed while this draft was being edited")
         sanitized = cue_tools.sanitize_client_draft_timing_provenance(current, draft)
+        if current is not None:
+            sanitized = _preserve_backend_owned_draft_state(current, sanitized)
         return draft_store.save(project_id, sanitized)
+
+
+def _preserve_backend_owned_draft_state(
+    current: VideoLocalizationDraft,
+    incoming: VideoLocalizationDraft,
+) -> VideoLocalizationDraft:
+    is_uninitialized = (
+        current.updated_at is None
+        and not current.operations
+        and not current.localization_state
+    )
+    updates: dict[str, Any] = {
+        "operations": incoming.operations if is_uninitialized else current.operations,
+        "localization_state": incoming.localization_state if is_uninitialized else current.localization_state,
+    }
+    if not _localization_draft_is_active(current):
+        return incoming.model_copy(update=updates)
+
+    current_cues = {cue.cue_id: cue for cue in current.cues}
+    next_cues = []
+    for cue in incoming.cues:
+        current_cue = current_cues.get(cue.cue_id)
+        next_cues.append(
+            cue.model_copy(
+                update={
+                    "zh_localized_subtitle_text": (
+                        current_cue.zh_localized_subtitle_text if current_cue is not None else None
+                    ),
+                    "tts_recommended_text": current_cue.tts_recommended_text if current_cue is not None else None,
+                }
+            )
+        )
+    updates.update(
+        {
+            "cues": next_cues,
+            "localized_subtitles": current.localized_subtitles,
+        }
+    )
+    return incoming.model_copy(update=updates)
 
 
 def update_video_localization_atomic(
@@ -265,12 +319,21 @@ def transcribe_english_source_audio(
 
 
 def import_subtitles(project_id: str, kind: str, request: VideoLocalizationSubtitleImportRequest) -> VideoLocalizationDraft | None:
-    project = project_store.get_project(project_id)
-    if not project:
-        return None
-    draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    next_draft = subtitles.import_srt(draft, kind, request.srt_text, update_timing=request.update_timing, overwrite_tts=request.overwrite_tts)
-    return save_video_localization(project_id, next_draft)
+    with _DRAFT_WRITE_LOCK:
+        project = project_store.get_project(project_id)
+        if not project:
+            return None
+        draft = get_video_localization(project_id) or VideoLocalizationDraft()
+        if kind == "zh":
+            _ensure_localization_track_editable(draft)
+        next_draft = subtitles.import_srt(
+            draft,
+            kind,
+            request.srt_text,
+            update_timing=request.update_timing,
+            overwrite_tts=request.overwrite_tts,
+        )
+        return draft_store.save(project_id, next_draft)
 
 
 def create_reference_clips_from_cues(project_id: str, payload: VideoLocalizationReferenceClipCreate | None = None) -> VideoLocalizationDraft | None:
@@ -301,12 +364,17 @@ def delete_reference_clip(project_id: str, reference_clip_id: str) -> VideoLocal
 
 
 def update_cue(project_id: str, cue_id: str, patch: VideoLocalizationCueUpdate) -> VideoLocalizationDraft | None:
-    project = project_store.get_project(project_id)
-    if not project:
-        return None
-    draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    next_draft = cue_tools.with_updated_cue(draft, cue_id, patch)
-    return save_video_localization(project_id, speakers.reconcile_speakers(next_draft))
+    target_fields = {"zh_localized_subtitle_text", "tts_recommended_text"}
+    updates_target_track = bool(target_fields.intersection(patch.model_fields_set))
+    with _DRAFT_WRITE_LOCK:
+        project = project_store.get_project(project_id)
+        if not project:
+            return None
+        draft = get_video_localization(project_id) or VideoLocalizationDraft()
+        if updates_target_track:
+            _ensure_localization_track_editable(draft)
+        next_draft = cue_tools.with_updated_cue(draft, cue_id, patch)
+        return draft_store.save(project_id, speakers.reconcile_speakers(next_draft))
 
 
 def update_localized_subtitle(
@@ -314,12 +382,14 @@ def update_localized_subtitle(
     subtitle_id: str,
     patch: VideoLocalizationSubtitleCueUpdate,
 ) -> VideoLocalizationDraft | None:
-    project = project_store.get_project(project_id)
-    if not project:
-        return None
-    draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    next_draft = subtitles.with_updated_localized_subtitle(draft, subtitle_id, patch)
-    return save_video_localization(project_id, next_draft)
+    with _DRAFT_WRITE_LOCK:
+        project = project_store.get_project(project_id)
+        if not project:
+            return None
+        draft = get_video_localization(project_id) or VideoLocalizationDraft()
+        _ensure_localization_track_editable(draft)
+        next_draft = subtitles.with_updated_localized_subtitle(draft, subtitle_id, patch)
+        return draft_store.save(project_id, next_draft)
 
 
 def clear_subtitles(project_id: str, kind: str) -> VideoLocalizationDraft | None:
@@ -335,9 +405,26 @@ def clear_subtitles(project_id: str, kind: str) -> VideoLocalizationDraft | None
                     "字幕听写仍在运行，请先取消或等待完成后再清空 ASR 字幕轨。",
                 )
             return source_pipeline.without_english_asr(current)
+        _ensure_localization_track_editable(current)
         return subtitles.without_localized_subtitle_track(current)
 
     return update_video_localization_atomic(project_id, clear)
+
+
+def _ensure_localization_track_editable(draft: VideoLocalizationDraft) -> None:
+    if _localization_draft_is_active(draft):
+        raise AppException(
+            409,
+            "VIDEO_LOCALIZATION_TRACK_BUSY",
+            "本土化字幕正在生成，请等待完成或先取消任务。",
+        )
+
+
+def _localization_draft_is_active(draft: VideoLocalizationDraft) -> bool:
+    return any(
+        operation.kind == "localization_draft" and operation.status in {"queued", "running"}
+        for operation in draft.operations
+    )
 
 
 def create_speaker(project_id: str, payload: VideoLocalizationSpeakerCreate) -> VideoLocalizationDraft | None:
@@ -357,11 +444,93 @@ def update_speaker(project_id: str, speaker_id: str, payload: VideoLocalizationS
 
 
 def generate_localization_draft(project_id: str) -> VideoLocalizationDraft | None:
+    updated, _summary = run_localization_draft(project_id)
+    return updated
+
+
+def run_localization_draft(
+    project_id: str,
+    *,
+    source_language: str = "en",
+    target_language: str = "zh-Hans",
+    profile_id: str | None = None,
+    localization_level: str = "L1",
+    worldview_permeability: str = "W0",
+    is_cancelled: Callable[[], bool] | None = None,
+    on_progress: Callable[[float, str], None] | None = None,
+    on_preview: Callable[[str, list[dict]], None] | None = None,
+    commit_guard: Callable[
+        [Callable[[], VideoLocalizationDraft | None]],
+        tuple[bool, VideoLocalizationDraft | None],
+    ]
+    | None = None,
+) -> tuple[VideoLocalizationDraft | None, dict]:
     project = project_store.get_project(project_id)
     if not project:
-        return None
-    draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    return save_video_localization(project_id, localization.with_chinese_draft(draft))
+        return None, {}
+    snapshot = get_video_localization(project_id) or VideoLocalizationDraft()
+    fingerprint = localization.source_fingerprint(snapshot)
+    try:
+        run = localization.generate_localization_draft(
+            snapshot,
+            source_language=source_language,
+            target_language=target_language,
+            profile_id=profile_id,
+            localization_level=localization_level,
+            worldview_permeability=worldview_permeability,
+            is_cancelled=is_cancelled,
+            on_progress=on_progress,
+            on_preview=on_preview,
+        )
+    except llm_runtime.LlmRuntimeError as exc:
+        raise AppException(exc.status_code, exc.code, str(exc)) from exc
+
+    def commit_generated_track() -> VideoLocalizationDraft | None:
+        with _DRAFT_WRITE_LOCK:
+            latest = get_video_localization(project_id)
+            if latest is None:
+                return None
+            if is_cancelled and is_cancelled():
+                return latest
+            if localization.source_fingerprint(latest) != fingerprint:
+                raise AppException(
+                    409,
+                    "VIDEO_LOCALIZATION_SOURCE_CHANGED",
+                    "任务运行期间原文字幕发生了变化，因此没有覆盖当前编辑。请重新生成本土化字幕。",
+                )
+            generated_by_id = {cue.cue_id: cue for cue in run.draft.cues}
+            next_cues = []
+            for cue in latest.cues:
+                generated = generated_by_id.get(cue.cue_id)
+                if generated is None:
+                    next_cues.append(cue)
+                    continue
+                next_cues.append(
+                    cue.model_copy(
+                        update={
+                            "zh_localized_subtitle_text": generated.zh_localized_subtitle_text,
+                            "tts_recommended_text": generated.tts_recommended_text,
+                            "quality_flags": generated.quality_flags,
+                        }
+                    )
+                )
+            merged = latest.model_copy(
+                update={
+                    "cues": next_cues,
+                    "localized_subtitles": run.draft.localized_subtitles,
+                    "localization_state": run.draft.localization_state,
+                }
+            )
+            if is_cancelled and is_cancelled():
+                return latest
+            return draft_store.save(project_id, merged)
+
+    if commit_guard is not None:
+        committed, saved = commit_guard(commit_generated_track)
+        if not committed:
+            return get_video_localization(project_id), run.summary
+        return saved, run.summary
+    return commit_generated_track(), run.summary
 
 
 def build_tts_batch_request(project_id: str, engine_id: str = "indextts-v2") -> BatchGenerateRequest | None:

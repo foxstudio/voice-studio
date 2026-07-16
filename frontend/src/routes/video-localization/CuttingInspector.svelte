@@ -6,6 +6,7 @@
 		VideoLocalizationReferenceClip,
 		VideoLocalizationReferenceClipCreate,
 		VideoLocalizationReferenceClipUpdate,
+		VideoLocalizationSubtitleCue,
 		VideoLocalizationVoiceRecipe
 	} from '$lib/api/types';
 	import { AudioLines, Captions, CheckCircle2, ListTodo, Palette, WandSparkles } from 'lucide-svelte';
@@ -24,6 +25,7 @@
 		draft,
 		projectId,
 		selectedCue,
+		selectedLocalizedSubtitle = null,
 		selectionRange,
 		selectedVoiceId,
 		selectedRecipeId,
@@ -33,6 +35,8 @@
 		onSelectedVoiceIdChange,
 		onSectionChange,
 		onUpdateCue,
+		onUpdateLocalizedSubtitle = undefined,
+		onDeleteLocalizedSubtitle = undefined,
 		onSaveCue,
 		onConfirmCueTiming,
 		onDeleteCue,
@@ -58,11 +62,13 @@
 		taskHistory = [],
 		onCancelTask = undefined,
 		subtitleRuntimeBusy = false,
+		localizationRuntimeBusy = false,
 		taskCenterPulseKey = 0
 	}: {
 		draft: VideoLocalizationDraft | null;
 		projectId: string;
 		selectedCue: VideoLocalizationCue | null;
+		selectedLocalizedSubtitle?: VideoLocalizationSubtitleCue | null;
 		selectionRange: { start_ms: number; end_ms: number } | null;
 		selectedVoiceId: string;
 		selectedRecipeId: string;
@@ -72,6 +78,8 @@
 		onSelectedVoiceIdChange: (voiceId: string) => void;
 		onSectionChange: (section: 'tasks' | 'voice' | 'generate' | 'subtitle' | 'style') => void;
 		onUpdateCue: (patch: Partial<VideoLocalizationCue>) => void;
+		onUpdateLocalizedSubtitle?: (patch: Partial<VideoLocalizationSubtitleCue>) => void | Promise<void>;
+		onDeleteLocalizedSubtitle?: (subtitleId: string) => void | Promise<void>;
 		onSaveCue: () => void;
 		onConfirmCueTiming: () => void;
 		onDeleteCue: () => void;
@@ -97,6 +105,7 @@
 		taskHistory?: ActivityTask[];
 		onCancelTask?: (task: ActivityTask) => void | Promise<void>;
 		subtitleRuntimeBusy?: boolean;
+		localizationRuntimeBusy?: boolean;
 		taskCenterPulseKey?: number;
 	} = $props();
 
@@ -568,12 +577,44 @@
 	{/if}
 
 	{#if activeSection === 'subtitle'}
-	<section class="inspector-panel" class:runtime-locked={subtitleRuntimeBusy} aria-busy={subtitleRuntimeBusy}>
+	<section class="inspector-panel" class:runtime-locked={selectedLocalizedSubtitle ? localizationRuntimeBusy : subtitleRuntimeBusy} aria-busy={selectedLocalizedSubtitle ? localizationRuntimeBusy : subtitleRuntimeBusy}>
 		<div class="panel-head">
-			<h2>字幕编辑{selectedCue ? `：${selectedCue.cue_id}` : ''}</h2>
-				<span>{selectedCue ? subtitleStatusLabel(selectedCue.review_status) : '未选择'}</span>
+			<h2>{selectedLocalizedSubtitle ? `本土化字幕：${selectedLocalizedSubtitle.subtitle_id}` : `ASR 字幕${selectedCue ? `：${selectedCue.cue_id}` : ''}`}</h2>
+			<span>{selectedLocalizedSubtitle ? '初稿' : selectedCue ? subtitleStatusLabel(selectedCue.review_status) : '未选择'}</span>
 		</div>
-		{#if selectedCue}
+		{#if selectedLocalizedSubtitle}
+			<div class="cue-meta">
+				<span>{msLabel(selectedLocalizedSubtitle.end_ms - selectedLocalizedSubtitle.start_ms)}</span>
+				<span>来源 {selectedLocalizedSubtitle.source_cue_ids?.length || (selectedLocalizedSubtitle.linked_cue_id ? 1 : 0)} 条原文</span>
+			</div>
+			<div class="editor-grid time-grid">
+				<label class="field">
+					<span>入点 ms</span>
+					<input type="number" min="0" step="100" value={selectedLocalizedSubtitle.start_ms} disabled={localizationRuntimeBusy} onchange={(event) => onUpdateLocalizedSubtitle?.({ start_ms: Number(event.currentTarget.value) })} />
+				</label>
+				<label class="field">
+					<span>出点 ms</span>
+					<input type="number" min="0" step="100" value={selectedLocalizedSubtitle.end_ms} disabled={localizationRuntimeBusy} onchange={(event) => onUpdateLocalizedSubtitle?.({ end_ms: Number(event.currentTarget.value) })} />
+				</label>
+			</div>
+			<label class="field">
+				<span>上屏字幕</span>
+				<textarea class="subtitle-textarea" rows="1" value={selectedLocalizedSubtitle.text} disabled={localizationRuntimeBusy} onchange={(event) => onUpdateLocalizedSubtitle?.({ text: event.currentTarget.value })}></textarea>
+			</label>
+			<label class="field">
+				<span>配音台词</span>
+				<textarea class="subtitle-textarea" rows="1" value={selectedLocalizedSubtitle.tts_text ?? selectedLocalizedSubtitle.text} disabled={localizationRuntimeBusy} onchange={(event) => onUpdateLocalizedSubtitle?.({ tts_text: event.currentTarget.value })}></textarea>
+			</label>
+			{#if selectedLocalizedSubtitle.adaptation_note}
+				<div class="audit-row accepted">
+					<span>本土化处理</span>
+					<p>{selectedLocalizedSubtitle.adaptation_note}</p>
+				</div>
+			{/if}
+			<div class="cue-actions">
+				<button class="danger-btn" type="button" data-tooltip="删除片段：只移除当前本土化字幕片段。" onclick={() => onDeleteLocalizedSubtitle?.(selectedLocalizedSubtitle.subtitle_id)} disabled={localizationRuntimeBusy}>删除片段</button>
+			</div>
+		{:else if selectedCue}
 			<div class="cue-meta">
 				<span>{timeLabel(selectedCue)}</span>
 				<div class="timing-meta">

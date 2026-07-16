@@ -4,6 +4,7 @@ import asyncio
 import queue
 import threading
 import time
+from typing import Callable
 
 from app.domains.video_localization import operation_state
 from app.domains.video_localization import service
@@ -19,6 +20,8 @@ _queue: queue.Queue[str | None] | None = None
 _worker_thread: threading.Thread | None = None
 _lock = threading.Lock()
 _queued_operation_ids: set[str] = set()
+_cancelled_operation_ids: set[str] = set()
+_operation_commit_gates: dict[str, "_OperationCommitGate"] = {}
 
 _ACTIVE_STATUSES = operation_state.ACTIVE_STATUSES
 _TERMINAL_STATUSES = operation_state.TERMINAL_STATUSES
@@ -40,18 +43,33 @@ def _asr_stage_id(stage: str) -> str:
     return "asr"
 
 
-class _AsrStageTimer:
-    """Continuously attributes operation wall time to exactly one ASR step."""
+def _localization_stage_id(stage: str) -> str:
+    normalized = str(stage or "")
+    for stage_id, markers in (
+        ("research", ("查证文化",)),
+        ("localize", ("生成中文表达",)),
+        ("segment_timing", ("安排字幕分段",)),
+        ("quality_review", ("复核语义",)),
+        ("write_track", ("写入本土化", "正在保存")),
+    ):
+        if any(marker in normalized for marker in markers):
+            return stage_id
+    return "prepare_context"
 
-    def __init__(self, *, clock=time.perf_counter):
+
+class _StageTimer:
+    """Continuously attributes operation wall time to exactly one visible step."""
+
+    def __init__(self, stage_resolver: Callable[[str], str], *, clock=time.perf_counter):
         self._clock = clock
-        self._current_stage_id = "asr"
+        self._stage_resolver = stage_resolver
+        self._current_stage_id = stage_resolver("")
         self._current_started_at = clock()
         self._completed: dict[str, int] = {}
 
     def update(self, stage: str) -> dict[str, dict[str, int | bool]]:
         now = self._clock()
-        next_stage_id = _asr_stage_id(stage)
+        next_stage_id = self._stage_resolver(stage)
         if next_stage_id != self._current_stage_id:
             self._completed[self._current_stage_id] = self._elapsed_ms(now)
             self._current_stage_id = next_stage_id
@@ -61,8 +79,7 @@ class _AsrStageTimer:
     def snapshot(self, *, now: float | None = None) -> dict[str, dict[str, int | bool]]:
         observed_at = self._clock() if now is None else now
         timings: dict[str, dict[str, int | bool]] = {
-            stage_id: {"duration_ms": duration_ms}
-            for stage_id, duration_ms in self._completed.items()
+            stage_id: {"duration_ms": duration_ms} for stage_id, duration_ms in self._completed.items()
         }
         timings[self._current_stage_id] = {
             "duration_ms": self._elapsed_ms(observed_at),
@@ -73,13 +90,54 @@ class _AsrStageTimer:
     def finish(self) -> dict[str, dict[str, int]]:
         now = self._clock()
         self._completed[self._current_stage_id] = self._elapsed_ms(now)
-        return {
-            stage_id: {"duration_ms": duration_ms}
-            for stage_id, duration_ms in self._completed.items()
-        }
+        return {stage_id: {"duration_ms": duration_ms} for stage_id, duration_ms in self._completed.items()}
 
     def _elapsed_ms(self, now: float) -> int:
         return max(0, round((now - self._current_started_at) * 1000))
+
+
+class _AsrStageTimer(_StageTimer):
+    """Backward-compatible ASR timer used by focused timing tests."""
+
+    def __init__(self, *, clock=time.perf_counter):
+        super().__init__(_asr_stage_id, clock=clock)
+
+
+class _OperationCommitGate:
+    """Linearizes cancellation against one operation's final draft commit."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._cancel_requested = False
+        self._committed = False
+
+    def request_cancel(self) -> bool:
+        with self._lock:
+            if self._committed:
+                return False
+            self._cancel_requested = True
+            return True
+
+    def is_cancel_requested(self) -> bool:
+        with self._lock:
+            return self._cancel_requested
+
+    def commit(self, action: Callable[[], object]) -> tuple[bool, object | None]:
+        with self._lock:
+            if self._cancel_requested:
+                return False, None
+            result = action()
+            self._committed = True
+            return True, result
+
+
+def _operation_commit_gate(operation_id: str) -> _OperationCommitGate:
+    with _lock:
+        gate = _operation_commit_gates.get(operation_id)
+        if gate is None:
+            gate = _OperationCommitGate()
+            _operation_commit_gates[operation_id] = gate
+        return gate
 
 
 def start_worker() -> None:
@@ -88,7 +146,9 @@ def start_worker() -> None:
         if _worker_thread and _worker_thread.is_alive():
             return
         _queue = queue.Queue()
-        _worker_thread = threading.Thread(target=_worker, args=(_queue,), daemon=True, name="video-localization-operation-worker")
+        _worker_thread = threading.Thread(
+            target=_worker, args=(_queue,), daemon=True, name="video-localization-operation-worker"
+        )
         _worker_thread.start()
     _recover_active_operations()
 
@@ -101,6 +161,8 @@ async def shutdown() -> None:
         _queue = None
         _worker_thread = None
         _queued_operation_ids.clear()
+        _cancelled_operation_ids.clear()
+        _operation_commit_gates.clear()
     if q:
         q.put(None)
     if thread and thread.is_alive():
@@ -131,6 +193,13 @@ def cancel(project_id: str, operation_id: str) -> VideoLocalizationOperation | N
     if operation.status not in _ACTIVE_STATUSES:
         return operation
 
+    gate = _operation_commit_gate(operation_id)
+    if not gate.request_cancel():
+        return get_operation(project_id, operation_id) or operation
+
+    with _lock:
+        _cancelled_operation_ids.add(operation_id)
+
     completed_at = now_iso() if operation.status == "queued" else None
     updates = {
         "status": "cancelled",
@@ -142,6 +211,16 @@ def cancel(project_id: str, operation_id: str) -> VideoLocalizationOperation | N
     _mark_operation(project_id, operation_id, kind=operation.kind, **updates)
     updated = get_operation(project_id, operation_id)
     return updated or operation.model_copy(update=updates)
+
+
+def _cancel_requested(project_id: str, operation_id: str) -> bool:
+    gate = _operation_commit_gate(operation_id)
+    if gate.is_cancel_requested():
+        return True
+    with _lock:
+        if operation_id in _cancelled_operation_ids:
+            return True
+    return operation_state.operation_was_cancelled(get_operation(project_id, operation_id))
 
 
 def retry(project_id: str, operation_id: str) -> VideoLocalizationOperation | None:
@@ -195,6 +274,9 @@ def _worker(task_queue: queue.Queue[str | None]) -> None:
         try:
             _process(operation_id)
         finally:
+            with _lock:
+                _cancelled_operation_ids.discard(operation_id)
+                _operation_commit_gates.pop(operation_id, None)
             task_queue.task_done()
 
 
@@ -203,8 +285,16 @@ def _process(operation_id: str) -> None:
     if not project_id or not operation:
         return
     if operation.status == "cancelled" or operation.cancel_requested:
-        _mark_operation(project_id, operation_id, kind=operation.kind, status="cancelled", completed_at=operation.completed_at or now_iso())
+        _mark_operation(
+            project_id,
+            operation_id,
+            kind=operation.kind,
+            status="cancelled",
+            completed_at=operation.completed_at or now_iso(),
+        )
         return
+
+    commit_gate = _operation_commit_gate(operation_id)
 
     _mark_operation(
         project_id,
@@ -215,7 +305,7 @@ def _process(operation_id: str) -> None:
         started_at=now_iso(),
         result_summary={"stage": "准备处理"},
     )
-    asr_stage_timer: _AsrStageTimer | None = None
+    stage_timer: _StageTimer | None = None
     try:
         if operation.kind == "source_audio":
             updated = service.extract_source_audio(project_id)
@@ -227,10 +317,10 @@ def _process(operation_id: str) -> None:
             engine_id = str(operation.parameters.get("engine_id") or source_pipeline.DEFAULT_ENGLISH_ASR_ENGINE_ID)
             source_track_id = str(operation.parameters.get("source_track_id") or "auto")
             segmentation_profile_id = str(operation.parameters.get("segmentation_profile_id") or "generic_zh")
-            asr_stage_timer = _AsrStageTimer()
+            stage_timer = _StageTimer(_asr_stage_id)
 
             def report_asr_progress(progress: float, stage: str) -> None:
-                assert asr_stage_timer is not None
+                assert stage_timer is not None
                 _mark_operation(
                     project_id,
                     operation_id,
@@ -239,7 +329,7 @@ def _process(operation_id: str) -> None:
                     progress=progress,
                     result_summary={
                         "stage": stage,
-                        "task_stage_timings": asr_stage_timer.update(stage),
+                        "task_stage_timings": stage_timer.update(stage),
                     },
                 )
 
@@ -247,7 +337,7 @@ def _process(operation_id: str) -> None:
                 project_id,
                 engine_id=engine_id,
                 source_track_id=source_track_id,
-                is_cancelled=lambda: operation_state.operation_was_cancelled(get_operation(project_id, operation_id)),
+                is_cancelled=lambda: _cancel_requested(project_id, operation_id),
                 on_progress=report_asr_progress,
                 on_preview=lambda phase, cues: _mark_operation(
                     project_id,
@@ -259,34 +349,117 @@ def _process(operation_id: str) -> None:
                 segmentation_profile_id=segmentation_profile_id,
             )
             summary = operation_state.english_asr_summary(updated)
-            task_stage_timings = asr_stage_timer.finish()
+            task_stage_timings = stage_timer.finish()
             summary["task_stage_timings"] = task_stage_timings
-            summary["task_duration_ms"] = sum(
-                int(item.get("duration_ms") or 0) for item in task_stage_timings.values()
+            summary["task_duration_ms"] = sum(int(item.get("duration_ms") or 0) for item in task_stage_timings.values())
+        elif operation.kind == "localization_draft":
+            stage_timer = _StageTimer(_localization_stage_id)
+
+            def report_localization_progress(progress: float, stage: str) -> None:
+                assert stage_timer is not None
+                _mark_operation(
+                    project_id,
+                    operation_id,
+                    kind=operation.kind,
+                    status="running",
+                    progress=progress,
+                    result_summary={
+                        "stage": stage,
+                        "task_stage_timings": stage_timer.update(stage),
+                    },
+                )
+
+            updated, summary = service.run_localization_draft(
+                project_id,
+                source_language=str(operation.parameters.get("source_language") or "en"),
+                target_language=str(operation.parameters.get("target_language") or "zh-Hans"),
+                profile_id=str(operation.parameters.get("profile_id") or "") or None,
+                localization_level=str(operation.parameters.get("localization_level") or "L1"),
+                worldview_permeability=str(operation.parameters.get("worldview_permeability") or "W0"),
+                is_cancelled=lambda: _cancel_requested(project_id, operation_id),
+                on_progress=report_localization_progress,
+                on_preview=lambda phase, cues: _mark_operation(
+                    project_id,
+                    operation_id,
+                    kind=operation.kind,
+                    status="running",
+                    result_summary={"preview_phase": phase, "preview_cues": cues},
+                ),
+                commit_guard=commit_gate.commit,
             )
+            task_stage_timings = stage_timer.finish()
+            summary["task_stage_timings"] = task_stage_timings
+            summary["task_duration_ms"] = sum(int(item.get("duration_ms") or 0) for item in task_stage_timings.values())
         elif operation.kind == "reference_clips":
             updated = service.create_reference_clips_from_cues(project_id)
             summary = operation_state.reference_clips_summary(updated)
         else:
-            raise AppException(400, "VIDEO_LOCALIZATION_OPERATION_UNSUPPORTED", f"Unsupported operation: {operation.kind}")
+            raise AppException(
+                400, "VIDEO_LOCALIZATION_OPERATION_UNSUPPORTED", f"Unsupported operation: {operation.kind}"
+            )
         if updated is None:
             raise AppException(404, "PROJECT_NOT_FOUND", "Project not found")
         latest = get_operation(project_id, operation_id)
         if operation_state.operation_was_cancelled(latest):
-            _mark_operation(project_id, operation_id, kind=operation.kind, status="cancelled", progress=1.0, completed_at=now_iso(), error_message="已取消，任务结果未作为成功状态保留。")
+            _mark_operation(
+                project_id,
+                operation_id,
+                kind=operation.kind,
+                status="cancelled",
+                progress=1.0,
+                completed_at=now_iso(),
+                error_message="已取消，任务结果未作为成功状态保留。",
+            )
             return
-        _mark_operation(project_id, operation_id, kind=operation.kind, status="success", progress=1.0, completed_at=now_iso(), result_summary=summary)
+        _mark_operation(
+            project_id,
+            operation_id,
+            kind=operation.kind,
+            status="success",
+            progress=1.0,
+            completed_at=now_iso(),
+            result_summary=summary,
+        )
     except AppException as exc:
         latest = get_operation(project_id, operation_id)
         if operation_state.operation_was_cancelled(latest):
-            _mark_operation(project_id, operation_id, kind=operation.kind, status="cancelled", progress=1.0, completed_at=now_iso(), error_message="已取消，失败结果未保留。")
+            _mark_operation(
+                project_id,
+                operation_id,
+                kind=operation.kind,
+                status="cancelled",
+                progress=1.0,
+                completed_at=now_iso(),
+                error_message="已取消，失败结果未保留。",
+            )
             return
+        failure_summary = dict(latest.result_summary if latest is not None else {})
+        if exc.detail_dict:
+            failure_summary["error_detail"] = exc.detail_dict
         _mark_kind_failed(project_id, operation.kind, exc.code, exc.message)
-        _mark_operation(project_id, operation_id, kind=operation.kind, status="failed", progress=1.0, completed_at=now_iso(), error_code=exc.code, error_message=exc.message)
+        _mark_operation(
+            project_id,
+            operation_id,
+            kind=operation.kind,
+            status="failed",
+            progress=1.0,
+            completed_at=now_iso(),
+            error_code=exc.code,
+            error_message=exc.message,
+            result_summary=failure_summary,
+        )
     except Exception as exc:
         latest = get_operation(project_id, operation_id)
         if operation_state.operation_was_cancelled(latest):
-            _mark_operation(project_id, operation_id, kind=operation.kind, status="cancelled", progress=1.0, completed_at=now_iso(), error_message="已取消，失败结果未保留。")
+            _mark_operation(
+                project_id,
+                operation_id,
+                kind=operation.kind,
+                status="cancelled",
+                progress=1.0,
+                completed_at=now_iso(),
+                error_message="已取消，失败结果未保留。",
+            )
             return
         _mark_kind_failed(project_id, operation.kind, "VIDEO_LOCALIZATION_OPERATION_FAILED", str(exc))
         _mark_operation(
@@ -355,11 +528,15 @@ def _mark_operation(project_id: str, operation_id: str, *, kind: OperationKind |
         for operation in draft.operations:
             if operation.operation_id == operation_id:
                 incoming_status = updates.get("status")
-                if (operation.cancel_requested or operation.status in _TERMINAL_STATUSES) and incoming_status in _ACTIVE_STATUSES:
+                if (
+                    operation.cancel_requested or operation.status in _TERMINAL_STATUSES
+                ) and incoming_status in _ACTIVE_STATUSES:
                     next_operations.append(operation)
                 else:
                     operation_updates = dict(updates)
-                    if incoming_status in _ACTIVE_STATUSES and isinstance(operation_updates.get("result_summary"), dict):
+                    if incoming_status in _ACTIVE_STATUSES and isinstance(
+                        operation_updates.get("result_summary"), dict
+                    ):
                         operation_updates["result_summary"] = {
                             **operation.result_summary,
                             **operation_updates["result_summary"],

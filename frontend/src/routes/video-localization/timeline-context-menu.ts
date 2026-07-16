@@ -1,7 +1,7 @@
-import { Captions, ChevronsLeft, ChevronsRight, CircleOff, MoveHorizontal, Trash2 } from 'lucide-svelte';
+import { Captions, ChevronsLeft, ChevronsRight, CircleOff, Languages, MoveHorizontal, Trash2 } from 'lucide-svelte';
 import type { ContextMenuItem } from '$lib/components/shared/context-menu';
 import type { VideoLocalizationTrackId } from './studio-state';
-import { asrSubtitleActionLabel } from './activity-notice';
+import { asrSubtitleActionLabel, localizationSubtitleActionLabel } from './activity-notice';
 
 export type SubtitleTrackKind = 'asr' | 'localized';
 
@@ -17,10 +17,14 @@ export type TimelineContextMenuContext = {
 	locked: boolean;
 	canGenerateAsr: boolean;
 	asrBusy: boolean;
+	canGenerateLocalization?: boolean;
+	localizationBusy?: boolean;
 	trackBusy: boolean;
 	asrUnavailableReason: string;
+	localizationUnavailableReason?: string;
 	hasSelectionPoints: boolean;
 	onGenerateAsr: () => void | Promise<void>;
+	onGenerateLocalization?: () => void | Promise<void>;
 	onClearSubtitleTrack: (track: SubtitleTrackKind) => void | Promise<void>;
 	onDeleteSubtitleItem: (track: SubtitleTrackKind, itemId: string) => void | Promise<void>;
 	onDeleteAudioClip: (itemId: string) => void | Promise<void>;
@@ -56,6 +60,30 @@ export function buildSubtitleTrackCommands(
 			onSelect: context.onGenerateAsr
 		});
 	}
+	if (track === 'localized') {
+		const canGenerate = context.canGenerateLocalization === true;
+		const generateDisabled = context.locked || !canGenerate || context.localizationBusy === true || context.trackBusy;
+		commands.push({
+			id: 'generate-localized-subtitles',
+			label: localizationSubtitleActionLabel(context.itemCount > 0),
+			description: context.locked
+				? '请先解锁本土化字幕轨'
+				: context.localizationBusy
+					? '本土化字幕初稿生成任务正在运行'
+					: context.trackBusy
+						? '当前字幕轨正在处理，请稍候'
+						: canGenerate
+							? context.itemCount
+								? '根据最新 ASR 字幕重新生成本土化字幕初稿'
+								: '理解 ASR 字幕内容并生成带初步时间的本土化字幕'
+							: context.localizationUnavailableReason || 'ASR 字幕轨有内容后，才能生成本土化字幕初稿',
+			icon: Languages,
+			disabled: generateDisabled,
+			onSelect: context.onGenerateLocalization ?? (() => {})
+		});
+	}
+
+	const operationBusy = track === 'asr' ? context.asrBusy : context.localizationBusy === true;
 
 	commands.push({
 		id: `fill-${track}-subtitle-gaps`,
@@ -68,8 +96,8 @@ export function buildSubtitleTrackCommands(
 					? '把连续说话中的短空隙延伸到下一条入点，不重叠且不修改最后一条'
 					: '至少需要两条字幕才能判断短停顿',
 		icon: MoveHorizontal,
-		disabled: context.locked || context.trackBusy || context.itemCount < 2 || (track === 'asr' && context.asrBusy),
-		separatorBefore: track === 'asr',
+		disabled: context.locked || context.trackBusy || context.itemCount < 2 || operationBusy,
+		separatorBefore: true,
 		onSelect: () => context.onFillSubtitleGaps(track)
 	});
 
@@ -80,13 +108,15 @@ export function buildSubtitleTrackCommands(
 			? '请先解锁当前字幕轨'
 			: context.trackBusy
 				? '当前字幕轨正在处理，请稍候'
-				: context.asrBusy && track === 'asr'
-					? '字幕听写运行期间不能清空 ASR 字幕轨'
+				: operationBusy
+					? track === 'asr'
+						? '字幕听写运行期间不能清空 ASR 字幕轨'
+						: '本土化字幕生成期间不能清空本土化字幕轨'
 					: context.itemCount
 						? `将删除 ${context.itemCount} 个片段，其他轨道不受影响`
 						: '当前字幕轨已经为空',
 		icon: Trash2,
-		disabled: context.locked || context.trackBusy || context.itemCount === 0 || (track === 'asr' && context.asrBusy),
+		disabled: context.locked || context.trackBusy || context.itemCount === 0 || operationBusy,
 		tone: 'danger',
 		onSelect: () => context.onClearSubtitleTrack(track)
 	});
@@ -141,7 +171,8 @@ export function buildTimelineContextMenuItems(
 				? '当前字幕片段暂时不可编辑'
 				: '只删除当前选中的字幕片段，其他字幕不受影响',
 			icon: Trash2,
-			disabled: context.locked || context.trackBusy || (target.subtitleTrack === 'asr' && context.asrBusy),
+			disabled: context.locked || context.trackBusy
+				|| (target.subtitleTrack === 'asr' ? context.asrBusy : context.localizationBusy === true),
 			tone: 'danger',
 			onSelect: () => context.onDeleteSubtitleItem(target.subtitleTrack, target.itemId)
 		});

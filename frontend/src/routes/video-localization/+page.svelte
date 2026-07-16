@@ -108,6 +108,7 @@
 		VideoLocalizationReferenceClip,
 		VideoLocalizationReferenceClipCreate,
 		VideoLocalizationReferenceClipUpdate,
+		VideoLocalizationSubtitleCue,
 		VideoLocalizationTimelineClip,
 		VideoLocalizationVoiceRecipe,
 		VideoLocalizationSpeakerCreate
@@ -182,6 +183,7 @@
 	let draft = $state<VideoLocalizationDraft | null>(null);
 	let draftOnlyCueIds = $state<string[]>([]);
 	let selectedCueId = $state('');
+	let selectedLocalizedSubtitleId = $state('');
 	let loading = $state(true);
 	let resetting = $state(false);
 	let savingCue = $state(false);
@@ -249,12 +251,40 @@
 	const selectedProject = $derived(projects.find((project) => project.project_id === projectId) ?? null);
 	const hasImportedProject = $derived(Boolean(draft?.source_media.video_path || draft?.source_media.filename));
 	const selectedCue = $derived(selectedCueId ? draft?.cues.find((cue) => cue.cue_id === selectedCueId) ?? null : null);
+	const selectedLocalizedSubtitle = $derived(
+		selectedLocalizedSubtitleId
+			? draft?.localized_subtitles.find((cue) => cue.subtitle_id === selectedLocalizedSubtitleId) ?? null
+			: null
+	);
 	const displayedPreviewTimeMs = $derived(hoverPreviewTimeMs ?? previewTimeMs);
 	const previewCue = $derived(
 		draft?.cues.find((cue) => cue.start_ms !== null && cue.end_ms !== null && displayedPreviewTimeMs >= cue.start_ms && displayedPreviewTimeMs < cue.end_ms) ?? null
 	);
+	const localizationPreview = $derived.by((): VideoLocalizationSubtitleCue[] => {
+		const operation = operations.find((item) => item.kind === 'localization_draft' && isActiveOperation(item));
+		const raw = operation?.result_summary?.preview_cues;
+		if (!Array.isArray(raw)) return [];
+		return raw.flatMap((item, index) => {
+			if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+			const cue = item as Record<string, unknown>;
+			const startMs = Number(cue.start_ms);
+			const endMs = Number(cue.end_ms);
+			const text = typeof cue.text === 'string' ? cue.text.trim() : '';
+			if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs || !text) return [];
+			return [{
+				subtitle_id: typeof cue.subtitle_id === 'string' ? cue.subtitle_id : `localized_preview_${index + 1}`,
+				start_ms: Math.round(startMs),
+				end_ms: Math.round(endMs),
+				text,
+				tts_text: typeof cue.tts_text === 'string' ? cue.tts_text : null,
+				linked_cue_id: null,
+				quality_flags: Array.isArray(cue.quality_flags) ? cue.quality_flags.map(String) : []
+			}];
+		});
+	});
 	const previewLocalizedSubtitle = $derived(
-		(draft?.localized_subtitles ?? []).find((cue) => displayedPreviewTimeMs >= cue.start_ms && displayedPreviewTimeMs < cue.end_ms) ?? null
+		(localizationPreview.length ? localizationPreview : (draft?.localized_subtitles ?? []))
+			.find((cue) => displayedPreviewTimeMs >= cue.start_ms && displayedPreviewTimeMs < cue.end_ms) ?? null
 	);
 	const readyCount = $derived(draft?.cues.filter((cue) => cue.review_status === 'ready' || cue.review_status === 'locked').length ?? 0);
 	const reviewCount = $derived(draft?.cues.filter((cue) => cue.review_status === 'needs_review').length ?? 0);
@@ -294,6 +324,7 @@
 	]);
 	const asrPreview = $derived(resolveAsrOperationPreview(operations));
 	const subtitleRuntimeBusy = $derived(activityTasks.some((task) => activityTaskAffectsTrack(task, 'subtitles')));
+	const localizationRuntimeBusy = $derived(activityTasks.some((task) => activityTaskAffectsTrack(task, 'localizedSubtitles')));
 	const latestOperation = $derived(operations.find((operation) => isActiveOperation(operation)) ?? operations[0] ?? null);
 	const speakerSeed = $derived(suggestSpeakerSeed(draft?.speakers ?? []));
 	const cueTimelineAudioSrc = $derived(stemAudioUrl(projectId, draft, 'vocals') || sourceAudioUrl(projectId, draft));
@@ -790,6 +821,29 @@
 		await transcribeEnglishSource('vocals');
 	}
 
+	async function generateLocalizationFromTimeline() {
+		if (!projectId || !draft?.cues.length || operationBusy('localization_draft')) return;
+		if (draft.localized_subtitles.length) {
+			const confirmed = window.confirm('重新生成会替换当前本土化字幕初稿，上屏字幕和配音台词都会更新。是否继续？');
+			if (!confirmed) return;
+		}
+		if (!(await flushPendingAutosave())) {
+			error = '存在未保存的字幕修改，请先处理保存错误后再生成本土化字幕。';
+			return;
+		}
+		error = '';
+		try {
+			await submitMediaOperation('localization_draft', '本土化字幕初稿任务已开始', {
+				source_language: draft.transcription?.language || 'en',
+				target_language: 'zh-Hans',
+				localization_level: 'L1',
+				worldview_permeability: 'W0'
+			});
+		} catch (e) {
+			error = (e as Error).message || '提交本土化字幕任务失败';
+		}
+	}
+
 	async function separateStems() {
 		if (!projectId || !(draft?.source_media.audio_path || draft?.stems.original_audio_path)) return;
 		separatingStems = true;
@@ -1126,8 +1180,16 @@
 	}
 
 	function selectCue(cueId: string) {
+		selectedLocalizedSubtitleId = '';
 		selectedCueId = cueId;
 		updateDraftUiState({ selected_cue_id: cueId });
+		focusInspector('subtitle');
+	}
+
+	function selectLocalizedSubtitle(subtitleId: string) {
+		selectedLocalizedSubtitleId = subtitleId;
+		const subtitle = draft?.localized_subtitles.find((item) => item.subtitle_id === subtitleId);
+		if (subtitle?.linked_cue_id) selectedCueId = subtitle.linked_cue_id;
 		focusInspector('subtitle');
 	}
 
@@ -1201,7 +1263,7 @@
 	}
 
 	async function updateLocalizedSubtitleTime(subtitleId: string, startMs: number, endMs: number) {
-		if (!projectId || !draft) return;
+		if (!projectId || !draft || localizationRuntimeBusy) return;
 		const normalizedStart = Math.max(0, Math.round(startMs));
 		const normalizedEnd = Math.max(normalizedStart + MIN_SUBTITLE_DURATION_MS, Math.round(endMs));
 		const previous = draft.localized_subtitles;
@@ -1220,6 +1282,24 @@
 		} catch (e) {
 			draft = { ...draft, localized_subtitles: previous };
 			error = (e as Error).message || '本土化字幕时间保存失败';
+		}
+	}
+
+	async function updateSelectedLocalizedSubtitle(patch: Partial<VideoLocalizationSubtitleCue>) {
+		if (!projectId || !draft || !selectedLocalizedSubtitle || localizationRuntimeBusy) return;
+		const previous = draft.localized_subtitles;
+		draft = {
+			...draft,
+			localized_subtitles: draft.localized_subtitles.map((cue) =>
+				cue.subtitle_id === selectedLocalizedSubtitle.subtitle_id ? { ...cue, ...patch } : cue
+			)
+		};
+		try {
+			draft = await Api.updateVideoLocalizationLocalizedSubtitle(projectId, selectedLocalizedSubtitle.subtitle_id, patch);
+			autoSaveStatus = 'saved';
+		} catch (e) {
+			draft = { ...draft, localized_subtitles: previous };
+			error = (e as Error).message || '本土化字幕保存失败';
 		}
 	}
 
@@ -1429,14 +1509,16 @@
 
 	function clearCueSelection() {
 		selectedCueId = '';
+		selectedLocalizedSubtitleId = '';
 		updateDraftUiState({ selected_cue_id: '' });
 	}
 
 	function deleteSubtitleItem(track: 'asr' | 'localized', itemId: string) {
-		if (!draft || subtitleRuntimeBusy) return;
+		if (!draft || subtitleRuntimeBusy || localizationRuntimeBusy) return;
 		if (track === 'localized') {
 			if (!draft.localized_subtitles.some((cue) => cue.subtitle_id === itemId)) return;
 			draft = { ...draft, localized_subtitles: draft.localized_subtitles.filter((cue) => cue.subtitle_id !== itemId) };
+			if (selectedLocalizedSubtitleId === itemId) selectedLocalizedSubtitleId = '';
 			scheduleDraftAutosave();
 			message = '本土化字幕片段已删除';
 			return;
@@ -1490,6 +1572,10 @@
 			error = 'ASR 字幕听写正在运行，完成或取消任务后才能清空字幕轨。';
 			return;
 		}
+		if (track === 'localized' && operationBusy('localization_draft')) {
+			error = '本土化字幕正在生成，完成或取消任务后才能清空字幕轨。';
+			return;
+		}
 		const count = track === 'asr' ? draft.cues.length : draft.localized_subtitles.length;
 		if (!count) return;
 		const label = track === 'asr' ? 'ASR 字幕轨' : '本土化字幕轨';
@@ -1524,7 +1610,7 @@
 		if (track === 'asr') {
 			selectedCueId = '';
 			draftOnlyCueIds = [];
-		}
+		} else selectedLocalizedSubtitleId = '';
 		message = `${label}已从时间线移除，正在后台清理`;
 		try {
 			await pendingSave;
@@ -1534,7 +1620,7 @@
 			if (track === 'asr') {
 				selectedCueId = '';
 				draftOnlyCueIds = [];
-			}
+			} else selectedLocalizedSubtitleId = '';
 			message = `${label}已清空`;
 		} catch (e) {
 			try {
@@ -1681,7 +1767,7 @@
 	}
 
 	async function applyLocalizationSrt(text: string) {
-		if (!projectId || !draft) return;
+		if (!projectId || !draft || localizationRuntimeBusy) return;
 		error = '';
 		try {
 			draft = await Api.importVideoLocalizationSubtitles(projectId, 'zh', {
@@ -2372,11 +2458,16 @@
 	}
 
 	function mergeDraftAfterConflict(latest: VideoLocalizationDraft, local: VideoLocalizationDraft): VideoLocalizationDraft {
+		const latestLocalizationRevision = String(latest.localization_state?.created_at ?? '');
+		const localLocalizationRevision = String(local.localization_state?.created_at ?? '');
+		const preserveLatestLocalization = Boolean(
+			latestLocalizationRevision && latestLocalizationRevision !== localLocalizationRevision
+		);
 		const latestCues = new Map(latest.cues.map((cue) => [cue.cue_id, cue]));
 		const mergedCues = local.cues.map((cue) => {
 			const serverCue = latestCues.get(cue.cue_id);
 			if (!serverCue) return cue;
-			return {
+			const merged = {
 				...serverCue,
 				...cue,
 				tts_result_id: serverCue.tts_result_id ?? cue.tts_result_id,
@@ -2387,6 +2478,12 @@
 				tts_attempted_at: serverCue.tts_attempted_at ?? cue.tts_attempted_at,
 				generated_duration_ms: serverCue.generated_duration_ms ?? cue.generated_duration_ms,
 				quality_flags: [...new Set([...(cue.quality_flags ?? []), ...(serverCue.quality_flags ?? [])])]
+			};
+			if (!preserveLatestLocalization) return merged;
+			return {
+				...merged,
+				zh_localized_subtitle_text: serverCue.zh_localized_subtitle_text,
+				tts_recommended_text: serverCue.tts_recommended_text
 			};
 		});
 		const localClips = new Map(local.timeline_clips.map((clip) => [clip.clip_id, clip]));
@@ -2404,7 +2501,8 @@
 				...latest,
 				ui_state: local.ui_state,
 				cues: mergedCues,
-				localized_subtitles: local.localized_subtitles,
+				localized_subtitles: preserveLatestLocalization ? latest.localized_subtitles : local.localized_subtitles,
+				localization_state: preserveLatestLocalization ? latest.localization_state : local.localization_state,
 				glossary: local.glossary,
 				scene_context: local.scene_context,
 				timeline_clips: mergedClips
@@ -2595,7 +2693,7 @@
 				onPlaybackStateChange={updatePreviewPlaying}
 				onControllerReady={(controller) => (previewPlaybackController = controller)}
 			/>
-				<VideoCuttingTimeline
+			<VideoCuttingTimeline
 				{projectId}
 				{draft}
 				{selectedCueId}
@@ -2603,24 +2701,25 @@
 				isPlaying={previewPlaying}
 				{latestOperation}
 				extractingAudio={extractingAudio || operationBusy('source_audio')}
-					separatingStems={separatingStems || operationBusy('stems')}
-					noticeKind={error ? 'error' : message ? 'success' : 'idle'}
-					noticeSummary={noticeText}
-						noticeDetail={error}
-						{activityTasks}
-						{asrPreview}
-						onOpenTaskCenter={openTaskCenter}
-						asrBusy={transcribingAsr || operationBusy('english_asr')}
+				separatingStems={separatingStems || operationBusy('stems')}
+				noticeKind={error ? 'error' : message ? 'success' : 'idle'}
+				noticeSummary={noticeText}
+				noticeDetail={error}
+				{activityTasks}
+				{asrPreview}
+				onOpenTaskCenter={openTaskCenter}
+				asrBusy={transcribingAsr || operationBusy('english_asr')}
 				{trackStates}
 				{audioTrackOrder}
 				{timelineZoom}
 				subtitlePreview={{ ...subtitlePreview, sources: subtitlePreview.sources ?? autoSubtitleSources() }}
-					onSelectCue={selectCue}
-					onClearCueSelection={clearCueSelection}
+				onSelectCue={selectCue}
+				onClearCueSelection={clearCueSelection}
 				onExtractAudio={extractSourceAudio}
 				onRestoreOriginalAudio={restoreOriginalAudio}
 				onSeparateStems={separateStems}
 				onImportLocalizedSrt={() => localizationSrtInput?.click()}
+				onGenerateLocalization={generateLocalizationFromTimeline}
 				onTransportAction={handleTimelineTransport}
 				onTrackStateChange={updateTrackState}
 				onAudioTrackOrderChange={updateAudioTrackOrder}
@@ -2631,21 +2730,24 @@
 				onSelectionRangeCommit={playCommittedTimelineSelection}
 				onUpdateCueTime={updateCueTimeFromTimeline}
 				onUpdateLocalizedSubtitleTime={updateLocalizedSubtitleTime}
-					onClearSubtitleTrack={clearSubtitleTrack}
-					onDeleteSubtitleItem={deleteSubtitleItem}
-					onFillSubtitleGaps={fillSubtitleGaps}
-					onGenerateAsr={generateAsrFromTimeline}
+				onClearSubtitleTrack={clearSubtitleTrack}
+				onDeleteSubtitleItem={deleteSubtitleItem}
+				onFillSubtitleGaps={fillSubtitleGaps}
+				onGenerateAsr={generateAsrFromTimeline}
+				onSelectLocalizedSubtitle={selectLocalizedSubtitle}
+				localizationBusy={localizationRuntimeBusy}
+				{localizationPreview}
 				onSplitCue={splitSelectedCue}
 				onMergeCue={mergeSelectedCueWithNext}
 				onDeleteCue={deleteSelectedCue}
 				onSaveSelectionAsVoice={focusSaveSelectionAsVoice}
 				onGenerateToSelection={focusGenerateToSelection}
 				onUpdateTimelineClip={updateTimelineClipFromTimeline}
-					onDeleteTimelineClip={deleteTimelineClip}
-					hoverScrubEnabled={hoverScrubEnabled}
-					onHoverScrubChange={updateHoverScrubEnabled}
-					onHoverScrub={hoverScrubPreview}
-					onHoverScrubEnd={endHoverScrubPreview}
+				onDeleteTimelineClip={deleteTimelineClip}
+				hoverScrubEnabled={hoverScrubEnabled}
+				onHoverScrubChange={updateHoverScrubEnabled}
+				onHoverScrub={hoverScrubPreview}
+				onHoverScrubEnd={endHoverScrubPreview}
 				onUndoTimelineClip={undoTimelineClipEdit}
 				onRedoTimelineClip={redoTimelineClipEdit}
 				canUndoTimeline={timelineUndoStack.length > 0}
@@ -2772,7 +2874,7 @@
 				<button class="mini-btn" type="button" data-tooltip="从人声轨生成 ASR 字幕：识别分离后的人声，并生成带时间码的字幕轨。" onclick={generateAsrFromTimeline} disabled={!draft?.stems.vocals_clean_path || transcribingAsr || operationBusy('english_asr')}>
 					<Captions size={13} /> {transcribingAsr || operationBusy('english_asr') ? '生成中' : asrSubtitleActionLabel(Boolean(draft?.cues.length))}
 				</button>
-				<button class="mini-btn" type="button" data-tooltip="导入本土化 SRT：创建独立的本土化字幕轨，不修改 ASR 字幕时间。" onclick={() => localizationSrtInput?.click()} disabled={!draft}>
+				<button class="mini-btn" type="button" data-tooltip="导入本土化 SRT：创建独立的本土化字幕轨，不修改 ASR 字幕时间。" onclick={() => localizationSrtInput?.click()} disabled={!draft || localizationRuntimeBusy}>
 					<FileUp size={13} /> 导入本土化 SRT
 				</button>
 				<button class="mini-btn" type="button" data-tooltip="生成参考音候选：从已识别的干净人声片段创建项目音色候选。" onclick={createReferenceCandidates} disabled={draft?.stems.separation_status !== 'completed' || creatingReferences}>
@@ -2854,6 +2956,7 @@
 				{draft}
 				{projectId}
 				{selectedCue}
+				{selectedLocalizedSubtitle}
 				selectionRange={audioSelectionRange}
 				{selectedVoiceId}
 				{selectedRecipeId}
@@ -2863,6 +2966,8 @@
 				onSelectedVoiceIdChange={updateSelectedVoiceId}
 				onSectionChange={(section) => focusInspector(section)}
 				onUpdateCue={updateSelectedCue}
+				onUpdateLocalizedSubtitle={updateSelectedLocalizedSubtitle}
+				onDeleteLocalizedSubtitle={(subtitleId) => deleteSubtitleItem('localized', subtitleId)}
 					onSaveCue={saveSelectedCue}
 					onConfirmCueTiming={confirmSelectedCueTiming}
 				onDeleteCue={deleteSelectedCue}
@@ -2888,6 +2993,7 @@
 					{taskHistory}
 					onCancelTask={cancelActivityTask}
 					{subtitleRuntimeBusy}
+					{localizationRuntimeBusy}
 					{taskCenterPulseKey}
 				/>
 		{:else}

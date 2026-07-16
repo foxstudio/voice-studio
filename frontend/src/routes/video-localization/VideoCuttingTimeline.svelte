@@ -27,6 +27,7 @@
 			noticeDetail,
 			activityTasks,
 			asrBusy,
+			localizationBusy,
 		trackStates,
 		audioTrackOrder,
 		timelineZoom,
@@ -37,6 +38,7 @@
 		onRestoreOriginalAudio,
 		onSeparateStems,
 		onImportLocalizedSrt,
+		onGenerateLocalization,
 		onTransportAction,
 		onTrackStateChange,
 		onAudioTrackOrderChange,
@@ -51,8 +53,10 @@
 		onDeleteSubtitleItem,
 		onFillSubtitleGaps,
 		onGenerateAsr,
+		onSelectLocalizedSubtitle = undefined,
 		onOpenTaskCenter = undefined,
 		asrPreview = null,
+		localizationPreview = [],
 		onSplitCue,
 		onMergeCue,
 		onDeleteCue,
@@ -82,6 +86,7 @@
 			noticeDetail: string;
 			activityTasks: ActivityTask[];
 			asrBusy: boolean;
+			localizationBusy: boolean;
 		trackStates: VideoLocalizationTrackStates;
 		audioTrackOrder: VideoLocalizationAudioTrackOrder;
 		timelineZoom: number;
@@ -92,6 +97,7 @@
 		onRestoreOriginalAudio: () => void | Promise<void>;
 		onSeparateStems: () => void;
 		onImportLocalizedSrt: () => void;
+		onGenerateLocalization: () => void | Promise<void>;
 		onTransportAction: (action: 'start' | 'play-pause' | 'next') => void;
 		onTrackStateChange: (trackId: VideoLocalizationTrackId, patch: Partial<VideoLocalizationTrackState>) => void;
 		onAudioTrackOrderChange: (order: VideoLocalizationAudioTrackOrder) => void;
@@ -106,8 +112,10 @@
 		onDeleteSubtitleItem: (track: SubtitleTrackKind, itemId: string) => void | Promise<void>;
 		onFillSubtitleGaps: (track: SubtitleTrackKind) => void | Promise<void>;
 		onGenerateAsr: () => void | Promise<void>;
+		onSelectLocalizedSubtitle?: (subtitleId: string) => void;
 		onOpenTaskCenter?: () => void;
 		asrPreview?: AsrOperationPreview | null;
+		localizationPreview?: VideoLocalizationSubtitleCue[];
 		onSplitCue: () => void;
 		onMergeCue: () => void;
 		onDeleteCue: () => void;
@@ -220,7 +228,8 @@
 	const visibleTimelineTicks = $derived(timelineTicks.filter((tick) => tick.time * 1000 >= renderViewport.startMs && tick.time * 1000 <= renderViewport.endMs));
 	const visibleAsrCues = $derived((draft?.cues ?? []).filter((cue) => dragState?.itemId === cue.cue_id || timeRangeIntersectsViewport(cue.start_ms, cue.end_ms, renderViewport)));
 	const visibleAsrPreviewCues = $derived((asrPreview?.cues ?? []).filter((cue) => timeRangeIntersectsViewport(cue.start_ms, cue.end_ms, renderViewport)));
-	const visibleLocalizedSubtitles = $derived((draft?.localized_subtitles ?? []).filter((cue) => dragState?.itemId === cue.subtitle_id || timeRangeIntersectsViewport(cue.start_ms, cue.end_ms, renderViewport)));
+	const runtimeLocalizedSubtitles = $derived(localizationPreview.length ? localizationPreview : (draft?.localized_subtitles ?? []));
+	const visibleLocalizedSubtitles = $derived(runtimeLocalizedSubtitles.filter((cue) => dragState?.itemId === cue.subtitle_id || timeRangeIntersectsViewport(cue.start_ms, cue.end_ms, renderViewport)));
 	const playheadPercent = $derived(Math.max(0, Math.min(100, (currentTimeMs / timelineDurationMs) * 100)));
 	const selectedCue = $derived(draft?.cues.find((cue) => cue.cue_id === selectedCueId) ?? null);
 	const canEditSelectedCue = $derived(Boolean(selectedCue) && !trackInteractionLocked('subtitles'));
@@ -241,10 +250,13 @@
 		locked: trackStates.subtitles.locked === true,
 		canGenerateAsr: vocalsTrackReady,
 		asrBusy,
+		canGenerateLocalization: Boolean(draft?.cues.length),
+		localizationBusy,
 		trackBusy: trackRuntimeBusy('subtitles'),
 		asrUnavailableReason: '人声轨有可用音频后，才能听写生成 ASR 字幕',
 		hasSelectionPoints: rangeStartMs !== null || rangeEndMs !== null,
 		onGenerateAsr,
+		onGenerateLocalization,
 		onClearSubtitleTrack,
 		onDeleteSubtitleItem: deleteSubtitleTimelineItem,
 		onDeleteAudioClip: deleteAudioTimelineItem,
@@ -274,10 +286,13 @@
 			locked: targetTrackId ? trackStates[targetTrackId].locked === true : false,
 			canGenerateAsr: vocalsTrackReady,
 			asrBusy,
+			canGenerateLocalization: Boolean(draft?.cues.length),
+			localizationBusy,
 			trackBusy: targetTrackId ? trackRuntimeBusy(targetTrackId) : false,
 			asrUnavailableReason: '人声轨有可用音频后，才能听写生成 ASR 字幕',
 			hasSelectionPoints: rangeStartMs !== null || rangeEndMs !== null,
 			onGenerateAsr,
+			onGenerateLocalization,
 			onClearSubtitleTrack,
 				onDeleteSubtitleItem: deleteSubtitleTimelineItem,
 				onDeleteAudioClip: deleteAudioTimelineItem,
@@ -830,7 +845,7 @@
 			preserveRangeOnCueSelection = preserveRange && itemId !== selectedCueId;
 			onSelectCue(itemId);
 			if (preserveRangeOnCueSelection) queueMicrotask(() => (preserveRangeOnCueSelection = false));
-		}
+		} else onSelectLocalizedSubtitle?.(itemId);
 	}
 
 	function selectAudioTimelineItem(trackId: VideoLocalizationTrackId, itemId: string) {
@@ -1018,7 +1033,7 @@
 		if (time.end_ms <= time.start_ms) return;
 		const trackCues = trackKind === 'asr'
 			? (draft?.cues ?? [])
-			: (draft?.localized_subtitles ?? []).map((item) => ({ cue_id: item.subtitle_id, start_ms: item.start_ms, end_ms: item.end_ms }));
+			: runtimeLocalizedSubtitles.map((item) => ({ cue_id: item.subtitle_id, start_ms: item.start_ms, end_ms: item.end_ms }));
 		const bounds = subtitleCueDragBounds(trackCues, itemId, subtitleTimelineLimitMs);
 		event.preventDefault();
 		event.stopPropagation();
@@ -1555,12 +1570,19 @@
 							<span class="cue-handle" role="slider" tabindex="-1" aria-label="调整本土化字幕出点" aria-valuemin="0" aria-valuemax={subtitleTimelineLimitMs} aria-valuenow={cueLiveTime(cue, 'localized').end_ms} onpointerdown={(event) => startCueDrag(event, cue, 'trim-end', 'localized')}></span>
 						</button>
 					{/each}
-					{#if !draft?.localized_subtitles.length}
-						<div class="pending-actions single" aria-label="本土化字幕轨可用操作">
-							<button class="track-inline-action" type="button" onclick={onImportLocalizedSrt} disabled={trackStates.localizedSubtitles.locked} data-tooltip="导入本土化 SRT｜创建独立字幕轨，不改动 ASR 字幕时间。" onpointerdown={(event) => event.stopPropagation()}>
-								<FileUp size={11} /> 导入本土化 SRT
-							</button>
-						</div>
+					{#if !runtimeLocalizedSubtitles.length}
+						{#if draft?.cues.length}
+							<div class="pending-actions" aria-label="本土化字幕轨可用操作">
+								<button class="track-inline-action" type="button" onclick={onGenerateLocalization} disabled={trackStates.localizedSubtitles.locked || localizationBusy} data-tooltip="生成本土化字幕初稿｜理解原文、人物和文化语境，生成上屏字幕与配音台词。" onpointerdown={(event) => event.stopPropagation()}>
+									<Wand2 size={11} /> {localizationBusy ? '正在生成' : '生成本土化字幕初稿'}
+								</button>
+								<button class="track-inline-action secondary" type="button" onclick={onImportLocalizedSrt} disabled={trackStates.localizedSubtitles.locked || localizationBusy} data-tooltip="导入本土化 SRT｜使用已经准备好的本土化字幕文件。" onpointerdown={(event) => event.stopPropagation()}>
+									<FileUp size={11} /> 导入 SRT
+								</button>
+							</div>
+						{:else}
+							<div class="pending-block">ASR 字幕轨有内容后，可生成本土化字幕初稿</div>
+						{/if}
 					{/if}
 				</div>
 				<div class="track-row row-original" data-track-row data-track-id="original" data-audio-selection-track="original" aria-busy={trackRuntimeBusy('original')} class:muted={trackStates.original.muted} class:locked={trackInteractionLocked('original')} class:processing={trackRuntimeBusy('original')} style={audioTrackStyle('original')}>

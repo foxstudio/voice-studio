@@ -89,6 +89,7 @@ const OPERATION_LABELS: Record<VideoLocalizationOperation['kind'], string> = {
 	source_audio: '从视频提取原音轨',
 	stems: '分离人声与背景音乐',
 	english_asr: '从人声轨生成 ASR 字幕',
+	localization_draft: '生成本土化字幕初稿',
 	reference_clips: '生成参考音候选'
 };
 
@@ -96,10 +97,15 @@ export function asrSubtitleActionLabel(hasExistingSubtitles: boolean) {
 	return hasExistingSubtitles ? '重新生成 ASR 字幕' : '从人声轨生成 ASR 字幕';
 }
 
+export function localizationSubtitleActionLabel(hasExistingSubtitles: boolean) {
+	return hasExistingSubtitles ? '重新生成本土化字幕初稿' : '生成本土化字幕初稿';
+}
+
 const FALLBACK_SCOPES: Record<VideoLocalizationOperation['kind'], ActivityTaskScope> = {
 	source_audio: { trackIds: ['original'], itemIds: [], area: 'timeline', exclusive: true },
 	stems: { trackIds: ['vocals', 'background'], itemIds: [], area: 'timeline', exclusive: true },
 	english_asr: { trackIds: ['subtitles'], itemIds: [], area: 'subtitle', exclusive: true },
+	localization_draft: { trackIds: ['localizedSubtitles'], itemIds: [], area: 'subtitle', exclusive: true },
 	reference_clips: { trackIds: [], itemIds: [], area: 'voice', exclusive: false }
 };
 
@@ -116,13 +122,23 @@ const ASR_STEP_DEFINITIONS = [
 	{ id: 'subtitles', label: '写入 ASR 字幕轨', stages: ['生成字幕轨'], timingStages: ['subtitle_track'] }
 ] as const;
 
+const LOCALIZATION_STEP_DEFINITIONS = [
+	{ id: 'prepare_context', label: '理解原文与人物', stages: ['prepare_context', '理解原文与人物'] },
+	{ id: 'research', label: '查证文化与背景', stages: ['research', '查证文化与背景'] },
+	{ id: 'localize', label: '生成中文表达', stages: ['localize', '生成中文表达'] },
+	{ id: 'segment_timing', label: '安排字幕分段与时间', stages: ['segment_timing', '安排字幕分段与时间'] },
+	{ id: 'quality_review', label: '复核语义与可读性', stages: ['quality_review', '复核语义与可读性'] },
+	{ id: 'write_track', label: '写入本土化字幕轨', stages: ['write_track', '写入本土化字幕轨'] }
+] as const;
+
 const TRACK_LABELS: Record<string, string> = {
 	auto: '自动选择',
 	original: '原始音轨',
 	vocals: '人声音轨',
 	background: '背景音轨',
 	dub: '配音轨',
-	subtitles: '字幕轨'
+	subtitles: 'ASR 字幕轨',
+	localizedSubtitles: '本土化字幕轨'
 };
 
 function stringValue(value: unknown): string | null {
@@ -300,7 +316,48 @@ function asrCurrentStepIndex(operation: VideoLocalizationOperation, stage: strin
 	return 0;
 }
 
+function localizationCurrentStepIndex(stage: string) {
+	const normalizedStage = stage.trim();
+	const matched = LOCALIZATION_STEP_DEFINITIONS.findIndex((step) =>
+		step.stages.some((candidate) => normalizedStage === candidate || normalizedStage.includes(candidate))
+	);
+	return matched >= 0 ? matched : 0;
+}
+
+function stepStatus(
+	operationStatus: VideoLocalizationOperation['status'],
+	stepIndex: number,
+	currentIndex: number
+): ActivityTaskStepStatus {
+	if (operationStatus === 'success') return 'success';
+	if (operationStatus === 'running') return stepIndex < currentIndex ? 'success' : stepIndex === currentIndex ? 'running' : 'todo';
+	if (operationStatus === 'failed') return stepIndex < currentIndex ? 'success' : stepIndex === currentIndex ? 'failed' : 'todo';
+	if (operationStatus === 'cancelled') return stepIndex < currentIndex ? 'success' : stepIndex === currentIndex ? 'cancelled' : 'todo';
+	return 'todo';
+}
+
+function localizationOperationSteps(operation: VideoLocalizationOperation, stage: string): ActivityTaskStep[] {
+	const currentIndex = localizationCurrentStepIndex(stage);
+	const taskStageTimings = recordValue(operation.result_summary?.task_stage_timings);
+	const rawStepResults = recordValue(operation.result_summary?.task_step_results);
+	return LOCALIZATION_STEP_DEFINITIONS.map((step, index) => {
+		const status = stepStatus(operation.status, index, currentIndex);
+		const timing = recordValue(taskStageTimings?.[step.id]);
+		const durationMs = numberValue(timing?.duration_ms);
+		const result = normalizeStepResult(rawStepResults?.[step.id], status)
+			?? fallbackStepResult(step.label, status, timing);
+		return {
+			id: step.id,
+			label: step.label,
+			status,
+			...(durationMs === null ? {} : { durationMs }),
+			...(result ? { result } : {})
+		};
+	});
+}
+
 function operationSteps(operation: VideoLocalizationOperation, stage: string): ActivityTaskStep[] | undefined {
+	if (operation.kind === 'localization_draft') return localizationOperationSteps(operation, stage);
 	if (operation.kind !== 'english_asr') return undefined;
 	const currentIndex = asrCurrentStepIndex(operation, stage);
 	const diagnosticStageTimings = recordValue(operation.result_summary?.stage_timings);
@@ -318,11 +375,7 @@ function operationSteps(operation: VideoLocalizationOperation, stage: string): A
 		? null
 		: Math.max(0, operationDuration - measuredStageDuration);
 	return ASR_STEP_DEFINITIONS.map((step, index) => {
-		let status: ActivityTaskStepStatus = 'todo';
-		if (operation.status === 'success') status = 'success';
-		else if (operation.status === 'running') status = index < currentIndex ? 'success' : index === currentIndex ? 'running' : 'todo';
-		else if (operation.status === 'failed') status = index < currentIndex ? 'success' : index === currentIndex ? 'failed' : 'todo';
-		else if (operation.status === 'cancelled') status = index < currentIndex ? 'success' : index === currentIndex ? 'cancelled' : 'todo';
+		const status = stepStatus(operation.status, index, currentIndex);
 		const recordedDurationMs = stageDurationMs(stageTimings, step.timingStages);
 		const durationMs = step.id === 'subtitles' && recordedDurationMs === null
 			? legacySubtitleTrackDuration
@@ -349,6 +402,9 @@ function operationSteps(operation: VideoLocalizationOperation, stage: string): A
 function operationResult(operation: VideoLocalizationOperation) {
 	if (operation.kind === 'english_asr') {
 		return { count: numberValue(operation.result_summary?.cue_count ?? operation.result_summary?.segment_count), unit: '条字幕' };
+	}
+	if (operation.kind === 'localization_draft') {
+		return { count: numberValue(operation.result_summary?.localized_subtitle_count), unit: '条字幕' };
 	}
 	if (operation.kind === 'reference_clips') {
 		return { count: numberValue(operation.result_summary?.reference_clip_count), unit: '个候选' };
@@ -381,6 +437,7 @@ export function operationActivityTask(operation: VideoLocalizationOperation, can
 	const stage = typeof operation.result_summary?.stage === 'string'
 		? operation.result_summary.stage.trim()
 		: '';
+	const stageId = stringValue(operation.result_summary?.stage_id) ?? stage;
 	const result = operationResult(operation);
 	return {
 		id: `operation:${operation.operation_id}`,
@@ -391,12 +448,14 @@ export function operationActivityTask(operation: VideoLocalizationOperation, can
 			? '正在取消，将在当前步骤结束后停止'
 			: stage || activityTaskStatusLabel(operation.status),
 		detail: operation.error_message ?? '',
-		progress: operation.status === 'running' && operation.kind === 'english_asr'
+		progress: operation.status === 'running' && (operation.kind === 'english_asr' || operation.kind === 'localization_draft')
 			? Math.max(0, Math.min(1, operation.progress ?? 0))
 			: null,
 		status: operation.status,
 		scope: operationActivityScope(operation),
-		cancellable: (operation.status === 'queued' || operation.status === 'running') && operation.kind === 'english_asr' && !operation.cancel_requested,
+		cancellable: (operation.status === 'queued' || operation.status === 'running')
+			&& (operation.kind === 'english_asr' || operation.kind === 'localization_draft')
+			&& !operation.cancel_requested,
 		cancelPending: cancelPending || operation.cancel_requested,
 		createdAt: operation.created_at,
 		startedAt: operation.started_at,
@@ -408,9 +467,11 @@ export function operationActivityTask(operation: VideoLocalizationOperation, can
 		resultUnit: result.unit,
 		durationMs: numberValue(
 			operation.result_summary?.task_duration_ms
-			?? (operation.kind === 'english_asr' ? operation.result_summary?.duration_ms : null)
+			?? (operation.kind === 'english_asr' || operation.kind === 'localization_draft'
+				? operation.result_summary?.duration_ms
+				: null)
 		),
-		steps: operationSteps(operation, stage)
+		steps: operationSteps(operation, stageId)
 	};
 }
 

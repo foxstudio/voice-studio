@@ -7,7 +7,7 @@ from app.errors import AppException
 from app.domains.video_localization import asr_step_results
 from app.domains.video_localization.schemas import VideoLocalizationDraft, VideoLocalizationOperation
 
-OperationKind = Literal["source_audio", "stems", "english_asr", "reference_clips"]
+OperationKind = Literal["source_audio", "stems", "english_asr", "localization_draft", "reference_clips"]
 OperationStatus = Literal["queued", "running", "success", "failed", "cancelled"]
 
 ACTIVE_STATUSES = {"queued", "running"}
@@ -16,6 +16,7 @@ KIND_LABELS: dict[OperationKind, str] = {
     "source_audio": "抽取源音轨",
     "stems": "分离人声与背景声",
     "english_asr": "听写字幕",
+    "localization_draft": "生成本土化字幕初稿",
     "reference_clips": "生成参考音候选",
 }
 
@@ -49,6 +50,15 @@ def operation_scope(kind: OperationKind, parameters: dict | None = None) -> dict
                 {"id": "subtitles", "role": "output"},
             ],
         },
+        "localization_draft": {
+            "area": "subtitle",
+            "exclusive": True,
+            "cancel_mode": "safe_point",
+            "tracks": [
+                {"id": "subtitles", "role": "input"},
+                {"id": "localizedSubtitles", "role": "output"},
+            ],
+        },
         "reference_clips": {
             "area": "voice",
             "exclusive": False,
@@ -79,6 +89,17 @@ def validate_prerequisites(kind: OperationKind, draft: VideoLocalizationDraft, p
         from app.domains.video_localization import source_pipeline
 
         source_pipeline.validate_english_asr_source(draft, str((parameters or {}).get("source_track_id") or "auto"))
+        return
+
+    if kind == "localization_draft":
+        if not draft.cues or not any((cue.en_subtitle_text or "").strip() for cue in draft.cues):
+            raise AppException(400, "VIDEO_LOCALIZATION_CUES_MISSING", "请先生成并校对 ASR 字幕。")
+        from app.services import llm_runtime
+
+        try:
+            llm_runtime.resolve_profile(str((parameters or {}).get("profile_id") or "") or None)
+        except llm_runtime.LlmRuntimeError as exc:
+            raise AppException(exc.status_code, exc.code, str(exc)) from exc
         return
 
     if kind == "reference_clips":
@@ -135,6 +156,15 @@ def with_kind_status(
             metadata["english_asr_error_code"] = error_code
         if error_message:
             metadata["english_asr_error"] = error_message
+    elif kind == "localization_draft":
+        metadata["localization_draft_status"] = draft_status
+        if clears_errors:
+            metadata.pop("localization_draft_error_code", None)
+            metadata.pop("localization_draft_error", None)
+        if error_code:
+            metadata["localization_draft_error_code"] = error_code
+        if error_message:
+            metadata["localization_draft_error"] = error_message
     elif kind == "reference_clips":
         metadata["reference_clips_status"] = draft_status
         if clears_errors:

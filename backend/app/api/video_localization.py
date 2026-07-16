@@ -97,7 +97,7 @@ async def list_video_localization_operations(project_id: str):
 
 @router.post("/{project_id}/video-localization/operations", response_model=VideoLocalizationOperation)
 async def submit_video_localization_operation(project_id: str, request: VideoLocalizationOperationRequest):
-    operation = operation_queue.submit(project_id, request.kind, request.parameters)
+    operation = video_localization_service.submit_operation(project_id, request.kind, request.parameters)
     return require_resource(operation)
 
 
@@ -220,10 +220,10 @@ async def update_video_localization_speaker(project_id: str, speaker_id: str, pa
     return require_resource(updated)
 
 
-@router.post("/{project_id}/video-localization/localize/zh", response_model=VideoLocalizationDraft)
+@router.post("/{project_id}/video-localization/localize/zh", response_model=VideoLocalizationOperation)
 async def generate_video_localization_chinese_draft(project_id: str):
-    updated = video_localization_service.generate_localization_draft(project_id)
-    return require_resource(updated)
+    operation = video_localization_service.submit_operation(project_id, "localization_draft", {})
+    return require_resource(operation)
 
 
 @router.post("/{project_id}/video-localization/tts/batch", response_model=BatchTask)

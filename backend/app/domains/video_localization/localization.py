@@ -1,178 +1,1783 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 import re
+import time
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from typing import Callable
 
-from app.domains.video_localization import cues as cue_tools
+from app.domains.video_localization.schemas import (
+    VideoLocalizationCue,
+    VideoLocalizationDraft,
+    VideoLocalizationSubtitleCue,
+    now_iso,
+)
 from app.errors import AppException
-from app.domains.video_localization.schemas import VideoLocalizationCue, VideoLocalizationDraft
-from app.services import llm_runtime, settings_store
+from app.services import llm_runtime, settings_store, web_search
 
 
-LOCALIZATION_PROMPT_VERSION = "localization-zh-v1"
-LOCALIZATION_BATCH_SIZE = 24
-NUMBER_PATTERN = re.compile(r"(?<![\w.])[-+]?\d+(?:[.,]\d+)*(?:%|％)?(?!\w)")
+LOCALIZATION_PROMPT_VERSION = "localization-draft-v2"
+LOCALIZATION_BATCH_SIZE = 72
+QUALITY_REVIEW_BATCH_SIZE = 120
+LOCALIZATION_FIT_BATCH_SIZE = 24
+LOCALIZATION_FIT_MAX_ROUNDS = 3
+MIN_SUBTITLE_DURATION_MS = 833
+MAX_SUBTITLE_DURATION_MS = 7000
+MAX_CHARS_PER_LINE = 16
+MAX_CHINESE_CPS = 9.0
+END_HOLD_MS = 220
+NUMBER_PATTERN = re.compile(r"[-+]?\d+(?:[.,]\d+)*(?:%|％|[KkDd])?")
+DISPLAY_PUNCTUATION = frozenset(",，。.;；:：")
+
+ProgressCallback = Callable[[float, str], None]
+PreviewCallback = Callable[[str, list[dict]], None]
+CancelCallback = Callable[[], bool]
+
+
+@dataclass(frozen=True)
+class LocalizationRun:
+    draft: VideoLocalizationDraft
+    summary: dict
+
+
+def source_fingerprint(draft: VideoLocalizationDraft) -> str:
+    payload = {
+        "transcription_revision_ids": sorted(
+            {cue.transcription_revision_id for cue in draft.cues if cue.transcription_revision_id}
+        ),
+        "cues": [
+            {
+                "cue_id": cue.cue_id,
+                "speaker_id": cue.speaker_id,
+                "start_ms": cue.start_ms,
+                "end_ms": cue.end_ms,
+                "text": cue.en_subtitle_text,
+                "source_word_ids": cue.source_word_ids,
+            }
+            for cue in draft.cues
+        ],
+        "speakers": [
+            {
+                "speaker_id": speaker.speaker_id,
+                "display_name": speaker.display_name,
+                "notes": speaker.notes,
+            }
+            for speaker in sorted(draft.speakers, key=lambda item: item.speaker_id)
+        ],
+        "transcription": (
+            {
+                "revision_id": draft.transcription.revision_id,
+                "language": draft.transcription.language,
+                "source_track_id": draft.transcription.source_track_id,
+                "source_audio_sha256": draft.transcription.source_audio_sha256,
+                "words": [
+                    {
+                        "word_id": word.word_id,
+                        "segment_id": word.segment_id,
+                        "text": word.text,
+                        "start_ms": word.start_ms,
+                        "end_ms": word.end_ms,
+                        "timing_source": word.timing_source,
+                    }
+                    for word in draft.transcription.words
+                ],
+            }
+            if draft.transcription
+            else None
+        ),
+        "glossary": [item.model_dump(mode="json") for item in draft.glossary],
+        "scene_context": draft.scene_context,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def generate_localization_draft(
+    draft: VideoLocalizationDraft,
+    *,
+    source_language: str = "en",
+    target_language: str = "zh-Hans",
+    profile_id: str | None = None,
+    localization_level: str = "L1",
+    worldview_permeability: str = "W0",
+    is_cancelled: CancelCallback | None = None,
+    on_progress: ProgressCallback | None = None,
+    on_preview: PreviewCallback | None = None,
+) -> LocalizationRun:
+    _validate_source(draft)
+    if target_language != "zh-Hans":
+        raise AppException(400, "VIDEO_LOCALIZATION_TARGET_LANGUAGE_UNSUPPORTED", "当前版本先支持简体中文本土化。")
+
+    profile = llm_runtime.resolve_profile(profile_id)
+    fingerprint = source_fingerprint(draft)
+    step_results: dict[str, dict] = {}
+    started_at = time.perf_counter()
+
+    _report(on_progress, 0.06, "正在理解原文与人物")
+    _ensure_active(is_cancelled)
+    context = _analyze_context(
+        draft,
+        profile_id=profile.profile_id,
+        source_language=source_language,
+        target_language=target_language,
+        localization_level=localization_level,
+        worldview_permeability=worldview_permeability,
+    )
+    step_results["prepare_context"] = _context_step_result(context, draft)
+
+    _report(on_progress, 0.18, "正在查证文化与背景")
+    _ensure_active(is_cancelled)
+    research = _research_context(context, is_cancelled=is_cancelled)
+
+    _report(on_progress, 0.30, "正在生成中文表达")
+    candidates = _localize_cues(
+        draft,
+        context=context,
+        research=research,
+        profile_id=profile.profile_id,
+        source_language=source_language,
+        target_language=target_language,
+        localization_level=localization_level,
+        worldview_permeability=worldview_permeability,
+        is_cancelled=is_cancelled,
+        on_batch=lambda completed, total: _report(
+            on_progress,
+            0.30 + 0.28 * completed / max(1, total),
+            f"正在生成中文表达 · {completed}/{total}",
+        ),
+        on_repair=lambda batch_number, total: _report(
+            on_progress,
+            0.30 + 0.28 * max(0, batch_number - 1) / max(1, total),
+            f"正在生成中文表达 · 核对第 {batch_number}/{total} 批数字",
+        ),
+        on_split=lambda batch_number, total: _report(
+            on_progress,
+            0.30 + 0.28 * max(0, batch_number - 1) / max(1, total),
+            f"正在生成中文表达 · 第 {batch_number}/{total} 批内容较长，正在拆分",
+        ),
+        on_batch_preview=(
+            (lambda items: on_preview("localized_draft", _rough_preview(items, draft))) if on_preview else None
+        ),
+    )
+    initial_candidates = candidates
+    candidates = _fit_candidate_segments(
+        candidates,
+        draft,
+        context=context,
+        profile_id=profile.profile_id,
+        source_language=source_language,
+        target_language=target_language,
+        is_cancelled=is_cancelled,
+        on_progress=lambda completed, total, round_number: _report(
+            on_progress,
+            0.58 + 0.03 * completed / max(1, total),
+            f"正在生成中文表达 · 调整过长字幕 · 第 {round_number} 轮 {completed}/{total}",
+        ),
+    )
+    step_results["research"] = _research_step_result(research, candidates)
+    step_results["localize"] = _localize_step_result(candidates, draft)
+    if on_preview and candidates != initial_candidates:
+        on_preview("localized_draft", _rough_preview(candidates, draft))
+
+    _report(on_progress, 0.62, "正在安排字幕分段与时间")
+    _ensure_active(is_cancelled)
+    timed = _finalize_timing(_time_candidates(candidates, draft), draft)
+    step_results["segment_timing"] = _timing_step_result(timed)
+    if on_preview:
+        on_preview("localized_timing", [_preview_item(item) for item in timed])
+
+    _report(on_progress, 0.75, "正在复核语义与可读性")
+    reviewed, review_changes = _quality_review(
+        timed,
+        draft=draft,
+        context=context,
+        profile_id=profile.profile_id,
+        source_language=source_language,
+        target_language=target_language,
+        is_cancelled=is_cancelled,
+        on_batch=lambda completed, total: _report(
+            on_progress,
+            0.75 + 0.16 * completed / max(1, total),
+            f"正在复核语义与可读性 · {completed}/{total}",
+        ),
+        on_split=lambda batch_number, total: _report(
+            on_progress,
+            0.75 + 0.16 * max(0, batch_number - 1) / max(1, total),
+            f"正在复核语义与可读性 · 第 {batch_number}/{total} 批内容较长，正在拆分",
+        ),
+    )
+    reviewed = _finalize_timing(reviewed, draft)
+    step_results["quality_review"] = _quality_step_result(reviewed, review_changes)
+    if on_preview:
+        on_preview("localized_review", [_preview_item(item) for item in reviewed])
+
+    _report(on_progress, 0.94, "正在写入本土化字幕轨")
+    _ensure_active(is_cancelled)
+    next_draft = _with_localized_track(
+        draft,
+        reviewed,
+        fingerprint=fingerprint,
+        context=context,
+        research=research,
+        source_language=source_language,
+        target_language=target_language,
+        profile_id=profile.profile_id,
+        model_id=profile.model_id,
+        localization_level=localization_level,
+        worldview_permeability=worldview_permeability,
+    )
+    step_results["write_track"] = _write_step_result(next_draft.localized_subtitles)
+    _report(on_progress, 0.98, "本土化字幕初稿已生成，正在保存")
+
+    return LocalizationRun(
+        draft=next_draft,
+        summary={
+            "source_language": source_language,
+            "target_language": target_language,
+            "source_fingerprint": fingerprint,
+            "llm_profile_id": profile.profile_id,
+            "llm_model_id": profile.model_id,
+            "localized_subtitle_count": len(next_draft.localized_subtitles),
+            "duration_ms": _elapsed_ms(started_at),
+            "task_step_results": step_results,
+            "preview_phase": "localized_review",
+            "preview_cues": [_preview_item(item) for item in reviewed],
+        },
+    )
 
 
 def with_chinese_draft(draft: VideoLocalizationDraft) -> VideoLocalizationDraft:
-    if not draft.cues:
-        raise AppException(400, "VIDEO_LOCALIZATION_CUES_MISSING", "Create English ASR cues before generating Chinese localization draft")
-
-    localized_by_id, localization_meta = _localize_missing_cues(draft)
-    changed = False
-    next_cues: list[VideoLocalizationCue] = []
-    for cue in draft.cues:
-        patch: dict[str, object] = {}
-        flags = list(cue.quality_flags)
-        zh_text = (cue.zh_localized_subtitle_text or "").strip()
-        if not zh_text:
-            source_text = (cue.en_subtitle_text or "").strip()
-            if not source_text:
-                next_cues.append(cue)
-                continue
-            localized = localized_by_id.get(cue.cue_id)
-            if localized:
-                zh_text = localized["text"]
-                note = localized.get("note")
-                patch["notes"] = _append_localization_note(cue.notes, note)
-                flags = cue_tools.add_flags(
-                    [flag for flag in flags if flag not in {"localization_draft", "llm_localization_failed"}],
-                    [
-                        "llm_localized",
-                        "needs_human_localization",
-                        "localization:L1_W0",
-                        f"localization_prompt:{LOCALIZATION_PROMPT_VERSION}",
-                        f"localization_model:{localization_meta['model_id']}",
-                    ],
-                )
-            else:
-                zh_text = f"【待本土化】{source_text}"
-                failure_flags = ["localization_draft", "needs_human_localization"]
-                if localization_meta["attempted"]:
-                    failure_flags.append("llm_localization_failed")
-                flags = cue_tools.add_flags(flags, failure_flags)
-            patch["zh_localized_subtitle_text"] = zh_text
-            changed = True
-
-        if patch:
-            patch["quality_flags"] = flags
-            next_cues.append(cue.model_copy(update=patch))
-        else:
-            next_cues.append(cue)
-
-    if not changed:
-        raise AppException(400, "VIDEO_LOCALIZATION_LOCALIZATION_UNCHANGED", "All cues already have Chinese subtitles")
-    return draft.model_copy(update={"cues": next_cues})
+    """Compatibility entry point for the legacy synchronous endpoint."""
+    return generate_localization_draft(draft).draft
 
 
-def _localize_missing_cues(draft: VideoLocalizationDraft) -> tuple[dict[str, dict[str, str]], dict[str, object]]:
-    missing = [cue for cue in draft.cues if not (cue.zh_localized_subtitle_text or "").strip() and (cue.en_subtitle_text or "").strip()]
-    profiles = settings_store.llm_profiles()
-    profile = settings_store.llm_profile(profiles.default_profile_id) if profiles.default_profile_id else None
-    if not missing or not profile or not profile.enabled or not profile.model_id:
-        return {}, {"attempted": False, "model_id": None}
-
-    speaker_by_id = {speaker.speaker_id: speaker for speaker in draft.speakers}
-    localized: dict[str, dict[str, str]] = {}
-    for start in range(0, len(missing), LOCALIZATION_BATCH_SIZE):
-        batch = missing[start : start + LOCALIZATION_BATCH_SIZE]
-        payload = {
-            "task": LOCALIZATION_PROMPT_VERSION,
-            "profile": {
-                "localization_level": "L1",
-                "worldview_permeability": "W0",
-                "target_language": "zh-Hans",
-                "audience": "中国大陆观众",
-                "scene_context": draft.scene_context,
-            },
-            "glossary": [
-                {
-                    "source_text": item.source_text,
-                    "corrected_source_text": item.corrected_source_text,
-                    "zh_text": item.zh_text,
-                    "notes": item.notes,
-                }
-                for item in draft.glossary
-                if item.source_text.strip()
-            ],
-            "rules": {
-                "preserve": ["facts", "numbers", "proper nouns", "causality", "negation", "speaker intent", "emotion strength", "persona"],
-                "style": ["natural spoken Chinese", "concise subtitle", "minimal necessary punctuation", "no translationese"],
-                "forbidden": ["timestamps", "summarization", "invented facts", "new Chinese historical or cultural entities", "internet memes"],
-                "numbers": "Keep every Arabic number from the source unchanged in zh_subtitle_text.",
-            },
-            "cues": [
-                {
-                    "cue_id": cue.cue_id,
-                    "source_text": cue.en_subtitle_text,
-                    "speaker": _speaker_context(speaker_by_id.get(cue.speaker_id)),
-                    "previous": _neighbor_text(draft.cues, cue.cue_id, -1),
-                    "next": _neighbor_text(draft.cues, cue.cue_id, 1),
-                }
-                for cue in batch
-            ],
-            "output": "Return {cues:[{cue_id, zh_subtitle_text, adaptation_note}]}. Return every cue exactly once and in input order.",
-        }
-        try:
-            raw = llm_runtime.complete_json(
-                system_prompt=_localization_system_prompt(),
-                user_payload=payload,
-                profile_id=profile.profile_id,
-                temperature=0.15,
-                max_tokens=min(16384, max(4096, len(batch) * 300)),
-            )
-            items = raw.get("cues") if isinstance(raw, dict) else None
-            if not isinstance(items, list) or [item.get("cue_id") for item in items if isinstance(item, dict)] != [cue.cue_id for cue in batch]:
-                continue
-            for cue, item in zip(batch, items):
-                text = str(item.get("zh_subtitle_text") or "").strip()
-                if not _localized_text_is_safe(cue.en_subtitle_text or "", text):
-                    continue
-                localized[cue.cue_id] = {
-                    "text": text,
-                    "note": str(item.get("adaptation_note") or "").strip()[:500],
-                }
-        except Exception:
-            continue
-    return localized, {"attempted": True, "model_id": profile.model_id}
+def _validate_source(draft: VideoLocalizationDraft) -> None:
+    usable = [
+        cue
+        for cue in draft.cues
+        if (cue.en_subtitle_text or "").strip() and cue.start_ms is not None and cue.end_ms is not None
+    ]
+    if not usable:
+        raise AppException(400, "VIDEO_LOCALIZATION_CUES_MISSING", "请先生成并校对 ASR 字幕。")
+    if any(cue.end_ms is None or cue.start_ms is None or cue.end_ms <= cue.start_ms for cue in usable):
+        raise AppException(400, "VIDEO_LOCALIZATION_SOURCE_TIMING_INVALID", "ASR 字幕中存在无效时间，请先修正。")
 
 
-def _localized_text_is_safe(source: str, localized: str) -> bool:
-    if not localized or localized.startswith("【待本土化】"):
-        return False
-    source_numbers = NUMBER_PATTERN.findall(source)
-    return all(number in localized for number in source_numbers)
-
-
-def _speaker_context(speaker) -> dict[str, str | None] | None:
-    if speaker is None:
-        return None
+def _analyze_context(
+    draft: VideoLocalizationDraft,
+    *,
+    profile_id: str,
+    source_language: str,
+    target_language: str,
+    localization_level: str,
+    worldview_permeability: str,
+) -> dict:
+    payload = {
+        "task": f"{LOCALIZATION_PROMPT_VERSION}:context",
+        "source_language": source_language,
+        "target_language": target_language,
+        "localization_level": localization_level,
+        "worldview_permeability": worldview_permeability,
+        "scene_context": draft.scene_context.strip()[:3000] or None,
+        "speakers": [
+            {"speaker_id": speaker.speaker_id, "name": speaker.display_name, "notes": speaker.notes}
+            for speaker in draft.speakers
+        ],
+        "glossary": [item.model_dump(mode="json") for item in draft.glossary],
+        "transcript": [
+            {"cue_id": cue.cue_id, "speaker_id": cue.speaker_id, "text": cue.en_subtitle_text}
+            for cue in draft.cues
+            if (cue.en_subtitle_text or "").strip()
+        ],
+        "output": (
+            "返回 overview、era、setting、topics、speakers、style_rules、needs_research、research_questions。"
+            "speakers 每项包含 speaker_id、persona、speech_habits、relationship、emotion。"
+            "research_questions 每项包含 query、reason、category、target_terms；只有外部资料能减少误译时才提出。"
+        ),
+    }
+    raw = llm_runtime.complete_json(
+        system_prompt=(
+            "你是影视本土化总编。先理解内容、时代、场景、人物关系、说话习惯与情绪，再决定哪些事实或文化背景需要外部查证。"
+            "人物口吻来自原文证据，不得凭空编造。把本土化强度与世界观渗透程度分开考虑。只返回约定 JSON。"
+        ),
+        user_payload=payload,
+        profile_id=profile_id,
+        temperature=0.1,
+        max_tokens=5000,
+        timeout=120,
+    )
+    if not isinstance(raw, dict):
+        raise AppException(422, "VIDEO_LOCALIZATION_CONTEXT_INVALID", "语言模型没有返回可用的内容理解结果。")
     return {
-        "speaker_id": speaker.speaker_id,
-        "display_name": speaker.display_name,
-        "notes": speaker.notes,
+        "overview": _text(raw.get("overview"), 1200),
+        "era": _text(raw.get("era"), 200),
+        "setting": _text(raw.get("setting"), 300),
+        "topics": _string_list(raw.get("topics"), 12, 120),
+        "speakers": _dict_list(raw.get("speakers"), 24),
+        "style_rules": _string_list(raw.get("style_rules"), 16, 300),
+        "needs_research": bool(raw.get("needs_research")),
+        "research_questions": _dict_list(raw.get("research_questions"), 8),
     }
 
 
-def _neighbor_text(cues: list[VideoLocalizationCue], cue_id: str, offset: int) -> str | None:
-    index = next((index for index, cue in enumerate(cues) if cue.cue_id == cue_id), -1)
-    target = index + offset
-    if index < 0 or target < 0 or target >= len(cues):
-        return None
-    return (cues[target].en_subtitle_text or "").strip() or None
+def _research_context(context: dict, *, is_cancelled: CancelCallback | None) -> dict:
+    questions = context.get("research_questions") if context.get("needs_research") else []
+    settings = settings_store.web_search_settings()
+    if not questions:
+        return {"status": "not_needed", "reason": "现有原文与项目资料足以完成初稿", "questions": []}
+    if not settings.enabled:
+        return {"status": "disabled", "reason": "网络查证未启用，继续使用项目内资料", "questions": []}
+
+    api_key = settings_store.web_search_api_key()
+    items = []
+    failures = 0
+    for raw in questions[: settings.max_queries]:
+        _ensure_active(is_cancelled)
+        query = _text(raw.get("query"), 240)
+        if not query:
+            continue
+        try:
+            results = web_search.search(settings, query, api_key=api_key)
+            error = None
+        except Exception as exc:
+            results = []
+            error = str(exc)[:300]
+            failures += 1
+        items.append(
+            {
+                "question_id": f"research_{len(items) + 1:02d}",
+                "query": query,
+                "reason": _text(raw.get("reason"), 500),
+                "category": _text(raw.get("category"), 80) or "背景",
+                "target_terms": _string_list(raw.get("target_terms"), 8, 100),
+                "sources": [
+                    {"title": item.title, "url": item.url, "snippet": item.snippet, "provider": settings.provider}
+                    for item in results
+                ],
+                "error": error,
+            }
+        )
+    source_count = sum(len(item["sources"]) for item in items)
+    status = "completed" if not failures else "partial" if source_count else "failed"
+    return {"status": status, "reason": "只查证会影响理解或文化转述的问题", "questions": items}
 
 
-def _append_localization_note(existing: str | None, note: str | None) -> str | None:
-    note = (note or "").strip()
-    if not note:
-        return existing
-    line = f"本土化说明：{note}"
-    return f"{existing.rstrip()}\n{line}" if existing and existing.strip() else line
+def _localize_cues(
+    draft: VideoLocalizationDraft,
+    *,
+    context: dict,
+    research: dict,
+    profile_id: str,
+    source_language: str,
+    target_language: str,
+    localization_level: str,
+    worldview_permeability: str,
+    is_cancelled: CancelCallback | None,
+    on_batch: Callable[[int, int], None],
+    on_batch_preview: Callable[[list[dict]], None] | None = None,
+    on_repair: Callable[[int, int], None] | None = None,
+    on_split: Callable[[int, int], None] | None = None,
+) -> list[dict]:
+    cues = [cue for cue in draft.cues if (cue.en_subtitle_text or "").strip()]
+    cue_by_id = {cue.cue_id: cue for cue in cues}
+    word_by_id = {word.word_id: word for word in (draft.transcription.words if draft.transcription else [])}
+    allowed_research_ids = {
+        str(item.get("question_id")) for item in research.get("questions") or [] if item.get("question_id")
+    }
+    batches = [cues[index : index + LOCALIZATION_BATCH_SIZE] for index in range(0, len(cues), LOCALIZATION_BATCH_SIZE)]
+    candidates: list[dict] = []
+    for batch_index, batch in enumerate(batches):
+        _ensure_active(is_cancelled)
+        allowed_ids = {cue.cue_id for cue in batch}
+        allowed_word_ids = {word_id for cue in batch for word_id in cue.source_word_ids if word_id in word_by_id}
+        payload = {
+            "task": f"{LOCALIZATION_PROMPT_VERSION}:localize",
+            "source_language": source_language,
+            "target_language": target_language,
+            "profile": {
+                "localization_level": localization_level,
+                "worldview_permeability": worldview_permeability,
+                "audience": "中国大陆观众",
+            },
+            "context": context,
+            "research": _research_payload(research),
+            "glossary": [item.model_dump(mode="json") for item in draft.glossary],
+            "neighbor_context": {
+                "previous": [
+                    {"cue_id": cue.cue_id, "text": cue.en_subtitle_text}
+                    for cue in cues[
+                        max(0, batch_index * LOCALIZATION_BATCH_SIZE - 2) : batch_index * LOCALIZATION_BATCH_SIZE
+                    ]
+                ],
+                "next": [
+                    {"cue_id": cue.cue_id, "text": cue.en_subtitle_text}
+                    for cue in cues[
+                        (batch_index + 1) * LOCALIZATION_BATCH_SIZE : (batch_index + 1) * LOCALIZATION_BATCH_SIZE + 2
+                    ]
+                ],
+            },
+            "source_cues": [_cue_payload(cue, word_by_id) for cue in batch],
+            "rules": {
+                "immutable": ["事实", "数字", "专名", "否定", "因果", "比较", "人物意图", "情绪强度"],
+                "display_text": "自然口语、单行优先、尽量不使用逗号句号等常规标点，只保留确有必要的问号或感叹号",
+                "tts_text": "与上屏字幕含义一致，但保留语音合成需要的标点、停顿、语气词和口语节奏",
+                "segmentation": "按完整语义和说话停顿重新分段，不必与源 cue 一一对应，可合并或拆分",
+                "adaptation_note": "用简短中文说明本土化处理；专名或代码可保留原文，不使用内部字段名或英文流程术语",
+                "research_usage": "只有查证资料实际影响当前表达时才填写；没有直接影响必须返回空数组",
+            },
+            "output": (
+                "返回 segments 数组。每项必须包含 source_cue_ids、source_word_ids、display_text、tts_text、adaptation_note、research_usage。"
+                "research_usage 每项包含 question_id 和 effect，说明哪项查证具体改变或确认了什么；未直接采用资料时必须为空数组。"
+                "source_cue_ids 和 source_word_ids 只能使用输入中的 id，并按原文顺序覆盖本批全部 cue。"
+            ),
+        }
+
+        def split_current_batch() -> list[dict]:
+            if len(batch) <= 1:
+                raise AppException(422, "VIDEO_LOCALIZATION_LOCALIZATION_INVALID", "单条本土化字幕仍无法通过校验。")
+            if on_split:
+                on_split(batch_index + 1, len(batches))
+            midpoint = len(batch) // 2
+            split_items: list[dict] = []
+            for sub_batch in (batch[:midpoint], batch[midpoint:]):
+                sub_draft = draft.model_copy(update={"cues": sub_batch})
+                sub_items = _localize_cues(
+                    sub_draft,
+                    context=context,
+                    research=research,
+                    profile_id=profile_id,
+                    source_language=source_language,
+                    target_language=target_language,
+                    localization_level=localization_level,
+                    worldview_permeability=worldview_permeability,
+                    is_cancelled=is_cancelled,
+                    on_batch=lambda _completed, _total: None,
+                    on_batch_preview=(
+                        (lambda items: on_batch_preview([*candidates, *split_items, *items]))
+                        if on_batch_preview
+                        else None
+                    ),
+                    on_repair=(
+                        (lambda _batch_number, _total: on_repair(batch_index + 1, len(batches))) if on_repair else None
+                    ),
+                    on_split=(
+                        (lambda _batch_number, _total: on_split(batch_index + 1, len(batches))) if on_split else None
+                    ),
+                )
+                split_items.extend(sub_items)
+            return split_items
+
+        try:
+            raw = llm_runtime.complete_json(
+                system_prompt=(
+                    "你是中文影视字幕本土化编辑。先保持说话行为、事实和人物口吻，再写成中国大陆观众自然会说的话。"
+                    "不要逐字硬译，不要擅自植入中国历史人物、地名、典故或网络热梗。上屏字幕与配音台词是两个用途不同但语义一致的文本。"
+                    "源字幕行只是识别容器，不是目标语言分段边界。只返回约定 JSON。"
+                ),
+                user_payload=payload,
+                profile_id=profile_id,
+                temperature=0.18,
+                max_tokens=16384,
+                timeout=180,
+                allow_array=True,
+            )
+        except llm_runtime.LlmRuntimeError as exc:
+            if exc.code != "llm_output_truncated" or len(batch) <= 1:
+                raise
+            parsed = split_current_batch()
+            raw_segments = None
+        else:
+            raw_segments = raw if isinstance(raw, list) else raw.get("segments") if isinstance(raw, dict) else None
+        if raw_segments is not None:
+            try:
+                parsed = _validate_localized_segments(
+                    raw_segments,
+                    batch,
+                    allowed_ids,
+                    allowed_word_ids,
+                    cue_by_id,
+                    word_by_id,
+                    allowed_research_ids=allowed_research_ids,
+                )
+            except AppException as exc:
+                if (
+                    exc.code
+                    in {
+                        "VIDEO_LOCALIZATION_SOURCE_COVERAGE_INCOMPLETE",
+                        "VIDEO_LOCALIZATION_SOURCE_MAPPING_INVALID",
+                        "VIDEO_LOCALIZATION_LOCALIZATION_INVALID",
+                    }
+                    and len(batch) > 1
+                ):
+                    parsed = split_current_batch()
+                    exc = None
+                elif exc.code != "VIDEO_LOCALIZATION_NUMBER_CHANGED":
+                    raise
+                if exc is not None:
+                    _ensure_active(is_cancelled)
+                    if on_repair:
+                        on_repair(batch_index + 1, len(batches))
+                    problem_ids = set(_string_list(exc.detail_dict.get("source_cue_ids"), 24, 120))
+                    problem_segments = [
+                        item
+                        for item in (raw_segments or [])
+                        if isinstance(item, dict)
+                        and problem_ids.intersection(_string_list(item.get("source_cue_ids"), 24, 120))
+                    ]
+                    problem_cues = [cue for cue in batch if cue.cue_id in problem_ids]
+                    repair_payload = {
+                        "task": f"{LOCALIZATION_PROMPT_VERSION}:repair-numbers",
+                        "source_language": source_language,
+                        "target_language": target_language,
+                        "context": context,
+                        "source_cues": [_cue_payload(cue, word_by_id) for cue in problem_cues],
+                        "previous_segments": problem_segments,
+                        "required_numbers": [
+                            {
+                                "cue_id": cue.cue_id,
+                                "tokens": list(_normalized_numbers(cue.en_subtitle_text or "").elements()),
+                            }
+                            for cue in problem_cues
+                            if _normalized_numbers(cue.en_subtitle_text or "")
+                        ],
+                        "repair_instruction": (
+                            "只修正数字遗漏或改写。每个数字、百分比、版本号和规格型号必须在 display_text 和 tts_text 中按原字符出现；"
+                            "不得增加原文没有的阿拉伯数字。保持原有 source_cue_ids、source_word_ids、语义和分段。"
+                        ),
+                        "output": "只返回修正后的问题 segments，不要返回本批其他字幕。",
+                    }
+                    repaired = llm_runtime.complete_json(
+                        system_prompt=(
+                            "你是字幕事实校对员。上一版本土化字幕的数字与原文不一致。"
+                            "只修复数字和规格，不改变其他翻译、分段或来源关系，只返回约定 JSON。"
+                        ),
+                        user_payload=repair_payload,
+                        profile_id=profile_id,
+                        temperature=0.0,
+                        max_tokens=4096,
+                        timeout=180,
+                        allow_array=True,
+                    )
+                    repaired_segments = (
+                        repaired
+                        if isinstance(repaired, list)
+                        else repaired.get("segments")
+                        if isinstance(repaired, dict)
+                        else None
+                    )
+                    repaired_by_source = {
+                        tuple(_string_list(item.get("source_cue_ids"), 24, 120)): item
+                        for item in (repaired_segments or [])
+                        if isinstance(item, dict)
+                    }
+                    merged_segments = [
+                        repaired_by_source.get(tuple(_string_list(item.get("source_cue_ids"), 24, 120)), item)
+                        if isinstance(item, dict)
+                        else item
+                        for item in (raw_segments or [])
+                    ]
+                    try:
+                        parsed = _validate_localized_segments(
+                            merged_segments,
+                            batch,
+                            allowed_ids,
+                            allowed_word_ids,
+                            cue_by_id,
+                            word_by_id,
+                            allowed_research_ids=allowed_research_ids,
+                        )
+                    except AppException as repair_exc:
+                        if (
+                            repair_exc.code
+                            in {
+                                "VIDEO_LOCALIZATION_NUMBER_CHANGED",
+                                "VIDEO_LOCALIZATION_SOURCE_COVERAGE_INCOMPLETE",
+                                "VIDEO_LOCALIZATION_SOURCE_MAPPING_INVALID",
+                                "VIDEO_LOCALIZATION_LOCALIZATION_INVALID",
+                            }
+                            and len(batch) > 1
+                        ):
+                            parsed = split_current_batch()
+                        else:
+                            if repair_exc.code != "VIDEO_LOCALIZATION_NUMBER_CHANGED":
+                                raise
+                            raise AppException(
+                                422,
+                                repair_exc.code,
+                                "数字自动核对后仍与原文不一致，任务已停止写入。",
+                                repair_exc.detail_dict,
+                            ) from repair_exc
+        candidates.extend(parsed)
+        on_batch(batch_index + 1, len(batches))
+        if on_batch_preview:
+            on_batch_preview(candidates)
+    return candidates
 
 
-def _localization_system_prompt() -> str:
-    return (
-        "你是中文影视字幕本土化编辑。默认执行 L1 功能等值与 W0 封闭世界观：先保住源事实、说话行为、人物关系和口吻，"
-        "再写成中国大陆观众自然会说、能快速读懂的口语字幕。不得逐字硬译，不得添加原作不存在的中国历史人物、典故、地名或网络热梗。"
-        "数字、专名、否定、因果、比较和结论不得改变。字幕只写当前 cue 实际表达的内容，不生成或修改时间码，不合并、拆分或遗漏 cue。"
-        "标点保持克制；adaptation_note 只简述必要的意译或风险，没有特殊改写时留空。只返回约定 JSON。"
+def _validate_localized_segments(
+    raw_segments,
+    batch,
+    allowed_ids,
+    allowed_word_ids,
+    cue_by_id,
+    word_by_id,
+    *,
+    allowed_research_ids: set[str] | None = None,
+) -> list[dict]:
+    if not isinstance(raw_segments, list) or not raw_segments:
+        raise AppException(422, "VIDEO_LOCALIZATION_LOCALIZATION_INVALID", "语言模型没有返回可用的本土化字幕。")
+    parsed = []
+    covered: set[str] = set()
+    cue_order = {cue.cue_id: index for index, cue in enumerate(batch)}
+    word_order = {word_id: index for index, word_id in enumerate(word_by_id)}
+    previous_cue_position = -1
+    returned_word_ids: list[str] = []
+    for raw in raw_segments:
+        if not isinstance(raw, dict):
+            continue
+        source_cue_ids = [item for item in _string_list(raw.get("source_cue_ids"), 24, 120) if item in allowed_ids]
+        source_word_ids = [
+            item for item in _string_list(raw.get("source_word_ids"), 200, 120) if item in allowed_word_ids
+        ]
+        display_text = _normalize_display_text(_text(raw.get("display_text"), 800))
+        tts_text = _text(raw.get("tts_text"), 1000) or display_text
+        research_usage = [
+            {"question_id": question_id, "effect": effect}
+            for item in _dict_list(raw.get("research_usage"), 8)
+            if (question_id := _text(item.get("question_id"), 80))
+            and (allowed_research_ids is None or question_id in allowed_research_ids)
+            and (effect := _text(item.get("effect"), 300))
+        ]
+        if not source_cue_ids or not display_text or not tts_text:
+            continue
+        cue_positions = [cue_order[cue_id] for cue_id in source_cue_ids]
+        unique_positions = sorted(set(cue_positions))
+        speaker_ids = {
+            cue_by_id[cue_id].speaker_id
+            for cue_id in source_cue_ids
+            if cue_id in cue_by_id and cue_by_id[cue_id].speaker_id
+        }
+        if (
+            cue_positions != sorted(cue_positions)
+            or (unique_positions and unique_positions[-1] - unique_positions[0] + 1 != len(unique_positions))
+            or (cue_positions and cue_positions[0] < previous_cue_position)
+            or len(speaker_ids) > 1
+        ):
+            raise AppException(
+                422,
+                "VIDEO_LOCALIZATION_SOURCE_MAPPING_INVALID",
+                "本土化字幕的原文范围顺序错误或跨越了不同说话人，任务已停止写入。",
+                {"source_cue_ids": source_cue_ids, "speaker_ids": sorted(speaker_ids)},
+            )
+        if cue_positions:
+            previous_cue_position = cue_positions[0]
+        returned_word_ids.extend(source_word_ids)
+        source_text = (
+            _join_source_words([word_by_id[word_id].text for word_id in source_word_ids if word_id in word_by_id])
+            if source_word_ids
+            else " ".join((cue_by_id[item].en_subtitle_text or "").strip() for item in source_cue_ids)
+        )
+        if not _numbers_preserved(source_text, display_text) or not _numbers_preserved(source_text, tts_text):
+            raise AppException(
+                422,
+                "VIDEO_LOCALIZATION_NUMBER_CHANGED",
+                "本土化结果改变或遗漏了原文数字，正在尝试自动修正。",
+                {
+                    "source_numbers": list(_normalized_numbers(source_text).elements()),
+                    "display_numbers": list(_normalized_numbers(display_text).elements()),
+                    "tts_numbers": list(_normalized_numbers(tts_text).elements()),
+                    "source_cue_ids": source_cue_ids,
+                },
+            )
+        covered.update(source_cue_ids)
+        parsed.append(
+            {
+                "id": f"localized_{len(parsed) + 1:04d}",
+                "source_cue_ids": source_cue_ids,
+                "source_word_ids": source_word_ids,
+                "source_text": source_text,
+                "display_text": display_text,
+                "tts_text": tts_text,
+                "adaptation_note": _text(raw.get("adaptation_note"), 600),
+                "research_usage": research_usage,
+                "quality_flags": [],
+            }
+        )
+    missing = [cue.cue_id for cue in batch if cue.cue_id not in covered]
+    expected_word_ids = [word_id for cue in batch for word_id in cue.source_word_ids if word_id in allowed_word_ids]
+    returned_word_positions = [word_order[word_id] for word_id in returned_word_ids]
+    word_mapping_invalid = bool(expected_word_ids) and (
+        returned_word_ids != expected_word_ids
+        or returned_word_positions != sorted(returned_word_positions)
+        or len(returned_word_ids) != len(set(returned_word_ids))
     )
+    if word_mapping_invalid:
+        raise AppException(
+            422,
+            "VIDEO_LOCALIZATION_SOURCE_MAPPING_INVALID",
+            "本土化字幕遗漏、重复或打乱了源语逐词时间，任务已停止写入。",
+            {
+                "expected_word_count": len(expected_word_ids),
+                "returned_word_count": len(returned_word_ids),
+            },
+        )
+    if not parsed or missing:
+        raise AppException(
+            422,
+            "VIDEO_LOCALIZATION_SOURCE_COVERAGE_INCOMPLETE",
+            "本土化结果遗漏了部分原文，任务已停止写入。",
+            {"missing_cue_ids": missing[:20]},
+        )
+    return parsed
+
+
+def _join_source_words(tokens: list[str]) -> str:
+    result = ""
+    for raw in tokens:
+        token = raw.strip()
+        if not token:
+            continue
+        if not result:
+            result = token
+        elif token[0].isdigit() and re.search(r"\d[.,]$", result):
+            result += token
+        elif token[0] in ".,!?;:，。！？；：)]}”’":
+            result += token
+        else:
+            result += " " + token
+    return result.strip()
+
+
+def _time_candidates(candidates: list[dict], draft: VideoLocalizationDraft) -> list[dict]:
+    cue_by_id = {cue.cue_id: cue for cue in draft.cues}
+    word_by_id = {word.word_id: word for word in (draft.transcription.words if draft.transcription else [])}
+    timed = []
+    for index, item in enumerate(candidates):
+        words = [word_by_id[word_id] for word_id in item["source_word_ids"] if word_id in word_by_id]
+        cues = [cue_by_id[cue_id] for cue_id in item["source_cue_ids"] if cue_id in cue_by_id]
+        if words:
+            start_ms = min(word.start_ms for word in words)
+            end_ms = max(word.end_ms for word in words)
+            timing_source = "源音频逐词时间"
+        else:
+            start_ms = min(cue.start_ms or 0 for cue in cues)
+            end_ms = max(cue.end_ms or start_ms + MIN_SUBTITLE_DURATION_MS for cue in cues)
+            timing_source = "ASR 字幕时间范围"
+        timed.append(
+            {
+                **item,
+                "id": f"localized_{index + 1:04d}",
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "timing_source": timing_source,
+            }
+        )
+
+    _split_identical_ranges(timed)
+    timed.sort(key=lambda item: (item["start_ms"], item["end_ms"], item["id"]))
+    for index, item in enumerate(timed):
+        next_start = timed[index + 1]["start_ms"] if index + 1 < len(timed) else None
+        if index and item["start_ms"] < timed[index - 1]["end_ms"]:
+            item["start_ms"] = timed[index - 1]["end_ms"]
+        desired_end = (
+            min(item["end_ms"] + END_HOLD_MS, next_start) if next_start is not None else item["end_ms"] + END_HOLD_MS
+        )
+        item["end_ms"] = max(item["start_ms"] + 1, desired_end)
+    return timed
+
+
+def _fit_candidate_segments(
+    candidates: list[dict],
+    draft: VideoLocalizationDraft,
+    *,
+    context: dict,
+    profile_id: str,
+    source_language: str,
+    target_language: str,
+    is_cancelled: CancelCallback | None,
+    on_progress: Callable[[int, int, int], None] | None = None,
+) -> list[dict]:
+    fitted = list(candidates)
+    cue_by_id = {cue.cue_id: cue for cue in draft.cues}
+    word_by_id = {word.word_id: word for word in (draft.transcription.words if draft.transcription else [])}
+
+    for round_number in range(1, LOCALIZATION_FIT_MAX_ROUNDS + 1):
+        timed = _time_candidates([{**item, "_fit_index": index} for index, item in enumerate(fitted)], draft)
+        timed_by_index = {int(item["_fit_index"]): item for item in timed}
+        problem_indexes = sorted(index for index, item in timed_by_index.items() if _candidate_exceeds_budget(item))
+        if not problem_indexes:
+            return fitted
+
+        batches = [
+            problem_indexes[index : index + LOCALIZATION_FIT_BATCH_SIZE]
+            for index in range(0, len(problem_indexes), LOCALIZATION_FIT_BATCH_SIZE)
+        ]
+        replacements: dict[int, list[dict]] = {}
+        for batch_index, indexes in enumerate(batches, start=1):
+            _ensure_active(is_cancelled)
+            replacements.update(
+                _refine_candidate_batch(
+                    [(index, fitted[index], timed_by_index[index]) for index in indexes],
+                    cue_by_id=cue_by_id,
+                    word_by_id=word_by_id,
+                    context=context,
+                    profile_id=profile_id,
+                    source_language=source_language,
+                    target_language=target_language,
+                    is_cancelled=is_cancelled,
+                )
+            )
+            if on_progress:
+                on_progress(batch_index, len(batches), round_number)
+
+        next_fitted: list[dict] = []
+        for index, item in enumerate(fitted):
+            next_fitted.extend(replacements.get(index, [item]))
+        expected_word_ids = [word_id for item in fitted for word_id in item["source_word_ids"]]
+        returned_word_ids = [word_id for item in next_fitted for word_id in item["source_word_ids"]]
+        if expected_word_ids and returned_word_ids != expected_word_ids:
+            raise AppException(
+                422,
+                "VIDEO_LOCALIZATION_FIT_WORD_COVERAGE_INVALID",
+                "字幕长度调整结果遗漏、重复或打乱了源语逐词时间，任务已停止写入。",
+                {
+                    "expected_word_count": len(expected_word_ids),
+                    "returned_word_count": len(returned_word_ids),
+                    "round": round_number,
+                },
+            )
+        fitted = next_fitted
+
+    remaining = [item for item in _time_candidates(fitted, draft) if _candidate_exceeds_budget(item)]
+    if remaining:
+        raise AppException(
+            422,
+            "VIDEO_LOCALIZATION_TIMING_BUDGET_UNRESOLVED",
+            "部分本土化字幕在自动调整后仍过长，任务已停止写入。",
+            {
+                "subtitle_ids": [item["id"] for item in remaining[:20]],
+                "count": len(remaining),
+                "limits": {
+                    "max_duration_ms": MAX_SUBTITLE_DURATION_MS,
+                    "max_chars": MAX_CHARS_PER_LINE * 2,
+                    "max_cps": MAX_CHINESE_CPS,
+                },
+                "remaining": [
+                    {
+                        "subtitle_id": item["id"],
+                        "source_cue_ids": item["source_cue_ids"],
+                        **_candidate_budget_report(item),
+                    }
+                    for item in remaining[:20]
+                ],
+            },
+        )
+    return fitted
+
+
+def _candidate_exceeds_budget(item: dict) -> bool:
+    return bool(_candidate_budget_report(item)["violations"])
+
+
+def _candidate_budget_report(item: dict) -> dict:
+    duration = max(1, int(item["end_ms"]) - int(item["start_ms"]))
+    chars = _readable_chars(item["display_text"])
+    cps = chars * 1000 / duration
+    violations = []
+    if duration > MAX_SUBTITLE_DURATION_MS:
+        violations.append("时长超过7秒，需要按完整语义拆分")
+    if chars > MAX_CHARS_PER_LINE * 2:
+        violations.append("上屏文字超过32个字，需要拆分或精简")
+    if cps > MAX_CHINESE_CPS:
+        violations.append("阅读速度超过每秒9字，需要在不丢信息的前提下精简表达")
+    return {
+        "duration_ms": duration,
+        "visible_chars": chars,
+        "cps": round(cps, 2),
+        "max_chars_for_duration": max(
+            1,
+            min(MAX_CHARS_PER_LINE * 2, math.floor(duration * MAX_CHINESE_CPS / 1000)),
+        ),
+        "suggested_min_segments": max(
+            1,
+            math.ceil(duration / MAX_SUBTITLE_DURATION_MS),
+            math.ceil(chars / (MAX_CHARS_PER_LINE * 2)),
+        ),
+        "violations": violations,
+    }
+
+
+def _refine_candidate_batch(
+    entries: list[tuple[int, dict, dict]],
+    *,
+    cue_by_id: dict[str, VideoLocalizationCue],
+    word_by_id: dict,
+    context: dict,
+    profile_id: str,
+    source_language: str,
+    target_language: str,
+    is_cancelled: CancelCallback | None,
+    validation_retry: bool = False,
+) -> dict[int, list[dict]]:
+    _ensure_active(is_cancelled)
+    payload_items = []
+    for index, item, timed in entries:
+        source_cues = _fit_source_cues(item, cue_by_id, word_by_id)
+        budget = _candidate_budget_report(timed)
+        payload_items.append(
+            {
+                "parent_id": f"candidate_{index:04d}",
+                "current": {
+                    "display_text": item["display_text"],
+                    "tts_text": item["tts_text"],
+                    "adaptation_note": item.get("adaptation_note"),
+                    **budget,
+                },
+                "source_cues": [_cue_payload(cue, word_by_id) for cue in source_cues],
+            }
+        )
+
+    try:
+        raw = llm_runtime.complete_json(
+            system_prompt=(
+                "你是中文影视字幕分段编辑。只处理过长或阅读过快的本土化字幕。"
+                "按完整语义、源语逐词时间和自然停顿拆分，必要时压缩中文，但不得删改事实、数字、专名、否定、因果或人物语气。"
+                "代码已经列出每条字幕违反的硬性限制和建议最少段数。时长或字数超限时优先按语义拆分；"
+                "只有阅读速度超限时，拆分不能解决问题，必须在不损失信息的前提下精简中文表达。"
+                "每段上屏字幕不超过32个可见字符，源语时间范围不超过7秒，阅读速度不超过9字/秒。"
+                "配音台词与上屏字幕含义一致，并保留语音合成需要的标点和语气。只返回约定 JSON。"
+                + (
+                    "上次结果重复或遗漏了源语词。重新分配时，每个输入 source_word_id 在该 parent 的全部 segments 中必须恰好出现一次，"
+                    "不得把完整词列表复制到多个 segment。原文中的数字、版本号和型号也必须在对应片段中原样保留。"
+                    if validation_retry
+                    else ""
+                )
+            ),
+            user_payload={
+                "task": f"{LOCALIZATION_PROMPT_VERSION}:fit-segments",
+                "validation_retry": validation_retry,
+                "source_language": source_language,
+                "target_language": target_language,
+                "context": context,
+                "limits": {
+                    "max_duration_ms": MAX_SUBTITLE_DURATION_MS,
+                    "max_display_chars": MAX_CHARS_PER_LINE * 2,
+                    "max_display_cps": MAX_CHINESE_CPS,
+                    "min_duration_ms": MIN_SUBTITLE_DURATION_MS,
+                },
+                "items": payload_items,
+                "output": (
+                    "返回 items 数组，顺序与 parent_id 必须和输入一致。每项包含 parent_id 和 segments。"
+                    "每个 segment 必须包含 source_cue_ids、source_word_ids、display_text、tts_text、adaptation_note。"
+                    "每个 parent 的 segments 必须按原顺序覆盖其全部 source cue；有逐词 ID 时必须无重复、无遗漏地覆盖全部 source_word_ids。"
+                ),
+            },
+            profile_id=profile_id,
+            temperature=0.08,
+            max_tokens=16384,
+            timeout=180,
+            allow_array=True,
+        )
+    except llm_runtime.LlmRuntimeError as exc:
+        if exc.code != "llm_output_truncated" or len(entries) <= 1:
+            raise
+        raw = None
+
+    raw_items = raw if isinstance(raw, list) else raw.get("items") if isinstance(raw, dict) else None
+    expected_parent_ids = [f"candidate_{index:04d}" for index, _item, _timed in entries]
+    returned_parent_ids = (
+        [str(item.get("parent_id")) for item in raw_items if isinstance(item, dict)]
+        if isinstance(raw_items, list)
+        else []
+    )
+    if returned_parent_ids != expected_parent_ids:
+        if len(entries) > 1:
+            midpoint = len(entries) // 2
+            return {
+                **_refine_candidate_batch(
+                    entries[:midpoint],
+                    cue_by_id=cue_by_id,
+                    word_by_id=word_by_id,
+                    context=context,
+                    profile_id=profile_id,
+                    source_language=source_language,
+                    target_language=target_language,
+                    is_cancelled=is_cancelled,
+                    validation_retry=validation_retry,
+                ),
+                **_refine_candidate_batch(
+                    entries[midpoint:],
+                    cue_by_id=cue_by_id,
+                    word_by_id=word_by_id,
+                    context=context,
+                    profile_id=profile_id,
+                    source_language=source_language,
+                    target_language=target_language,
+                    is_cancelled=is_cancelled,
+                    validation_retry=validation_retry,
+                ),
+            }
+        raise AppException(422, "VIDEO_LOCALIZATION_FIT_INVALID", "语言模型没有返回完整的字幕长度调整结果。")
+
+    replacements: dict[int, list[dict]] = {}
+    for (index, source, timed), raw_item in zip(entries, raw_items):
+        source_cues = _fit_source_cues(source, cue_by_id, word_by_id)
+        allowed_ids = {cue.cue_id for cue in source_cues}
+        allowed_word_ids = {word_id for cue in source_cues for word_id in cue.source_word_ids if word_id in word_by_id}
+        allowed_research_ids = {
+            str(item.get("question_id"))
+            for item in source.get("research_usage") or []
+            if item.get("question_id")
+        }
+        try:
+            parsed = _validate_localized_segments(
+                raw_item.get("segments"),
+                source_cues,
+                allowed_ids,
+                allowed_word_ids,
+                cue_by_id,
+                word_by_id,
+                allowed_research_ids=allowed_research_ids,
+            )
+        except AppException as exc:
+            if not validation_retry and exc.code in {
+                "VIDEO_LOCALIZATION_SOURCE_MAPPING_INVALID",
+                "VIDEO_LOCALIZATION_SOURCE_COVERAGE_INCOMPLETE",
+                "VIDEO_LOCALIZATION_NUMBER_CHANGED",
+            }:
+                replacements.update(
+                    _refine_candidate_batch(
+                        [(index, source, timed)],
+                        cue_by_id=cue_by_id,
+                        word_by_id=word_by_id,
+                        context=context,
+                        profile_id=profile_id,
+                        source_language=source_language,
+                        target_language=target_language,
+                        is_cancelled=is_cancelled,
+                        validation_retry=True,
+                    )
+                )
+                continue
+            raise
+        for item in parsed:
+            if not item.get("adaptation_note") and source.get("adaptation_note"):
+                item["adaptation_note"] = source["adaptation_note"]
+            if not item.get("research_usage") and source.get("research_usage"):
+                item["research_usage"] = list(source["research_usage"])
+        returned_word_ids = [word_id for item in parsed for word_id in item["source_word_ids"]]
+        expected_word_ids = [word_id for word_id in source["source_word_ids"] if word_id in allowed_word_ids]
+        if expected_word_ids and returned_word_ids != expected_word_ids:
+            raise AppException(
+                422,
+                "VIDEO_LOCALIZATION_FIT_WORD_COVERAGE_INVALID",
+                "字幕长度调整结果遗漏、重复或打乱了源语逐词时间，任务已停止写入。",
+                {
+                    "parent_id": f"candidate_{index:04d}",
+                    "expected_word_count": len(expected_word_ids),
+                    "returned_word_count": len(returned_word_ids),
+                },
+            )
+        replacements[index] = parsed
+    return replacements
+
+
+def _fit_source_cues(item: dict, cue_by_id: dict[str, VideoLocalizationCue], word_by_id: dict) -> list[VideoLocalizationCue]:
+    source_cues = [cue_by_id[cue_id] for cue_id in item["source_cue_ids"] if cue_id in cue_by_id]
+    candidate_word_ids = [word_id for word_id in item["source_word_ids"] if word_id in word_by_id]
+    if not candidate_word_ids:
+        return source_cues
+
+    candidate_word_id_set = set(candidate_word_ids)
+    scoped_cues = []
+    for cue in source_cues:
+        scoped_word_ids = [word_id for word_id in cue.source_word_ids if word_id in candidate_word_id_set]
+        patch: dict[str, object] = {"source_word_ids": scoped_word_ids}
+        if scoped_word_ids:
+            words = [word_by_id[word_id] for word_id in scoped_word_ids]
+            patch.update(
+                {
+                    "start_ms": min(word.start_ms for word in words),
+                    "end_ms": max(word.end_ms for word in words),
+                    "en_subtitle_text": _join_source_words([word.text for word in words]),
+                }
+            )
+        scoped_cues.append(cue.model_copy(update=patch))
+    return scoped_cues
+
+
+def _split_identical_ranges(items: list[dict]) -> None:
+    groups: dict[tuple[int, int], list[dict]] = defaultdict(list)
+    for item in items:
+        groups[(item["start_ms"], item["end_ms"])].append(item)
+    for (start_ms, end_ms), group in groups.items():
+        if len(group) < 2:
+            continue
+        total_weight = sum(max(1, _readable_chars(item["display_text"])) for item in group)
+        cursor = start_ms
+        consumed = 0
+        for index, item in enumerate(group):
+            consumed += max(1, _readable_chars(item["display_text"]))
+            boundary = (
+                end_ms if index == len(group) - 1 else start_ms + round((end_ms - start_ms) * consumed / total_weight)
+            )
+            item["start_ms"] = cursor
+            item["end_ms"] = max(cursor + 1, boundary)
+            cursor = boundary
+
+
+def _quality_review(
+    timed: list[dict],
+    *,
+    draft: VideoLocalizationDraft,
+    context: dict,
+    profile_id: str,
+    source_language: str,
+    target_language: str,
+    is_cancelled: CancelCallback | None,
+    on_batch: Callable[[int, int], None],
+    on_split: Callable[[int, int], None] | None = None,
+) -> tuple[list[dict], list[dict]]:
+    batches = [
+        timed[index : index + QUALITY_REVIEW_BATCH_SIZE] for index in range(0, len(timed), QUALITY_REVIEW_BATCH_SIZE)
+    ]
+    reviewed: list[dict] = []
+    changes: list[dict] = []
+    for batch_index, batch in enumerate(batches):
+        _ensure_active(is_cancelled)
+
+        def review_batch(items: list[dict]) -> tuple[list[dict], list[dict]]:
+            _ensure_active(is_cancelled)
+            try:
+                raw = llm_runtime.complete_json(
+                    system_prompt=(
+                        "你是影视本土化终审。核对语义、数字、否定、因果、人物口吻、文化转述和字幕可读性。"
+                        "只修正确有问题的项目；不要把自然口语改回翻译腔。上屏字幕少用常规标点，配音台词保留必要语气和停顿。只返回 JSON。"
+                    ),
+                    user_payload={
+                        "task": f"{LOCALIZATION_PROMPT_VERSION}:quality-review",
+                        "source_language": source_language,
+                        "target_language": target_language,
+                        "context": context,
+                        "items": [
+                            {
+                                "id": item["id"],
+                                "source_text": item["source_text"],
+                                "display_text": item["display_text"],
+                                "tts_text": item["tts_text"],
+                                "duration_ms": item["end_ms"] - item["start_ms"],
+                            }
+                            for item in items
+                        ],
+                        "output": "返回 items；每项包含 id、approved、display_text、tts_text、reason，顺序和 id 必须与输入完全一致。",
+                    },
+                    profile_id=profile_id,
+                    temperature=0.05,
+                    max_tokens=16384,
+                    timeout=180,
+                    allow_array=True,
+                )
+            except llm_runtime.LlmRuntimeError as exc:
+                if exc.code != "llm_output_truncated" or len(items) <= 1:
+                    raise
+                raw = None
+
+            raw_items = raw if isinstance(raw, list) else raw.get("items") if isinstance(raw, dict) else None
+            expected_ids = [item["id"] for item in items]
+            returned_ids = (
+                [str(item.get("id")) for item in raw_items if isinstance(item, dict)]
+                if isinstance(raw_items, list)
+                else []
+            )
+            if returned_ids != expected_ids:
+                if len(items) <= 1:
+                    raise AppException(
+                        422,
+                        "VIDEO_LOCALIZATION_REVIEW_INVALID",
+                        "本土化终审没有返回完整结果，任务已停止写入。",
+                        {"expected_ids": expected_ids, "returned_ids": returned_ids},
+                    )
+                if on_split:
+                    on_split(batch_index + 1, len(batches))
+                midpoint = len(items) // 2
+                left_reviewed, left_changes = review_batch(items[:midpoint])
+                right_reviewed, right_changes = review_batch(items[midpoint:])
+                return [*left_reviewed, *right_reviewed], [*left_changes, *right_changes]
+
+            batch_reviewed: list[dict] = []
+            batch_changes: list[dict] = []
+            for source, decision in zip(items, raw_items):
+                display_text = (
+                    _normalize_display_text(_text(decision.get("display_text"), 800)) or source["display_text"]
+                )
+                tts_text = _text(decision.get("tts_text"), 1000) or source["tts_text"]
+                if not _numbers_preserved(source["source_text"], display_text) or not _numbers_preserved(
+                    source["source_text"], tts_text
+                ):
+                    display_text, tts_text = source["display_text"], source["tts_text"]
+                changed = display_text != source["display_text"] or tts_text != source["tts_text"]
+                if changed:
+                    batch_changes.append(
+                        {
+                            "id": source["id"],
+                            "before": source["display_text"],
+                            "after": display_text,
+                            "tts_before": source["tts_text"],
+                            "tts_after": tts_text,
+                            "reason": _text(decision.get("reason"), 500) or "终审修正了语义或口语表达",
+                        }
+                    )
+                batch_reviewed.append({**source, "display_text": display_text, "tts_text": tts_text})
+            return batch_reviewed, batch_changes
+
+        batch_reviewed, batch_changes = review_batch(batch)
+        reviewed.extend(batch_reviewed)
+        changes.extend(batch_changes)
+        on_batch(batch_index + 1, len(batches))
+    return reviewed, changes
+
+
+def _finalize_timing(items: list[dict], draft: VideoLocalizationDraft) -> list[dict]:
+    ordered = sorted(items, key=lambda item: (item["start_ms"], item["end_ms"], item["id"]))
+    media_end = int(draft.source_media.duration_ms or 0) or None
+    for index, item in enumerate(ordered):
+        flags = set(item.get("quality_flags") or [])
+        next_start = ordered[index + 1]["start_ms"] if index + 1 < len(ordered) else media_end
+        if index and item["start_ms"] < ordered[index - 1]["end_ms"]:
+            item["start_ms"] = ordered[index - 1]["end_ms"]
+        if next_start is not None:
+            item["end_ms"] = min(item["end_ms"], next_start)
+
+    _ensure_minimum_subtitle_durations(ordered, media_end=media_end)
+
+    for item in ordered:
+        flags = set(item.get("quality_flags") or [])
+        duration = max(1, item["end_ms"] - item["start_ms"])
+        chars = _readable_chars(item["display_text"])
+        cps = chars * 1000 / duration
+        if duration < MIN_SUBTITLE_DURATION_MS:
+            flags.add("localized_duration_short")
+        if duration > MAX_SUBTITLE_DURATION_MS:
+            flags.add("localized_duration_long")
+        if cps > MAX_CHINESE_CPS:
+            flags.add("localized_reading_speed_high")
+        if chars > MAX_CHARS_PER_LINE * 2:
+            flags.add("localized_text_too_long")
+        item["quality_flags"] = sorted(flags)
+        item["cps"] = round(cps, 1)
+    return ordered
+
+
+def _ensure_minimum_subtitle_durations(items: list[dict], *, media_end: int | None) -> None:
+    original_ranges = [(item["start_ms"], item["end_ms"]) for item in items]
+    if _borrow_minimum_duration_from_neighbors(items, media_end=media_end):
+        return
+    for item, (start_ms, end_ms) in zip(items, original_ranges):
+        item["start_ms"] = start_ms
+        item["end_ms"] = end_ms
+    _schedule_minimum_durations(items, media_end=media_end)
+
+
+def _borrow_minimum_duration_from_neighbors(items: list[dict], *, media_end: int | None) -> bool:
+    for index, item in enumerate(items):
+        deficit = MIN_SUBTITLE_DURATION_MS - (item["end_ms"] - item["start_ms"])
+        if deficit <= 0:
+            continue
+
+        previous = items[index - 1] if index else None
+        following = items[index + 1] if index + 1 < len(items) else None
+
+        left_limit = previous["end_ms"] if previous is not None else 0
+        take = min(deficit, max(0, item["start_ms"] - left_limit))
+        item["start_ms"] -= take
+        deficit -= take
+
+        right_limit = following["start_ms"] if following is not None else media_end
+        if right_limit is None:
+            right_limit = item["end_ms"] + deficit
+        take = min(deficit, max(0, right_limit - item["end_ms"]))
+        item["end_ms"] += take
+        deficit -= take
+
+        if deficit > 0 and previous is not None:
+            available = max(0, previous["end_ms"] - previous["start_ms"] - MIN_SUBTITLE_DURATION_MS)
+            take = min(deficit, available)
+            previous["end_ms"] -= take
+            item["start_ms"] = previous["end_ms"]
+            deficit -= take
+
+        if deficit > 0 and following is not None:
+            available = max(0, following["end_ms"] - following["start_ms"] - MIN_SUBTITLE_DURATION_MS)
+            take = min(deficit, available)
+            following["start_ms"] += take
+            item["end_ms"] = following["start_ms"]
+            deficit -= take
+
+        if deficit > 0:
+            return False
+    return True
+
+
+def _schedule_minimum_durations(items: list[dict], *, media_end: int | None) -> None:
+    scheduled: list[tuple[int, int]] = []
+    previous_end = 0
+    for item in items:
+        preferred_duration = max(MIN_SUBTITLE_DURATION_MS, item["end_ms"] - item["start_ms"])
+        start_ms = max(item["start_ms"], previous_end)
+        end_ms = start_ms + preferred_duration
+        scheduled.append((start_ms, end_ms))
+        previous_end = end_ms
+
+    if media_end is not None and scheduled and scheduled[-1][1] > media_end:
+        next_start = media_end
+        adjusted: list[tuple[int, int]] = [(0, 0)] * len(items)
+        for index in range(len(items) - 1, -1, -1):
+            start_ms, end_ms = scheduled[index]
+            end_ms = min(end_ms, next_start)
+            start_ms = min(start_ms, end_ms - MIN_SUBTITLE_DURATION_MS)
+            if start_ms < 0:
+                raise AppException(
+                    422,
+                    "VIDEO_LOCALIZATION_TIMING_TOO_DENSE",
+                    "本土化字幕时间过于密集，无法保证每条字幕至少显示 833 毫秒。",
+                    {"subtitle_id": items[index]["id"], "minimum_duration_ms": MIN_SUBTITLE_DURATION_MS},
+                )
+            adjusted[index] = (start_ms, end_ms)
+            next_start = start_ms
+        scheduled = adjusted
+
+    for item, (start_ms, end_ms) in zip(items, scheduled):
+        item["start_ms"] = start_ms
+        item["end_ms"] = end_ms
+
+
+def _with_localized_track(
+    draft: VideoLocalizationDraft,
+    items: list[dict],
+    *,
+    fingerprint: str,
+    context: dict,
+    research: dict,
+    source_language: str,
+    target_language: str,
+    profile_id: str,
+    model_id: str,
+    localization_level: str,
+    worldview_permeability: str,
+) -> VideoLocalizationDraft:
+    subtitles = [
+        VideoLocalizationSubtitleCue(
+            subtitle_id=item["id"],
+            start_ms=item["start_ms"],
+            end_ms=item["end_ms"],
+            text=item["display_text"],
+            tts_text=item["tts_text"],
+            linked_cue_id=item["source_cue_ids"][0] if item["source_cue_ids"] else None,
+            source_cue_ids=item["source_cue_ids"],
+            source_word_ids=item["source_word_ids"],
+            adaptation_note=item["adaptation_note"] or None,
+            quality_flags=["generated_localization_draft", *item["quality_flags"]],
+        )
+        for item in items
+    ]
+    outputs_by_primary: dict[str, list[dict]] = defaultdict(list)
+    for item in items:
+        if item["source_cue_ids"]:
+            outputs_by_primary[item["source_cue_ids"][0]].append(item)
+    next_cues = []
+    for cue in draft.cues:
+        outputs = outputs_by_primary.get(cue.cue_id, [])
+        if outputs:
+            next_cues.append(
+                cue.model_copy(
+                    update={
+                        "zh_localized_subtitle_text": "\n".join(item["display_text"] for item in outputs),
+                        "tts_recommended_text": "\n".join(item["tts_text"] for item in outputs),
+                        "quality_flags": sorted(
+                            set(
+                                [
+                                    *cue.quality_flags,
+                                    "localization_draft",
+                                    f"localization_prompt:{LOCALIZATION_PROMPT_VERSION}",
+                                ]
+                            )
+                        ),
+                    }
+                )
+            )
+        else:
+            next_cues.append(
+                cue.model_copy(
+                    update={
+                        "zh_localized_subtitle_text": None,
+                        "tts_recommended_text": None,
+                        "quality_flags": [flag for flag in cue.quality_flags if not flag.startswith("localization")],
+                    }
+                )
+            )
+    state = {
+        "status": "draft",
+        "source_language": source_language,
+        "target_language": target_language,
+        "source_fingerprint": fingerprint,
+        "profile_id": profile_id,
+        "model_id": model_id,
+        "prompt_version": LOCALIZATION_PROMPT_VERSION,
+        "localization_level": localization_level,
+        "worldview_permeability": worldview_permeability,
+        "context": context,
+        "research": research,
+        "subtitle_count": len(subtitles),
+        "created_at": now_iso(),
+    }
+    return draft.model_copy(update={"localized_subtitles": subtitles, "cues": next_cues, "localization_state": state})
+
+
+def _context_step_result(context: dict, draft: VideoLocalizationDraft) -> dict:
+    speakers = [
+        {
+            "title": _text(item.get("speaker_id"), 120) or f"人物 {index}",
+            "text": _text(item.get("persona"), 500) or "未发现足够证据形成明确人物画像",
+            "facts": [
+                {"label": "说话习惯", "value": _text(item.get("speech_habits"), 300) or "按原文口吻处理"},
+                {"label": "人物关系", "value": _text(item.get("relationship"), 300) or "原文未明确"},
+                {"label": "当前情绪", "value": _text(item.get("emotion"), 200) or "按原文语气判断"},
+            ],
+        }
+        for index, item in enumerate(context.get("speakers") or [], start=1)
+    ]
+    return _result(
+        "success",
+        context.get("overview") or "已完成原文、场景与人物口吻分析。",
+        [
+            ("原文字幕", len(draft.cues)),
+            ("识别人物", len(context.get("speakers") or [])),
+            ("内容主题", len(context.get("topics") or [])),
+        ],
+        [("人物与表达方式", speakers)],
+        [
+            f"时代背景：{context['era']}" if context.get("era") else None,
+            f"场景：{context['setting']}" if context.get("setting") else None,
+        ],
+    )
+
+
+def _research_step_result(research: dict, localized_items: list[dict] | None = None) -> dict:
+    usage_by_question: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for localized in localized_items or []:
+        for usage in localized.get("research_usage") or []:
+            question_id = _text(usage.get("question_id"), 80)
+            if not question_id:
+                continue
+            usage_by_question[question_id].append(
+                {
+                    "effect": _text(usage.get("effect"), 300),
+                    "display_text": _text(localized.get("display_text"), 160),
+                }
+            )
+    items = []
+    for index, question in enumerate(research.get("questions") or [], start=1):
+        sources = question.get("sources") or []
+        usages = usage_by_question.get(str(question.get("question_id") or ""), [])
+        effects: list[str] = []
+        for usage in usages:
+            effect = usage.get("effect")
+            if effect and effect not in effects:
+                effects.append(effect)
+        if usages:
+            conclusion = f"这项资料实际影响了 {len(usages)} 段字幕。" + "；".join(effects[:4])
+            adoption = f"已用于 {len(usages)} 段字幕"
+            tone = "positive"
+        elif sources:
+            conclusion = "已把资料提供给本土化模型，但模型没有标记任何直接改写；本次仅作为背景参考。"
+            adoption = "仅参考，未直接采用"
+            tone = "neutral"
+        else:
+            conclusion = "没有找到足够可靠的公开资料，因此不会据此改写。"
+            adoption = "不采用"
+            tone = "warning"
+        items.append(
+            {
+                "title": f"问题 {index} · {question.get('query')}",
+                "text": conclusion,
+                "facts": [
+                    {"label": "为什么要查", "value": question.get("reason") or "避免名称或文化背景误译"},
+                    {"label": "重点内容", "value": "、".join(question.get("target_terms") or []) or "相关背景"},
+                    {"label": "采用结果", "value": adoption},
+                ],
+                "links": [
+                    {
+                        "title": source["title"],
+                        "url": source["url"],
+                        "text": source.get("snippet"),
+                        "meta": source.get("provider"),
+                    }
+                    for source in sources[:12]
+                ],
+                "tone": tone,
+            }
+        )
+    status = research.get("status") or "not_needed"
+    return _result(
+        "success"
+        if status == "completed"
+        else "warning"
+        if status in {"partial", "disabled"}
+        else "skipped"
+        if status == "not_needed"
+        else "failed",
+        research.get("reason") or "本次没有需要联网查证的问题。",
+        [
+            ("查证问题", len(research.get("questions") or [])),
+            ("参考来源", sum(len(item.get("sources") or []) for item in research.get("questions") or [])),
+            ("实际影响字幕", sum(len(usages) for usages in usage_by_question.values())),
+        ],
+        [("逐项查证结果", items)],
+    )
+
+
+def _localize_step_result(items: list[dict], draft: VideoLocalizationDraft) -> dict:
+    samples = [
+        {
+            "title": f"表达 {index}",
+            "before": item["source_text"],
+            "after": item["display_text"],
+            "before_label": "原文意思",
+            "after_label": "上屏字幕",
+            "text": f"配音台词：{item['tts_text']}"
+            + (f"；处理说明：{item['adaptation_note']}" if item.get("adaptation_note") else ""),
+            "tone": "positive",
+        }
+        for index, item in enumerate(items[:20], start=1)
+    ]
+    return _result(
+        "success",
+        f"把 {len(draft.cues)} 条原文字幕按完整语义整理为 {len(items)} 段自然中文表达。",
+        [("原文字幕", len(draft.cues)), ("中文语义段", len(items)), ("抽查样例", len(samples))],
+        [("原文与中文表达对照", samples)],
+    )
+
+
+def _timing_step_result(items: list[dict]) -> dict:
+    samples = [
+        {
+            "title": item["display_text"],
+            "text": f"字幕从 {_timecode(item['start_ms'])} 显示到 {_timecode(item['end_ms'])}。",
+            "facts": [
+                {"label": "时间依据", "value": item["timing_source"]},
+                {"label": "持续时间", "value": _duration_label(item["end_ms"] - item["start_ms"])},
+                {"label": "来源范围", "value": f"{len(item['source_cue_ids'])} 条原文字幕"},
+            ],
+        }
+        for item in items[:20]
+    ]
+    return _result(
+        "success",
+        "已根据原文词语时间、语义范围和相邻字幕边界安排初步时间，所有片段互不重叠。",
+        [
+            ("已安排片段", len(items)),
+            ("使用逐词时间", sum(item["timing_source"] == "源音频逐词时间" for item in items)),
+        ],
+        [("时间安排样例", samples)],
+    )
+
+
+def _quality_step_result(items: list[dict], changes: list[dict]) -> dict:
+    risky = [item for item in items if item.get("quality_flags")]
+    samples = [
+        {
+            "title": change["id"],
+            "before": change["before"],
+            "after": change["after"],
+            "before_label": "初稿",
+            "after_label": "复核后",
+            "text": change["reason"],
+            "tone": "positive",
+        }
+        for change in changes[:50]
+    ]
+    warnings = [
+        {
+            "title": item["display_text"],
+            "text": _quality_flags_label(item["quality_flags"]),
+            "facts": [
+                {"label": "显示时长", "value": _duration_label(item["end_ms"] - item["start_ms"])},
+                {"label": "阅读速度", "value": f"{item.get('cps', 0)} 字/秒"},
+            ],
+            "tone": "warning",
+        }
+        for item in risky[:50]
+    ]
+    return _result(
+        "warning" if risky else "success",
+        f"终审检查了 {len(items)} 段字幕，修正 {len(changes)} 段表达；{len(risky)} 段建议人工试听确认。",
+        [("复核字幕", len(items)), ("表达修正", len(changes)), ("建议试听", len(risky))],
+        [("终审修正", samples), ("需要重点看的字幕", warnings)],
+    )
+
+
+def _write_step_result(subtitles: list[VideoLocalizationSubtitleCue]) -> dict:
+    overlaps = sum(left.end_ms > right.start_ms for left, right in zip(subtitles, subtitles[1:]))
+    return _result(
+        "success" if subtitles and not overlaps else "warning",
+        f"已写入 {len(subtitles)} 条本土化字幕，并同时保存上屏字幕、配音台词和原文来源关系。",
+        [
+            ("写入字幕", len(subtitles)),
+            ("时间重叠", overlaps),
+            ("包含配音台词", sum(bool(item.tts_text) for item in subtitles)),
+        ],
+    )
+
+
+def _result(status: str, summary: str, metrics=(), sections=(), notes=()) -> dict:
+    return {
+        "status": status,
+        "summary": summary,
+        "metrics": [{"label": label, "value": str(value)} for label, value in metrics if value is not None],
+        "sections": [{"title": title, "items": items} for title, items in sections if items],
+        "notes": [note for note in notes if note],
+    }
+
+
+def _cue_payload(cue: VideoLocalizationCue, word_by_id: dict) -> dict:
+    return {
+        "cue_id": cue.cue_id,
+        "speaker_id": cue.speaker_id,
+        "start_ms": cue.start_ms,
+        "end_ms": cue.end_ms,
+        "text": cue.en_subtitle_text,
+        "words": [
+            {
+                "word_id": word_id,
+                "text": word_by_id[word_id].text,
+                "start_ms": word_by_id[word_id].start_ms,
+                "end_ms": word_by_id[word_id].end_ms,
+            }
+            for word_id in cue.source_word_ids
+            if word_id in word_by_id
+        ],
+    }
+
+
+def _research_payload(research: dict) -> list[dict]:
+    return [
+        {
+            "question_id": item.get("question_id"),
+            "question": item.get("query"),
+            "reason": item.get("reason"),
+            "sources": [
+                {"title": source.get("title"), "snippet": source.get("snippet"), "url": source.get("url")}
+                for source in item.get("sources") or []
+            ],
+        }
+        for item in research.get("questions") or []
+    ]
+
+
+def _rough_preview(items: list[dict], draft: VideoLocalizationDraft) -> list[dict]:
+    cue_by_id = {cue.cue_id: cue for cue in draft.cues}
+    result = []
+    for index, item in enumerate(items, start=1):
+        cues = [cue_by_id[cue_id] for cue_id in item["source_cue_ids"] if cue_id in cue_by_id]
+        result.append(
+            {
+                "subtitle_id": f"localized_{index:04d}",
+                "start_ms": min(cue.start_ms or 0 for cue in cues),
+                "end_ms": max(cue.end_ms or 1 for cue in cues),
+                "text": item["display_text"],
+                "tts_text": item["tts_text"],
+            }
+        )
+    return result
+
+
+def _preview_item(item: dict) -> dict:
+    return {
+        "subtitle_id": item["id"],
+        "start_ms": item["start_ms"],
+        "end_ms": item["end_ms"],
+        "text": item["display_text"],
+        "tts_text": item["tts_text"],
+        "quality_flags": item.get("quality_flags") or [],
+    }
+
+
+def _normalize_display_text(value: str) -> str:
+    characters = []
+    for index, character in enumerate(value):
+        if character not in DISPLAY_PUNCTUATION:
+            characters.append(character)
+            continue
+        previous = value[index - 1] if index else ""
+        following = value[index + 1] if index + 1 < len(value) else ""
+        if character in ",.:" and previous.isdigit() and following.isdigit():
+            characters.append(character)
+        else:
+            characters.append(" ")
+    text = "".join(characters)
+    return " ".join(text.split()).strip()
+
+
+def _numbers_preserved(source: str, localized: str) -> bool:
+    return _normalized_numbers(source) == _normalized_numbers(localized)
+
+
+def _normalized_numbers(value: str) -> Counter[str]:
+    return Counter(token.replace(",", "").replace("％", "%").upper() for token in NUMBER_PATTERN.findall(value))
+
+
+def _readable_chars(value: str) -> int:
+    return len(re.sub(r"\s|[^\w\u3400-\u9fff]", "", value))
+
+
+def _quality_flags_label(flags: list[str]) -> str:
+    labels = {
+        "localized_duration_short": "显示时间偏短",
+        "localized_duration_long": "单条持续时间偏长",
+        "localized_reading_speed_high": "单位时间字数偏多",
+        "localized_text_too_long": "上屏文字偏长",
+    }
+    return "；".join(labels.get(flag, flag) for flag in flags)
+
+
+def _timecode(value_ms: int) -> str:
+    total_seconds, milliseconds = divmod(max(0, int(value_ms)), 1000)
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+
+
+def _duration_label(value_ms: int) -> str:
+    seconds = max(0, value_ms) / 1000
+    return f"{seconds:.2f}".rstrip("0").rstrip(".") + " 秒"
+
+
+def _text(value, limit: int) -> str:
+    return " ".join(str(value or "").split())[:limit]
+
+
+def _string_list(value, limit: int, item_limit: int) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for raw in value[:limit] if (item := _text(raw, item_limit))]
+
+
+def _dict_list(value, limit: int) -> list[dict]:
+    return [item for item in (value if isinstance(value, list) else [])[:limit] if isinstance(item, dict)]
+
+
+def _report(callback: ProgressCallback | None, progress: float, stage: str) -> None:
+    if callback:
+        callback(progress, stage)
+
+
+def _ensure_active(callback: CancelCallback | None) -> None:
+    if callback and callback():
+        raise AppException(409, "VIDEO_LOCALIZATION_OPERATION_CANCELLED", "本土化字幕任务已取消。")
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, round((time.perf_counter() - started_at) * 1000))

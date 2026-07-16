@@ -40,6 +40,7 @@ def evaluate_quality_gate(draft: VideoLocalizationDraft) -> VideoLocalizationQua
     speaker_ids = {speaker.speaker_id for speaker in draft.speakers}
     has_localization_work = _has_localization_work(draft)
     has_dubbing_work = _has_dubbing_work(draft)
+    has_localized_track = bool(draft.localized_subtitles)
     _check_asr_timing_quality(draft, blockers)
     _check_word_provenance(draft, blockers)
     _check_boundary_review_quality(draft, blockers, warnings)
@@ -73,10 +74,10 @@ def evaluate_quality_gate(draft: VideoLocalizationDraft) -> VideoLocalizationQua
             speaker_ids,
             blockers,
             warnings,
-            check_localization=has_localization_work or has_dubbing_work,
+            check_localization=(has_localization_work or has_dubbing_work) and not has_localized_track,
             check_dubbing=has_dubbing_work,
         )
-        if has_localization_work or has_dubbing_work:
+        if (has_localization_work or has_dubbing_work) and not has_localized_track:
             _check_cue_localized_subtitle(cue, blockers, warnings)
         if has_dubbing_work:
             _check_cue_reference(cue, reference_by_id, blockers, warnings)
@@ -113,6 +114,9 @@ def _has_dubbing_work(draft: VideoLocalizationDraft) -> bool:
 def subtitle_export_blockers(draft: VideoLocalizationDraft, kind: str) -> list[VideoLocalizationQualityIssue]:
     blockers: list[VideoLocalizationQualityIssue] = []
     warnings: list[VideoLocalizationQualityIssue] = []
+    has_localized_track = bool(draft.localized_subtitles)
+    if kind in {"zh", "bilingual"}:
+        _check_localization_source_current(draft, blockers)
     if kind in {"en", "bilingual"}:
         if not draft.cues:
             blockers.append(_issue("SUBTITLE_TRACK_EMPTY", "字幕轨为空，没有可导出的字幕", "blocker"))
@@ -122,9 +126,12 @@ def subtitle_export_blockers(draft: VideoLocalizationDraft, kind: str) -> list[V
         _check_cue_timeline(draft.cues, blockers)
         _check_duplicate_cue_ids(draft.cues, blockers)
         for cue in draft.cues:
-            _check_export_cue(cue, kind, blockers)
-            if kind == "bilingual":
+            cue_kind = "en" if kind == "bilingual" and has_localized_track else kind
+            _check_export_cue(cue, cue_kind, blockers)
+            if kind == "bilingual" and not has_localized_track:
                 _check_cue_localized_subtitle(cue, blockers, warnings)
+        if kind == "bilingual" and has_localized_track:
+            _check_localized_subtitles(draft.localized_subtitles, blockers, warnings)
     elif kind == "zh":
         if draft.localized_subtitles:
             _check_localized_subtitles(draft.localized_subtitles, blockers, warnings)
@@ -143,6 +150,25 @@ def subtitle_export_blockers(draft: VideoLocalizationDraft, kind: str) -> list[V
         check_localized=kind in {"zh", "bilingual"} and bool(draft.localized_subtitles),
     )
     return _finalize_issues(blockers)
+
+
+def _check_localization_source_current(
+    draft: VideoLocalizationDraft,
+    blockers: list[VideoLocalizationQualityIssue],
+) -> None:
+    expected = str(draft.localization_state.get("source_fingerprint") or "")
+    if not expected:
+        return
+    from app.domains.video_localization import localization
+
+    if localization.source_fingerprint(draft) != expected:
+        blockers.append(
+            _issue(
+                "LOCALIZATION_SOURCE_CHANGED",
+                "原文字幕在本土化之后发生了变化，请重新生成本土化字幕初稿",
+                "blocker",
+            )
+        )
 
 
 def _check_export_cue(

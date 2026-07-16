@@ -8,6 +8,7 @@ from app.domains.video_localization.schemas import VideoLocalizationDraft
 ASR_SAMPLE_LIMIT = 15
 DETAIL_LIMIT = 50
 
+
 def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[str, dict]:
     transcription = draft.transcription
     if transcription is None:
@@ -16,6 +17,7 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
     segments = transcription.segments
     words = transcription.words
     research = transcription.research
+
     def stage(name: str) -> dict:
         value = stages.get(name)
         return value if isinstance(value, dict) else {}
@@ -45,11 +47,7 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
     }
 
     research_source_by_id = {item.source_id: item for item in research.sources}
-    review_operations = [
-        (segment, operation)
-        for segment in segments
-        for operation in segment.review_operations
-    ]
+    review_operations = [(segment, operation) for segment in segments for operation in segment.review_operations]
     research_edits = [
         operation
         for _segment, operation in review_operations
@@ -84,7 +82,9 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
     correction_items = _correction_items(segments, review_operations, research_source_by_id)
     correction_notes = [transcription.review_error]
     if len(review_operations) > DETAIL_LIMIT:
-        correction_notes.append(f"修改记录共 {len(review_operations)} 项，当前展示前 {DETAIL_LIMIT} 项；完整结果仍保留在项目转录数据中。")
+        correction_notes.append(
+            f"修改记录共 {len(review_operations)} 项，当前展示前 {DETAIL_LIMIT} 项；完整结果仍保留在项目转录数据中。"
+        )
     review_result = {
         "status": _result_status(transcription.review_status),
         "summary": _review_summary(transcription.review_status, len(changed_segments), len(segments)),
@@ -99,7 +99,9 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
         "notes": _notes(*correction_notes),
     }
 
-    confidence_counts = {level: sum(word.timing_confidence == level for word in words) for level in ("high", "medium", "low")}
+    confidence_counts = {
+        level: sum(word.timing_confidence == level for word in words) for level in ("high", "medium", "low")
+    }
     confidence_order = {"low": 0, "medium": 1, "high": 2}
     alignment_samples = [
         {
@@ -112,13 +114,16 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
             ],
             "tone": "warning" if word.timing_confidence == "low" else "neutral",
         }
-        for word in sorted(words, key=lambda item: (confidence_order.get(item.timing_confidence, 3), item.start_ms))[:12]
+        for word in sorted(words, key=lambda item: (confidence_order.get(item.timing_confidence, 3), item.start_ms))[
+            :12
+        ]
     ]
     alignment_result = {
         "status": _result_status(transcription.alignment_status),
         "summary": (
             f"为 {len(words)} 个词生成时间码，整体可信度为{_confidence_label(transcription.timing_confidence)}。"
-            if words else "没有生成可用的逐词时间码。"
+            if words
+            else "没有生成可用的逐词时间码。"
         ),
         "metrics": _metrics(
             ("对齐引擎", transcription.alignment_engine_id),
@@ -216,12 +221,12 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
 
     asr_cues = [cue for cue in draft.cues if "generated_by_asr" in cue.quality_flags]
     if not asr_cues:
-        asr_cues = [cue for cue in draft.cues if cue.en_subtitle_text and cue.start_ms is not None and cue.end_ms is not None]
+        asr_cues = [
+            cue for cue in draft.cues if cue.en_subtitle_text and cue.start_ms is not None and cue.end_ms is not None
+        ]
     ordered_cues = sorted(asr_cues, key=lambda cue: (cue.start_ms or 0, cue.end_ms or 0, cue.cue_id))
     overlaps = sum(
-        previous.end_ms is not None
-        and current.start_ms is not None
-        and previous.end_ms > current.start_ms
+        previous.end_ms is not None and current.start_ms is not None and previous.end_ms > current.start_ms
         for previous, current in zip(ordered_cues, ordered_cues[1:])
     )
     empty_cues = sum(not (cue.en_subtitle_text or "").strip() for cue in ordered_cues)
@@ -361,9 +366,9 @@ def _correction_items(segments, review_operations, research_source_by_id: dict[s
             for source_id in operation.evidence_source_ids
             if source_id in research_source_by_id
         ]
-        reason = _compact_text(operation.reason, 320) or "模型提出了这项文字校对建议。"
+        reason = _plain_review_reason(operation.reason)
         if not accepted:
-            rejection = _compact_text(operation.rejection_reason, 240) or "证据或声音依据不足"
+            rejection = _rejection_reason_label(operation.rejection_reason)
             reason = f"建议理由：{reason} 未采用原因：{rejection}。"
         items.append(
             {
@@ -449,6 +454,41 @@ def _boundary_context(left_word_id: str, right_word_id: str, words, word_index: 
     continuous = " ".join([*left_words, *right_words])
     split = f"{' '.join(left_words)} ｜ {' '.join(right_words)}"
     return _compact_text(continuous, 320), _compact_text(split, 320)
+
+
+def _plain_review_reason(value: object) -> str:
+    reason = _compact_text(value, 320)
+    if not reason:
+        return "模型根据原文上下文提出了这项校对建议。"
+    normalized = reason.lower()
+    if normalized.startswith("project_glossary:"):
+        return "与项目术语表中的标准写法一致。"
+    if "product name correction" in normalized and "video title" in normalized:
+        return "根据视频标题核对并修正产品名称。"
+    if "proper noun correction" in normalized:
+        return "结合视频标题、上下文和术语表核对专有名称。"
+    if "near-homophone" in normalized or "near homophone" in normalized:
+        return "结合上下文和术语表修正近音误识别。"
+    if "number correction" in normalized:
+        return "结合上下文核对数字或型号写法。"
+    return reason
+
+
+def _rejection_reason_label(value: object) -> str:
+    reason = _compact_text(value, 240)
+    labels = {
+        "llm_review_rejected:empty": "建议内容为空",
+        "llm_review_rejected:empty_text": "建议内容为空",
+        "llm_review_rejected:language_changed": "建议改变了原文语言",
+        "llm_review_rejected:numbers_changed": "建议会改变数字或型号",
+        "llm_review_rejected:negation_changed": "建议会改变否定关系",
+        "llm_review_rejected:rewrite_too_large": "建议改写幅度过大",
+        "llm_review_rejected:too_different": "建议改写幅度过大",
+        "llm_review_rejected:invalid_word_range": "建议定位的词语范围无效",
+        "llm_review_rejected:content_deletion": "建议会删除原文信息",
+        "llm_review_rejected:unsupported_proper_noun": "专有名称缺少足够依据",
+    }
+    return labels.get(reason, reason or "证据或声音依据不足")
 
 
 def _result_status(status: str) -> str:

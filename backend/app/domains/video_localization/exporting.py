@@ -14,12 +14,72 @@ from app.domains.video_localization import media_assets
 from app.domains.video_localization import subtitles
 from app.domains.video_localization.readiness import build_production_readiness_audit
 from app.errors import AppException
-from app.domains.video_localization.schemas import VideoLocalizationDraft, VideoLocalizationExport, now_iso
+from app.domains.video_localization.schemas import (
+    VideoLocalizationCue,
+    VideoLocalizationDraft,
+    VideoLocalizationExport,
+    VideoLocalizationSubtitleCue,
+    now_iso,
+)
 from app.services import audio_tools
 
 
 def export_subtitles(draft: VideoLocalizationDraft, kind: str) -> str:
+    if kind == "bilingual" and draft.localized_subtitles:
+        return _export_bilingual_localized_track(draft)
     return subtitles.export_srt(draft, kind)
+
+
+def _export_bilingual_localized_track(draft: VideoLocalizationDraft) -> str:
+    cue_by_id = {cue.cue_id: cue for cue in draft.cues}
+    projected_cues: list[VideoLocalizationCue] = []
+    for subtitle in sorted(
+        draft.localized_subtitles,
+        key=lambda item: (item.start_ms, item.end_ms, item.subtitle_id),
+    ):
+        source_cues = _localized_subtitle_source_cues(subtitle, draft.cues, cue_by_id)
+        english = " ".join(text for cue in source_cues if (text := (cue.en_subtitle_text or "").strip()))
+        if not english:
+            raise AppException(
+                400,
+                "VIDEO_LOCALIZATION_SUBTITLE_EXPORT_INVALID",
+                "本土化字幕无法映射到原文字幕，无法导出双语字幕。",
+                {"subtitle_id": subtitle.subtitle_id, "kind": "bilingual"},
+            )
+        projected_cues.append(
+            VideoLocalizationCue(
+                cue_id=subtitle.subtitle_id,
+                start_ms=subtitle.start_ms,
+                end_ms=subtitle.end_ms,
+                en_subtitle_text=english,
+                zh_localized_subtitle_text=subtitle.text,
+            )
+        )
+
+    return subtitles.export_srt(draft.model_copy(update={"cues": projected_cues}), "bilingual")
+
+
+def _localized_subtitle_source_cues(
+    subtitle: VideoLocalizationSubtitleCue,
+    cues: list[VideoLocalizationCue],
+    cue_by_id: dict[str, VideoLocalizationCue],
+) -> list[VideoLocalizationCue]:
+    if subtitle.source_cue_ids:
+        return [cue_by_id[cue_id] for cue_id in subtitle.source_cue_ids if cue_id in cue_by_id]
+
+    overlapping = [
+        cue
+        for cue in cues
+        if cue.start_ms is not None
+        and cue.end_ms is not None
+        and cue.start_ms < subtitle.end_ms
+        and cue.end_ms > subtitle.start_ms
+    ]
+    if overlapping:
+        return overlapping
+    if subtitle.linked_cue_id and subtitle.linked_cue_id in cue_by_id:
+        return [cue_by_id[subtitle.linked_cue_id]]
+    return []
 
 
 def export_bundle(project_id: str, project_name: str, draft: VideoLocalizationDraft) -> VideoLocalizationExport | None:
@@ -55,6 +115,7 @@ def timeline_edl(project_id: str, project_name: str, draft: VideoLocalizationDra
         "stems": next_draft.stems.model_dump(),
         "track_states": next_draft.ui_state.get("track_states", {}),
         "timeline_clips": [dict(clip) for clip in next_draft.timeline_clips],
+        "localized_subtitles": [subtitle.model_dump(mode="json") for subtitle in next_draft.localized_subtitles],
         "cues": [
             {
                 "cue_id": cue.cue_id,
@@ -94,8 +155,16 @@ def timeline_audio_package(project_id: str, project_name: str, draft: VideoLocal
         source_path = _clip_audio_path(next_draft, clip)
         clip_id = str(clip.get("clip_id") or f"clip_{index:04d}")
         cue_id = str(clip.get("cue_id") or "")
+        subtitle_id = str(clip.get("subtitle_id") or "")
         if not source_path or not source_path.exists():
-            missing_segments.append({"clip_id": clip_id, "cue_id": cue_id or None, "reason": "audio_source_missing"})
+            missing_segments.append(
+                {
+                    "clip_id": clip_id,
+                    "cue_id": cue_id or None,
+                    "subtitle_id": subtitle_id or None,
+                    "reason": "audio_source_missing",
+                }
+            )
             continue
 
         start_ms = _int_value(clip.get("start_ms"), 0)
@@ -103,10 +172,24 @@ def timeline_audio_package(project_id: str, project_name: str, draft: VideoLocal
         clip_end_ms = _clip_end_ms(next_draft, clip, source_path, start_ms)
         source_end_ms = _source_end_ms(clip, source_path, source_start_ms, clip_end_ms - start_ms)
         if clip_end_ms <= start_ms:
-            missing_segments.append({"clip_id": clip_id, "cue_id": cue_id or None, "reason": "invalid_timeline_range"})
+            missing_segments.append(
+                {
+                    "clip_id": clip_id,
+                    "cue_id": cue_id or None,
+                    "subtitle_id": subtitle_id or None,
+                    "reason": "invalid_timeline_range",
+                }
+            )
             continue
         if source_end_ms <= source_start_ms:
-            missing_segments.append({"clip_id": clip_id, "cue_id": cue_id or None, "reason": "invalid_source_range"})
+            missing_segments.append(
+                {
+                    "clip_id": clip_id,
+                    "cue_id": cue_id or None,
+                    "subtitle_id": subtitle_id or None,
+                    "reason": "invalid_source_range",
+                }
+            )
             continue
 
         segment_name = f"{index:03d}_{_safe_identifier(clip_id)}.wav"
@@ -118,6 +201,8 @@ def timeline_audio_package(project_id: str, project_name: str, draft: VideoLocal
                 "index": index,
                 "clip_id": clip_id,
                 "cue_id": cue_id or None,
+                "subtitle_id": subtitle_id or None,
+                "source_cue_ids": list(clip.get("source_cue_ids") or []),
                 "candidate_id": clip.get("candidate_id"),
                 "audio_route": clip.get("audio_route") or _cue_audio_route(next_draft, cue_id),
                 "track_id": clip.get("track_id", "dub"),
@@ -208,28 +293,52 @@ def _renderable_dub_clips(draft: VideoLocalizationDraft) -> list[dict]:
         and cue_routes.get(str(dict(clip).get("cue_id") or ""), "clone_from_source") != "preserve_original_audio"
     ]
     generated_cues = list(timeline_clips)
-    timeline_cue_ids = {str(clip.get("cue_id") or "") for clip in timeline_clips}
-    for cue in draft.cues:
-        if cue.cue_id in timeline_cue_ids or cue.audio_route not in {"clone_from_source", "preset_tts"}:
-            continue
-        if not cue.tts_audio_path:
-            continue
-        start_ms = cue.start_ms or 0
-        end_ms = cue.end_ms or start_ms + (cue.generated_duration_ms or cue.source_duration_ms or 0)
-        generated_cues.append(
-            {
-                "clip_id": f"clip_{cue.cue_id}",
-                "cue_id": cue.cue_id,
-                "track_id": "dub",
-                "start_ms": start_ms,
-                "end_ms": end_ms,
-                "source_start_ms": 0,
-                "source_end_ms": cue.generated_duration_ms,
-                "audio_path": cue.tts_audio_path,
-                "status": "ready",
-                "audio_route": cue.audio_route,
-            }
-        )
+    if draft.localized_subtitles:
+        timeline_subtitle_ids = {str(clip.get("subtitle_id") or "") for clip in timeline_clips}
+        for subtitle in draft.localized_subtitles:
+            if subtitle.subtitle_id in timeline_subtitle_ids or not subtitle.tts_audio_path:
+                continue
+            source_cue_ids = list(dict.fromkeys(subtitle.source_cue_ids))
+            primary_cue_id = next(iter(source_cue_ids), subtitle.linked_cue_id)
+            generated_cues.append(
+                {
+                    "clip_id": f"clip_{subtitle.subtitle_id}",
+                    "subtitle_id": subtitle.subtitle_id,
+                    "source_cue_ids": source_cue_ids,
+                    "cue_id": primary_cue_id,
+                    "track_id": "dub",
+                    "start_ms": subtitle.start_ms,
+                    "end_ms": subtitle.end_ms,
+                    "source_start_ms": 0,
+                    "source_end_ms": subtitle.generated_duration_ms,
+                    "audio_path": subtitle.tts_audio_path,
+                    "status": "ready",
+                    "audio_route": _localized_audio_route(draft, subtitle),
+                }
+            )
+    else:
+        timeline_cue_ids = {str(clip.get("cue_id") or "") for clip in timeline_clips}
+        for cue in draft.cues:
+            if cue.cue_id in timeline_cue_ids or cue.audio_route not in {"clone_from_source", "preset_tts"}:
+                continue
+            if not cue.tts_audio_path:
+                continue
+            start_ms = cue.start_ms or 0
+            end_ms = cue.end_ms or start_ms + (cue.generated_duration_ms or cue.source_duration_ms or 0)
+            generated_cues.append(
+                {
+                    "clip_id": f"clip_{cue.cue_id}",
+                    "cue_id": cue.cue_id,
+                    "track_id": "dub",
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "source_start_ms": 0,
+                    "source_end_ms": cue.generated_duration_ms,
+                    "audio_path": cue.tts_audio_path,
+                    "status": "ready",
+                    "audio_route": cue.audio_route,
+                }
+            )
     preserve_source = _existing_path(draft.stems.vocals_clean_path) or _existing_path(draft.source_media.audio_path) or _existing_path(draft.stems.original_audio_path)
     if preserve_source:
         for cue in draft.cues:
@@ -265,6 +374,13 @@ def _clip_audio_path(draft: VideoLocalizationDraft, clip: dict) -> Path | None:
         path = Path(explicit)
         if path.exists():
             return path
+    subtitle_id = clip.get("subtitle_id")
+    if isinstance(subtitle_id, str):
+        subtitle = next((item for item in draft.localized_subtitles if item.subtitle_id == subtitle_id), None)
+        if subtitle and subtitle.tts_audio_path:
+            path = Path(subtitle.tts_audio_path)
+            if path.exists():
+                return path
     cue_id = clip.get("cue_id")
     if isinstance(cue_id, str):
         cue = next((item for item in draft.cues if item.cue_id == cue_id), None)
@@ -280,10 +396,25 @@ def _cue_audio_route(draft: VideoLocalizationDraft, cue_id: str) -> str | None:
     return cue.audio_route if cue else None
 
 
+def _localized_audio_route(draft: VideoLocalizationDraft, subtitle: VideoLocalizationSubtitleCue) -> str | None:
+    cue_by_id = {cue.cue_id: cue for cue in draft.cues}
+    routes = {
+        cue.audio_route
+        for cue_id in subtitle.source_cue_ids
+        if (cue := cue_by_id.get(cue_id)) is not None
+    }
+    return next(iter(routes)) if len(routes) == 1 else None
+
+
 def _clip_end_ms(draft: VideoLocalizationDraft, clip: dict, source_path: Path, start_ms: int) -> int:
     end_ms = _int_value(clip.get("end_ms"), -1)
     if end_ms > start_ms:
         return end_ms
+    subtitle_id = clip.get("subtitle_id")
+    if isinstance(subtitle_id, str):
+        subtitle = next((item for item in draft.localized_subtitles if item.subtitle_id == subtitle_id), None)
+        if subtitle and subtitle.end_ms > start_ms:
+            return subtitle.end_ms
     duration_ms = audio_tools.probe_audio(source_path).get("duration_ms", 0)
     cue_id = clip.get("cue_id")
     if isinstance(cue_id, str):

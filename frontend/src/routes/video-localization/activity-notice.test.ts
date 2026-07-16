@@ -234,6 +234,87 @@ describe('activity notice tasks', () => {
 		expect(activityTaskStepTimingLabel(task.steps![5], task)).toBe('8 秒 · 2 轮 · 3 批');
 	});
 
+	it('maps localization draft progress, scope, timings, results and output count', () => {
+		const task = operationActivityTask({
+			operation_id: 'localization-running', project_id: 'project', kind: 'localization_draft', status: 'running',
+			label: null, progress: 0.82, error_code: null, error_message: null, cancel_requested: false,
+			parameters: { source_track_id: 'subtitles' },
+			result_summary: {
+				stage: '正在检查中文意思和阅读体验',
+				stage_id: 'quality_review',
+				localized_subtitle_count: 18,
+				llm_model_id: 'deepseek-chat',
+				task_stage_timings: {
+					prepare_context: { duration_ms: 1_200 },
+					research: { duration_ms: 2_300 },
+					localize: { duration_ms: 4_500 },
+					segment_timing: { duration_ms: 800 },
+					quality_review: { duration_ms: 400, running: true }
+				},
+				task_step_results: {
+					prepare_context: {
+						status: 'success',
+						summary: '已梳理主题、人物关系和表达习惯。',
+						metrics: [{ label: '人物', value: 2 }],
+						sections: [],
+						notes: []
+					},
+					localize: {
+						status: 'success',
+						summary: '已生成符合人物语气的中文初稿。',
+						metrics: [{ label: '中文片段', value: '18' }],
+						sections: [{
+							title: '表达对比',
+							items: [{ before: 'You nailed it.', after: '这事你办得漂亮', facts: [], links: [] }]
+						}],
+						notes: []
+					}
+				}
+			},
+			created_at: '2026-07-16T08:00:00Z', started_at: '2026-07-16T08:00:01Z', completed_at: null
+		});
+
+		expect(task).toMatchObject({
+			label: '生成本土化字幕初稿',
+			progress: 0.82,
+			cancellable: true,
+			semanticModelId: 'deepseek-chat',
+			resultCount: 18,
+			resultUnit: '条字幕',
+			scope: { trackIds: ['localizedSubtitles'], area: 'subtitle', exclusive: true }
+		});
+		expect(activityTaskDisplayName(task)).toBe('生成本土化字幕初稿');
+		expect(activityTaskResultLabel(task)).toBe('18 条字幕');
+		expect(activityTaskAffectsTrack(task, 'localizedSubtitles')).toBe(true);
+		expect(activityTaskAffectsTrack(task, 'subtitles')).toBe(false);
+		expect(task.steps?.map(({ id, label, status, durationMs }) => ({ id, label, status, durationMs }))).toEqual([
+			{ id: 'prepare_context', label: '理解原文与人物', status: 'success', durationMs: 1_200 },
+			{ id: 'research', label: '查证文化与背景', status: 'success', durationMs: 2_300 },
+			{ id: 'localize', label: '生成中文表达', status: 'success', durationMs: 4_500 },
+			{ id: 'segment_timing', label: '安排字幕分段与时间', status: 'success', durationMs: 800 },
+			{ id: 'quality_review', label: '复核语义与可读性', status: 'running', durationMs: 400 },
+			{ id: 'write_track', label: '写入本土化字幕轨', status: 'todo', durationMs: undefined }
+		]);
+		expect(task.steps?.[0].result?.summary).toBe('已梳理主题、人物关系和表达习惯。');
+		expect(task.steps?.[2].result?.sections[0].items[0]).toMatchObject({
+			before: 'You nailed it.',
+			after: '这事你办得漂亮'
+		});
+	});
+
+	it('keeps localization draft cancellation disabled once cancellation is requested', () => {
+		const task = operationActivityTask({
+			operation_id: 'localization-cancelling', project_id: 'project', kind: 'localization_draft', status: 'running',
+			label: null, progress: 0.3, error_code: null, error_message: null, cancel_requested: true,
+			parameters: {}, result_summary: { stage: 'research' },
+			created_at: '', started_at: '', completed_at: null
+		});
+
+		expect(task.cancellable).toBe(false);
+		expect(task.cancelPending).toBe(true);
+		expect(task.stage).toBe('正在取消，将在当前步骤结束后停止');
+	});
+
 	it('derives only the current step elapsed time from completed live step timings', () => {
 		const task = operationActivityTask({
 			operation_id: 'asr-live', project_id: 'project', kind: 'english_asr', status: 'running',
