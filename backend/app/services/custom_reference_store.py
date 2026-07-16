@@ -30,11 +30,11 @@ def allocate_path(file_id: str, suffix: str) -> Path:
 def is_managed_custom_path(path: str | Path | None) -> bool:
     if not path:
         return False
-    raw_candidate = Path(path).expanduser()
-    raw_root = custom_reference_dir()
-    if raw_candidate.is_symlink() or raw_root.is_symlink():
-        return False
     try:
+        raw_candidate = Path(path).expanduser()
+        raw_root = custom_reference_dir()
+        if raw_candidate.is_symlink() or raw_root.is_symlink():
+            return False
         candidate = _resolved(raw_candidate)
         root = _resolved(raw_root)
     except (OSError, RuntimeError, ValueError):

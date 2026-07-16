@@ -86,6 +86,37 @@ def test_longform_list_endpoint_returns_tasks(monkeypatch, isolated_db):
     assert any(item["longform_task_id"] == created["longform_task_id"] for item in response.json())
 
 
+def test_failed_longform_with_long_input_can_be_dismissed(isolated_db):
+    long_text = "包括为啥各种灾情都集中在这个时间段？这是一段正文，不是文件路径。" * 80
+    task = LongformTask(
+        longform_task_id="longform-long-input",
+        engine_id="indextts-v2",
+        voice_id="voice-a",
+        input_text=long_text,
+        status=TaskStatus.failed,
+        progress=1.0,
+        segments=[
+            LongformSegmentTask(
+                index=1,
+                text=long_text,
+                char_count=len(long_text),
+                status=TaskStatus.failed,
+                error_message="校对失败：检测到缺句或漏段",
+            )
+        ],
+        error_message="1 个段落生成或校对失败",
+        parameters={"generate_request": {"text": long_text}},
+    )
+    db.upsert("longform_tasks", task.longform_task_id, task.model_dump())
+
+    with TestClient(app) as client:
+        response = client.delete(f"/api/longform/{task.longform_task_id}")
+
+    assert response.status_code == 200
+    assert response.json() == {"longform_task_id": task.longform_task_id, "status": "dismissed"}
+    assert db.get_one("longform_tasks", "longform_task_id", task.longform_task_id) is None
+
+
 @pytest.mark.asyncio
 async def test_longform_segment_tasks_carry_parent_metadata(monkeypatch, isolated_db):
     captured: dict = {}

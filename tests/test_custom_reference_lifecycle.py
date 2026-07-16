@@ -84,6 +84,13 @@ def _task(
     return task
 
 
+def test_long_plain_text_is_not_treated_as_a_managed_path(isolated_store):
+    long_text = "这是一段正文，不是文件路径。" * 200
+
+    assert custom_reference_store.is_managed_custom_path(long_text) is False
+    assert custom_reference_store.managed_paths_in({"input_text": long_text}) == set()
+
+
 @pytest.mark.asyncio
 async def test_upload_audio_uses_managed_custom_root(isolated_store, monkeypatch):
     monkeypatch.setattr(
