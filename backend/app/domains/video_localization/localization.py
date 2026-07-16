@@ -19,7 +19,7 @@ from app.errors import AppException
 from app.services import llm_runtime, settings_store, web_search
 
 
-LOCALIZATION_PROMPT_VERSION = "localization-draft-v3"
+LOCALIZATION_PROMPT_VERSION = "localization-draft-v5"
 LOCALIZATION_BATCH_MAX_CUES = 64
 LOCALIZATION_BATCH_MAX_WORDS = 280
 LOCALIZATION_BATCH_MAX_SOURCE_CHARS = 3200
@@ -27,7 +27,7 @@ QUALITY_REVIEW_BATCH_MAX_ITEMS = 60
 QUALITY_REVIEW_BATCH_MAX_TEXT_CHARS = 12_000
 QUALITY_REVIEW_MAX_REQUESTS = 8
 QUALITY_REVIEW_MAX_SECONDS = 600
-LOCALIZATION_FIT_BATCH_MAX_ITEMS = 8
+LOCALIZATION_FIT_BATCH_MAX_ITEMS = 12
 LOCALIZATION_FIT_MAX_ROUNDS = 3
 LOCALIZATION_FIT_MAX_REQUESTS = 16
 LOCALIZATION_FIT_MAX_SECONDS = 600
@@ -36,6 +36,8 @@ MAX_SUBTITLE_DURATION_MS = 7000
 MAX_CHARS_PER_LINE = 16
 MAX_CHINESE_CPS = 9.0
 END_HOLD_MS = 220
+PREFERRED_PAUSE_SPLIT_MIN_GAP_MS = 280
+PREFERRED_PAUSE_SPLIT_MIN_VISIBLE_CHARS = 18
 NUMBER_PATTERN = re.compile(r"[-+]?\d+(?:[.,]\d+)*(?:%|％|[KkDd])?")
 DISPLAY_PUNCTUATION = frozenset(",，。.;；:：")
 
@@ -234,6 +236,34 @@ def generate_localization_draft(
     )
     reviewed = _finalize_timing(reviewed, draft)
     step_results["quality_review"] = _quality_step_result(reviewed, review_changes, review_diagnostics)
+
+    # A wording correction in final review can make an otherwise valid cue too dense.
+    # Reuse the constrained fitter only when the deterministic budget check finds a regression.
+    _report(on_progress, 0.92, "正在确认终审后的字幕限制")
+    post_review_diagnostics: dict = {}
+    post_review_input = reviewed
+    reviewed = _fit_candidate_segments(
+        reviewed,
+        draft,
+        context=context,
+        profile_id=profile.profile_id,
+        source_language=source_language,
+        target_language=target_language,
+        is_cancelled=is_cancelled,
+        include_preferred_pause_splits=False,
+        on_progress=lambda completed, total, round_number, detail: _report(
+            on_progress,
+            0.92 + 0.015 * ((round_number - 1) + completed / max(1, total)) / LOCALIZATION_FIT_MAX_ROUNDS,
+            f"正在确认终审后的字幕限制 · 第 {round_number} 轮 {completed}/{total} · {detail}",
+        ),
+        diagnostics=post_review_diagnostics,
+    )
+    reviewed = _finalize_timing(_time_candidates(reviewed, draft), draft)
+    step_results["post_review_constraints"] = _post_review_constraint_step_result(
+        post_review_input,
+        reviewed,
+        post_review_diagnostics,
+    )
     if on_preview:
         on_preview("localized_review", [_preview_item(item) for item in reviewed])
 
@@ -503,13 +533,45 @@ def _localize_cues(
                 ],
             },
             "source_cues": [_cue_payload(cue, word_by_id) for cue in batch],
+            "pause_boundaries": _pause_boundary_payload(batch, word_by_id),
             "rules": {
                 "immutable": ["事实", "数字", "专名", "否定", "因果", "比较", "人物意图", "情绪强度"],
                 "display_text": "自然口语、单行优先、尽量不使用逗号句号等常规标点，只保留确有必要的问号或感叹号",
                 "tts_text": "与上屏字幕含义一致，但保留语音合成需要的标点、停顿、语气词和口语节奏",
                 "segmentation": (
-                    "按完整语义和说话停顿重新分段，不必与源 cue 一一对应，可合并或拆分。"
+                    "按完整语义和源音频停顿重新分段，不必与源 cue 一一对应，可合并或拆分。"
+                    f"当一段预计超过 {PREFERRED_PAUSE_SPLIT_MIN_VISIBLE_CHARS} 个可见中文字，且输入给出至少 "
+                    f"{PREFERRED_PAUSE_SPLIT_MIN_GAP_MS} 毫秒的停顿边界时，只要边界两侧都能成为自然中文语义单位，优先拆成两段。"
+                    "不要在专名、固定搭配、动宾结构、数量词、否定结构或因果连接中间硬拆。"
                     "第一次生成就必须满足上屏限制；超过限制时在这一轮直接按 source_word_ids 拆开，不要留给后续返修"
+                ),
+                "native_spoken_chinese": (
+                    "先理解整句话的说话意图，再用中国大陆母语者真实口头表达重写。"
+                    "允许调整语序、省略中文里多余的主语和将来时、把名词化结构改成短主动句；"
+                    "逐项警惕‘我将、怎样、进行、创建、获得、实现、其、该、从而’等可能来自英文句法或书面稿的词，"
+                    "只有在中文口头表达确实自然时才保留；避免‘我将向你展示怎样’‘进行创建’‘获得效果’等翻译腔。"
+                ),
+                "speaker_voice": (
+                    "保留同一说话人的表达层级与个性，包括正式或随意、专业或外行、笃定或迟疑、冷静分析或强烈强调；"
+                    "访谈、播客和对话还要保留轮次、接话、质疑、打断与自我修正，不能全部润色成统一顺滑的播音稿。"
+                ),
+                "discourse_markers": (
+                    "语气词和口头填充词按功能处理而不是逐字翻译：表达犹豫、立场、转折、自我修正、与观众关系或人物习惯时，"
+                    "改成自然中文并适量保留；只是 ASR 噪声或重复赘词时删除。不能为了显得口语化凭空添加‘其实、你知道吧、对吧’。"
+                ),
+                "cultural_function": (
+                    "保留原作中的文化、地点、产品、头衔、笑点、比喻和典故；需要时用简短自然表达让中国观众听懂，"
+                    "但只能做功能等价转述，不能替换成无关的中国人物、地名、网络梗或额外事实。"
+                ),
+                "lexical_context": (
+                    "术语和形容词必须按当前对象与行业语境翻译，不能只取词典首义；"
+                    "优先说出观众能直接感知的结果，区分画面清晰、自然、少噪点/少瑕疵、动作流畅、结果可直接使用等不同含义。"
+                    "例如英文 clean 在 AI 画面语境不能机械写成‘干净’，应按上下文选择清晰、自然、没瑕疵或可直接用。"
+                ),
+                "cohesion": (
+                    "检查中文固定搭配、动词补语、介词和指代是否完整；"
+                    "根据真实指代而不是英文代词字面区分人物的他/她与产品、模型、画面、提示词等非人物的它；"
+                    "如果上下文明确指向工具或 AI，即使 ASR 原文误写 he/she，也应改为它或省略代词。"
                 ),
                 "hard_display_limits": {
                     "max_duration_ms": MAX_SUBTITLE_DURATION_MS,
@@ -566,7 +628,8 @@ def _localize_cues(
         try:
             raw = llm_runtime.complete_json(
                 system_prompt=(
-                    "你是中文影视字幕本土化编辑。先保持说话行为、事实和人物口吻，再写成中国大陆观众自然会说的话。"
+                    "你是中文影视字幕本土化编辑，不是逐句翻译器。先通读上下文，保持说话行为、事实和人物口吻，"
+                    "再改写成中国大陆创作者面对镜头时自然会说的口语。中文必须能直接说出口，不能保留英语语序、书面腔或生硬直译。"
                     "不要逐字硬译，不要擅自植入中国历史人物、地名、典故或网络热梗。上屏字幕与配音台词是两个用途不同但语义一致的文本。"
                     "源字幕行只是识别容器，不是目标语言分段边界。只返回约定 JSON。"
                 ),
@@ -898,6 +961,7 @@ def _fit_candidate_segments(
     source_language: str,
     target_language: str,
     is_cancelled: CancelCallback | None,
+    include_preferred_pause_splits: bool = True,
     on_progress: Callable[[int, int, int, str], None] | None = None,
     on_preview: Callable[[list[dict]], None] | None = None,
     diagnostics: dict | None = None,
@@ -911,7 +975,16 @@ def _fit_candidate_segments(
     for round_number in range(1, LOCALIZATION_FIT_MAX_ROUNDS + 1):
         timed = _time_candidates([{**item, "_fit_index": index} for index, item in enumerate(fitted)], draft)
         timed_by_index = {int(item["_fit_index"]): item for item in timed}
-        problem_indexes = sorted(index for index, item in timed_by_index.items() if _candidate_exceeds_budget(item))
+        problem_indexes = sorted(
+            index
+            for index, item in timed_by_index.items()
+            if _candidate_exceeds_budget(item)
+            or (
+                include_preferred_pause_splits
+                and round_number == 1
+                and _candidate_has_preferred_pause_split(item, word_by_id)
+            )
+        )
         if not problem_indexes:
             _finish_fit_diagnostics(diagnostics, candidates, fitted, request_state, rounds)
             return fitted
@@ -1034,6 +1107,18 @@ def _candidate_exceeds_budget(item: dict) -> bool:
     return bool(_candidate_budget_report(item)["violations"])
 
 
+def _candidate_has_preferred_pause_split(item: dict, word_by_id: dict) -> bool:
+    if _readable_chars(item.get("display_text") or "") < PREFERRED_PAUSE_SPLIT_MIN_VISIBLE_CHARS:
+        return False
+    ordered = [word_by_id[word_id] for word_id in item.get("source_word_ids") or [] if word_id in word_by_id]
+    if len(ordered) < 4:
+        return False
+    return any(
+        int(right.start_ms) - int(left.end_ms) >= PREFERRED_PAUSE_SPLIT_MIN_GAP_MS
+        for left, right in zip(ordered[1:-2], ordered[2:-1])
+    )
+
+
 def _candidate_budget_report(item: dict) -> dict:
     duration = max(1, int(item["end_ms"]) - int(item["start_ms"]))
     chars = _readable_chars(item["display_text"])
@@ -1091,6 +1176,12 @@ def _refine_candidate_batch(
                 },
                 "boundary_mode": "word" if _fit_uses_word_boundaries(source_cues, word_by_id) else "cue",
                 "source_cues": [_cue_payload(cue, word_by_id) for cue in source_cues],
+                "pause_boundaries": _pause_boundary_payload(source_cues, word_by_id),
+                "refinement_goal": (
+                    "存在清晰音频停顿且中文偏长；仅在停顿两侧语义都自然完整时拆分，拆后尽量降低单条字数"
+                    if _candidate_has_preferred_pause_split(timed, word_by_id)
+                    else "修复列出的字幕硬限制"
+                ),
             }
         )
 
@@ -1098,8 +1189,10 @@ def _refine_candidate_batch(
     try:
         raw = llm_runtime.complete_json(
             system_prompt=(
-                "你是中文影视字幕分段编辑。只处理过长或阅读过快的本土化字幕。"
+                "你是中文影视字幕分段编辑。处理过长、阅读过快，或存在清晰音频停顿且中文偏长的本土化字幕。"
                 "按完整语义、源语逐词时间和自然停顿拆分，必要时压缩中文，但不得删改事实、数字、专名、否定、因果或人物语气。"
+                "对只有停顿拆分建议、没有硬性超限的项目，必须先判断停顿两侧是否都能成为自然中文语义单位；"
+                "合适就拆以降低单条字数，不合适则原样保留，绝不能切断固定搭配、动宾结构、数量词或因果关系。"
                 "代码已经列出每条字幕违反的硬性限制和建议最少段数。时长或字数超限时优先按语义拆分；"
                 "只有阅读速度超限时，拆分不能解决问题，必须在不损失信息的前提下精简中文表达。"
                 "每段上屏字幕不超过32个可见字符，源语时间范围不超过7秒，阅读速度不超过9字/秒。"
@@ -1423,8 +1516,14 @@ def _quality_review(
             try:
                 raw = llm_runtime.complete_json(
                     system_prompt=(
-                        "你是影视本土化终审。核对语义、数字、否定、因果、人物口吻、文化转述和字幕可读性。"
-                        "只修正确有问题的项目；不要把自然口语改回翻译腔。上屏字幕少用常规标点，配音台词保留必要语气和停顿。"
+                        "你是中国大陆影视本土化终审，要像中文母语口播编辑一样按顺序通读整批字幕。"
+                        "逐项核对原文意图、数字、否定、因果、人物口吻、文化转述和字幕可读性；"
+                        "还要主动找出英语语序、书面公文腔、词典式直译、中文搭配或补语缺失，以及人和物的代词指代错误。"
+                        "把生硬表达改成同一个人面对镜头时会自然说出口的短句，可调整语序并省略中文里多余的主语和将来时，"
+                        "但不能删掉事实、论证、情绪强度或关键动作。术语和形容词必须结合当前对象与行业语境判断。"
+                        "只修正确有问题的项目；不要把自然口语改回翻译腔，也不要为了口语化添加原文没有的网络热梗。"
+                        "不要把人物原有的迟疑、自我修正、接话、质疑或强调统一润色成顺滑播音稿；语气词要按话语功能保留或删除。"
+                        "上屏字幕少用常规标点，配音台词保留必要语气和停顿。"
                         "必须检查全部输入，但只回传实际需要修改的项目。只返回 JSON。"
                     ),
                     user_payload={
@@ -1432,6 +1531,41 @@ def _quality_review(
                         "source_language": source_language,
                         "target_language": target_language,
                         "context": context,
+                        "review_rules": {
+                            "spoken_chinese": "听起来应像同一位说话人即兴讲解，不像译稿、说明书或演讲稿",
+                            "sentence_order": (
+                                "优先使用中文自然语序和短主动句；逐项检查‘我将、怎样、进行、创建、获得、实现、其、该、从而’"
+                                "是否只是英文句法或书面稿残留，有翻译腔就改写，没有问题才保留"
+                            ),
+                            "collocation": "检查动词与宾语、结果补语、介词和固定搭配是否完整自然，不能漏掉‘出、到、起来、下去’等必要补语",
+                            "pronouns": (
+                                "按真实指代而不是英文代词字面区分人物的他/她和产品、模型、画面、提示词等非人物的它；"
+                                "上下文明显指向 AI 或工具时，即使 ASR 写成 he/she，也要改为它或省略代词"
+                            ),
+                            "terminology": (
+                                "同一个英文词必须按具体对象说成观众能感知的结果；例如 AI 画面语境的 clean 不默认译为‘干净’，"
+                                "应按上下文选清晰、自然、没瑕疵或可直接使用，其他行业词也按同一原则处理"
+                            ),
+                            "speaker_voice": (
+                                "保持说话人的正式或随意、专业或外行、笃定或迟疑、节奏与强调方式；"
+                                "保留有意义的自我修正、接话、质疑和打断，不要统一改成播音稿"
+                            ),
+                            "discourse_markers": (
+                                "语气词表达犹豫、立场、转折、人物习惯或观众关系时自然保留；属于 ASR 噪声时删除；"
+                                "不能为了口语化凭空添加口头禅"
+                            ),
+                            "cultural_function": (
+                                "文化、地点、产品、头衔、笑点、比喻和典故要让中国观众听懂，同时保留原世界与原功能；"
+                                "不得替换成无关中国梗或增加原文没有的事实"
+                            ),
+                            "read_aloud_test": "逐条默读一遍；如果正常中国创作者面对镜头不会这样说，就在不丢信息的前提下改成能直接说出口的表达",
+                            "preserve": ["事实", "数字", "专名", "否定", "因果", "比较", "动作", "人物口吻", "情绪强度"],
+                        },
+                        "display_limits": {
+                            "max_duration_ms": MAX_SUBTITLE_DURATION_MS,
+                            "max_visible_chars": MAX_CHARS_PER_LINE * 2,
+                            "max_chinese_chars_per_second": MAX_CHINESE_CPS,
+                        },
                         "items": [
                             {
                                 "id": item["id"],
@@ -1439,11 +1573,13 @@ def _quality_review(
                                 "display_text": item["display_text"],
                                 "tts_text": item["tts_text"],
                                 "duration_ms": item["end_ms"] - item["start_ms"],
+                                "review_focus": _localization_review_focus(item, context),
                             }
                             for item in items
                         ],
                         "output": (
                             "返回 checked_ids 和 changes。checked_ids 必须按输入顺序完整列出所有 id；"
+                            "review_focus 非空的项目必须逐条完成所列检查；确认有问题时必须放入 changes，确认无问题才可不修改。"
                             "changes 只包含确实需要修改的项目，每项包含 id、display_text、tts_text、reason。"
                             "没有修改时 changes 返回空数组。"
                         ),
@@ -1569,6 +1705,27 @@ def _quality_review_batches(timed: list[dict]) -> list[list[dict]]:
     if current:
         batches.append(current)
     return batches
+
+
+def _localization_review_focus(item: dict, context: dict) -> list[str]:
+    source = str(item.get("source_text") or "")
+    source_lower = source.lower()
+    display = str(item.get("display_text") or "")
+    focus: list[str] = []
+    if re.search(r"\b(clean|cleanest|clear|clearest|sharp|sharpest)\b", source_lower) and "干净" in display:
+        focus.append("面向普通观众不能单独用‘干净’描述视觉质量；必须结合画面语境改成清晰、自然、少瑕疵或可直接使用等具体结果")
+    if re.search(r"\b(he|him|his|she|her|hers)\b", source_lower) and re.search(r"[他她]", display):
+        focus.append("英文人称代词可能来自 ASR 或口语指代；结合整批上下文确认实际对象是人物还是 AI、工具、模型或提示词")
+    if "不了" in display:
+        focus.append("检查‘不了’是否缺少中文必要的结果补语；按真实含义判断应保留‘不了’还是改为‘不出、不到、不开、不了解’等完整搭配")
+    if "体现不了" in display:
+        focus.append("‘体现不了’在当前观看效果语境搭配生硬，必须按原意改成‘看不出、体现不出、展现不出’一类自然结果表达")
+    if any(marker in display for marker in ("我将", "向你展示怎样", "进行创建", "获得效果", "从而实现")):
+        focus.append("存在明显书面句式或英文语序，改为同一说话人面对镜头时会直接说出口的短主动句")
+    if context.get("speakers") and len(context.get("speakers") or []) == 1:
+        if re.search(r"[他她]", display) and any(term in source_lower for term in ("prompt", "model", "tool", "ai", "seedance")):
+            focus.append("当前场景只有一位主讲人且句中涉及工具或 AI，重点复核‘他/她’是否应为‘它’或直接省略")
+    return focus
 
 
 def _claim_quality_review_request(request_state: dict) -> float:
@@ -1939,6 +2096,27 @@ def _fit_step_result(before: list[dict], after: list[dict], diagnostics: dict) -
     )
 
 
+def _post_review_constraint_step_result(before: list[dict], after: list[dict], diagnostics: dict) -> dict:
+    before_violations = sum(_candidate_exceeds_budget(item) for item in before)
+    after_violations = sum(_candidate_exceeds_budget(item) for item in after)
+    request_count = int(diagnostics.get("request_count") or 0)
+    return _result(
+        "warning" if after_violations else "success",
+        (
+            f"终审后重新检查 {len(before)} 段字幕，返修 {before_violations} 段，全部满足上屏限制。"
+            if before_violations
+            else f"终审后重新检查 {len(before)} 段字幕，没有产生新的时长、字数或阅读速度问题。"
+        ),
+        [
+            ("重新检查", len(before)),
+            ("二次返修", before_violations),
+            ("返修后片段", len(after)),
+            ("模型请求", request_count),
+            ("剩余超限", after_violations),
+        ],
+    )
+
+
 def _timing_step_result(items: list[dict]) -> dict:
     samples = [
         {
@@ -2055,6 +2233,37 @@ def _cue_payload(cue: VideoLocalizationCue, word_by_id: dict) -> dict:
             if word_id in word_by_id
         ],
     }
+
+
+def _pause_boundary_payload(cues: list[VideoLocalizationCue], word_by_id: dict) -> list[dict]:
+    ordered: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for cue in cues:
+        for word_id in cue.source_word_ids:
+            if word_id in seen or word_id not in word_by_id:
+                continue
+            seen.add(word_id)
+            ordered.append((cue.cue_id, word_id))
+
+    boundaries: list[dict] = []
+    for (left_cue_id, left_id), (right_cue_id, right_id) in zip(ordered, ordered[1:]):
+        left = word_by_id[left_id]
+        right = word_by_id[right_id]
+        gap_ms = max(0, int(right.start_ms) - int(left.end_ms))
+        if gap_ms < PREFERRED_PAUSE_SPLIT_MIN_GAP_MS:
+            continue
+        boundaries.append(
+            {
+                "after_word_id": left_id,
+                "before_word_id": right_id,
+                "left_cue_id": left_cue_id,
+                "right_cue_id": right_cue_id,
+                "gap_ms": gap_ms,
+                "strength": "strong" if gap_ms >= 500 else "clear",
+                "instruction": "仅当边界两侧都能形成自然中文语义单位时优先在此拆分",
+            }
+        )
+    return boundaries
 
 
 def _research_payload(research: dict) -> list[dict]:

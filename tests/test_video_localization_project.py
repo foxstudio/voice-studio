@@ -1660,6 +1660,53 @@ def test_video_localization_async_operation_validates_prerequisites(tmp_path: Pa
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_SOURCE_AUDIO_MISSING"
 
 
+def test_video_localization_operation_summaries_keep_live_preview_without_heavy_history(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "轻量任务轮询", "description": ""}).json()
+    active = VideoLocalizationOperation(
+        operation_id="running_localization",
+        project_id=project["project_id"],
+        kind="localization_draft",
+        status="running",
+        progress=0.75,
+        result_summary={
+            "stage": "正在复核语义与可读性",
+            "stage_id": "quality_review",
+            "task_stage_timings": {"quality_review": {"duration_ms": 1200, "running": True}},
+            "preview_phase": "localized_review",
+            "preview_cues": [{"subtitle_id": "localized_0001", "text": "实时预览"}],
+            "task_step_results": {"localize": {"sections": [{"items": ["heavy"]}]}},
+        },
+    )
+    history = VideoLocalizationOperation(
+        operation_id="completed_localization",
+        project_id=project["project_id"],
+        kind="localization_draft",
+        status="success",
+        result_summary={
+            "stage": "已完成",
+            "localized_subtitle_count": 160,
+            "preview_cues": [{"subtitle_id": "old_preview", "text": "旧预览"}],
+            "task_step_results": {"quality_review": {"sections": [{"items": ["heavy"]}]}},
+        },
+    )
+    draft = video_localization_service.get_video_localization(project["project_id"])
+    assert draft is not None
+    assert video_localization_service.save_video_localization(
+        project["project_id"],
+        draft.model_copy(update={"operations": [active, history]}),
+    ) is not None
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/operations/summaries")
+
+    assert response.status_code == 200
+    by_id = {item["operation_id"]: item for item in response.json()}
+    assert by_id["running_localization"]["result_summary"]["preview_cues"][0]["text"] == "实时预览"
+    assert "task_step_results" not in by_id["running_localization"]["result_summary"]
+    assert "preview_cues" not in by_id["completed_localization"]["result_summary"]
+    assert by_id["completed_localization"]["result_summary"]["localized_subtitle_count"] == 160
+
+
 def test_video_localization_cancel_queued_operation_marks_cancelled(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "取消后台任务", "description": ""}).json()

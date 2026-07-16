@@ -129,6 +129,7 @@ const LOCALIZATION_STEP_DEFINITIONS = [
 	{ id: 'fit_segments', label: '调整字幕长度', stages: ['fit_segments', '调整字幕长度'] },
 	{ id: 'segment_timing', label: '安排字幕分段与时间', stages: ['segment_timing', '安排字幕分段与时间'] },
 	{ id: 'quality_review', label: '复核语义与可读性', stages: ['quality_review', '复核语义与可读性'] },
+	{ id: 'post_review_constraints', label: '确认终审字幕限制', stages: ['post_review_constraints', '确认终审后的字幕限制'] },
 	{ id: 'write_track', label: '写入本土化字幕轨', stages: ['write_track', '写入本土化字幕轨'] }
 ] as const;
 

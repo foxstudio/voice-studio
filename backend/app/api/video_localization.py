@@ -95,6 +95,12 @@ async def list_video_localization_operations(project_id: str):
     return require_resource(operations)
 
 
+@router.get("/{project_id}/video-localization/operations/summaries", response_model=list[VideoLocalizationOperation])
+async def list_video_localization_operation_summaries(project_id: str):
+    operations = operation_queue.list_operation_summaries(project_id)
+    return require_resource(operations)
+
+
 @router.post("/{project_id}/video-localization/operations", response_model=VideoLocalizationOperation)
 async def submit_video_localization_operation(project_id: str, request: VideoLocalizationOperationRequest):
     operation = video_localization_service.submit_operation(project_id, request.kind, request.parameters)

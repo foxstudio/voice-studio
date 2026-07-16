@@ -51,6 +51,7 @@ def _localization_stage_id(stage: str) -> str:
         ("localize", ("生成中文表达",)),
         ("segment_timing", ("安排字幕分段",)),
         ("quality_review", ("复核语义",)),
+        ("post_review_constraints", ("确认终审后的字幕限制",)),
         ("write_track", ("写入本土化", "正在保存")),
     ):
         if any(marker in normalized for marker in markers):
@@ -186,6 +187,37 @@ def list_operations(project_id: str) -> list[VideoLocalizationOperation] | None:
     if draft is None:
         return None
     return sorted(draft.operations, key=lambda item: item.created_at, reverse=True)
+
+
+def list_operation_summaries(project_id: str) -> list[VideoLocalizationOperation] | None:
+    operations = list_operations(project_id)
+    if operations is None:
+        return None
+    common_keys = {
+        "stage",
+        "stage_id",
+        "task_stage_timings",
+        "task_duration_ms",
+        "preview_phase",
+        "cue_count",
+        "segment_count",
+        "localized_subtitle_count",
+        "engine_id",
+        "llm_profile_id",
+        "llm_model_id",
+        "source_track_id",
+    }
+    summarized: list[VideoLocalizationOperation] = []
+    for operation in operations:
+        summary = {
+            key: value
+            for key, value in operation.result_summary.items()
+            if key in common_keys
+        }
+        if operation.status in _ACTIVE_STATUSES and "preview_cues" in operation.result_summary:
+            summary["preview_cues"] = operation.result_summary["preview_cues"]
+        summarized.append(operation.model_copy(update={"result_summary": summary}))
+    return summarized
 
 
 def get_operation(project_id: str, operation_id: str) -> VideoLocalizationOperation | None:

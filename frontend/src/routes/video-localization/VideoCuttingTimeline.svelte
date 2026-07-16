@@ -588,10 +588,7 @@
 	function handleTimelineKeydown(event: KeyboardEvent) {
 		const target = event.target as HTMLElement | null;
 		if (target?.closest('input,textarea,select,[contenteditable="true"]')) return;
-		if (event.code === 'Space') {
-			event.preventDefault();
-			onTransportAction('play-pause');
-		} else if (event.key === '+' || event.key === '=') {
+		if (event.key === '+' || event.key === '=') {
 			event.preventDefault();
 			zoomTimelineAtPointer(1);
 		} else if (event.key === '-' || event.key === '_') {

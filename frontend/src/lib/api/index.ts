@@ -199,6 +199,7 @@ export const Api = {
 	openVideoLocalizationProjectDirectory: (id: string) => api.post<StorageOpenResponse>(`/projects/${id}/video-localization/open-directory`),
 	importVideoLocalizationSource: (id: string, file: File) => api.upload<VideoLocalizationDraft>(`/projects/${id}/video-localization/source-media`, file),
 	videoLocalizationOperations: (id: string) => api.get<VideoLocalizationOperation[]>(`/projects/${id}/video-localization/operations`),
+	videoLocalizationOperationSummaries: (id: string) => api.get<VideoLocalizationOperation[]>(`/projects/${id}/video-localization/operations/summaries`),
 	videoLocalizationOperation: (id: string, operationId: string) => api.get<VideoLocalizationOperation>(`/projects/${id}/video-localization/operations/${operationId}`),
 	submitVideoLocalizationOperation: (id: string, kind: VideoLocalizationOperation['kind'], parameters: Record<string, unknown> = {}) =>
 		api.post<VideoLocalizationOperation>(`/projects/${id}/video-localization/operations`, { kind, parameters }),

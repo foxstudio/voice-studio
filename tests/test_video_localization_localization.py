@@ -78,6 +78,73 @@ def test_localization_batches_reject_a_single_unbounded_source_cue():
     assert exc_info.value.code == "VIDEO_LOCALIZATION_SOURCE_CUE_TOO_LARGE"
 
 
+def test_pause_split_candidates_require_both_audio_gap_and_longer_chinese():
+    words = [
+        VideoLocalizationAlignedWord(
+            word_id=f"word_{index}",
+            segment_id="segment_01",
+            text=f"w{index}",
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        for index, (start_ms, end_ms) in enumerate(
+            [(0, 160), (180, 340), (700, 860), (880, 1040)],
+            start=1,
+        )
+    ]
+    cue = VideoLocalizationCue(
+        cue_id="cue_0001",
+        start_ms=0,
+        end_ms=1040,
+        en_subtitle_text="one two three four",
+        source_word_ids=[word.word_id for word in words],
+    )
+    word_by_id = {word.word_id: word for word in words}
+    candidate = {
+        "display_text": "这是一段已经偏长但仍没有触发硬上限的中文字幕",
+        "source_word_ids": cue.source_word_ids,
+    }
+
+    assert localization._candidate_has_preferred_pause_split(candidate, word_by_id)
+    assert not localization._candidate_has_preferred_pause_split(
+        {**candidate, "display_text": "短句"},
+        word_by_id,
+    )
+    assert localization._pause_boundary_payload([cue], word_by_id) == [
+        {
+            "after_word_id": "word_2",
+            "before_word_id": "word_3",
+            "left_cue_id": "cue_0001",
+            "right_cue_id": "cue_0001",
+            "gap_ms": 360,
+            "strength": "clear",
+            "instruction": "仅当边界两侧都能形成自然中文语义单位时优先在此拆分",
+        }
+    ]
+
+
+def test_localization_review_focus_flags_calques_collocations_and_real_referents():
+    context = {"speakers": [{"speaker_id": "speaker_01"}]}
+    visual = localization._localization_review_focus(
+        {
+            "source_text": "This is the cleanest 4K AI and a small screen does not do it justice",
+            "display_text": "这是最干净的 4K AI 画面 小屏幕体现不了它的好",
+        },
+        context,
+    )
+    tool_pronoun = localization._localization_review_focus(
+        {
+            "source_text": "This is the prompt he gave me",
+            "display_text": "这是他给我的提示词",
+        },
+        context,
+    )
+
+    assert any("不能单独用‘干净’" in hint for hint in visual)
+    assert any("体现不了" in hint for hint in visual)
+    assert any("工具或 AI" in hint for hint in tool_pronoun)
+
+
 def test_quality_review_batches_obey_item_and_text_limits(monkeypatch):
     monkeypatch.setattr(localization, "QUALITY_REVIEW_BATCH_MAX_ITEMS", 3)
     monkeypatch.setattr(localization, "QUALITY_REVIEW_BATCH_MAX_TEXT_CHARS", 24)
@@ -105,10 +172,12 @@ def test_quality_review_splits_a_batch_after_invalid_json(monkeypatch):
         for index in range(1, 5)
     ]
     calls: list[list[str]] = []
+    review_rules: list[dict] = []
 
     def complete_json(**kwargs):
         ids = [item["id"] for item in kwargs["user_payload"]["items"]]
         calls.append(ids)
+        review_rules.append(kwargs["user_payload"]["review_rules"])
         if len(ids) == 4:
             raise LlmRuntimeError("invalid json", code="llm_json_invalid", status_code=502)
         return {"checked_ids": ids, "changes": []}
@@ -132,6 +201,9 @@ def test_quality_review_splits_a_batch_after_invalid_json(monkeypatch):
     ]
     assert reviewed == items
     assert changes == []
+    assert all("speaker_voice" in rules for rules in review_rules)
+    assert all("discourse_markers" in rules for rules in review_rules)
+    assert all("cultural_function" in rules for rules in review_rules)
 
 
 def test_source_fingerprint_tracks_speaker_profile_and_word_timing():
@@ -228,7 +300,13 @@ def test_localization_pipeline_creates_non_one_to_one_dual_text_track(monkeypatc
         "resolve_profile",
         lambda _profile_id=None: SimpleNamespace(profile_id="llm_default", model_id="deepseek-chat"),
     )
-    monkeypatch.setattr(localization.llm_runtime, "complete_json", lambda **_kwargs: next(responses))
+    payloads: list[dict] = []
+
+    def complete_json(**kwargs):
+        payloads.append(kwargs["user_payload"])
+        return next(responses)
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
     progress = []
     previews = []
 
@@ -255,6 +333,7 @@ def test_localization_pipeline_creates_non_one_to_one_dual_text_track(monkeypatc
         "fit_segments",
         "segment_timing",
         "quality_review",
+        "post_review_constraints",
         "write_track",
     }
     quality_metrics = {
@@ -265,6 +344,95 @@ def test_localization_pipeline_creates_non_one_to_one_dual_text_track(monkeypatc
     assert quality_metrics["失败拆分"] == "0"
     assert [phase for phase, _items in previews] == ["localized_draft", "localized_timing", "localized_review"]
     assert progress[-1][1] == "本土化字幕初稿已生成，正在保存"
+    localize_rules = next(payload["rules"] for payload in payloads if payload["task"].endswith(":localize"))
+    assert "speaker_voice" in localize_rules
+    assert "discourse_markers" in localize_rules
+    assert "cultural_function" in localize_rules
+
+
+def test_localization_pipeline_refits_a_review_change_that_breaks_reading_budget(monkeypatch):
+    draft = VideoLocalizationDraft(
+        cues=[
+            VideoLocalizationCue(
+                cue_id="cue_0001",
+                speaker_id="speaker_01",
+                start_ms=0,
+                end_ms=1000,
+                en_subtitle_text="Show the result",
+            )
+        ]
+    )
+    tasks: list[str] = []
+
+    def complete_json(**kwargs):
+        payload = kwargs["user_payload"]
+        task = payload["task"]
+        tasks.append(task)
+        if task.endswith(":context"):
+            return {
+                "overview": "创作者展示结果",
+                "topics": [],
+                "speakers": [],
+                "style_rules": ["自然口语"],
+                "needs_research": False,
+                "research_questions": [],
+            }
+        if task.endswith(":localize"):
+            return [
+                {
+                    "source_cue_ids": ["cue_0001"],
+                    "source_word_ids": [],
+                    "display_text": "看效果",
+                    "tts_text": "看效果。",
+                }
+            ]
+        if task.endswith(":quality-review"):
+            return {
+                "checked_ids": ["localized_0001"],
+                "changes": [
+                    {
+                        "id": "localized_0001",
+                        "display_text": "接下来我将向你详细展示这个最终生成出来的效果",
+                        "tts_text": "接下来，我将向你详细展示这个最终生成出来的效果。",
+                        "reason": "补充表达",
+                    }
+                ],
+            }
+        if task.endswith(":fit-segments"):
+            return {
+                "items": [
+                    {
+                        "parent_id": "candidate_0000",
+                        "segments": [
+                            {
+                                "end_cue_id": "cue_0001",
+                                "display_text": "接下来看最终效果",
+                                "tts_text": "接下来看最终效果。",
+                                "adaptation_note": "压缩为自然口语",
+                            }
+                        ],
+                    }
+                ]
+            }
+        raise AssertionError(task)
+
+    monkeypatch.setattr(
+        localization.llm_runtime,
+        "resolve_profile",
+        lambda _profile_id=None: SimpleNamespace(profile_id="llm_default", model_id="deepseek-chat"),
+    )
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    run = localization.generate_localization_draft(draft)
+
+    assert run.draft.localized_subtitles[0].text == "接下来看最终效果"
+    assert sum(task.endswith(":fit-segments") for task in tasks) == 1
+    metrics = {
+        item["label"]: item["value"]
+        for item in run.summary["task_step_results"]["post_review_constraints"]["metrics"]
+    }
+    assert metrics["二次返修"] == "1"
+    assert metrics["剩余超限"] == "0"
 
 
 def test_localization_pipeline_repairs_changed_numbers_once(monkeypatch):
@@ -799,18 +967,18 @@ def test_fit_candidate_segments_uses_stable_batches_and_compact_boundaries(monke
         diagnostics=diagnostics,
     )
 
-    assert calls == [8, 8, 8, 8, 1]
+    assert calls == [12, 12, 9]
     assert len(fitted) == 66
-    assert diagnostics["request_count"] == 5
+    assert diagnostics["request_count"] == 3
     assert len(diagnostics["rounds"]) == 1
     assert diagnostics["rounds"][0] | {"duration_ms": 0} == {
         "round": 1,
         "problem_count": 33,
-        "batch_count": 5,
+        "batch_count": 3,
         "duration_ms": 0,
     }
-    assert len(previews) == 5
-    assert progress[0][:3] == (0, 5, 1)
+    assert len(previews) == 3
+    assert progress[0][:3] == (0, 3, 1)
 
 
 def test_fit_candidate_segments_allows_a_final_targeted_refinement_round(monkeypatch):

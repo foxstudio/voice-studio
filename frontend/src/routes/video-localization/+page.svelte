@@ -407,8 +407,10 @@
 		void loadAsrEngineHealth();
 		loadProjects();
 		document.addEventListener('visibilitychange', handleOperationVisibilityChange);
+		window.addEventListener('keydown', handlePageKeydown, true);
 		return () => {
 			document.removeEventListener('visibilitychange', handleOperationVisibilityChange);
+			window.removeEventListener('keydown', handlePageKeydown, true);
 			stopOperationPolling();
 			if (autoSaveTimer) clearTimeout(autoSaveTimer);
 		};
@@ -628,7 +630,16 @@
 	}
 
 	function handlePageKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape') projectMenuOpen = false;
+		if (event.key === 'Escape') {
+			projectMenuOpen = false;
+			return;
+		}
+		if (event.code !== 'Space' || event.repeat || event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
+		const target = event.target as HTMLElement | null;
+		if (target?.isContentEditable || target?.closest('input,textarea,select,[contenteditable="true"],[role="textbox"]')) return;
+		event.preventDefault();
+		event.stopPropagation();
+		handleTimelineTransport('play-pause');
 	}
 
 	function defaultLocalizationProjectName(file: File) {
@@ -2581,7 +2592,16 @@
 		let shouldContinue = false;
 		try {
 			const previousById = new Map(operations.map((operation) => [operation.operation_id, operation]));
-			const latest = sortOperations(await Api.videoLocalizationOperations(expectedProjectId));
+			const summaries = await Api.videoLocalizationOperationSummaries(expectedProjectId);
+			const latest = sortOperations(summaries.map((summary) => {
+				const previous = previousById.get(summary.operation_id);
+				if (!previous) return summary;
+				return {
+					...previous,
+					...summary,
+					result_summary: { ...previous.result_summary, ...summary.result_summary }
+				};
+			}));
 			if (expectedProjectId !== projectId || expectedGeneration !== operationPollingGeneration) return;
 			const terminalTransition = latest.find((operation) => {
 				const previous = previousById.get(operation.operation_id);
@@ -2624,7 +2644,7 @@
 
 </script>
 
-<svelte:window onpointerdown={closeProjectMenuFromPage} onkeydown={handlePageKeydown} />
+<svelte:window onpointerdown={closeProjectMenuFromPage} />
 
 <svelte:head>
 	<title>视频本土化配音 - Voice Studio</title>
