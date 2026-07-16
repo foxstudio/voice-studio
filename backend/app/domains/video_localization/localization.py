@@ -351,17 +351,34 @@ def _analyze_context(
             "research_questions 每项包含 query、reason、category、target_terms；只有外部资料能减少误译时才提出。"
         ),
     }
-    raw = llm_runtime.complete_json(
-        system_prompt=(
-            "你是影视本土化总编。先理解内容、时代、场景、人物关系、说话习惯与情绪，再决定哪些事实或文化背景需要外部查证。"
-            "人物口吻来自原文证据，不得凭空编造。把本土化强度与世界观渗透程度分开考虑。只返回约定 JSON。"
-        ),
-        user_payload=payload,
-        profile_id=profile_id,
-        temperature=0.1,
-        max_tokens=5000,
-        timeout=120,
+    system_prompt = (
+        "你是影视本土化总编。先理解内容、时代、场景、人物关系、说话习惯与情绪，再决定哪些事实或文化背景需要外部查证。"
+        "人物口吻来自原文证据，不得凭空编造。把本土化强度与世界观渗透程度分开考虑。只返回约定 JSON。"
     )
+    raw = None
+    for attempt in range(2):
+        try:
+            raw = llm_runtime.complete_json(
+                system_prompt=(
+                    system_prompt
+                    if attempt == 0
+                    else system_prompt + "上次响应无法解析；这次必须返回一个紧凑、完整、有效的 JSON 对象，不要输出说明文字。"
+                ),
+                user_payload=payload,
+                profile_id=profile_id,
+                temperature=0.1,
+                max_tokens=5000,
+                timeout=120,
+            )
+            break
+        except llm_runtime.LlmRuntimeError as exc:
+            if attempt or exc.code not in {
+                "llm_json_invalid",
+                "llm_json_not_object",
+                "llm_output_truncated",
+                "llm_response_invalid",
+            }:
+                raise
     if not isinstance(raw, dict):
         raise AppException(422, "VIDEO_LOCALIZATION_CONTEXT_INVALID", "语言模型没有返回可用的内容理解结果。")
     return {

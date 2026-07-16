@@ -78,6 +78,40 @@ def test_localization_batches_reject_a_single_unbounded_source_cue():
     assert exc_info.value.code == "VIDEO_LOCALIZATION_SOURCE_CUE_TOO_LARGE"
 
 
+def test_context_analysis_retries_one_invalid_structured_response(monkeypatch):
+    prompts: list[str] = []
+
+    def complete_json(**kwargs):
+        prompts.append(kwargs["system_prompt"])
+        if len(prompts) == 1:
+            raise LlmRuntimeError("invalid json", code="llm_json_invalid", status_code=502)
+        return {
+            "overview": "创作者介绍工作流",
+            "era": "当代",
+            "setting": "教程",
+            "topics": ["视频创作"],
+            "speakers": [],
+            "style_rules": ["自然口语"],
+            "needs_research": False,
+            "research_questions": [],
+        }
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    result = localization._analyze_context(
+        _draft(),
+        profile_id="llm_default",
+        source_language="en",
+        target_language="zh-Hans",
+        localization_level="L1",
+        worldview_permeability="W0",
+    )
+
+    assert len(prompts) == 2
+    assert "上次响应无法解析" in prompts[1]
+    assert result["overview"] == "创作者介绍工作流"
+
+
 def test_pause_split_candidates_require_both_audio_gap_and_longer_chinese():
     words = [
         VideoLocalizationAlignedWord(
