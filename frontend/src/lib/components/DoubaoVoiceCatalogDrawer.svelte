@@ -3,7 +3,7 @@
 	import { Api } from '$lib/api';
 	import type { DoubaoSpeakerCatalogStatus, EngineSpeaker } from '$lib/api/types';
 	import Tooltip from '$lib/components/shared/Tooltip.svelte';
-	import { Check, Clock3, Heart, Library, Pause, Play, RefreshCw, Search, Sparkles, X } from 'lucide-svelte';
+	import { ArrowRight, Check, Clock3, Heart, Library, Pause, Play, RefreshCw, Search, Shuffle, Sparkles, X } from 'lucide-svelte';
 	import { onDestroy, onMount, tick } from 'svelte';
 	import {
 		buildDoubaoCatalogFacets,
@@ -44,9 +44,15 @@
 	const DRAWER_WIDTH_KEY = 'voice-studio:doubao-speakers:drawer-width';
 	const DRAWER_MIN_WIDTH = 380;
 	const DRAWER_MAX_WIDTH = 720;
+	const EMBEDDED_PAGE_SIZE = 36;
+	type DoubaoChipFacet = 'age' | 'emotion' | 'category' | 'specialLabel';
 	let drawerOpen = $state(false);
 	let tab: DoubaoCatalogTab = $state('recommended');
 	let filters: DoubaoVoiceFilters = $state({ ...EMPTY_DOUBAO_FILTERS });
+	let sort: 'random' | 'name' = $state('random');
+	let randomSeed = $state(0);
+	let displayedCount = $state(EMBEDDED_PAGE_SIZE);
+	let expandedFacets = $state(new Set<DoubaoChipFacet>());
 	let favoriteIds: string[] = $state([]);
 	let persistedRecentIds: string[] = $state([]);
 	let manualId = $state('');
@@ -67,14 +73,31 @@
 	const currentSpeaker = $derived(byId.get(value) ?? fallbackSpeaker(value));
 	const allRecentIds = $derived(mergeRecentIds(persistedRecentIds, recentIds));
 	const visibleSpeakers = $derived(filterDoubaoSpeakers(speakers, filters, tab, favoriteIds, allRecentIds));
+	const orderedSpeakers = $derived.by(() => {
+		const next = [...visibleSpeakers];
+		if (mode !== 'embedded') return next;
+		if (tab === 'favorites' || tab === 'recent') return next;
+		if (sort === 'name') return next.sort((left, right) => left.name.localeCompare(right.name, 'zh-Hans-CN'));
+		return next.sort((left, right) => seededRank(left.speaker_id, randomSeed) - seededRank(right.speaker_id, randomSeed));
+	});
+	const displayedSpeakers = $derived(mode === 'embedded' ? orderedSpeakers.slice(0, displayedCount) : orderedSpeakers);
+	const hasMoreSpeakers = $derived(mode === 'embedded' && displayedCount < orderedSpeakers.length);
 	const catalogFacets = $derived(buildDoubaoCatalogFacets(speakers));
 	const contextualFacets = $derived(buildDoubaoContextualFacets(speakers, filters, tab, favoriteIds, allRecentIds));
 	const filterOptions = $derived(contextualFacets.options);
 	const filterTotals = $derived(contextualFacets.totals);
 	const tabCounts = $derived(doubaoCatalogTabCounts(speakers, favoriteIds, allRecentIds));
 	const hasActiveFilters = $derived(Object.entries(filters).some(([key, item]) => key === 'query' ? Boolean(String(item).trim()) : item !== 'all'));
+	const chipFacetRows = $derived([
+		{ key: 'age' as const, label: '年龄', options: filterOptions.ages },
+		{ key: 'emotion' as const, label: '情绪', options: filterOptions.emotions },
+		{ key: 'category' as const, label: '分类', options: filterOptions.categories },
+		{ key: 'specialLabel' as const, label: '同款', options: filterOptions.specialLabels }
+	]);
 
 	onMount(() => {
+		if (mode === 'embedded') tab = 'all';
+		randomSeed = Math.floor(Math.random() * 1e9);
 		favoriteIds = readIds(FAVORITES_KEY);
 		persistedRecentIds = mergeRecentIds(readIds(RECENTS_KEY), recentIds);
 		writeIds(RECENTS_KEY, persistedRecentIds);
@@ -101,6 +124,12 @@
 
 	$effect(() => {
 		if (speakers.length > 0 && tab === 'recommended' && tabCounts.recommended === 0) tab = 'all';
+	});
+
+	$effect(() => {
+		const filterSignature = `${tab}|${sort}|${randomSeed}|${filters.query}|${filters.gender}|${filters.age}|${filters.language}|${filters.emotion}|${filters.category}|${filters.specialLabel}`;
+		void filterSignature;
+		displayedCount = EMBEDDED_PAGE_SIZE;
 	});
 
 	$effect(() => {
@@ -139,6 +168,7 @@
 		try {
 			catalogStatus = await Api.syncDoubaoSpeakerCatalog();
 			await onRefresh();
+			randomSeed = Math.floor(Math.random() * 1e9);
 		} catch {
 			statusError = '本次刷新失败，已保留当前目录';
 		} finally {
@@ -255,6 +285,44 @@
 		filters = { ...EMPTY_DOUBAO_FILTERS };
 	}
 
+	function reshuffle() {
+		sort = 'random';
+		randomSeed = Math.floor(Math.random() * 1e9);
+	}
+
+	function toggleChipFacet(key: DoubaoChipFacet, value: string) {
+		filters = { ...filters, [key]: filters[key] === value ? 'all' : value };
+	}
+
+	function toggleFacetExpanded(key: DoubaoChipFacet) {
+		expandedFacets = expandedFacets.has(key)
+			? new Set([...expandedFacets].filter((item) => item !== key))
+			: new Set([...expandedFacets, key]);
+	}
+
+	function applySpeakerTag(speaker: EngineSpeaker, tag: string) {
+		if ((speaker.categories ?? []).includes(tag)) filters = { ...filters, category: tag };
+		else if ((speaker.special_labels ?? []).includes(tag)) filters = { ...filters, specialLabel: tag };
+		else filters = { ...filters, query: tag };
+	}
+
+	function observeMore(node: HTMLElement) {
+		if (mode !== 'embedded') return {};
+		const root = node.closest('.main') as HTMLElement | null;
+		const observer = new IntersectionObserver((entries) => {
+			if (!entries[0]?.isIntersecting || !hasMoreSpeakers) return;
+			displayedCount = Math.min(displayedCount + EMBEDDED_PAGE_SIZE, orderedSpeakers.length);
+		}, { root, rootMargin: '320px' });
+		observer.observe(node);
+		return { destroy: () => observer.disconnect() };
+	}
+
+	function seededRank(value: string, seed: number) {
+		let hash = seed | 0;
+		for (let index = 0; index < value.length; index += 1) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+		return hash >>> 0;
+	}
+
 	function handleWindowKeydown(event: KeyboardEvent) {
 		if (mode !== 'drawer' || !drawerOpen) return;
 		if (event.key === 'Escape') {
@@ -334,14 +402,16 @@
 					<p class:syncing class:warning={Boolean(statusError) || catalogStatus?.stale} role="status" aria-live="polite">{statusLine()}</p>
 				</div>
 				<div class="doubao-head-title-row">
-					<h2 id="doubao-catalog-title">官方音色目录</h2>
+					<h2 id="doubao-catalog-title">{mode === 'embedded' ? '豆包官方音色' : '官方音色目录'}</h2>
 					<div class="doubao-head-actions">
+						{#if mode === 'embedded'}<button class="doubao-icon-action" type="button" aria-label="换一批随机顺序" data-tooltip="重新随机排列音色" onclick={reshuffle}><Shuffle size={15} /></button>{/if}
 						<button class="doubao-icon-action" type="button" aria-label="刷新官方音色目录" data-tooltip={catalogStatus?.sync_available === false ? '在设置中配置火山引擎 AK/SK 后可同步官方目录' : '刷新官方音色目录'} disabled={syncing || catalogStatus?.sync_available === false} onclick={syncCatalog}><RefreshCw size={15} class={syncing ? 'spinning' : ''} /></button>
 						{#if mode === 'drawer'}<button class="doubao-icon-action" type="button" aria-label="关闭音色目录" data-tooltip="关闭音色目录" onclick={closeDrawer}><X size={17} /></button>{/if}
 					</div>
 				</div>
 			</header>
 
+			{#if mode === 'drawer'}
 			<div class="doubao-search-row">
 				<Search size={15} />
 				<input bind:this={searchInput} bind:value={filters.query} placeholder="搜索名称、音色 ID、标签或描述" autocomplete="off" />
@@ -411,6 +481,89 @@
 				<button class="doubao-manual-toggle" type="button" aria-expanded={manualIdOpen} onclick={() => (manualIdOpen = !manualIdOpen)}>目录里没有？输入官方音色 ID</button>
 				{#if manualIdOpen}<div><input bind:value={manualId} placeholder="例如 zh_female_vv_uranus_bigtts" onkeydown={(event) => event.key === 'Enter' && useManualId()} /><button type="button" disabled={!manualId.trim()} onclick={useManualId}>使用这个 ID</button></div>{/if}
 			</footer>
+			{:else}
+				<section class="doubao-library-toolbar" aria-label="豆包官方音色筛选">
+					<div class="doubao-library-toolbar-grid">
+						<label class="doubao-library-search">
+							<span>搜索</span>
+							<div><Search size={15} /><input bind:this={searchInput} bind:value={filters.query} placeholder="名称、标签、音色 ID" autocomplete="off" />{#if filters.query}<button type="button" aria-label="清除搜索" onclick={() => (filters.query = '')}><X size={13} /></button>{/if}</div>
+						</label>
+						{#if filterOptions.genders.length}<label><span>性别</span><select bind:value={filters.gender}><option value="all">全部</option>{#each filterOptions.genders as item}<option value={item.value}>{item.label}（{item.count}）</option>{/each}</select></label>{/if}
+						{#if filterOptions.languages.length}<label><span>语言</span><select bind:value={filters.language}><option value="all">全部</option>{#each filterOptions.languages as item}<option value={item.value}>{item.label}（{item.count}）</option>{/each}</select></label>{/if}
+						<label><span>排序</span><select bind:value={sort}><option value="random">随机</option><option value="name">名称</option></select></label>
+					</div>
+					<div class="doubao-library-toolbar-foot">
+						<nav class="doubao-tabs embedded-tabs" aria-label="音色目录分组">
+							<button class:active={tab === 'recommended'} type="button" onclick={() => (tab = 'recommended')}><Sparkles size={13} />官方同款 <span>{tabCounts.recommended}</span></button>
+							<button class:active={tab === 'favorites'} type="button" onclick={() => (tab = 'favorites')}><Heart size={13} />收藏 <span>{tabCounts.favorites}</span></button>
+							<button class:active={tab === 'recent'} type="button" onclick={() => (tab = 'recent')}><Clock3 size={13} />最近 <span>{tabCounts.recent}</span></button>
+							<button class:active={tab === 'all'} type="button" onclick={() => (tab = 'all')}><Library size={13} />全部 <span>{tabCounts.all}</span></button>
+						</nav>
+						<span class="doubao-library-count">{displayedSpeakers.length} / {orderedSpeakers.length} / {speakers.length} 个音色</span>
+					</div>
+				</section>
+
+				{#if chipFacetRows.some((row) => row.options.length)}
+					<section class="doubao-tag-cloud" aria-label="豆包官方音色标签筛选">
+						<div class="doubao-tag-cloud-title"><span>标签筛选</span>{#if hasActiveFilters}<button type="button" onclick={clearFilters}>清除筛选</button>{/if}</div>
+						{#each chipFacetRows as row}
+							{#if row.options.length}
+								<div class="doubao-tag-category" class:expanded={expandedFacets.has(row.key)}>
+									<span class="doubao-tag-label">{row.label}</span>
+									{#each row.options as item}
+										<button class:active={filters[row.key] === item.value} type="button" onclick={() => toggleChipFacet(row.key, item.value)}>{item.label}<span>{item.count}</span></button>
+									{/each}
+									{#if row.options.length > 6}<button class="doubao-tag-expand" type="button" onclick={() => toggleFacetExpanded(row.key)}>{expandedFacets.has(row.key) ? '收起' : '更多'}</button>{/if}
+								</div>
+							{/if}
+						{/each}
+					</section>
+				{/if}
+
+				<section class="doubao-library-grid" aria-live="polite">
+					{#if loading && !speakers.length}
+						{#each [1, 2, 3, 4, 5, 6] as item}<div class="doubao-card-skeleton" aria-hidden="true"><span></span><span></span></div>{/each}
+					{:else}
+						{#each displayedSpeakers as speaker (speaker.speaker_id)}
+							<article class="doubao-library-card" class:selected={value === speaker.speaker_id} class:previewing={previewingId === speaker.speaker_id} class:denied={speaker.authorization_status === 'denied'}>
+								<div class="doubao-library-card-head">
+									<div class="doubao-library-identity">
+										<span class="doubao-voice-orb large" class:playing={previewingId === speaker.speaker_id} class:with-avatar={Boolean(speaker.avatar_url)}>
+											{#if speaker.avatar_url}<img src={speaker.avatar_url} alt="" />{:else}<span></span><span></span><span></span>{/if}
+										</span>
+										<div><h3 title={speaker.name}>{speaker.name}</h3><span>{genderLabel(speaker.gender)}{speaker.age ? ` · ${speaker.age}` : ''}</span></div>
+									</div>
+									<button class="doubao-icon-action favorite" class:active={favoriteIds.includes(speaker.speaker_id)} type="button" aria-label={favoriteIds.includes(speaker.speaker_id) ? `取消收藏${speaker.name}` : `收藏${speaker.name}`} data-tooltip={favoriteIds.includes(speaker.speaker_id) ? '取消收藏' : '收藏这个音色'} onclick={() => toggleFavorite(speaker.speaker_id)}><Heart size={14} fill={favoriteIds.includes(speaker.speaker_id) ? 'currentColor' : 'none'} /></button>
+								</div>
+								<p class="doubao-library-description">{speaker.description || '豆包 TTS 2.0 官方预置音色'}</p>
+								<div class="doubao-library-tags">
+									{#each speakerCategories(speaker).slice(0, 4) as tag}<button type="button" class:special={(speaker.special_labels ?? []).includes(tag)} onclick={() => applySpeakerTag(speaker, tag)}>{tag}</button>{/each}
+									{#if speakerCategories(speaker).length > 4}<span>+{speakerCategories(speaker).length - 4}</span>{/if}
+								</div>
+								<div class="doubao-library-meta">
+									{#each (speaker.languages ?? []).slice(0, 2) as language}<span>{typeof language === 'string' ? language : (language.text || language.language || language.code || '多语言')}</span>{/each}
+									<span class:verified={speaker.authorization_status === 'verified'} class:denied={speaker.authorization_status === 'denied'}>{authorizationLabel(speaker)}</span>
+								</div>
+								<div class="doubao-library-id" title={speaker.speaker_id}>{speaker.speaker_id}</div>
+								<div class="doubao-library-actions">
+									<button class="doubao-preview-button" class:active={previewingId === speaker.speaker_id} type="button" onclick={() => togglePreview(speaker)}>{#if previewingId === speaker.speaker_id}<Pause size={14} />暂停{:else}<Play size={14} />试听{/if}</button>
+									<button class="doubao-use-button" type="button" disabled={speaker.authorization_status === 'denied'} onclick={() => choose(speaker.speaker_id, true)}>去合成 <ArrowRight size={14} /></button>
+								</div>
+								{#if previewErrorId === speaker.speaker_id}<small class="doubao-preview-error">试听未加载，可稍后重试；不影响直接合成。</small>{/if}
+							</article>
+						{:else}
+							<div class="doubao-empty embedded-empty"><strong>{tab === 'favorites' ? '还没有收藏音色' : tab === 'recent' ? '还没有最近使用' : '没有匹配的音色'}</strong><p>调整标签或清除筛选后再试。</p>{#if hasActiveFilters}<button type="button" onclick={clearFilters}>清除筛选</button>{/if}</div>
+						{/each}
+					{/if}
+				</section>
+
+				{#if hasMoreSpeakers}<div class="doubao-load-sentinel" use:observeMore><span></span><span>继续加载</span></div>{:else if orderedSpeakers.length > EMBEDDED_PAGE_SIZE}<div class="doubao-end-of-list">— 已加载全部 {orderedSpeakers.length} 个音色 —</div>{/if}
+
+				<footer class="doubao-manual-entry embedded-manual">
+					<button class="doubao-manual-toggle" type="button" aria-expanded={manualIdOpen} onclick={() => (manualIdOpen = !manualIdOpen)}>目录里没有？输入官方音色 ID</button>
+					{#if manualIdOpen}<div><input bind:value={manualId} placeholder="例如 zh_female_vv_uranus_bigtts" onkeydown={(event) => event.key === 'Enter' && useManualId()} /><button type="button" disabled={!manualId.trim()} onclick={useManualId}>去合成</button></div>{/if}
+				</footer>
+			{/if}
 		</aside>
 	</div>
 {/if}
@@ -454,7 +607,7 @@
 	.doubao-drawer-resizer:hover::after, .doubao-drawer-resizer:focus-visible::after { width: 2px; background: #71b8f3; }
 	.doubao-drawer-resizer:focus-visible { outline: none; }
 	.doubao-drawer-backdrop.embedded { position: static; inset: auto; z-index: auto; display: block; background: transparent; backdrop-filter: none; }
-	.doubao-catalog-drawer.embedded { width: 100%; height: min(780px, calc(100vh - 180px)); min-height: 560px; border: 1px solid rgba(119, 165, 216, .24); border-radius: 12px; box-shadow: none; animation: none; }
+	.doubao-catalog-drawer.embedded { width: 100%; height: auto; min-height: 0; display: block; padding: 0; overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; animation: none; container-type: normal; }
 	.doubao-drawer-head { display: grid; gap: 4px; min-width: 0; }
 	.doubao-head-meta, .doubao-head-title-row { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 	.doubao-kicker { color: #78b9ed; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; }
@@ -511,6 +664,70 @@
 	.doubao-manual-entry > div { display: flex; gap: 6px; margin-top: 6px; }
 	.doubao-manual-entry input { flex: 1; min-width: 0; height: 32px; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
 	.doubao-manual-entry div button { min-width: 94px; border-radius: 7px; font-size: 10px; }
+	.doubao-catalog-drawer.embedded .doubao-drawer-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 2px 0 9px; }
+	.doubao-catalog-drawer.embedded .doubao-head-meta { flex: 1 1 auto; display: grid; justify-content: start; gap: 2px; }
+	.doubao-catalog-drawer.embedded .doubao-head-meta p { max-width: none; text-align: left; }
+	.doubao-catalog-drawer.embedded .doubao-head-title-row { flex: 0 0 auto; width: auto; }
+	.doubao-catalog-drawer.embedded .doubao-head-title-row h2 { display: none; }
+	.doubao-catalog-drawer.embedded .doubao-kicker { color: #88bce9; font-size: 9px; }
+	.doubao-library-toolbar { padding: 9px 11px 7px; border: 1px solid var(--line); border-radius: 9px; background: #12161c; }
+	.doubao-library-toolbar-grid { display: grid; grid-template-columns: minmax(240px, 1fr) repeat(3, minmax(110px, auto)); align-items: end; gap: 9px; }
+	.doubao-library-toolbar-grid > label { min-width: 0; display: grid; gap: 4px; }
+	.doubao-library-toolbar-grid > label > span { color: var(--muted); font-size: 10px; }
+	.doubao-library-toolbar-grid select { min-width: 110px; height: 33px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; background: #0e1217; color: #c5d0dc; font-size: 11px; }
+	.doubao-library-search > div { min-width: 0; height: 33px; display: flex; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; background: #0e1217; color: #708092; }
+	.doubao-library-search > div:focus-within { border-color: rgba(89, 156, 226, .58); box-shadow: 0 0 0 2px rgba(78, 151, 231, .1); }
+	.doubao-library-search input { flex: 1; min-width: 0; height: 30px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
+	.doubao-library-search button { display: inline-grid; place-items: center; padding: 3px; border: 0; background: transparent; color: #788697; }
+	.doubao-library-toolbar-foot { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 7px; }
+	.doubao-tabs.embedded-tabs { width: fit-content; display: flex; gap: 2px; padding: 0; border: 0; border-radius: 0; background: transparent; }
+	.doubao-tabs.embedded-tabs button { min-height: 25px; padding: 0 8px; border-radius: 6px; font-size: 10px; }
+	.doubao-library-count { flex: 0 0 auto; color: #6f7d8d; font-size: 10px; }
+	.doubao-tag-cloud { display: grid; gap: 5px; padding: 9px 0 11px; }
+	.doubao-tag-cloud-title { display: flex; align-items: center; justify-content: space-between; color: #c6d0dc; font-size: 11px; font-weight: 600; }
+	.doubao-tag-cloud-title button { padding: 0; border: 0; background: transparent; color: #79afe0; font-size: 10px; }
+	.doubao-tag-category { position: relative; min-height: 22px; max-height: 22px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; overflow: hidden; padding-right: 38px; }
+	.doubao-tag-category.expanded { max-height: none; overflow: visible; }
+	.doubao-tag-label { width: 34px; flex: 0 0 34px; color: #798696; font-size: 10px; }
+	.doubao-tag-category > button:not(.doubao-tag-expand) { min-height: 20px; display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border: 1px solid rgba(118, 145, 175, .2); border-radius: 999px; background: rgba(22, 29, 38, .72); color: #8f9dad; font-size: 9px; }
+	.doubao-tag-category > button:not(.doubao-tag-expand):hover, .doubao-tag-category > button.active { border-color: rgba(93, 165, 235, .5); background: rgba(55, 113, 171, .2); color: #b9daf7; }
+	.doubao-tag-category button span { color: #6f9bc3; font: 8px ui-monospace, SFMono-Regular, Menlo, monospace; }
+	.doubao-tag-expand { position: absolute; top: 1px; right: 0; padding: 2px 0 2px 8px; border: 0; background: linear-gradient(90deg, transparent, #0d1116 28%); color: #69a5dc; font-size: 9px; }
+	.doubao-library-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-items: stretch; gap: 9px; }
+	.doubao-library-card { min-width: 0; min-height: 192px; display: flex; flex-direction: column; padding: 11px; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: #171b21; transition: border-color 120ms ease, background 120ms ease, transform 120ms ease; }
+	.doubao-library-card:hover { border-color: rgba(103, 163, 224, .4); background: #191f27; transform: translateY(-1px); }
+	.doubao-library-card.previewing { border-color: rgba(77, 169, 245, .68); background: linear-gradient(130deg, rgba(34, 78, 117, .32), #171d25 52%); }
+	.doubao-library-card.selected { border-color: rgba(79, 178, 144, .52); }
+	.doubao-library-card.denied { opacity: .68; }
+	.doubao-library-card-head { min-width: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+	.doubao-library-identity { min-width: 0; display: flex; align-items: center; gap: 8px; }
+	.doubao-library-identity > div { min-width: 0; }
+	.doubao-library-identity h3 { max-width: 100%; margin: 0; overflow: hidden; color: #e7edf5; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+	.doubao-library-identity > div > span { color: #738293; font-size: 9px; }
+	.doubao-library-card-head .doubao-icon-action { width: 25px; height: 25px; flex-basis: 25px; border: 0; background: transparent; opacity: .62; }
+	.doubao-library-card:hover .doubao-library-card-head .doubao-icon-action, .doubao-library-card-head .doubao-icon-action.active, .doubao-library-card-head .doubao-icon-action:focus-visible { opacity: 1; }
+	.doubao-library-description { min-height: 33px; margin: 8px 0 7px; overflow: hidden; color: #909ba9; font-size: 10.5px; line-height: 1.5; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+	.doubao-library-tags { min-height: 21px; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 4px; overflow: hidden; }
+	.doubao-library-tags button, .doubao-library-tags > span, .doubao-library-meta span { min-height: 18px; display: inline-flex; align-items: center; padding: 1px 5px; border: 1px solid rgba(117, 145, 175, .18); border-radius: 999px; background: rgba(21, 29, 38, .76); color: #8391a1; font-size: 8.5px; }
+	.doubao-library-tags button.special { border-color: rgba(103, 169, 231, .3); color: #8fc4f0; background: rgba(43, 91, 137, .17); }
+	.doubao-library-tags button:hover { border-color: rgba(103, 169, 231, .48); color: #b8dafa; }
+	.doubao-library-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+	.doubao-library-meta span.verified { border-color: rgba(76, 168, 137, .28); color: #83cbb1; }
+	.doubao-library-meta span.denied { border-color: rgba(190, 86, 106, .28); color: #d49aa4; }
+	.doubao-library-id { margin-top: 7px; overflow: hidden; color: #596777; font: 8px ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+	.doubao-library-actions { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 8px; }
+	.doubao-preview-button, .doubao-use-button { min-height: 27px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; border-radius: 6px; font-size: 10px; }
+	.doubao-preview-button { border: 1px solid var(--line); background: #11161c; color: #aab5c1; }
+	.doubao-preview-button:hover, .doubao-preview-button.active { border-color: rgba(87, 163, 231, .48); color: #b9dcfb; }
+	.doubao-use-button { margin-left: auto; border: 1px solid rgba(84, 160, 226, .35); background: rgba(50, 119, 181, .14); color: #9dcef7; }
+	.doubao-use-button:hover { border-color: rgba(90, 172, 243, .6); background: rgba(50, 119, 181, .24); color: #d0e9ff; }
+	.doubao-use-button:disabled { opacity: .45; cursor: not-allowed; }
+	.doubao-library-card .doubao-preview-error { text-align: left; }
+	.doubao-empty.embedded-empty { grid-column: 1 / -1; min-height: 180px; border: 1px dashed rgba(116, 144, 176, .22); border-radius: 9px; }
+	.doubao-load-sentinel, .doubao-end-of-list { min-height: 42px; display: flex; align-items: center; justify-content: center; gap: 8px; color: #667586; font-size: 10px; }
+	.doubao-load-sentinel > span:first-child { width: 14px; height: 14px; border: 2px solid rgba(105, 162, 216, .22); border-top-color: #65a7df; border-radius: 50%; animation: doubao-spin .8s linear infinite; }
+	.doubao-manual-entry.embedded-manual { margin-top: 2px; padding-top: 7px; }
+	.doubao-manual-entry.embedded-manual .doubao-manual-toggle { width: auto; }
 	:global(.spinning) { animation: doubao-spin .8s linear infinite; }
 	@keyframes doubao-drawer-in { from { transform: translateX(24px); opacity: .75; } }
 	@keyframes doubao-spin { to { transform: rotate(360deg); } }
@@ -523,8 +740,15 @@
 		.doubao-current-control { width: 100%; }
 		.doubao-catalog-drawer { width: 100vw; max-width: none; padding: 16px 14px; border-left: 0; }
 		.doubao-drawer-resizer { display: none; }
-		.doubao-catalog-drawer.embedded { width: 100%; height: 720px; min-height: 520px; border: 1px solid rgba(119, 165, 216, .24); }
+		.doubao-catalog-drawer.embedded { width: 100%; height: auto; min-height: 0; padding: 0; border: 0; }
 		.doubao-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+		.doubao-library-toolbar-grid { grid-template-columns: 1fr 1fr; }
+		.doubao-library-search { grid-column: 1 / -1; }
+		.doubao-library-toolbar-grid > label:last-child { grid-column: 1 / -1; }
+		.doubao-library-toolbar-foot { align-items: flex-start; flex-direction: column; }
+		.doubao-tabs.embedded-tabs { width: 100%; display: grid; }
+		.doubao-library-count { align-self: flex-end; }
+		.doubao-library-grid { grid-template-columns: 1fr; }
 	}
 	@container (max-width: 430px) {
 		.doubao-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -534,6 +758,6 @@
 		.doubao-card-id { margin-left: 38px; }
 	}
 	@media (prefers-reduced-motion: reduce) {
-		.doubao-catalog-drawer, .doubao-drawer-head p.syncing::before, .doubao-voice-card.previewing .doubao-voice-orb, .doubao-voice-orb.playing span, .doubao-card-skeleton span, :global(.spinning) { animation: none; }
+		.doubao-catalog-drawer, .doubao-drawer-head p.syncing::before, .doubao-voice-card.previewing .doubao-voice-orb, .doubao-voice-orb.playing span, .doubao-card-skeleton span, .doubao-load-sentinel > span:first-child, :global(.spinning) { animation: none; }
 	}
 </style>

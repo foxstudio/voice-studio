@@ -37,8 +37,6 @@
 	let voiceAsrStatus = $state(new Map<string, 'idle' | 'generating' | 'done' | 'error'>());
 	let voiceSerStatus = $state(new Map<string, 'idle' | 'generating' | 'done' | 'error'>());
 	let doubaoCloneStatus = $state(new Map<string, 'idle' | 'training' | 'refreshing' | 'done' | 'error'>());
-	let doubaoCloudRefreshing = $state(false);
-	let doubaoCloudMessage = $state('');
 	let batchSerProgress = $state({ active: false, current: 0, total: 0 });
 	let showVoiceModal = $state(false);
 	let copiedId = $state("");
@@ -46,6 +44,7 @@
 	let doubaoOfficialSpeakers: EngineSpeaker[] = $state([]);
 	let doubaoOfficialLoading = $state(false);
 	let doubaoOfficialLoaded = $state(false);
+	let doubaoOfficialError = $state('');
 	let selectedDoubaoOfficialId = $state('');
 
 	function checkOverflow(node: HTMLElement, _text: string) {
@@ -95,9 +94,12 @@
 		if (doubaoOfficialLoading) return;
 		doubaoOfficialLoading = true;
 		try {
-			doubaoOfficialSpeakers = await Api.engineSpeakers('doubao-tts-preset', { limit: 500 });
+			doubaoOfficialSpeakers = await Api.engineSpeakers('doubao-tts-preset', { limit: 5000 });
 			doubaoOfficialLoaded = true;
+			doubaoOfficialError = '';
 			if (!selectedDoubaoOfficialId && doubaoOfficialSpeakers[0]) selectedDoubaoOfficialId = doubaoOfficialSpeakers[0].speaker_id;
+		} catch (error: any) {
+			doubaoOfficialError = error?.message || '官方音色目录读取失败';
 		} finally {
 			doubaoOfficialLoading = false;
 		}
@@ -257,34 +259,6 @@
 		} catch (e: any) {
 			uploadMessage = e?.message || '刷新豆包音色状态失败';
 			doubaoCloneStatus = new Map([...doubaoCloneStatus, [voice.voice_id, 'error']]);
-		}
-	}
-
-	async function refreshAllDoubaoCloudVoices() {
-		doubaoCloudRefreshing = true;
-		doubaoCloudMessage = '';
-		try {
-			const result = await Api.refreshDoubaoCloudVoices();
-			for (const voice of result.voices) updateVoiceInList(voice);
-			doubaoCloudMessage = result.failed.length
-				? `已刷新 ${result.count} 个，${result.failed.length} 个失败`
-				: `已刷新 ${result.count} 个`;
-		} catch (e: any) {
-			doubaoCloudMessage = e?.message || '刷新豆包云端音色失败';
-		} finally {
-			doubaoCloudRefreshing = false;
-		}
-	}
-
-	async function unbindDoubaoVoice(voice: VoiceAsset) {
-		const ok = window.confirm(`解除「${voice.name}」的豆包云端绑定？这只会清掉本地记录，不会删除火山引擎云端 SpeakerID。`);
-		if (!ok) return;
-		try {
-			const updated = await Api.unbindDoubaoVoice(voice.voice_id);
-			updateVoiceInList(updated);
-			doubaoCloudMessage = '已解除本地绑定';
-		} catch (e: any) {
-			doubaoCloudMessage = e?.message || '解除豆包绑定失败';
 		}
 	}
 
@@ -513,10 +487,6 @@
 
 	const visibleVoices = $derived(filteredVoices.slice(0, displayedCount));
 
-	const doubaoCloudVoices = $derived(
-		allVoices.filter((voice) => voice.external_provider === 'doubao' && Boolean(voice.external_voice_id))
-	);
-
 	const selfOrAuthorizedCount = $derived(
 		allVoices.filter((voice) => ['self_voice', 'authorized', 'company_authorized'].includes(voice.license_status)).length
 	);
@@ -622,44 +592,6 @@
 					</label>
 				</div>
 					<span class="toolbar-count muted">{visibleVoices.length} / {filteredVoices.length} / {allVoices.length} 条结果</span>
-			</section>
-
-			<section class="doubao-cloud-panel">
-				<div class="doubao-cloud-head">
-					<div>
-						<span class="section-kicker">豆包云端音色</span>
-						<strong>{doubaoCloudVoices.length} 个已绑定</strong>
-					</div>
-					<div class="doubao-cloud-actions">
-						<button class="btn icon-text" type="button" data-tooltip="批量调用豆包 get_voice 查询本地已绑定 speaker_id 的状态" onclick={refreshAllDoubaoCloudVoices} disabled={!doubaoCloudVoices.length || doubaoCloudRefreshing}>
-							<RefreshCw size={14} /> {doubaoCloudRefreshing ? '刷新中' : '批量刷新'}
-						</button>
-						<a class="btn icon-text" href="https://www.volcengine.com/docs/6561/1801953?lang=zh" target="_blank" rel="noreferrer">官方管理</a>
-					</div>
-				</div>
-				{#if doubaoCloudVoices.length}
-					<div class="doubao-cloud-list">
-						{#each doubaoCloudVoices.slice(0, 8) as voice}
-							<div class="doubao-cloud-row">
-								<span class="cloud-name">{voice.name}</span>
-								<span class="cloud-speaker">{voice.external_voice_id}</span>
-								<span class="badge cloud-binding-badge">{doubaoCloudStatusLabel(voice)}</span>
-								<button class="icon-btn-sm" type="button" aria-label="刷新豆包音色状态" data-tooltip="刷新这个 speaker_id 的训练状态" onclick={() => refreshDoubaoVoice(voice)} disabled={doubaoCloneStatus.get(voice.voice_id) === 'refreshing'}>
-									<RefreshCw size={13} />
-								</button>
-								<button class="icon-btn-sm danger" type="button" aria-label="解除本地豆包绑定" data-tooltip="只解除本地绑定，不删除云端 SpeakerID" onclick={() => unbindDoubaoVoice(voice)}>
-									<Trash2 size={13} />
-								</button>
-							</div>
-						{/each}
-					</div>
-					{#if doubaoCloudVoices.length > 8}
-						<p class="muted cloud-more">还有 {doubaoCloudVoices.length - 8} 个，可用筛选查看。</p>
-					{/if}
-				{:else}
-					<p class="muted cloud-empty">暂无豆包云端绑定。</p>
-				{/if}
-				{#if doubaoCloudMessage}<p class="muted cloud-message">{doubaoCloudMessage}</p>{/if}
 			</section>
 
 			{#if Object.keys(tagsByCategory).length > 0}
@@ -787,9 +719,10 @@
 			{:else}
 				<section class="doubao-official-library">
 					<div class="doubao-official-intro">
-						<div><span>云端预置目录</span><strong>豆包语音 TTS 2.0 官方音色</strong><p>目录会缓存在本地；这里的音色只能试听、收藏和用于合成，不会混入可编辑的本地参考音色。</p></div>
-						<a class="btn icon-text" href="/settings">目录同步设置</a>
+						<div><strong>豆包语音 TTS 2.0 官方目录</strong><p>试听、收藏并选择官方预置声线；这些云端音色不会混入可编辑的本地音色。</p></div>
+						<div class="doubao-official-intro-actions">{#if doubaoOfficialError}<button class="btn icon-text" type="button" onclick={loadDoubaoOfficialSpeakers}>重试</button>{/if}<a class="btn icon-text" href="/settings">同步设置</a></div>
 					</div>
+					{#if doubaoOfficialError}<p class="doubao-official-error" role="alert">{doubaoOfficialError}</p>{/if}
 					<DoubaoVoiceCatalogDrawer
 						mode="embedded"
 						speakers={doubaoOfficialSpeakers}
@@ -1005,26 +938,28 @@
 			align-items: center;
 			justify-content: space-between;
 			gap: 14px;
-			padding: 11px 13px;
-			border: 1px solid rgba(78, 151, 231, 0.2);
-			border-radius: 9px;
-			background: rgba(78, 151, 231, 0.045);
+			padding: 1px 0 3px;
 		}
 		.doubao-official-intro > div {
 			display: grid;
 			gap: 2px;
 		}
-		.doubao-official-intro span {
-			color: #7faee0;
-			font-size: 10px;
-			letter-spacing: 0.08em;
-		}
 		.doubao-official-intro strong {
-			font-size: 14px;
+			font-size: 13px;
 		}
 		.doubao-official-intro p {
 			margin: 0;
 			color: var(--muted);
+			font-size: 11px;
+		}
+		.doubao-official-intro-actions {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+		}
+		.doubao-official-error {
+			margin: 0;
+			color: #d8aa73;
 			font-size: 11px;
 		}
 		.toolbar-count {
@@ -1097,87 +1032,6 @@
 
 	.library-toolbar {
 		padding-bottom: 12px;
-	}
-
-	.doubao-cloud-panel {
-		border: 1px solid rgba(56, 189, 248, 0.18);
-		border-radius: 8px;
-		background: rgba(56, 189, 248, 0.035);
-		padding: 10px 12px;
-		display: grid;
-		gap: 8px;
-	}
-
-	.doubao-cloud-head {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		gap: 12px;
-	}
-
-	.doubao-cloud-head > div:first-child {
-		display: grid;
-		gap: 2px;
-	}
-
-	.section-kicker {
-		font-size: 11px;
-		color: var(--muted);
-	}
-
-	.doubao-cloud-head strong {
-		font-size: 13px;
-		color: var(--text);
-	}
-
-	.doubao-cloud-actions {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-	}
-
-	.doubao-cloud-list {
-		display: grid;
-		gap: 5px;
-	}
-
-	.doubao-cloud-row {
-		display: grid;
-		grid-template-columns: minmax(120px, 1fr) minmax(120px, 1.2fr) auto auto auto;
-		align-items: center;
-		gap: 6px;
-		min-height: 30px;
-		border-top: 1px solid rgba(255, 255, 255, 0.05);
-		padding-top: 5px;
-	}
-
-	.cloud-name,
-	.cloud-speaker {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		font-size: 12px;
-	}
-
-	.cloud-speaker {
-		color: var(--muted);
-		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-		font-size: 11px;
-	}
-
-	.doubao-cloud-row .cloud-binding-badge {
-		border-color: rgba(56, 189, 248, 0.35);
-		background: rgba(56, 189, 248, 0.1);
-		color: #9bdcff;
-		white-space: nowrap;
-	}
-
-	.cloud-empty,
-	.cloud-more,
-	.cloud-message {
-		margin: 0;
-		font-size: 12px;
 	}
 
 	.voice-toolbar {
@@ -1575,14 +1429,6 @@
 			grid-template-columns: 1fr 1fr;
 		}
 
-		.doubao-cloud-row {
-			grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) auto auto;
-		}
-
-		.doubao-cloud-row .cloud-binding-badge {
-			grid-column: 1 / -1;
-			width: max-content;
-		}
 	}
 
 	@media (max-width: 720px) {
@@ -1607,19 +1453,6 @@
 			grid-template-columns: 1fr;
 		}
 
-		.doubao-cloud-head {
-			align-items: flex-start;
-			flex-direction: column;
-		}
-
-		.doubao-cloud-row {
-			grid-template-columns: 1fr auto auto;
-		}
-
-		.cloud-speaker,
-		.doubao-cloud-row .cloud-binding-badge {
-			grid-column: 1 / -1;
-		}
 	}
 
 		/* Icon buttons in card head */
