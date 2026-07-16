@@ -1041,6 +1041,89 @@ def test_fit_candidate_segments_uses_stable_batches_and_compact_boundaries(monke
     assert progress[0][:3] == (0, 3, 1)
 
 
+def test_fit_batch_splits_after_invalid_json(monkeypatch):
+    cues = []
+    candidates = []
+    for index in range(2):
+        left_id = f"cue_{index:04d}_a"
+        right_id = f"cue_{index:04d}_b"
+        cues.extend(
+            [
+                VideoLocalizationCue(
+                    cue_id=left_id,
+                    start_ms=index * 10_000,
+                    end_ms=index * 10_000 + 4_000,
+                    en_subtitle_text="First complete idea",
+                ),
+                VideoLocalizationCue(
+                    cue_id=right_id,
+                    start_ms=index * 10_000 + 4_100,
+                    end_ms=index * 10_000 + 8_100,
+                    en_subtitle_text="Second complete idea",
+                ),
+            ]
+        )
+        candidates.append(
+            {
+                "id": f"localized_{index:04d}",
+                "source_cue_ids": [left_id, right_id],
+                "source_word_ids": [],
+                "source_text": "First complete idea Second complete idea",
+                "display_text": "第一段完整内容接着是第二段完整内容",
+                "tts_text": "第一段完整内容，接着是第二段完整内容。",
+                "adaptation_note": "保留两段语义",
+                "quality_flags": [],
+            }
+        )
+    draft = VideoLocalizationDraft(cues=cues)
+    timed = localization._time_candidates(candidates, draft)
+    calls: list[int] = []
+
+    def complete_json(**kwargs):
+        items = kwargs["user_payload"]["items"]
+        calls.append(len(items))
+        if len(calls) == 1:
+            raise LlmRuntimeError("invalid json", code="llm_json_invalid", status_code=502)
+        return {
+            "items": [
+                {
+                    "parent_id": item["parent_id"],
+                    "segments": [
+                        {
+                            "end_cue_id": item["source_cues"][0]["cue_id"],
+                            "display_text": "第一段完整内容",
+                            "tts_text": "第一段完整内容。",
+                        },
+                        {
+                            "end_cue_id": item["source_cues"][1]["cue_id"],
+                            "display_text": "接着是第二段完整内容",
+                            "tts_text": "接着是第二段完整内容。",
+                        },
+                    ],
+                }
+                for item in items
+            ]
+        }
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    replacements = localization._refine_candidate_batch(
+        [(index, candidates[index], timed[index]) for index in range(2)],
+        cue_by_id={cue.cue_id: cue for cue in cues},
+        word_by_id={},
+        context={},
+        profile_id="llm_default",
+        source_language="en",
+        target_language="zh-Hans",
+        is_cancelled=None,
+        request_state={"started_at": localization.time.perf_counter(), "requests": 0},
+    )
+
+    assert calls == [2, 1, 1]
+    assert sorted(replacements) == [0, 1]
+    assert all(len(items) == 2 for items in replacements.values())
+
+
 def test_fit_candidate_segments_allows_a_final_targeted_refinement_round(monkeypatch):
     draft = VideoLocalizationDraft(
         cues=[

@@ -21,7 +21,7 @@ from app.services import llm_runtime, settings_store, web_search
 
 LOCALIZATION_PROMPT_VERSION = "localization-draft-v6"
 LOCALIZATION_BATCH_MAX_CUES = 64
-LOCALIZATION_BATCH_MAX_WORDS = 280
+LOCALIZATION_BATCH_MAX_WORDS = 240
 LOCALIZATION_BATCH_MAX_SOURCE_CHARS = 3200
 QUALITY_REVIEW_BATCH_MAX_ITEMS = 60
 QUALITY_REVIEW_BATCH_MAX_TEXT_CHARS = 12_000
@@ -466,7 +466,7 @@ def _localization_batches(cues: list[VideoLocalizationCue]) -> list[tuple[int, l
         current_chars += cue_chars
     if current:
         batches.append((current_start, current))
-    if len(batches) >= 2 and len(batches[-1][1]) < max(2, LOCALIZATION_BATCH_MAX_CUES // 4):
+    if len(batches) >= 2 and len(batches[-1][1]) < len(batches[-2][1]):
         previous_start, previous = batches[-2]
         _last_start, last = batches[-1]
         combined = [*previous, *last]
@@ -1260,7 +1260,28 @@ def _refine_candidate_batch(
             allow_array=True,
         )
     except llm_runtime.LlmRuntimeError as exc:
-        if exc.code != "llm_output_truncated" or len(entries) <= 1:
+        recoverable_output_codes = {
+            "llm_json_invalid",
+            "llm_json_not_object",
+            "llm_output_truncated",
+            "llm_response_invalid",
+        }
+        if exc.code not in recoverable_output_codes:
+            raise
+        if len(entries) <= 1:
+            if not validation_retry:
+                return _refine_candidate_batch(
+                    entries,
+                    cue_by_id=cue_by_id,
+                    word_by_id=word_by_id,
+                    context=context,
+                    profile_id=profile_id,
+                    source_language=source_language,
+                    target_language=target_language,
+                    is_cancelled=is_cancelled,
+                    request_state=request_state,
+                    validation_retry=True,
+                )
             raise
         midpoint = len(entries) // 2
         return {
