@@ -1541,9 +1541,16 @@ def _quality_review(
     diagnostics: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     started_at = time.perf_counter()
-    request_state = {"started_at": started_at, "requests": 0}
     split_count = 0
     batches = _quality_review_batches(timed)
+    # Each planned batch may need one binary recovery pass: the original
+    # request plus two smaller requests. Keep a little extra room for a nested
+    # split while the wall-clock limit remains the final safety boundary.
+    request_state = {
+        "started_at": started_at,
+        "requests": 0,
+        "max_requests": max(QUALITY_REVIEW_MAX_REQUESTS, len(batches) * 4),
+    }
     reviewed: list[dict] = []
     changes: list[dict] = []
     for batch_index, batch in enumerate(batches):
@@ -1719,6 +1726,7 @@ def _quality_review(
             {
                 "planned_batch_count": len(batches),
                 "request_count": int(request_state["requests"]),
+                "request_limit": int(request_state["max_requests"]),
                 "split_count": split_count,
                 "duration_ms": _elapsed_ms(started_at),
             }
@@ -1771,12 +1779,13 @@ def _localization_review_focus(item: dict, context: dict) -> list[str]:
 def _claim_quality_review_request(request_state: dict) -> float:
     elapsed = time.perf_counter() - float(request_state["started_at"])
     requests = int(request_state["requests"])
-    if requests >= QUALITY_REVIEW_MAX_REQUESTS or elapsed >= QUALITY_REVIEW_MAX_SECONDS:
+    max_requests = int(request_state.get("max_requests", QUALITY_REVIEW_MAX_REQUESTS))
+    if requests >= max_requests or elapsed >= QUALITY_REVIEW_MAX_SECONDS:
         raise AppException(
             504,
             "VIDEO_LOCALIZATION_REVIEW_LIMIT_REACHED",
             "字幕语义复核已达到本次任务的处理上限，未覆盖当前本土化字幕轨。请稍后重试。",
-            {"request_count": requests, "elapsed_ms": round(elapsed * 1000)},
+            {"request_count": requests, "request_limit": max_requests, "elapsed_ms": round(elapsed * 1000)},
         )
     request_state["requests"] = requests + 1
     return max(1.0, min(180.0, QUALITY_REVIEW_MAX_SECONDS - elapsed))

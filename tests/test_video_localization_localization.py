@@ -266,6 +266,54 @@ def test_quality_review_splits_a_batch_after_invalid_json(monkeypatch):
     assert all("cultural_function" in rules for rules in review_rules)
 
 
+def test_quality_review_reserves_recovery_requests_for_each_planned_batch(monkeypatch):
+    items = [
+        {
+            "id": f"localized_{index:04d}",
+            "source_text": f"Source {index}",
+            "display_text": f"字幕 {index}",
+            "tts_text": f"字幕 {index}。",
+            "start_ms": index * 1000,
+            "end_ms": index * 1000 + 900,
+        }
+        for index in range(1, 5)
+    ]
+    calls: list[list[str]] = []
+
+    def complete_json(**kwargs):
+        ids = [item["id"] for item in kwargs["user_payload"]["items"]]
+        calls.append(ids)
+        if len(ids) > 1:
+            raise LlmRuntimeError("invalid json", code="llm_json_invalid", status_code=502)
+        return {"checked_ids": ids, "changes": []}
+
+    monkeypatch.setattr(localization, "QUALITY_REVIEW_BATCH_MAX_ITEMS", 2)
+    monkeypatch.setattr(localization, "QUALITY_REVIEW_BATCH_MAX_TEXT_CHARS", 10_000)
+    monkeypatch.setattr(localization, "QUALITY_REVIEW_MAX_REQUESTS", 2)
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+    diagnostics: dict = {}
+
+    reviewed, changes = localization._quality_review(
+        items,
+        draft=_draft(),
+        context={},
+        profile_id="llm_default",
+        source_language="en",
+        target_language="zh-Hans",
+        is_cancelled=None,
+        on_batch=lambda _completed, _total: None,
+        diagnostics=diagnostics,
+    )
+
+    assert reviewed == items
+    assert changes == []
+    assert [len(ids) for ids in calls] == [2, 1, 1, 2, 1, 1]
+    assert diagnostics["planned_batch_count"] == 2
+    assert diagnostics["request_count"] == 6
+    assert diagnostics["request_limit"] == 8
+    assert diagnostics["split_count"] == 2
+
+
 def test_source_fingerprint_tracks_speaker_profile_and_word_timing():
     draft = VideoLocalizationDraft.model_validate(
         {
