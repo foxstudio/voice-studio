@@ -42,6 +42,56 @@ def _draft() -> VideoLocalizationDraft:
     )
 
 
+def test_localization_batches_balance_context_size_without_tiny_requests():
+    cues = [
+        VideoLocalizationCue(
+            cue_id=f"cue_{index:04d}",
+            start_ms=index * 1000,
+            end_ms=(index + 1) * 1000,
+            en_subtitle_text="one short source sentence",
+            source_word_ids=[f"word_{index:04d}_{word}" for word in range(5)],
+        )
+        for index in range(70)
+    ]
+
+    batches = localization._localization_batches(cues)
+
+    assert [(start, len(batch)) for start, batch in batches] == [(0, 35), (35, 35)]
+    assert all(
+        sum(len(cue.source_word_ids) for cue in batch) <= localization.LOCALIZATION_BATCH_MAX_WORDS
+        for _, batch in batches
+    )
+
+
+def test_localization_batches_reject_a_single_unbounded_source_cue():
+    cue = VideoLocalizationCue(
+        cue_id="cue_too_large",
+        start_ms=0,
+        end_ms=1000,
+        en_subtitle_text="source",
+        source_word_ids=[f"word_{index:04d}" for index in range(localization.LOCALIZATION_BATCH_MAX_WORDS + 1)],
+    )
+
+    with pytest.raises(AppException) as exc_info:
+        localization._localization_batches([cue])
+
+    assert exc_info.value.code == "VIDEO_LOCALIZATION_SOURCE_CUE_TOO_LARGE"
+
+
+def test_quality_review_batches_obey_item_and_text_limits(monkeypatch):
+    monkeypatch.setattr(localization, "QUALITY_REVIEW_BATCH_MAX_ITEMS", 3)
+    monkeypatch.setattr(localization, "QUALITY_REVIEW_BATCH_MAX_TEXT_CHARS", 24)
+    items = [
+        {"id": f"localized_{index:04d}", "source_text": "source", "display_text": "字幕", "tts_text": "配音"}
+        for index in range(5)
+    ]
+
+    batches = localization._quality_review_batches(items)
+
+    assert [len(batch) for batch in batches] == [2, 2, 1]
+    assert [item["id"] for batch in batches for item in batch] == [item["id"] for item in items]
+
+
 def test_source_fingerprint_tracks_speaker_profile_and_word_timing():
     draft = VideoLocalizationDraft.model_validate(
         {
@@ -119,10 +169,10 @@ def test_localization_pipeline_creates_non_one_to_one_dual_text_track(monkeypatc
                 ]
             },
             {
-                "items": [
+                "checked_ids": ["localized_0001"],
+                "changes": [
                     {
                         "id": "localized_0001",
-                        "approved": True,
                         "display_text": "1992 年 这彻底改变了创作者",
                         "tts_text": "1992 年，这彻底改变了创作者。",
                         "reason": "语义和口吻准确",
@@ -165,6 +215,12 @@ def test_localization_pipeline_creates_non_one_to_one_dual_text_track(monkeypatc
         "quality_review",
         "write_track",
     }
+    quality_metrics = {
+        item["label"]: item["value"] for item in run.summary["task_step_results"]["quality_review"]["metrics"]
+    }
+    assert quality_metrics["计划批次"] == "1"
+    assert quality_metrics["模型请求"] == "1"
+    assert quality_metrics["失败拆分"] == "0"
     assert [phase for phase, _items in previews] == ["localized_draft", "localized_timing", "localized_review"]
     assert progress[-1][1] == "本土化字幕初稿已生成，正在保存"
 
@@ -284,7 +340,9 @@ def test_localization_pipeline_splits_only_a_truncated_or_incomplete_batch(monke
             for index in range(1, 5)
         ]
     )
-    monkeypatch.setattr(localization, "LOCALIZATION_BATCH_SIZE", 4)
+    monkeypatch.setattr(localization, "LOCALIZATION_BATCH_MAX_CUES", 4)
+    monkeypatch.setattr(localization, "LOCALIZATION_BATCH_MAX_WORDS", 10_000)
+    monkeypatch.setattr(localization, "LOCALIZATION_BATCH_MAX_SOURCE_CHARS", 10_000)
     monkeypatch.setattr(
         localization.llm_runtime,
         "resolve_profile",
@@ -324,7 +382,7 @@ def test_localization_pipeline_splits_only_a_truncated_or_incomplete_batch(monke
             item_ids = [item["id"] for item in payload["items"]]
             quality_review_calls.append(item_ids)
             if len(item_ids) == 4:
-                raise LlmRuntimeError("truncated", code="llm_output_truncated", status_code=502)
+                raise LlmRuntimeError("timeout", code="llm_timeout", status_code=504)
             return [
                 {
                     "id": item["id"],
@@ -355,6 +413,11 @@ def test_localization_pipeline_splits_only_a_truncated_or_incomplete_batch(monke
     assert len(run.draft.localized_subtitles) == 4
     assert any("内容较长，正在拆分" in stage for _value, stage in progress)
     assert [len(item_ids) for item_ids in quality_review_calls] == [4, 2, 2]
+    quality_metrics = {
+        item["label"]: item["value"] for item in run.summary["task_step_results"]["quality_review"]["metrics"]
+    }
+    assert quality_metrics["模型请求"] == "3"
+    assert quality_metrics["失败拆分"] == "1"
 
 
 def test_localization_number_check_rejoins_split_decimal_word_tokens():
@@ -616,7 +679,7 @@ def test_fit_candidate_segments_refines_only_items_over_budget(monkeypatch):
     assert all(not localization._candidate_exceeds_budget(item) for item in timed)
 
 
-def test_fit_candidate_segments_keeps_large_batches_and_compact_boundaries(monkeypatch):
+def test_fit_candidate_segments_uses_stable_batches_and_compact_boundaries(monkeypatch):
     cues = []
     candidates = []
     for index in range(33):
@@ -650,11 +713,10 @@ def test_fit_candidate_segments_keeps_large_batches_and_compact_boundaries(monke
                 "quality_flags": [],
             }
         )
-    calls = 0
+    calls = []
 
     def complete_json(**kwargs):
-        nonlocal calls
-        calls += 1
+        calls.append(len(kwargs["user_payload"]["items"]))
         assert kwargs["user_payload"]["boundary_contract"]["source_mapping"].startswith("不要返回")
         return {
             "items": [
@@ -695,18 +757,18 @@ def test_fit_candidate_segments_keeps_large_batches_and_compact_boundaries(monke
         diagnostics=diagnostics,
     )
 
-    assert calls == 2
+    assert calls == [8, 8, 8, 8, 1]
     assert len(fitted) == 66
-    assert diagnostics["request_count"] == 2
+    assert diagnostics["request_count"] == 5
     assert len(diagnostics["rounds"]) == 1
     assert diagnostics["rounds"][0] | {"duration_ms": 0} == {
         "round": 1,
         "problem_count": 33,
-        "batch_count": 2,
+        "batch_count": 5,
         "duration_ms": 0,
     }
-    assert len(previews) == 2
-    assert progress[0][:3] == (0, 2, 1)
+    assert len(previews) == 5
+    assert progress[0][:3] == (0, 5, 1)
 
 
 def test_fit_candidate_segments_allows_a_final_targeted_refinement_round(monkeypatch):

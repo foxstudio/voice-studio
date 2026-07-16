@@ -20,9 +20,14 @@ from app.services import llm_runtime, settings_store, web_search
 
 
 LOCALIZATION_PROMPT_VERSION = "localization-draft-v3"
-LOCALIZATION_BATCH_SIZE = 72
-QUALITY_REVIEW_BATCH_SIZE = 120
-LOCALIZATION_FIT_BATCH_SIZE = 32
+LOCALIZATION_BATCH_MAX_CUES = 64
+LOCALIZATION_BATCH_MAX_WORDS = 320
+LOCALIZATION_BATCH_MAX_SOURCE_CHARS = 3200
+QUALITY_REVIEW_BATCH_MAX_ITEMS = 60
+QUALITY_REVIEW_BATCH_MAX_TEXT_CHARS = 12_000
+QUALITY_REVIEW_MAX_REQUESTS = 8
+QUALITY_REVIEW_MAX_SECONDS = 600
+LOCALIZATION_FIT_BATCH_MAX_ITEMS = 8
 LOCALIZATION_FIT_MAX_ROUNDS = 3
 LOCALIZATION_FIT_MAX_REQUESTS = 16
 LOCALIZATION_FIT_MAX_SECONDS = 600
@@ -206,6 +211,7 @@ def generate_localization_draft(
         on_preview("localized_timing", [_preview_item(item) for item in timed])
 
     _report(on_progress, 0.75, "正在复核语义与可读性")
+    review_diagnostics: dict = {}
     reviewed, review_changes = _quality_review(
         timed,
         draft=draft,
@@ -224,9 +230,10 @@ def generate_localization_draft(
             0.75 + 0.16 * max(0, batch_number - 1) / max(1, total),
             f"正在复核语义与可读性 · 第 {batch_number}/{total} 批内容较长，正在拆分",
         ),
+        diagnostics=review_diagnostics,
     )
     reviewed = _finalize_timing(reviewed, draft)
-    step_results["quality_review"] = _quality_step_result(reviewed, review_changes)
+    step_results["quality_review"] = _quality_step_result(reviewed, review_changes, review_diagnostics)
     if on_preview:
         on_preview("localized_review", [_preview_item(item) for item in reviewed])
 
@@ -381,6 +388,70 @@ def _research_context(context: dict, *, is_cancelled: CancelCallback | None) -> 
     return {"status": status, "reason": "只查证会影响理解或文化转述的问题", "questions": items}
 
 
+def _localization_batches(cues: list[VideoLocalizationCue]) -> list[tuple[int, list[VideoLocalizationCue]]]:
+    batches: list[tuple[int, list[VideoLocalizationCue]]] = []
+    current: list[VideoLocalizationCue] = []
+    current_start = 0
+    current_words = 0
+    current_chars = 0
+    for cue_index, cue in enumerate(cues):
+        cue_words, cue_chars = _localization_cue_weight(cue)
+        if cue_words > LOCALIZATION_BATCH_MAX_WORDS or cue_chars > LOCALIZATION_BATCH_MAX_SOURCE_CHARS:
+            raise AppException(
+                422,
+                "VIDEO_LOCALIZATION_SOURCE_CUE_TOO_LARGE",
+                "一条原文字幕包含的内容过长，无法稳定生成本土化字幕。请先重新听写或拆分这条原文字幕。",
+                {"cue_id": cue.cue_id, "word_count": cue_words, "character_count": cue_chars},
+            )
+        exceeds_batch = current and (
+            len(current) >= LOCALIZATION_BATCH_MAX_CUES
+            or current_words + cue_words > LOCALIZATION_BATCH_MAX_WORDS
+            or current_chars + cue_chars > LOCALIZATION_BATCH_MAX_SOURCE_CHARS
+        )
+        if exceeds_batch:
+            batches.append((current_start, current))
+            current = []
+            current_start = cue_index
+            current_words = 0
+            current_chars = 0
+        current.append(cue)
+        current_words += cue_words
+        current_chars += cue_chars
+    if current:
+        batches.append((current_start, current))
+    if len(batches) >= 2 and len(batches[-1][1]) < max(2, LOCALIZATION_BATCH_MAX_CUES // 4):
+        previous_start, previous = batches[-2]
+        _last_start, last = batches[-1]
+        combined = [*previous, *last]
+        valid_splits = [
+            split
+            for split in range(1, len(combined))
+            if _localization_batch_fits(combined[:split]) and _localization_batch_fits(combined[split:])
+        ]
+        if valid_splits:
+            split = min(valid_splits, key=lambda value: abs(len(combined) - 2 * value))
+            batches[-2:] = [
+                (previous_start, combined[:split]),
+                (previous_start + split, combined[split:]),
+            ]
+    return batches
+
+
+def _localization_cue_weight(cue: VideoLocalizationCue) -> tuple[int, int]:
+    source_text = (cue.en_subtitle_text or "").strip()
+    words = len(cue.source_word_ids) or max(1, len(re.findall(r"\w+|[^\w\s]", source_text)))
+    return words, len(source_text)
+
+
+def _localization_batch_fits(cues: list[VideoLocalizationCue]) -> bool:
+    weights = [_localization_cue_weight(cue) for cue in cues]
+    return (
+        len(cues) <= LOCALIZATION_BATCH_MAX_CUES
+        and sum(words for words, _chars in weights) <= LOCALIZATION_BATCH_MAX_WORDS
+        and sum(chars for _words, chars in weights) <= LOCALIZATION_BATCH_MAX_SOURCE_CHARS
+    )
+
+
 def _localize_cues(
     draft: VideoLocalizationDraft,
     *,
@@ -403,9 +474,9 @@ def _localize_cues(
     allowed_research_ids = {
         str(item.get("question_id")) for item in research.get("questions") or [] if item.get("question_id")
     }
-    batches = [cues[index : index + LOCALIZATION_BATCH_SIZE] for index in range(0, len(cues), LOCALIZATION_BATCH_SIZE)]
+    batches = _localization_batches(cues)
     candidates: list[dict] = []
-    for batch_index, batch in enumerate(batches):
+    for batch_index, (batch_start, batch) in enumerate(batches):
         _ensure_active(is_cancelled)
         allowed_ids = {cue.cue_id for cue in batch}
         allowed_word_ids = {word_id for cue in batch for word_id in cue.source_word_ids if word_id in word_by_id}
@@ -424,15 +495,11 @@ def _localize_cues(
             "neighbor_context": {
                 "previous": [
                     {"cue_id": cue.cue_id, "text": cue.en_subtitle_text}
-                    for cue in cues[
-                        max(0, batch_index * LOCALIZATION_BATCH_SIZE - 2) : batch_index * LOCALIZATION_BATCH_SIZE
-                    ]
+                    for cue in cues[max(0, batch_start - 2) : batch_start]
                 ],
                 "next": [
                     {"cue_id": cue.cue_id, "text": cue.en_subtitle_text}
-                    for cue in cues[
-                        (batch_index + 1) * LOCALIZATION_BATCH_SIZE : (batch_index + 1) * LOCALIZATION_BATCH_SIZE + 2
-                    ]
+                    for cue in cues[batch_start + len(batch) : batch_start + len(batch) + 2]
                 ],
             },
             "source_cues": [_cue_payload(cue, word_by_id) for cue in batch],
@@ -851,8 +918,8 @@ def _fit_candidate_segments(
 
         round_started_at = time.perf_counter()
         batches = [
-            problem_indexes[index : index + LOCALIZATION_FIT_BATCH_SIZE]
-            for index in range(0, len(problem_indexes), LOCALIZATION_FIT_BATCH_SIZE)
+            problem_indexes[index : index + LOCALIZATION_FIT_BATCH_MAX_ITEMS]
+            for index in range(0, len(problem_indexes), LOCALIZATION_FIT_BATCH_MAX_ITEMS)
         ]
         replacements: dict[int, list[dict]] = {}
         for batch_index, indexes in enumerate(batches, start=1):
@@ -1338,22 +1405,27 @@ def _quality_review(
     is_cancelled: CancelCallback | None,
     on_batch: Callable[[int, int], None],
     on_split: Callable[[int, int], None] | None = None,
+    diagnostics: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    batches = [
-        timed[index : index + QUALITY_REVIEW_BATCH_SIZE] for index in range(0, len(timed), QUALITY_REVIEW_BATCH_SIZE)
-    ]
+    started_at = time.perf_counter()
+    request_state = {"started_at": started_at, "requests": 0}
+    split_count = 0
+    batches = _quality_review_batches(timed)
     reviewed: list[dict] = []
     changes: list[dict] = []
     for batch_index, batch in enumerate(batches):
         _ensure_active(is_cancelled)
 
         def review_batch(items: list[dict]) -> tuple[list[dict], list[dict]]:
+            nonlocal split_count
             _ensure_active(is_cancelled)
+            timeout = _claim_quality_review_request(request_state)
             try:
                 raw = llm_runtime.complete_json(
                     system_prompt=(
                         "你是影视本土化终审。核对语义、数字、否定、因果、人物口吻、文化转述和字幕可读性。"
-                        "只修正确有问题的项目；不要把自然口语改回翻译腔。上屏字幕少用常规标点，配音台词保留必要语气和停顿。只返回 JSON。"
+                        "只修正确有问题的项目；不要把自然口语改回翻译腔。上屏字幕少用常规标点，配音台词保留必要语气和停顿。"
+                        "必须检查全部输入，但只回传实际需要修改的项目。只返回 JSON。"
                     ),
                     user_payload={
                         "task": f"{LOCALIZATION_PROMPT_VERSION}:quality-review",
@@ -1370,27 +1442,46 @@ def _quality_review(
                             }
                             for item in items
                         ],
-                        "output": "返回 items；每项包含 id、approved、display_text、tts_text、reason，顺序和 id 必须与输入完全一致。",
+                        "output": (
+                            "返回 checked_ids 和 changes。checked_ids 必须按输入顺序完整列出所有 id；"
+                            "changes 只包含确实需要修改的项目，每项包含 id、display_text、tts_text、reason。"
+                            "没有修改时 changes 返回空数组。"
+                        ),
                     },
                     profile_id=profile_id,
                     temperature=0.05,
-                    max_tokens=16384,
-                    timeout=180,
-                    allow_array=True,
+                    max_tokens=6000,
+                    timeout=timeout,
                 )
             except llm_runtime.LlmRuntimeError as exc:
-                if exc.code != "llm_output_truncated" or len(items) <= 1:
+                if exc.code not in {"llm_output_truncated", "llm_timeout", "llm_response_too_large"} or len(items) <= 1:
                     raise
                 raw = None
 
-            raw_items = raw if isinstance(raw, list) else raw.get("items") if isinstance(raw, dict) else None
             expected_ids = [item["id"] for item in items]
+            legacy_items = raw.get("items") if isinstance(raw, dict) else None
+            raw_changes = (
+                raw
+                if isinstance(raw, list)
+                else legacy_items
+                if isinstance(legacy_items, list)
+                else raw.get("changes")
+                if isinstance(raw, dict)
+                else None
+            )
             returned_ids = (
-                [str(item.get("id")) for item in raw_items if isinstance(item, dict)]
-                if isinstance(raw_items, list)
+                [str(item.get("id")) for item in raw if isinstance(item, dict)]
+                if isinstance(raw, list)
+                else [str(item.get("id")) for item in legacy_items if isinstance(item, dict)]
+                if isinstance(legacy_items, list)
+                else [str(item) for item in raw.get("checked_ids") or []]
+                if isinstance(raw, dict)
                 else []
             )
-            if returned_ids != expected_ids:
+            changes_valid = isinstance(raw_changes, list) and all(isinstance(item, dict) for item in raw_changes)
+            change_ids = [str(item.get("id")) for item in raw_changes] if changes_valid else []
+            changes_valid = changes_valid and len(change_ids) == len(set(change_ids)) and set(change_ids) <= set(expected_ids)
+            if returned_ids != expected_ids or not changes_valid:
                 if len(items) <= 1:
                     raise AppException(
                         422,
@@ -1400,6 +1491,7 @@ def _quality_review(
                     )
                 if on_split:
                     on_split(batch_index + 1, len(batches))
+                split_count += 1
                 midpoint = len(items) // 2
                 left_reviewed, left_changes = review_batch(items[:midpoint])
                 right_reviewed, right_changes = review_batch(items[midpoint:])
@@ -1407,7 +1499,12 @@ def _quality_review(
 
             batch_reviewed: list[dict] = []
             batch_changes: list[dict] = []
-            for source, decision in zip(items, raw_items):
+            decisions_by_id = {str(item["id"]): item for item in raw_changes}
+            for source in items:
+                decision = decisions_by_id.get(source["id"])
+                if decision is None:
+                    batch_reviewed.append(source)
+                    continue
                 display_text = (
                     _normalize_display_text(_text(decision.get("display_text"), 800)) or source["display_text"]
                 )
@@ -1435,7 +1532,51 @@ def _quality_review(
         reviewed.extend(batch_reviewed)
         changes.extend(batch_changes)
         on_batch(batch_index + 1, len(batches))
+    if diagnostics is not None:
+        diagnostics.update(
+            {
+                "planned_batch_count": len(batches),
+                "request_count": int(request_state["requests"]),
+                "split_count": split_count,
+                "duration_ms": _elapsed_ms(started_at),
+            }
+        )
     return reviewed, changes
+
+
+def _quality_review_batches(timed: list[dict]) -> list[list[dict]]:
+    batches: list[list[dict]] = []
+    current: list[dict] = []
+    current_chars = 0
+    for item in timed:
+        item_chars = sum(len(str(item.get(key) or "")) for key in ("source_text", "display_text", "tts_text"))
+        exceeds_batch = current and (
+            len(current) >= QUALITY_REVIEW_BATCH_MAX_ITEMS
+            or current_chars + item_chars > QUALITY_REVIEW_BATCH_MAX_TEXT_CHARS
+        )
+        if exceeds_batch:
+            batches.append(current)
+            current = []
+            current_chars = 0
+        current.append(item)
+        current_chars += item_chars
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _claim_quality_review_request(request_state: dict) -> float:
+    elapsed = time.perf_counter() - float(request_state["started_at"])
+    requests = int(request_state["requests"])
+    if requests >= QUALITY_REVIEW_MAX_REQUESTS or elapsed >= QUALITY_REVIEW_MAX_SECONDS:
+        raise AppException(
+            504,
+            "VIDEO_LOCALIZATION_REVIEW_LIMIT_REACHED",
+            "字幕语义复核已达到本次任务的处理上限，未覆盖当前本土化字幕轨。请稍后重试。",
+            {"request_count": requests, "elapsed_ms": round(elapsed * 1000)},
+        )
+    request_state["requests"] = requests + 1
+    return max(1.0, min(180.0, QUALITY_REVIEW_MAX_SECONDS - elapsed))
 
 
 def _finalize_timing(items: list[dict], draft: VideoLocalizationDraft) -> list[dict]:
@@ -1816,7 +1957,8 @@ def _timing_step_result(items: list[dict]) -> dict:
     )
 
 
-def _quality_step_result(items: list[dict], changes: list[dict]) -> dict:
+def _quality_step_result(items: list[dict], changes: list[dict], diagnostics: dict | None = None) -> dict:
+    diagnostics = diagnostics or {}
     risky = [item for item in items if item.get("quality_flags")]
     samples = [
         {
@@ -1845,7 +1987,14 @@ def _quality_step_result(items: list[dict], changes: list[dict]) -> dict:
     return _result(
         "warning" if risky else "success",
         f"终审检查了 {len(items)} 段字幕，修正 {len(changes)} 段表达；{len(risky)} 段建议人工试听确认。",
-        [("复核字幕", len(items)), ("表达修正", len(changes)), ("建议试听", len(risky))],
+        [
+            ("复核字幕", len(items)),
+            ("表达修正", len(changes)),
+            ("建议试听", len(risky)),
+            ("计划批次", diagnostics.get("planned_batch_count", 0)),
+            ("模型请求", diagnostics.get("request_count", 0)),
+            ("失败拆分", diagnostics.get("split_count", 0)),
+        ],
         [("终审修正", samples), ("需要重点看的字幕", warnings)],
     )
 
