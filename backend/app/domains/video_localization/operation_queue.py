@@ -47,6 +47,7 @@ def _localization_stage_id(stage: str) -> str:
     normalized = str(stage or "")
     for stage_id, markers in (
         ("research", ("查证文化",)),
+        ("fit_segments", ("调整字幕长度",)),
         ("localize", ("生成中文表达",)),
         ("segment_timing", ("安排字幕分段",)),
         ("quality_review", ("复核语义",)),
@@ -329,6 +330,7 @@ def _process(operation_id: str) -> None:
                     progress=progress,
                     result_summary={
                         "stage": stage,
+                        "stage_id": _asr_stage_id(stage),
                         "task_stage_timings": stage_timer.update(stage),
                     },
                 )
@@ -365,6 +367,7 @@ def _process(operation_id: str) -> None:
                     progress=progress,
                     result_summary={
                         "stage": stage,
+                        "stage_id": _localization_stage_id(stage),
                         "task_stage_timings": stage_timer.update(stage),
                     },
                 )

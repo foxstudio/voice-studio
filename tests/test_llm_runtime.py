@@ -104,27 +104,31 @@ def test_complete_json_posts_openai_request_and_returns_object(monkeypatch):
 def test_complete_json_falls_back_when_provider_rejects_json_object(monkeypatch):
     _configure(monkeypatch)
     requests = []
+    timeouts = []
+    now = [0.0]
 
     def fake_urlopen(request, timeout):
         requests.append(request)
+        timeouts.append(timeout)
         if len(requests) == 1:
+            now[0] = 0.4
             error_body = json.dumps(
                 {
                     "error": {
                         "message": "Provider returned error",
-                        "metadata": {
-                            "raw": "Model does not support 'json_object' response format."
-                        },
+                        "metadata": {"raw": "Model does not support 'json_object' response format."},
                     }
                 }
             ).encode()
             raise urllib.error.HTTPError(request.full_url, 400, "failed", {}, io.BytesIO(error_body))
         return FakeResponse(_completion('{"ok":true}'))
 
+    monkeypatch.setattr(llm_runtime.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(llm_runtime.urllib.request, "urlopen", fake_urlopen)
 
-    assert llm_runtime.complete_json("system", {}) == {"ok": True}
+    assert llm_runtime.complete_json("system", {}, timeout=1) == {"ok": True}
     assert len(requests) == 2
+    assert timeouts == pytest.approx([1.0, 0.6])
     assert json.loads(requests[0].data)["response_format"] == {"type": "json_object"}
     assert "response_format" not in json.loads(requests[1].data)
 
@@ -148,9 +152,7 @@ def test_resolve_profile_uses_default_and_normalizes_url(monkeypatch):
         ([_profile(model_id="")], "work", None, "llm_model_not_configured", 400),
     ],
 )
-def test_resolve_profile_rejects_invalid_profile_state(
-    monkeypatch, profiles, default, profile_id, code, status_code
-):
+def test_resolve_profile_rejects_invalid_profile_state(monkeypatch, profiles, default, profile_id, code, status_code):
     _configure(monkeypatch, profiles=profiles, default=default)
     with pytest.raises(llm_runtime.LlmRuntimeError) as exc_info:
         llm_runtime.resolve_profile(profile_id)
@@ -318,6 +320,28 @@ def test_retry_stops_after_two_retries(monkeypatch, status_code, expected_code):
     assert exc_info.value.code == expected_code
     assert attempts == 3
     assert sleeps == list(llm_runtime.RETRY_DELAYS)
+
+
+def test_retry_timeout_is_one_total_deadline(monkeypatch):
+    _configure(monkeypatch)
+    now = [0.0]
+    attempts = 0
+
+    def fake_urlopen(request, timeout):
+        nonlocal attempts
+        attempts += 1
+        assert timeout == 1
+        now[0] = 0.9
+        raise urllib.error.HTTPError(request.full_url, 503, "retry", {}, io.BytesIO(b"ignored"))
+
+    monkeypatch.setattr(llm_runtime.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(llm_runtime.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(llm_runtime.LlmRuntimeError) as exc_info:
+        llm_runtime.complete_json("system", {}, timeout=1)
+
+    assert exc_info.value.code == "llm_timeout"
+    assert attempts == 1
 
 
 def test_nonrecoverable_server_error_is_not_retried(monkeypatch):

@@ -160,6 +160,7 @@ def test_localization_pipeline_creates_non_one_to_one_dual_text_track(monkeypatc
         "prepare_context",
         "research",
         "localize",
+        "fit_segments",
         "segment_timing",
         "quality_review",
         "write_track",
@@ -584,14 +585,12 @@ def test_fit_candidate_segments_refines_only_items_over_budget(monkeypatch):
                     "parent_id": "candidate_0000",
                     "segments": [
                         {
-                            "source_cue_ids": ["cue_0001"],
-                            "source_word_ids": [],
+                            "end_cue_id": "cue_0001",
                             "display_text": "这是第一段完整内容",
                             "tts_text": "这是第一段完整内容。",
                         },
                         {
-                            "source_cue_ids": ["cue_0002"],
-                            "source_word_ids": [],
+                            "end_cue_id": "cue_0002",
                             "display_text": "接下来是第二段完整内容",
                             "tts_text": "接下来是第二段完整内容。",
                         },
@@ -615,6 +614,99 @@ def test_fit_candidate_segments_refines_only_items_over_budget(monkeypatch):
     assert [item["source_cue_ids"] for item in fitted] == [["cue_0001"], ["cue_0002"]]
     timed = localization._time_candidates(fitted, draft)
     assert all(not localization._candidate_exceeds_budget(item) for item in timed)
+
+
+def test_fit_candidate_segments_keeps_large_batches_and_compact_boundaries(monkeypatch):
+    cues = []
+    candidates = []
+    for index in range(33):
+        left_id = f"cue_{index:04d}_a"
+        right_id = f"cue_{index:04d}_b"
+        cues.extend(
+            [
+                VideoLocalizationCue(
+                    cue_id=left_id,
+                    start_ms=index * 10_000,
+                    end_ms=index * 10_000 + 4_000,
+                    en_subtitle_text="First complete idea",
+                ),
+                VideoLocalizationCue(
+                    cue_id=right_id,
+                    start_ms=index * 10_000 + 4_100,
+                    end_ms=index * 10_000 + 8_100,
+                    en_subtitle_text="Second complete idea",
+                ),
+            ]
+        )
+        candidates.append(
+            {
+                "id": f"localized_{index:04d}",
+                "source_cue_ids": [left_id, right_id],
+                "source_word_ids": [],
+                "source_text": "First complete idea Second complete idea",
+                "display_text": "第一段完整内容接着是第二段完整内容",
+                "tts_text": "第一段完整内容，接着是第二段完整内容。",
+                "adaptation_note": "保留两段语义",
+                "quality_flags": [],
+            }
+        )
+    calls = 0
+
+    def complete_json(**kwargs):
+        nonlocal calls
+        calls += 1
+        assert kwargs["user_payload"]["boundary_contract"]["source_mapping"].startswith("不要返回")
+        return {
+            "items": [
+                {
+                    "parent_id": item["parent_id"],
+                    "segments": [
+                        {
+                            "end_cue_id": item["source_cues"][0]["cue_id"],
+                            "display_text": "第一段完整内容",
+                            "tts_text": "第一段完整内容。",
+                        },
+                        {
+                            "end_cue_id": item["source_cues"][1]["cue_id"],
+                            "display_text": "接着是第二段完整内容",
+                            "tts_text": "接着是第二段完整内容。",
+                        },
+                    ],
+                }
+                for item in kwargs["user_payload"]["items"]
+            ]
+        }
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+    diagnostics = {}
+    progress = []
+    previews = []
+
+    fitted = localization._fit_candidate_segments(
+        candidates,
+        VideoLocalizationDraft(cues=cues),
+        context={},
+        profile_id="llm_default",
+        source_language="en",
+        target_language="zh-Hans",
+        is_cancelled=None,
+        on_progress=lambda *items: progress.append(items),
+        on_preview=previews.append,
+        diagnostics=diagnostics,
+    )
+
+    assert calls == 2
+    assert len(fitted) == 66
+    assert diagnostics["request_count"] == 2
+    assert len(diagnostics["rounds"]) == 1
+    assert diagnostics["rounds"][0] | {"duration_ms": 0} == {
+        "round": 1,
+        "problem_count": 33,
+        "batch_count": 2,
+        "duration_ms": 0,
+    }
+    assert len(previews) == 2
+    assert progress[0][:3] == (0, 2, 1)
 
 
 def test_fit_candidate_segments_allows_a_final_targeted_refinement_round(monkeypatch):
@@ -656,8 +748,7 @@ def test_fit_candidate_segments_allows_a_final_targeted_refinement_round(monkeyp
                         "parent_id": "candidate_0000",
                         "segments": [
                             {
-                                "source_cue_ids": ["cue_0001", "cue_0002"],
-                                "source_word_ids": [],
+                                "end_cue_id": "cue_0002",
                                 "display_text": candidate["display_text"],
                                 "tts_text": candidate["tts_text"],
                             }
@@ -671,14 +762,12 @@ def test_fit_candidate_segments_allows_a_final_targeted_refinement_round(monkeyp
                     "parent_id": "candidate_0000",
                     "segments": [
                         {
-                            "source_cue_ids": ["cue_0001"],
-                            "source_word_ids": [],
+                            "end_cue_id": "cue_0001",
                             "display_text": "这是第一段完整内容",
                             "tts_text": "这是第一段完整内容。",
                         },
                         {
-                            "source_cue_ids": ["cue_0002"],
-                            "source_word_ids": [],
+                            "end_cue_id": "cue_0002",
                             "display_text": "接下来是第二段完整内容",
                             "tts_text": "接下来是第二段完整内容。",
                         },
@@ -701,7 +790,9 @@ def test_fit_candidate_segments_allows_a_final_targeted_refinement_round(monkeyp
 
     assert calls == 3
     assert [item["source_cue_ids"] for item in fitted] == [["cue_0001"], ["cue_0002"]]
-    assert all(not localization._candidate_exceeds_budget(item) for item in localization._time_candidates(fitted, draft))
+    assert all(
+        not localization._candidate_exceeds_budget(item) for item in localization._time_candidates(fitted, draft)
+    )
 
 
 def test_fit_candidate_segments_keeps_each_batched_parent_in_its_own_word_scope(monkeypatch):
@@ -760,8 +851,7 @@ def test_fit_candidate_segments_keeps_each_batched_parent_in_its_own_word_scope(
     def complete_json(**kwargs):
         payload_items = kwargs["user_payload"]["items"]
         assert [
-            [[word["word_id"] for word in cue["words"]] for cue in item["source_cues"]]
-            for item in payload_items
+            [[word["word_id"] for word in cue["words"]] for cue in item["source_cues"]] for item in payload_items
         ] == [
             [["word_0001"]],
             [["word_0002", "word_0003"], ["word_0004", "word_0005"]],
@@ -772,8 +862,7 @@ def test_fit_candidate_segments_keeps_each_batched_parent_in_its_own_word_scope(
                     "parent_id": "candidate_0000",
                     "segments": [
                         {
-                            "source_cue_ids": ["cue_0001"],
-                            "source_word_ids": ["word_0001"],
+                            "end_word_id": "word_0001",
                             "display_text": "第一词",
                             "tts_text": "第一词。",
                         }
@@ -783,14 +872,12 @@ def test_fit_candidate_segments_keeps_each_batched_parent_in_its_own_word_scope(
                     "parent_id": "candidate_0001",
                     "segments": [
                         {
-                            "source_cue_ids": ["cue_0001"],
-                            "source_word_ids": ["word_0002", "word_0003"],
+                            "end_word_id": "word_0003",
                             "display_text": "前句剩余",
                             "tts_text": "前句剩余。",
                         },
                         {
-                            "source_cue_ids": ["cue_0002"],
-                            "source_word_ids": ["word_0004", "word_0005"],
+                            "end_word_id": "word_0005",
                             "display_text": "后一句",
                             "tts_text": "后一句。",
                         },
@@ -821,7 +908,86 @@ def test_fit_candidate_segments_keeps_each_batched_parent_in_its_own_word_scope(
     assert [item["source_cue_ids"] for item in fitted] == [["cue_0001"], ["cue_0001"], ["cue_0002"]]
 
 
-def test_fit_candidate_segments_retries_one_parent_when_llm_duplicates_word_ids(monkeypatch):
+def test_fit_candidate_segments_falls_back_to_cue_boundaries_for_mixed_word_coverage(monkeypatch):
+    words = [
+        VideoLocalizationAlignedWord(
+            word_id="word_0001",
+            segment_id="segment_01",
+            text="First",
+            start_ms=0,
+            end_ms=3900,
+        )
+    ]
+    draft = VideoLocalizationDraft(
+        cues=[
+            VideoLocalizationCue(
+                cue_id="cue_0001",
+                start_ms=0,
+                end_ms=4000,
+                en_subtitle_text="First",
+                source_word_ids=["word_0001"],
+            ),
+            VideoLocalizationCue(
+                cue_id="cue_0002",
+                start_ms=4100,
+                end_ms=9000,
+                en_subtitle_text="Second complete idea",
+                source_word_ids=[],
+            ),
+        ],
+        transcription=VideoLocalizationTranscriptionState(words=words),
+    )
+    candidate = {
+        "id": "localized_0001",
+        "source_cue_ids": ["cue_0001", "cue_0002"],
+        "source_word_ids": ["word_0001"],
+        "source_text": "First Second complete idea",
+        "display_text": "这是第一段完整内容接着是第二段完整内容",
+        "tts_text": "这是第一段完整内容，接着是第二段完整内容。",
+        "adaptation_note": "保留完整语义",
+        "quality_flags": [],
+    }
+
+    def complete_json(**kwargs):
+        item = kwargs["user_payload"]["items"][0]
+        assert item["boundary_mode"] == "cue"
+        return {
+            "items": [
+                {
+                    "parent_id": "candidate_0000",
+                    "segments": [
+                        {
+                            "end_cue_id": "cue_0001",
+                            "display_text": "这是第一段完整内容",
+                            "tts_text": "这是第一段完整内容。",
+                        },
+                        {
+                            "end_cue_id": "cue_0002",
+                            "display_text": "接着是第二段完整内容",
+                            "tts_text": "接着是第二段完整内容。",
+                        },
+                    ],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    fitted = localization._fit_candidate_segments(
+        [candidate],
+        draft,
+        context={},
+        profile_id="llm_default",
+        source_language="en",
+        target_language="zh-Hans",
+        is_cancelled=None,
+    )
+
+    assert [item["source_cue_ids"] for item in fitted] == [["cue_0001"], ["cue_0002"]]
+    assert [item["source_word_ids"] for item in fitted] == [["word_0001"], []]
+
+
+def test_fit_candidate_segments_retries_whole_batch_when_llm_duplicates_boundaries(monkeypatch):
     words = [
         VideoLocalizationAlignedWord(
             word_id=f"word_{index:04d}",
@@ -860,24 +1026,19 @@ def test_fit_candidate_segments_retries_one_parent_when_llm_duplicates_word_ids(
         nonlocal calls
         calls += 1
         assert kwargs["user_payload"]["validation_retry"] is (calls == 2)
-        first_words = ["word_0001", "word_0002"]
-        second_words = ["word_0003", "word_0004", "word_0005"]
-        if calls == 1:
-            first_words = second_words = [word.word_id for word in words]
+        first_boundary = "word_0002" if calls == 2 else "word_0005"
         return {
             "items": [
                 {
                     "parent_id": "candidate_0000",
                     "segments": [
                         {
-                            "source_cue_ids": ["cue_0001"],
-                            "source_word_ids": first_words,
+                            "end_word_id": first_boundary,
                             "display_text": "这是第一段完整内容",
                             "tts_text": "这是第一段完整内容。",
                         },
                         {
-                            "source_cue_ids": ["cue_0001"],
-                            "source_word_ids": second_words,
+                            "end_word_id": "word_0005",
                             "display_text": "然后是第二段完整内容",
                             "tts_text": "然后是第二段完整内容。",
                         },
@@ -948,14 +1109,12 @@ def test_fit_candidate_segments_retries_one_parent_when_llm_drops_a_number(monke
                     "parent_id": "candidate_0000",
                     "segments": [
                         {
-                            "source_cue_ids": ["cue_0001"],
-                            "source_word_ids": ["word_0001", "word_0002"],
+                            "end_word_id": "word_0002",
                             "display_text": "使用Seedance 2.0",
                             "tts_text": "使用Seedance 2.0。",
                         },
                         {
-                            "source_cue_ids": ["cue_0001"],
-                            "source_word_ids": ["word_0003", "word_0004"],
+                            "end_word_id": "word_0004",
                             "display_text": second_text,
                             "tts_text": f"{second_text}。",
                         },
@@ -1036,9 +1195,7 @@ def test_research_step_result_reports_actual_usage():
     localized = [
         {
             "display_text": "这是 Seedance 2.0",
-            "research_usage": [
-                {"question_id": "research_01", "effect": "确认产品名应写作 Seedance 2.0"}
-            ],
+            "research_usage": [{"question_id": "research_01", "effect": "确认产品名应写作 Seedance 2.0"}],
         }
     ]
 
@@ -1081,6 +1238,4 @@ def test_localized_segment_keeps_only_declared_research_usage():
         allowed_research_ids={"research_01"},
     )
 
-    assert parsed[0]["research_usage"] == [
-        {"question_id": "research_01", "effect": "确认产品采用官方中文名称"}
-    ]
+    assert parsed[0]["research_usage"] == [{"question_id": "research_01", "effect": "确认产品采用官方中文名称"}]

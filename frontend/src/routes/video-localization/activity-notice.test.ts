@@ -248,6 +248,7 @@ describe('activity notice tasks', () => {
 					prepare_context: { duration_ms: 1_200 },
 					research: { duration_ms: 2_300 },
 					localize: { duration_ms: 4_500 },
+					fit_segments: { duration_ms: 600 },
 					segment_timing: { duration_ms: 800 },
 					quality_review: { duration_ms: 400, running: true }
 				},
@@ -291,6 +292,7 @@ describe('activity notice tasks', () => {
 			{ id: 'prepare_context', label: '理解原文与人物', status: 'success', durationMs: 1_200 },
 			{ id: 'research', label: '查证文化与背景', status: 'success', durationMs: 2_300 },
 			{ id: 'localize', label: '生成中文表达', status: 'success', durationMs: 4_500 },
+			{ id: 'fit_segments', label: '调整字幕长度', status: 'success', durationMs: 600 },
 			{ id: 'segment_timing', label: '安排字幕分段与时间', status: 'success', durationMs: 800 },
 			{ id: 'quality_review', label: '复核语义与可读性', status: 'running', durationMs: 400 },
 			{ id: 'write_track', label: '写入本土化字幕轨', status: 'todo', durationMs: undefined }

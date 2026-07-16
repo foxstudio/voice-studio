@@ -140,9 +140,7 @@ def complete_json(
 
     profile = resolve_profile(profile_id)
     user_content = (
-        "请处理以下 JSON 数据。\n"
-        f"JSON 数据：\n{payload_json}\n\n"
-        "只返回 JSON 对象，不要返回 Markdown、解释或其他文本。"
+        f"请处理以下 JSON 数据。\nJSON 数据：\n{payload_json}\n\n只返回 JSON 对象，不要返回 Markdown、解释或其他文本。"
     )
     request_body = {
         "model": profile.model_id,
@@ -157,14 +155,22 @@ def complete_json(
     headers = llm_provider.build_auth_headers(profile.api_key)
     headers["Content-Type"] = "application/json"
     request = _completion_request(profile.base_url, request_body, headers)
+    started_at = time.monotonic()
     try:
         raw = _send_with_retries(request, timeout)
     except LlmRuntimeError as exc:
         if exc.code != "llm_json_object_unsupported":
             raise
+        remaining = timeout - (time.monotonic() - started_at)
+        if remaining <= 0:
+            raise LlmRuntimeError(
+                "连接语言模型服务超时，请稍后重试",
+                code="llm_timeout",
+                status_code=504,
+            ) from None
         fallback_body = dict(request_body)
         fallback_body.pop("response_format", None)
-        raw = _send_with_retries(_completion_request(profile.base_url, fallback_body, headers), timeout)
+        raw = _send_with_retries(_completion_request(profile.base_url, fallback_body, headers), remaining)
     return _parse_completion(raw, allow_array=allow_array)
 
 
@@ -179,10 +185,19 @@ def _completion_request(base_url: str, request_body: dict[str, Any], headers: di
 
 
 def _send_with_retries(request: urllib.request.Request, timeout: float) -> bytes:
+    deadline = time.monotonic() + timeout
     for attempt in range(MAX_RETRIES + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise LlmRuntimeError(
+                "连接语言模型服务超时，请稍后重试",
+                code="llm_timeout",
+                status_code=504,
+            )
         error_body = b""
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            attempt_timeout = timeout if attempt == 0 else remaining
+            with urllib.request.urlopen(request, timeout=attempt_timeout) as response:
                 status_code = int(getattr(response, "status", 200))
                 if status_code >= 400:
                     raise _ResponseStatusError(status_code)
@@ -219,7 +234,14 @@ def _send_with_retries(request: urllib.request.Request, timeout: float) -> bytes
             ) from None
 
         if status_code in RETRYABLE_STATUS_CODES and attempt < MAX_RETRIES:
-            time.sleep(RETRY_DELAYS[attempt])
+            delay = RETRY_DELAYS[attempt]
+            if time.monotonic() + delay >= deadline:
+                raise LlmRuntimeError(
+                    "连接语言模型服务超时，请稍后重试",
+                    code="llm_timeout",
+                    status_code=504,
+                )
+            time.sleep(delay)
             continue
         raise _http_error(status_code, error_body)
 
@@ -255,11 +277,7 @@ def _read_error_body(response: BinaryIO) -> bytes:
 
 def _http_error(status_code: int, error_body: bytes = b"") -> LlmRuntimeError:
     normalized_error = error_body.decode("utf-8", "ignore").casefold()
-    if (
-        status_code == 400
-        and "json_object" in normalized_error
-        and "does not support" in normalized_error
-    ):
+    if status_code == 400 and "json_object" in normalized_error and "does not support" in normalized_error:
         return LlmRuntimeError(
             "当前模型不支持 JSON Object 响应格式，已尝试兼容模式",
             code="llm_json_object_unsupported",

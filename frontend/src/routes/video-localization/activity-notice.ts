@@ -126,6 +126,7 @@ const LOCALIZATION_STEP_DEFINITIONS = [
 	{ id: 'prepare_context', label: '理解原文与人物', stages: ['prepare_context', '理解原文与人物'] },
 	{ id: 'research', label: '查证文化与背景', stages: ['research', '查证文化与背景'] },
 	{ id: 'localize', label: '生成中文表达', stages: ['localize', '生成中文表达'] },
+	{ id: 'fit_segments', label: '调整字幕长度', stages: ['fit_segments', '调整字幕长度'] },
 	{ id: 'segment_timing', label: '安排字幕分段与时间', stages: ['segment_timing', '安排字幕分段与时间'] },
 	{ id: 'quality_review', label: '复核语义与可读性', stages: ['quality_review', '复核语义与可读性'] },
 	{ id: 'write_track', label: '写入本土化字幕轨', stages: ['write_track', '写入本土化字幕轨'] }
@@ -257,6 +258,8 @@ const TIMING_METRIC_LABELS: Record<string, string> = {
 	source_count: '资料来源',
 	cache_hits: '缓存命中',
 	batch_count: '请求批次',
+	request_count: '模型请求',
+	problem_count: '待调整字幕',
 	word_count: '逐词时间码',
 	boundary_count: '边界数量',
 	refined_onset_count: '修正入点',
