@@ -145,6 +145,32 @@ def test_localization_review_focus_flags_calques_collocations_and_real_referents
     assert any("工具或 AI" in hint for hint in tool_pronoun)
 
 
+def test_reading_speed_counts_a_contiguous_product_name_as_one_unit():
+    mixed_language = localization._candidate_budget_report(
+        {
+            "start_ms": 253_070,
+            "end_ms": 254_410,
+            "display_text": "在Seedance用此提示",
+        }
+    )
+    chinese_only = localization._candidate_budget_report(
+        {
+            "start_ms": 253_070,
+            "end_ms": 254_410,
+            "display_text": "一二三四五六七八九十甲乙丙",
+        }
+    )
+
+    assert mixed_language["visible_chars"] == 13
+    assert mixed_language["reading_units"] == 6
+    assert mixed_language["cps"] == 4.48
+    assert mixed_language["violations"] == []
+    assert chinese_only["visible_chars"] == 13
+    assert chinese_only["reading_units"] == 13
+    assert chinese_only["cps"] == 9.7
+    assert chinese_only["violations"] == ["阅读速度超过每秒9字，需要在不丢信息的前提下精简表达"]
+
+
 def test_quality_review_batches_obey_item_and_text_limits(monkeypatch):
     monkeypatch.setattr(localization, "QUALITY_REVIEW_BATCH_MAX_ITEMS", 3)
     monkeypatch.setattr(localization, "QUALITY_REVIEW_BATCH_MAX_TEXT_CHARS", 24)

@@ -19,7 +19,7 @@ from app.errors import AppException
 from app.services import llm_runtime, settings_store, web_search
 
 
-LOCALIZATION_PROMPT_VERSION = "localization-draft-v5"
+LOCALIZATION_PROMPT_VERSION = "localization-draft-v6"
 LOCALIZATION_BATCH_MAX_CUES = 64
 LOCALIZATION_BATCH_MAX_WORDS = 280
 LOCALIZATION_BATCH_MAX_SOURCE_CHARS = 3200
@@ -1122,7 +1122,8 @@ def _candidate_has_preferred_pause_split(item: dict, word_by_id: dict) -> bool:
 def _candidate_budget_report(item: dict) -> dict:
     duration = max(1, int(item["end_ms"]) - int(item["start_ms"]))
     chars = _readable_chars(item["display_text"])
-    cps = chars * 1000 / duration
+    reading_units = _reading_units(item["display_text"])
+    cps = reading_units * 1000 / duration
     violations = []
     if duration > MAX_SUBTITLE_DURATION_MS:
         violations.append("时长超过7秒，需要按完整语义拆分")
@@ -1133,6 +1134,7 @@ def _candidate_budget_report(item: dict) -> dict:
     return {
         "duration_ms": duration,
         "visible_chars": chars,
+        "reading_units": reading_units,
         "cps": round(cps, 2),
         "max_chars_for_duration": max(
             1,
@@ -1759,7 +1761,7 @@ def _finalize_timing(items: list[dict], draft: VideoLocalizationDraft) -> list[d
         flags = set(item.get("quality_flags") or [])
         duration = max(1, item["end_ms"] - item["start_ms"])
         chars = _readable_chars(item["display_text"])
-        cps = chars * 1000 / duration
+        cps = _reading_units(item["display_text"]) * 1000 / duration
         if duration < MIN_SUBTITLE_DURATION_MS:
             flags.add("localized_duration_short")
         if duration > MAX_SUBTITLE_DURATION_MS:
@@ -2335,6 +2337,11 @@ def _normalized_numbers(value: str) -> Counter[str]:
 
 def _readable_chars(value: str) -> int:
     return len(re.sub(r"\s|[^\w\u3400-\u9fff]", "", value))
+
+
+def _reading_units(value: str) -> int:
+    """Count Han characters individually and contiguous Latin/number terms as words."""
+    return len(re.findall(r"[\u3400-\u9fff]|[A-Za-z0-9]+(?:[._+%/_-][A-Za-z0-9]+)*", value))
 
 
 def _quality_flags_label(flags: list[str]) -> str:
