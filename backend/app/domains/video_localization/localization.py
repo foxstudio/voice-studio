@@ -784,6 +784,10 @@ def _localize_semantic_bundles(
             "clean 要按对象写成清晰、自然、瑕疵少、完成度高或能直接用，不能机械写成干净；do it justice 写成看不出真实效果或体现不出效果",
             "drop into 不一律写丢进，squeeze the most out of 不写榨干，insane 或 crazy 不要每次都翻成疯狂",
             "in 4K 要按语义写成4K画质、4K版本、以4K分辨率等自然说法，不能机械写成‘在4K下’",
+            (
+                "同一句同时出现工具/模型和画质、分辨率、版本等输出规格时，必须分清语义角色：工具或模型负责处理/生成，"
+                "4K、HD、竖屏等只描述结果；不能把它们硬拼成‘混了某模型的4K画质’一类错位定语"
+            ),
             "人物对自己的身体或随身物做动作时，my own、his own、her own 要按中文习惯写自己或自己的，不能机械保留英语所有格",
             (
                 "遇到 walk、move、movement、motion、tracking、framing、rig 等动作或镜头词，必须先结合主语、宾语和前后文判断类型："
@@ -940,21 +944,44 @@ def _review_localized_bundles(
                 "跟踪/跟拍、构图/取景和真正的空间轨迹；不能因英文共用 move 或 motion 就在中文里统一写成运动或轨迹"
             ),
             "源文若是缺少标点的连续名词，要先恢复并列关系；replacement 必须逐句默读，不能产生多层名词硬拼或动作‘变成某个高度/距离’的语义错位",
+            "同一句里的工具/模型、处理动作和输出规格必须各自挂到正确对象，不能把模型名误当成画质、分辨率或版本的所有者",
         ],
         "output": "返回 checked_count 和 changes；checked_count 等于输入数量。changes 每项含 id、replacement、reason，reason 最多20字。",
     }
     started_at = time.perf_counter()
-    raw = llm_runtime.complete_json(
-        system_prompt=(
-            "你是中文科技视频终稿质检编辑。通读完整原文和中文稿，只返回确有必要的稀疏修改，"
-            "不要统一抹平人物口吻，不要逐句解释，只返回约定 JSON。"
-        ),
-        user_payload=payload,
-        profile_id=profile_id,
-        temperature=0.05,
-        max_tokens=10_000,
-        timeout=300,
+    review_system_prompt = (
+        "你是中文科技视频终稿质检编辑。通读完整原文和中文稿，只返回确有必要的稀疏修改，"
+        "不要统一抹平人物口吻，不要逐句解释，只返回约定 JSON。"
     )
+    raw = None
+    review_request_count = 0
+    review_max_tokens = min(10_000, max(2_400, len(bundles) * 160))
+    for attempt in range(2):
+        review_request_count += 1
+        try:
+            raw = llm_runtime.complete_json(
+                system_prompt=(
+                    review_system_prompt
+                    if attempt == 0
+                    else review_system_prompt
+                    + "上次结构化输出过长或损坏；这次只返回 checked_count 和必要的 changes，reason 不超过20字，禁止解释过程。"
+                ),
+                user_payload=payload,
+                profile_id=profile_id,
+                temperature=0.05 if attempt == 0 else 0.01,
+                max_tokens=review_max_tokens,
+                timeout=300,
+            )
+            break
+        except llm_runtime.LlmRuntimeError as exc:
+            if attempt or exc.code not in {
+                "llm_json_invalid",
+                "llm_json_not_object",
+                "llm_output_truncated",
+                "llm_response_invalid",
+                "llm_response_too_large",
+            }:
+                raise
     raw_changes = raw.get("changes") if isinstance(raw, dict) else None
     required_change_ids = {
         item["id"]
@@ -1059,7 +1086,7 @@ def _review_localized_bundles(
         reviewed.append({**source, "text": text})
     return reviewed, changes, {
         "planned_batch_count": 1,
-        "request_count": 1 + repair_request_count,
+        "request_count": review_request_count + repair_request_count,
         "split_count": 0,
         "duration_ms": _elapsed_ms(started_at),
     }
@@ -1087,6 +1114,17 @@ def _localized_bundle_review_focus(source: str, text: str) -> list[str]:
         focus.append("‘疯狂，对吧’是机械翻译的反应句；按人物语气和上下文改成自然的惊叹或评价，不能套用固定译词")
     if re.search(r"\bin\s+4k\b", source, flags=re.IGNORECASE) and "在4K下" in text:
         focus.append("‘在4K下’机械映射了 in 4K；按语义写成4K画质、4K版本或以4K分辨率呈现")
+    if (
+        re.search(r"\b(?:mix\w*|process\w*|generat\w*|creat\w*|enhanc\w*|upscal\w*|render\w*)\b", source, flags=re.IGNORECASE)
+        and re.search(r"\b(?:with|using|via|through)\b", source, flags=re.IGNORECASE)
+        and re.search(r"\b(?:\d+k|hd|uhd|hdr)\b", source, flags=re.IGNORECASE)
+        and re.search(
+            r"(?:混|掺).{0,24}(?:的\s*)?(?:\d+K|HD|UHD|HDR)(?:的\s*)?(?:画质|分辨率|版本|效果)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    ):
+        focus.append("工具或模型负责处理/生成，4K、HD 等只描述输出规格；重排中文语序，不能把模型名挂成画质、分辨率或版本的定语")
     if re.search(r"\bmy\s+own\b", source, flags=re.IGNORECASE) and re.search(
         r"(?:把|让|给)我(?:的)?(?:头|脑袋|脸|手|身体|衣服)", text
     ):
@@ -4465,8 +4503,14 @@ def _normalize_display_text(value: str) -> str:
             characters.append(character)
         else:
             characters.append(" ")
-    text = "".join(characters)
+    text = _space_mixed_language_tokens("".join(characters))
     return " ".join(text.split()).strip()
+
+
+def _space_mixed_language_tokens(value: str) -> str:
+    latin_term = r"(?:[A-Za-z][A-Za-z0-9._+%/-]*|\d+[A-Za-z][A-Za-z0-9._+%/-]*)"
+    text = re.sub(rf"([\u3400-\u9fff])({latin_term})", r"\1 \2", value)
+    return re.sub(rf"({latin_term}(?:\s+\d+(?:\.\d+)*)?)([\u3400-\u9fff])", r"\1 \2", text)
 
 
 def _normalize_tts_text(value: str) -> str:

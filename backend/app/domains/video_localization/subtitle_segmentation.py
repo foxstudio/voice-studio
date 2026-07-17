@@ -578,6 +578,8 @@ def _boundary_forbidden_by_review(
 ) -> bool:
     if not reviews or end <= 0 or end >= len(words):
         return False
+    if TERMINAL_PUNCTUATION.search(words[end - 1].text):
+        return False
     review = reviews.get((words[end - 1].word_id, words[end].word_id))
     return bool(review and review.decision == "avoid" and review.confidence >= HARD_AVOID_REVIEW_CONFIDENCE)
 

@@ -185,6 +185,65 @@ def test_scene_title_query_replaces_redundant_second_raw_name_query():
     assert guarded[1].target_terms == ["seedance"]
 
 
+def test_scene_title_query_is_split_from_combined_llm_query():
+    planned = [
+        web_research.PlannedQuery(
+            query="seedance CineDan 2.0",
+            category="proper_noun",
+            target_terms=["CineDan", "2.0", "seedance"],
+        )
+    ]
+
+    guarded = web_research._ensure_scene_title_query(
+        planned,
+        scene_context="源视频标题：seedance-speech-30s-720p.mp4",
+        transcript="The same shot was mixed with CineDan 2. 0 in 4K.",
+        limit=3,
+    )
+
+    assert [item.query for item in guarded] == ["seedance CineDan 2.0", "seedance"]
+
+
+def test_title_conflict_uses_versioned_transcript_name_when_target_terms_are_split():
+    state = VideoLocalizationResearchState(
+        status="completed",
+        queries=[
+            VideoLocalizationResearchQuery(
+                query_id="query_01",
+                query="seedance CineDan 2.0",
+                category="proper_noun",
+                target_terms=["CineDan", "2.0", "seedance"],
+            ),
+            VideoLocalizationResearchQuery(
+                query_id="query_02",
+                query="seedance",
+                category="proper_noun",
+                target_terms=["seedance"],
+            ),
+        ],
+        sources=[
+            VideoLocalizationResearchSource(
+                source_id="source_seedance",
+                query_id="query_02",
+                title="Seedance 2.0",
+                url="https://example.com/seedance",
+                snippet="AI video model",
+                provider="wikipedia",
+            )
+        ],
+    )
+
+    conflicts = web_research.title_conflict_candidates(
+        state,
+        scene_context="源视频标题：seedance-speech-30s.mp4",
+        transcript="The same shot was mixed with CineDan 2. 0 in 4K.",
+    )
+
+    assert conflicts[0]["source_text"] == "CineDan"
+    assert conflicts[0]["corrected_source_text"] == "Seedance"
+    assert conflicts[0]["version"] == "2.0"
+
+
 def test_research_skips_llm_when_disabled(monkeypatch):
     monkeypatch.setattr(
         web_research.settings_store,
@@ -242,6 +301,76 @@ def test_research_zero_results_is_completed_without_evidence(monkeypatch):
     assert result.status == "completed"
     assert result.sources == []
     assert "没有找到" in result.reason
+
+
+def test_research_discards_unrelated_proper_name_results(monkeypatch):
+    settings = WebSearchSettings(enabled=True, provider="wikipedia", max_queries=1)
+    profile = LlmProviderProfile(
+        profile_id="work", name="Work", base_url="https://example.com/v1", model_id="chat", enabled=True
+    )
+    monkeypatch.setattr(web_research.settings_store, "web_search_settings", lambda: settings)
+    monkeypatch.setattr(web_research.settings_store, "web_search_api_key", lambda: None)
+    monkeypatch.setattr(
+        web_research.settings_store,
+        "llm_profiles",
+        lambda: LlmProviderListResponse(profiles=[profile], default_profile_id="work"),
+    )
+    monkeypatch.setattr(web_research.settings_store, "llm_profile", lambda _profile_id: profile)
+    monkeypatch.setattr(
+        web_research.llm_runtime,
+        "complete_json",
+        lambda **_kwargs: {
+            "needs_research": True,
+            "reason": "核对产品名",
+            "queries": [
+                {
+                    "query": "CineDan 2.0",
+                    "category": "proper_noun",
+                    "target_terms": ["CineDan 2.0"],
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        web_research.web_search,
+        "search",
+        lambda *_args, **_kwargs: [
+            web_search.SearchResult("Nicusor Dan", "https://example.com/person", "Romanian politician"),
+            web_search.SearchResult("AlloCine", "https://example.com/cinema", "French movie database"),
+        ],
+    )
+
+    result = web_research.research_transcript(_segments(), language="en")
+
+    assert result.status == "completed"
+    assert result.sources == []
+    assert "没有找到" in result.reason
+
+
+def test_evidence_payload_filters_unrelated_legacy_sources():
+    state = VideoLocalizationResearchState(
+        status="completed",
+        queries=[
+            VideoLocalizationResearchQuery(
+                query_id="query_01",
+                query="CineDan 2.0",
+                category="proper_noun",
+                target_terms=["CineDan 2.0"],
+            )
+        ],
+        sources=[
+            VideoLocalizationResearchSource(
+                source_id="source_bad",
+                query_id="query_01",
+                title="Nicusor Dan",
+                url="https://example.com/person",
+                snippet="Romanian politician",
+                provider="wikipedia",
+            )
+        ],
+    )
+
+    assert web_research.evidence_payload(state) == []
 
 
 def test_cache_write_failure_does_not_fail_search(tmp_path: Path, monkeypatch):

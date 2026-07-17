@@ -1,13 +1,13 @@
 <script module lang="ts">
 	import type {
 		VideoLocalizationCue as ProtectedCue,
+		VideoLocalizationDraft as ConflictDraft,
 		VideoLocalizationQualityIssue as ProtectedQualityIssue
 	} from '$lib/api/types';
 
 	export type AsrEngineId = 'faster-whisper-turbo' | 'qwen3-asr-mlx' | 'mimo-v2.5-asr';
 	export type InspectorSection = 'tasks' | 'voice' | 'generate' | 'subtitle' | 'style';
 	export const DEFAULT_ASR_ENGINE_ID: AsrEngineId = 'qwen3-asr-mlx';
-	export const ASR_ENGINE_IDS: AsrEngineId[] = [DEFAULT_ASR_ENGINE_ID, 'faster-whisper-turbo', 'mimo-v2.5-asr'];
 	type ManualTimingCue = ProtectedCue & {
 		manual_timing_revision?: number;
 		manual_timing_review_status?: 'not_reviewed' | 'required' | 'confirmed';
@@ -20,6 +20,70 @@
 
 	export function asrSelectionRequiresUploadConfirmation(engineId: AsrEngineId) {
 		return engineId === 'mimo-v2.5-asr';
+	}
+
+	export function inspectorSectionOnProjectLoad(): InspectorSection {
+		return 'tasks';
+	}
+
+	export function mergeDraftAfterConflict(latest: ConflictDraft, local: ConflictDraft): ConflictDraft {
+		const latestLocalizationRevision = String(latest.localization_state?.created_at ?? '');
+		const localLocalizationRevision = String(local.localization_state?.created_at ?? '');
+		const preserveLatestLocalization = Boolean(
+			(latestLocalizationRevision || localLocalizationRevision) &&
+			latestLocalizationRevision !== localLocalizationRevision
+		);
+		const latestTranscriptionRevision = String(latest.transcription?.revision_id ?? '');
+		const localTranscriptionRevision = String(local.transcription?.revision_id ?? '');
+		const preserveLatestTranscription = Boolean(
+			latestTranscriptionRevision && latestTranscriptionRevision !== localTranscriptionRevision
+		);
+		const latestCues = new Map(latest.cues.map((cue) => [cue.cue_id, cue]));
+		const mergedCues = preserveLatestTranscription
+			? latest.cues
+			: local.cues.map((cue) => {
+					const serverCue = latestCues.get(cue.cue_id);
+					if (!serverCue) return cue;
+					const merged = {
+						...serverCue,
+						...cue,
+						tts_result_id: serverCue.tts_result_id ?? cue.tts_result_id,
+						tts_audio_path: serverCue.tts_audio_path ?? cue.tts_audio_path,
+						tts_batch_task_id: serverCue.tts_batch_task_id ?? cue.tts_batch_task_id,
+						tts_batch_status: serverCue.tts_batch_status ?? cue.tts_batch_status,
+						tts_batch_error: serverCue.tts_batch_error ?? cue.tts_batch_error,
+						tts_attempted_at: serverCue.tts_attempted_at ?? cue.tts_attempted_at,
+						generated_duration_ms: serverCue.generated_duration_ms ?? cue.generated_duration_ms,
+						quality_flags: [...new Set([...(cue.quality_flags ?? []), ...(serverCue.quality_flags ?? [])])]
+					};
+					if (!preserveLatestLocalization) return merged;
+					return {
+						...merged,
+						zh_localized_subtitle_text: serverCue.zh_localized_subtitle_text,
+						tts_recommended_text: serverCue.tts_recommended_text
+					};
+				});
+		const localClips = new Map(local.timeline_clips.map((clip) => [clip.clip_id, clip]));
+		const latestClips = new Map(latest.timeline_clips.map((clip) => [clip.clip_id, clip]));
+		const mergedClips = local.timeline_clips.map((clip) => {
+			const serverClip = latestClips.get(clip.clip_id);
+			return serverClip
+				? { ...serverClip, ...clip, audio_path: serverClip.audio_path ?? clip.audio_path, status: serverClip.status ?? clip.status, candidate_id: serverClip.candidate_id ?? clip.candidate_id }
+				: clip;
+		});
+		for (const clip of latest.timeline_clips) {
+			if (!localClips.has(clip.clip_id)) mergedClips.push(clip);
+		}
+		return {
+			...latest,
+			ui_state: local.ui_state,
+			cues: mergedCues,
+			localized_subtitles: preserveLatestLocalization ? latest.localized_subtitles : local.localized_subtitles,
+			localization_state: preserveLatestLocalization ? latest.localization_state : local.localization_state,
+			glossary: local.glossary,
+			scene_context: local.scene_context,
+			timeline_clips: mergedClips
+		};
 	}
 
 	export function isDubbingInspectorSection(section: InspectorSection) {
@@ -96,7 +160,6 @@
 	import { ApiError } from '$lib/api/client';
 	import { withoutSubtitleTrack } from './subtitle-track-clear';
 	import type {
-		BatchTask,
 		GenerateRequest,
 		Project,
 		VideoLocalizationCue,
@@ -136,11 +199,9 @@
 	} from 'lucide-svelte';
 	import { onMount } from 'svelte';
 	import { selectionForPlaybackAtTime } from '$lib/audio/selection-playback';
-	import { downloadBlob, downloadJson, downloadText } from './downloads';
+	import { downloadBlob, downloadText } from './downloads';
 	import {
-		batchProjectId,
 		buildGenerateRequest,
-		buildWorkflow,
 		isActiveOperation,
 		summarizeVideoLocalizationError,
 		operationStatusLabel,
@@ -148,7 +209,6 @@
 		stemAudioUrl,
 		sortOperations,
 		suggestSpeakerSeed,
-		type WorkflowStep
 	} from './utils';
 	import CuttingInspector from './CuttingInspector.svelte';
 	import PreviewPanel from './PreviewPanel.svelte';
@@ -170,15 +230,9 @@
 		type VideoLocalizationTrackState
 	} from './studio-state';
 
-	type AsrEngineHealth = {
-		healthy: boolean;
-		status: string;
-		detail: string;
-	};
 	type SubtitleSegmentationProfileId = 'generic_zh' | 'short_video_large_text' | 'conservative_release';
 
 	let projects = $state<Project[]>([]);
-	let batches = $state<BatchTask[]>([]);
 	let operations = $state<VideoLocalizationOperation[]>([]);
 	let foregroundTasks = $state<ActivityTask[]>([]);
 	let projectId = $state('');
@@ -201,27 +255,15 @@
 	let extractingAudio = $state(false);
 	let separatingStems = $state(false);
 	let transcribingAsr = $state(false);
-	let selectedAsrEngineId = $state<AsrEngineId>(DEFAULT_ASR_ENGINE_ID);
-	let asrEngineHealth = $state<Record<AsrEngineId, AsrEngineHealth | null>>({
-		'faster-whisper-turbo': null,
-		'qwen3-asr-mlx': null,
-		'mimo-v2.5-asr': null
-	});
 	let creatingReferences = $state(false);
 	let submittingBatch = $state(false);
-	let syncingBatch = $state(false);
-	let exportingAudioPackage = $state(false);
 	let exportingLocalizedVideo = $state(false);
-	let loadingBatches = $state(false);
 	let referenceUpdatingId = $state('');
 	let candidateApplyingId = $state('');
 	let operationActionId = $state('');
-	let ttsBatchId = $state('');
-	let viewMode = $state<'single' | 'batch'>('single');
-	let rightPanelMode = $state<'speakers' | 'references' | 'delivery'>('speakers');
 	let inspectorCollapsed = $state(false);
 	let inspectorWidth = $state(380);
-	let inspectorSection = $state<InspectorSection>('tasks');
+	let inspectorSection = $state<InspectorSection>(inspectorSectionOnProjectLoad());
 	let inspectorVoiceTab = $state<'library' | 'save-selection'>('library');
 	let selectedVoiceId = $state('');
 	let selectedRecipeId = $state('');
@@ -251,7 +293,6 @@
 	let operationErrorMessage = $state('');
 	let taskCenterPulseKey = $state(0);
 
-	const workflow = $derived<WorkflowStep[]>(buildWorkflow(draft));
 	const selectedProject = $derived(projects.find((project) => project.project_id === projectId) ?? null);
 	const hasImportedProject = $derived(Boolean(draft?.source_media.video_path || draft?.source_media.filename));
 	const selectedCue = $derived(selectedCueId ? draft?.cues.find((cue) => cue.cue_id === selectedCueId) ?? null : null);
@@ -317,7 +358,6 @@
 	const transcription = $derived(draft?.transcription ?? null);
 	const noticeText = $derived(error ? summarizeVideoLocalizationError(error) : message);
 	const localizedCount = $derived(draft?.localized_subtitles?.length ?? 0);
-	const projectBatches = $derived(batches.filter((batch) => batchProjectId(batch) === projectId));
 	const hasActiveOperation = $derived(operations.some((operation) => isActiveOperation(operation)));
 	const activityTasks = $derived([
 		...foregroundTasks,
@@ -346,9 +386,6 @@
 	const audioTrackOrder = $derived(resolveAudioTrackOrder(draft?.ui_state?.audio_track_order));
 	const timelineZoom = $derived(clampNumber(draft?.ui_state?.timeline_zoom, 1, 1200, 1));
 	const hoverScrubEnabled = $derived(draft?.ui_state?.timeline_hover_scrub_enabled !== false);
-	const canSubmitCount = $derived(
-		draft?.cues.filter((cue) => cue.review_status === 'ready' && cue.audio_route === 'clone_from_source' && cue.tts_recommended_text?.trim() && referenceReady(cue.reference_clip_id)).length ?? 0
-	);
 	const hasResettableDraft = $derived(Boolean(projectId && draft && hasResettableContent(draft)));
 	const saveStatusLabel = $derived(
 		autoSaveStatus === 'saving'
@@ -409,7 +446,6 @@
 	}
 
 	onMount(() => {
-		void loadAsrEngineHealth();
 		loadProjects();
 		document.addEventListener('visibilitychange', handleOperationVisibilityChange);
 		window.addEventListener('keydown', handlePageKeydown, true);
@@ -420,43 +456,6 @@
 			if (autoSaveTimer) clearTimeout(autoSaveTimer);
 		};
 	});
-
-	function normalizeAsrHealth(payload: Record<string, unknown>): AsrEngineHealth {
-		const healthy = payload.healthy === true;
-		const status = String(payload.status ?? (healthy ? 'ready' : 'unknown'));
-		const detail =
-			String(payload.detail ?? '').trim() ||
-			(Array.isArray(payload.missing) ? payload.missing.map((item) => String(item)).join(', ') : '') ||
-			(healthy ? '可用' : '当前不可用');
-		return { healthy, status, detail };
-	}
-
-	function asrEngineLabel(engineId: AsrEngineId) {
-		return engineId === 'qwen3-asr-mlx'
-			? 'Qwen3 ASR（本地）'
-			: engineId === 'faster-whisper-turbo'
-				? 'Faster Whisper（本地）'
-				: 'MiMo 2.5 ASR（云端）';
-	}
-
-	function asrEngineOptionLabel(engineId: AsrEngineId) {
-		const health = asrEngineHealth[engineId];
-		return `${asrEngineLabel(engineId)}${health?.healthy === false ? ' · 不可用' : ''}`;
-	}
-
-	async function loadAsrEngineHealth() {
-		try {
-			const entries = await Promise.all(
-				ASR_ENGINE_IDS.map(async (engineId) => {
-					const result = await Api.healthEngine(engineId);
-					return [engineId, normalizeAsrHealth(result)] as const;
-				})
-			);
-			asrEngineHealth = Object.fromEntries(entries) as Record<AsrEngineId, AsrEngineHealth>;
-		} catch {
-			// 健康检查失败时保留当前选项，不阻断页面使用。
-		}
-	}
 
 	async function loadProjects() {
 		loading = true;
@@ -478,10 +477,6 @@
 	function projectHasVideoLocalizationSource(project: Project) {
 		const draftLike = project.parameters?.video_localization as { source_media?: { filename?: unknown; video_path?: unknown } } | undefined;
 		return Boolean(draftLike?.source_media?.video_path || draftLike?.source_media?.filename);
-	}
-
-	function isInspectorSection(value: string): value is InspectorSection {
-		return value === 'tasks' || value === 'voice' || value === 'generate' || value === 'subtitle' || value === 'style';
 	}
 
 	function isInspectorVoiceTab(value: string): value is 'library' | 'save-selection' {
@@ -506,19 +501,17 @@
 			const savedCueId = typeof draft.ui_state?.selected_cue_id === 'string' ? draft.ui_state.selected_cue_id : '';
 			const savedVoiceId = typeof draft.ui_state?.selected_reference_clip_id === 'string' ? draft.ui_state.selected_reference_clip_id : '';
 			const savedRecipeId = typeof draft.ui_state?.selected_recipe_id === 'string' ? draft.ui_state.selected_recipe_id : '';
-			const savedInspectorSection = typeof draft.ui_state?.inspector_section === 'string' ? draft.ui_state.inspector_section : '';
 			const savedInspectorVoiceTab = typeof draft.ui_state?.inspector_voice_tab === 'string' ? draft.ui_state.inspector_voice_tab : '';
 			selectedCueId = draft.cues.some((cue) => cue.cue_id === savedCueId) ? savedCueId : (draft.cues[0]?.cue_id ?? '');
 			selectedVoiceId = draft.reference_clips.some((clip) => clip.reference_clip_id === savedVoiceId) ? savedVoiceId : (draft.reference_clips[0]?.reference_clip_id ?? '');
 			selectedRecipeId = draft.voice_recipes.some((recipe) => recipe.recipe_id === savedRecipeId) ? savedRecipeId : (draft.voice_recipes.find((recipe) => recipe.reference_clip_id === selectedVoiceId)?.recipe_id ?? '');
 			inspectorCollapsed = draft.ui_state?.sidebar_collapsed === true;
 			inspectorWidth = clampNumber(draft.ui_state?.inspector_width, 320, 560, 380);
-			inspectorSection = isInspectorSection(savedInspectorSection) ? savedInspectorSection : 'tasks';
+			inspectorSection = inspectorSectionOnProjectLoad();
 			inspectorVoiceTab = isInspectorVoiceTab(savedInspectorVoiceTab) ? savedInspectorVoiceTab : 'library';
 			previewTimeMs = clampNumber(draft.ui_state?.playhead_ms, 0, Number.MAX_SAFE_INTEGER, 0);
 			autoSaveStatus = draft.updated_at ? 'saved' : 'idle';
 			await loadOperations(nextProjectId);
-			await loadBatches();
 		} catch (e) {
 			error = (e as Error).message || '加载草稿失败';
 		}
@@ -540,17 +533,6 @@
 			if (projectId === nextProjectId && operations.some((operation) => isActiveOperation(operation))) {
 				startOperationPolling(3000);
 			}
-		}
-	}
-
-	async function loadBatches() {
-		loadingBatches = true;
-		try {
-			batches = await Api.batches();
-		} catch {
-			batches = [];
-		} finally {
-			loadingBatches = false;
 		}
 	}
 
@@ -619,7 +601,6 @@
 		selectedVoiceId = '';
 		selectedRecipeId = '';
 		operations = [];
-		batches = [];
 		previewTimeMs = 0;
 		stopOperationPolling();
 	}
@@ -709,7 +690,6 @@
 			draftOnlyCueIds = [];
 			selectedCueId = '';
 			operations = [];
-			ttsBatchId = '';
 			stopOperationPolling();
 			message = '当前任务已清空，已回到初始状态';
 			setTimeout(() => (message = ''), 2200);
@@ -819,16 +799,8 @@
 		transcribingAsr = true;
 		error = '';
 		try {
-			const selectedHealth = asrEngineHealth[selectedAsrEngineId];
-			if (selectedHealth?.healthy === false) {
-				throw new Error(`${asrEngineLabel(selectedAsrEngineId)}当前不可用：${selectedHealth.detail || '请检查模型或服务配置'}。请检查配置，或手动选择其他听写引擎。`);
-			}
-			if (asrSelectionRequiresUploadConfirmation(selectedAsrEngineId)) {
-				const confirmed = window.confirm('即将把当前人声音频上传到 MiMo 云端进行字幕听写。请确认该音频允许上传，并接受云端服务的数据处理规则。是否确认上传并开始？');
-				if (!confirmed) return;
-			}
-			await submitMediaOperation('english_asr', `字幕听写任务已开始（${asrEngineLabel(selectedAsrEngineId)}）`, {
-				engine_id: selectedAsrEngineId,
+			await submitMediaOperation('english_asr', '正在从人声轨生成 ASR 字幕', {
+				engine_id: DEFAULT_ASR_ENGINE_ID,
 				source_track_id: sourceTrackId,
 				source_language: sourceTrackId === 'dub' ? 'zh' : (draft?.language_config?.source_language || 'auto'),
 				segmentation_profile_id: segmentationProfileId
@@ -1071,23 +1043,6 @@
 		updateReferenceClip(clip.reference_clip_id, { cleanliness: 'needs_review', asr_status: clip.asr_text ? 'candidate' : 'pending' }, '参考音已退回复听');
 	}
 
-	function handleAsrEngineChange(event: Event) {
-		const select = event.currentTarget as HTMLSelectElement;
-		const engineId = select.value as AsrEngineId;
-		if (!ASR_ENGINE_IDS.includes(engineId)) {
-			select.value = selectedAsrEngineId;
-			return;
-		}
-		if (asrSelectionRequiresUploadConfirmation(engineId)) {
-			const confirmed = window.confirm('MiMo 是云端识别服务。选择后，执行字幕听写会把源音频上传到 MiMo。是否确认允许上传并选择该引擎？');
-			if (!confirmed) {
-				select.value = selectedAsrEngineId;
-				return;
-			}
-		}
-		selectedAsrEngineId = engineId;
-	}
-
 	async function openProjectDirectory() {
 		if (!projectId) return;
 		openingProjectDirectory = true;
@@ -1100,43 +1055,6 @@
 			error = (e as Error).message || '打开项目目录失败';
 		} finally {
 			openingProjectDirectory = false;
-		}
-	}
-
-	async function exportTimelineEdl() {
-		if (!projectId || !draft) return;
-		error = '';
-		try {
-			if (autoSaveStatus === 'dirty') await runDraftAutosave();
-			const data = await Api.exportVideoLocalizationTimeline(projectId);
-			downloadJson(`${projectId}-video-localization-edl.json`, data);
-			message = '时间轴 EDL 已导出';
-			setTimeout(() => (message = ''), 1800);
-		} catch (e) {
-			error = (e as Error).message || '导出 EDL 失败';
-		}
-	}
-
-	async function exportTimelineAudioPackage() {
-		if (!projectId || !draft) return;
-		exportingAudioPackage = true;
-		error = '';
-		try {
-			if (autoSaveStatus === 'dirty') await runDraftAutosave();
-			const response = await fetch(`/api/projects/${projectId}/video-localization/export/timeline/audio-package`);
-			if (!response.ok) {
-				const data = await response.json().catch(() => null);
-				throw new Error(data?.error?.message || '导出音频包失败');
-			}
-			const blob = await response.blob();
-			downloadBlob(filenameFromDisposition(response.headers.get('content-disposition')) || `${projectId}-video-localization-audio-package.zip`, blob);
-			await refreshDraftOnly();
-			message = '时间线音频包已导出';
-			setTimeout(() => (message = ''), 1800);
-		} catch (e) {
-			error = (e as Error).message || '导出音频包失败';
-		} finally {
-			exportingAudioPackage = false;
 		}
 	}
 
@@ -1163,58 +1081,12 @@
 		}
 	}
 
-	async function exportReadinessAudit() {
-		if (!projectId) return;
-		error = '';
-		try {
-			const data = await Api.videoLocalizationReadiness(projectId);
-			downloadJson(`${projectId}-video-localization-readiness.json`, data);
-			message = 'Readiness JSON 已导出';
-			setTimeout(() => (message = ''), 1800);
-		} catch (e) {
-			error = (e as Error).message || '导出 readiness 失败';
-		}
-	}
-
 	function filenameFromDisposition(value: string | null) {
 		if (!value) return '';
 		const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(value);
 		if (utf8?.[1]) return decodeURIComponent(utf8[1]);
 		const plain = /filename="?([^";]+)"?/i.exec(value);
 		return plain?.[1] ?? '';
-	}
-
-	async function submitBatchTts() {
-		if (!projectId || !canSubmitCount) return;
-		submittingBatch = true;
-		error = '';
-		try {
-			const task = await Api.submitVideoLocalizationBatchTts(projectId);
-			ttsBatchId = task.batch_task_id;
-			batches = [task, ...batches.filter((batch) => batch.batch_task_id !== task.batch_task_id)];
-			message = `已提交批量 TTS：${task.batch_task_id}`;
-			setTimeout(() => (message = ''), 2400);
-		} catch (e) {
-			error = (e as Error).message || '批量 TTS 提交失败';
-		} finally {
-			submittingBatch = false;
-		}
-	}
-
-	async function syncBatchTtsResults() {
-		if (!projectId || !ttsBatchId.trim()) return;
-		syncingBatch = true;
-		error = '';
-		try {
-			draft = await Api.syncVideoLocalizationBatchTts(projectId, ttsBatchId.trim());
-			await loadBatches();
-			message = 'TTS 生成结果已同步到 cue';
-			setTimeout(() => (message = ''), 2200);
-		} catch (e) {
-			error = (e as Error).message || '同步 TTS 结果失败';
-		} finally {
-			syncingBatch = false;
-		}
 	}
 
 	async function exportSubtitleSrt(kind: 'en' | 'zh' | 'bilingual') {
@@ -2257,7 +2129,6 @@
 		selectedCueId = '';
 		selectedVoiceId = '';
 		selectedRecipeId = '';
-		ttsBatchId = '';
 		inspectorCollapsed = false;
 		inspectorSection = 'tasks';
 		inspectorVoiceTab = 'library';
@@ -2358,7 +2229,7 @@
 		inspectorCollapsed = false;
 		inspectorSection = section;
 		inspectorVoiceTab = voiceTab;
-		updateDraftUiState({ sidebar_collapsed: false, inspector_section: section, inspector_voice_tab: voiceTab });
+		updateDraftUiState({ sidebar_collapsed: false, inspector_voice_tab: voiceTab });
 	}
 
 	function openTaskCenter() {
@@ -2508,16 +2379,9 @@
 				}
 			}
 			if (projectId === savingProjectId) {
-				draft = draft === savingDraft
+				draft = draft === savingDraft || !draft
 					? savedDraft
-					: {
-							...savedDraft,
-							ui_state: draft?.ui_state ?? savedDraft.ui_state,
-							cues: draft?.cues ?? savedDraft.cues,
-							timeline_clips: draft?.timeline_clips ?? savedDraft.timeline_clips,
-							glossary: draft?.glossary ?? savedDraft.glossary,
-							scene_context: draft?.scene_context ?? savedDraft.scene_context
-						};
+					: mergeDraftAfterConflict(savedDraft, draft);
 			}
 			draftOnlyCueIds = [];
 			autoSaveStatus = 'saved';
@@ -2526,58 +2390,6 @@
 			autoSaveStatus = 'failed';
 			error = (e as Error).message || '自动保存失败';
 		}
-	}
-
-	function mergeDraftAfterConflict(latest: VideoLocalizationDraft, local: VideoLocalizationDraft): VideoLocalizationDraft {
-		const latestLocalizationRevision = String(latest.localization_state?.created_at ?? '');
-		const localLocalizationRevision = String(local.localization_state?.created_at ?? '');
-		const preserveLatestLocalization = Boolean(
-			latestLocalizationRevision && latestLocalizationRevision !== localLocalizationRevision
-		);
-		const latestCues = new Map(latest.cues.map((cue) => [cue.cue_id, cue]));
-		const mergedCues = local.cues.map((cue) => {
-			const serverCue = latestCues.get(cue.cue_id);
-			if (!serverCue) return cue;
-			const merged = {
-				...serverCue,
-				...cue,
-				tts_result_id: serverCue.tts_result_id ?? cue.tts_result_id,
-				tts_audio_path: serverCue.tts_audio_path ?? cue.tts_audio_path,
-				tts_batch_task_id: serverCue.tts_batch_task_id ?? cue.tts_batch_task_id,
-				tts_batch_status: serverCue.tts_batch_status ?? cue.tts_batch_status,
-				tts_batch_error: serverCue.tts_batch_error ?? cue.tts_batch_error,
-				tts_attempted_at: serverCue.tts_attempted_at ?? cue.tts_attempted_at,
-				generated_duration_ms: serverCue.generated_duration_ms ?? cue.generated_duration_ms,
-				quality_flags: [...new Set([...(cue.quality_flags ?? []), ...(serverCue.quality_flags ?? [])])]
-			};
-			if (!preserveLatestLocalization) return merged;
-			return {
-				...merged,
-				zh_localized_subtitle_text: serverCue.zh_localized_subtitle_text,
-				tts_recommended_text: serverCue.tts_recommended_text
-			};
-		});
-		const localClips = new Map(local.timeline_clips.map((clip) => [clip.clip_id, clip]));
-		const latestClips = new Map(latest.timeline_clips.map((clip) => [clip.clip_id, clip]));
-		const mergedClips = local.timeline_clips.map((clip) => {
-			const serverClip = latestClips.get(clip.clip_id);
-			return serverClip
-				? { ...serverClip, ...clip, audio_path: serverClip.audio_path ?? clip.audio_path, status: serverClip.status ?? clip.status, candidate_id: serverClip.candidate_id ?? clip.candidate_id }
-				: clip;
-		});
-		for (const clip of latest.timeline_clips) {
-			if (!localClips.has(clip.clip_id)) mergedClips.push(clip);
-		}
-			return {
-				...latest,
-				ui_state: local.ui_state,
-				cues: mergedCues,
-				localized_subtitles: preserveLatestLocalization ? latest.localized_subtitles : local.localized_subtitles,
-				localization_state: preserveLatestLocalization ? latest.localization_state : local.localization_state,
-				glossary: local.glossary,
-				scene_context: local.scene_context,
-				timeline_clips: mergedClips
-		};
 	}
 
 	function cueNeedsDraftSave(cueId: string) {

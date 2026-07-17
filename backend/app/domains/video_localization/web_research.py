@@ -50,6 +50,20 @@ GENERIC_TITLE_TERMS = {
     "video",
     "vocals",
 }
+PROPER_NOUN_QUERY_NOISE = {
+    *GENERIC_TITLE_TERMS,
+    "about",
+    "and",
+    "background",
+    "company",
+    "model",
+    "name",
+    "official",
+    "person",
+    "product",
+    "the",
+    "version",
+}
 
 
 class PlannedQuery(BaseModel):
@@ -208,6 +222,8 @@ def research_transcript(
             failures.append(error)
             continue
         for result in results:
+            if not _result_supports_query(query, result.title, result.snippet):
+                continue
             if result.url in seen_urls:
                 continue
             seen_urls.add(result.url)
@@ -254,6 +270,8 @@ def evidence_payload(state: VideoLocalizationResearchState) -> list[dict[str, ob
             "snippet": source.snippet,
         }
         for source in state.sources
+        if source.query_id in query_by_id
+        and _result_supports_query(query_by_id[source.query_id], source.title, source.snippet)
     ]
 
 
@@ -269,6 +287,9 @@ def title_conflict_candidates(
     transcript_key = _phrase_key(transcript)
     sources_by_query: dict[str, list[VideoLocalizationResearchSource]] = {}
     for source in state.sources:
+        query = next((item for item in state.queries if item.query_id == source.query_id), None)
+        if query is None or not _result_supports_query(query, source.title, source.snippet):
+            continue
         sources_by_query.setdefault(source.query_id, []).append(source)
 
     candidates: list[dict[str, object]] = []
@@ -326,6 +347,42 @@ def title_conflict_candidates(
                                 "raw_term_exact_title_supported": False,
                             }
                         )
+
+                for raw_name, raw_version in _transcript_versioned_names(transcript):
+                    if raw_version not in versions:
+                        continue
+                    candidate_name = VERSION_PATTERN.sub("", matched_scene_term).strip(" -_./")
+                    raw_letters = re.sub(r"[^a-z0-9]", "", raw_name.casefold())
+                    candidate_letters = re.sub(r"[^a-z0-9]", "", candidate_name.casefold())
+                    if (
+                        len(raw_letters) < 4
+                        or len(candidate_letters) < 4
+                        or raw_letters == candidate_letters
+                        or SequenceMatcher(None, raw_letters, candidate_letters).ratio() < 0.4
+                    ):
+                        continue
+                    if any(
+                        _contains_phrase(_phrase_key(item.title), _phrase_key(raw_name))
+                        and raw_version in VERSION_PATTERN.findall(item.title)
+                        for item in state.sources
+                    ):
+                        continue
+                    pair = (raw_name.casefold(), candidate_name.casefold())
+                    if pair in seen_pairs:
+                        continue
+                    seen_pairs.add(pair)
+                    candidates.append(
+                        {
+                            "conflict_id": f"title_conflict_{len(candidates) + 1:02d}",
+                            "source_text": raw_name,
+                            "corrected_source_text": candidate_name,
+                            "version": raw_version,
+                            "scene_term": scene_term,
+                            "confirmed_title": source.title,
+                            "evidence_source_ids": [source.source_id],
+                            "raw_term_exact_title_supported": False,
+                        }
+                    )
     return candidates[:4]
 
 
@@ -340,6 +397,49 @@ def _contains_phrase(haystack_key: str, needle_key: str) -> bool:
 def _matched_spelling(value: str, term: str) -> str | None:
     match = re.search(re.escape(term.strip()), value, flags=re.IGNORECASE)
     return match.group(0) if match else None
+
+
+def _transcript_versioned_names(value: str) -> list[tuple[str, str]]:
+    output: list[tuple[str, str]] = []
+    for match in re.finditer(r"\b([A-Za-z][A-Za-z0-9_-]{3,})\s+(\d+(?:\s*\.\s*\d+)+)\b", value):
+        output.append((match.group(1), re.sub(r"\s+", "", match.group(2))))
+    return output
+
+
+def _result_supports_query(
+    query: VideoLocalizationResearchQuery,
+    title: str,
+    snippet: str,
+) -> bool:
+    if query.category != "proper_noun":
+        return True
+
+    evidence_tokens = re.findall(r"[a-z0-9]+", f"{title} {snippet}".casefold())
+    if not evidence_tokens:
+        return False
+    evidence_compact = "".join(evidence_tokens)
+    raw_terms = query.target_terms or [query.query]
+    for raw_term in raw_terms:
+        without_version = VERSION_PATTERN.sub(" ", raw_term)
+        target_tokens = [
+            token
+            for token in re.findall(r"[a-z0-9]+", without_version.casefold())
+            if len(token) >= 4 and token not in PROPER_NOUN_QUERY_NOISE
+        ]
+        if not target_tokens:
+            continue
+        target_compact = "".join(target_tokens)
+        if len(target_compact) >= 4 and target_compact in evidence_compact:
+            return True
+        if any(
+            target == evidence
+            or SequenceMatcher(None, target, evidence).ratio() >= 0.84
+            for target in target_tokens
+            for evidence in evidence_tokens
+            if len(evidence) >= 4
+        ):
+            return True
+    return False
 
 
 def _normalize_queries(items: list[PlannedQuery], limit: int) -> list[PlannedQuery]:
@@ -386,7 +486,7 @@ def _ensure_scene_title_query(
             normalized in GENERIC_TITLE_TERMS
             or re.fullmatch(r"\d+p|\d+k|mp\d+", normalized)
             or _contains_phrase(transcript_key, _phrase_key(token))
-            or any(_contains_phrase(_phrase_key(item.query), _phrase_key(token)) for item in planned)
+            or any(_phrase_key(item.query) == _phrase_key(token) for item in planned)
         ):
             continue
         similarity = max(SequenceMatcher(None, normalized, raw_name).ratio() for raw_name in raw_names)

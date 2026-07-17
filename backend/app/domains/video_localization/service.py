@@ -179,7 +179,7 @@ def reset_video_localization(project_id: str) -> VideoLocalizationDraft | None:
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    if any(operation.status == "running" for operation in draft.operations):
+    if any(operation.status in operation_state.ACTIVE_STATUSES for operation in draft.operations):
         raise AppException(409, "VIDEO_LOCALIZATION_RESET_BLOCKED", "当前仍有后台任务在运行，请先取消或等待完成后再清空")
 
     media_assets.clear_project_video_localization_dir(project_id)
@@ -194,7 +194,7 @@ def delete_project(project_id: str) -> bool:
     if not project:
         return False
     draft = get_video_localization(project_id)
-    if draft and any(operation.status in {"pending", "running"} for operation in draft.operations):
+    if draft and any(operation.status in operation_state.ACTIVE_STATUSES for operation in draft.operations):
         raise AppException(409, "VIDEO_LOCALIZATION_DELETE_BLOCKED", "当前仍有后台任务，请先取消或等待完成后再删除项目")
     if VIDEO_LOCALIZATION_KEY in project.parameters or media_assets.PROJECT_DIR_NAME_KEY in project.parameters:
         media_assets.delete_project_video_localization_dir(project_id)

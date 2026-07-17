@@ -571,6 +571,31 @@ def test_delete_project_api_removes_local_package_so_sync_cannot_restore_it(tmp_
     assert project["project_id"] not in {item["project_id"] for item in synced.json()}
 
 
+def test_delete_project_api_blocks_queued_video_localization_operation(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "排队任务项目", "description": ""}).json()
+    saved = client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "operations": [
+                VideoLocalizationOperation(
+                    project_id=project["project_id"],
+                    kind="english_asr",
+                    status="queued",
+                    label="生成 ASR 字幕",
+                ).model_dump()
+            ]
+        },
+    )
+    assert saved.status_code == 200
+
+    deleted = client.delete(f"/api/projects/{project['project_id']}")
+
+    assert deleted.status_code == 409
+    assert deleted.json()["error"]["code"] == "VIDEO_LOCALIZATION_DELETE_BLOCKED"
+    assert project_store.get_project(project["project_id"]) is not None
+
+
 def test_video_localization_sync_hides_missing_directory_without_deleting_database_project(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "目录被删除", "description": ""}).json()
@@ -929,11 +954,6 @@ def test_video_localization_reset_clears_draft_and_project_assets(tmp_path: Path
                     "en_subtitle_text": "Hello.",
                 }
             ],
-            "operations": [
-                VideoLocalizationOperation(
-                    project_id=project["project_id"], kind="english_asr", status="queued", label="英文 ASR 转字幕"
-                ).model_dump()
-            ],
         },
     )
 
@@ -955,7 +975,8 @@ def test_video_localization_reset_clears_draft_and_project_assets(tmp_path: Path
     assert "video_localization" not in stored_project["parameters"]
 
 
-def test_video_localization_reset_blocks_running_operations(tmp_path: Path):
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_video_localization_reset_blocks_active_operations(tmp_path: Path, status: str):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "重置阻断", "description": ""}).json()
     client.put(
@@ -966,7 +987,7 @@ def test_video_localization_reset_blocks_running_operations(tmp_path: Path):
             "source_media": {"filename": "demo.mp4"},
             "operations": [
                 VideoLocalizationOperation(
-                    project_id=project["project_id"], kind="stems", status="running", label="分离人声与背景声"
+                    project_id=project["project_id"], kind="stems", status=status, label="分离人声与背景声"
                 ).model_dump()
             ],
         },
@@ -978,7 +999,7 @@ def test_video_localization_reset_blocks_running_operations(tmp_path: Path):
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_RESET_BLOCKED"
     draft = client.get(f"/api/projects/{project['project_id']}/video-localization").json()
     assert draft["source_media"]["filename"] == "demo.mp4"
-    assert draft["operations"][0]["status"] == "running"
+    assert draft["operations"][0]["status"] == status
 
 
 def test_video_localization_rejects_inverted_time_ranges(tmp_path: Path):
@@ -1435,6 +1456,7 @@ def test_video_localization_reimport_invalidates_source_derived_state(tmp_path: 
             "cues": [{"cue_id": "old-cue", "start_ms": 0, "end_ms": 1000, "en_subtitle_text": "Old"}],
             "transcription": {"raw_text": "Old", "corrected_text": "Old"},
             "localized_subtitles": [{"subtitle_id": "old-zh", "start_ms": 0, "end_ms": 1000, "text": "旧字幕"}],
+            "localization_state": {"created_at": "2026-07-17T10:00:00Z", "source_fingerprint": "old"},
             "generated_candidates": [{"candidate_id": "old", "status": "ready"}],
             "timeline_clips": [{"clip_id": "old", "track_id": "dub"}],
             "ui_state": {"timeline_zoom": 4},
@@ -1460,6 +1482,7 @@ def test_video_localization_reimport_invalidates_source_derived_state(tmp_path: 
     assert body["cues"] == []
     assert body["transcription"] is None
     assert body["localized_subtitles"] == []
+    assert body["localization_state"] == {}
     assert body["generated_candidates"] == []
     assert body["timeline_clips"] == []
     assert body["ui_state"] == {"timeline_zoom": 4}

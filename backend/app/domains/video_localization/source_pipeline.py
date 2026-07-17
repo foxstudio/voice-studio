@@ -165,6 +165,7 @@ def _without_source_derivatives(draft: VideoLocalizationDraft) -> VideoLocalizat
             "cues": [],
             "transcription": None,
             "localized_subtitles": [],
+            "localization_state": {},
             "quality_gate": type(draft.quality_gate)(),
             "exports": type(draft.exports)(),
             "operations": [],
@@ -299,7 +300,7 @@ def with_english_asr(
         source_audio_sha256 = media_assets.file_sha256(audio_path)
         alignment_audio_sha256 = media_assets.file_sha256(alignment_audio_path)
         requested_language = normalize_source_language(source_language, default="en")
-        asr_language = "zh" if resolved_track_id == "dub" and requested_language == "auto" else requested_language
+        asr_language = "zh" if resolved_track_id == "dub" else requested_language
         previous_transcription = draft.transcription
         can_reuse_boundary_reviews = bool(
             previous_transcription

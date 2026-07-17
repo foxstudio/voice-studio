@@ -461,6 +461,44 @@ def test_bundle_review_allows_a_focused_item_to_need_no_change(monkeypatch):
     assert diagnostics["request_count"] == 1
 
 
+def test_bundle_review_retries_one_truncated_structured_response(monkeypatch):
+    calls = []
+
+    def complete_json(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise LlmRuntimeError("truncated", code="llm_output_truncated", status_code=502)
+        return {
+            "checked_count": 1,
+            "changes": [
+                {
+                    "id": "bundle_0001",
+                    "replacement": "这是同一个画面 用 Acme 3.1 做成的 4K 版本",
+                    "reason": "修正模型与画质关系",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    reviewed, changes, diagnostics = localization._review_localized_bundles(
+        [
+            {
+                "id": "bundle_0001",
+                "source": "This is the same shot mixed with Acme 3.1 in 4K.",
+                "text": "这是同一个画面混了Acme 3.1的4K画质",
+            }
+        ],
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert reviewed[0]["text"] == "这是同一个画面 用 Acme 3.1 做成的 4K 版本"
+    assert changes[0]["reason"] == "修正模型与画质关系"
+    assert diagnostics["request_count"] == 2
+    assert "上次结构化输出过长或损坏" in calls[1]["system_prompt"]
+
+
 @pytest.mark.parametrize(
     ("source", "chinese", "expected"),
     [
@@ -1924,6 +1962,15 @@ def test_review_focus_flags_literal_reaction_and_4k_phrasing():
     assert any("4K" in item for item in timed_focus)
 
 
+def test_review_focus_flags_model_and_output_spec_attached_to_the_wrong_object():
+    source = "This is the same shot mixed with Acme 3.1 in 4K."
+    chinese = "这是同一个画面混了Acme 3.1的4K画质"
+
+    focus = localization._localized_bundle_review_focus(source, chinese)
+
+    assert any("输出规格" in item for item in focus)
+
+
 def test_review_focus_flags_literal_english_possessive_in_self_action():
     source = "Set my own head on fire and keep talking."
     chinese = "把我的脑袋点上火 然后继续讲"
@@ -2753,7 +2800,7 @@ def test_fit_candidate_segments_retries_one_parent_when_llm_drops_a_number(monke
     )
 
     assert calls == 2
-    assert [item["display_text"] for item in fitted] == ["使用Seedance 2.0", "生成4K画面"]
+    assert [item["display_text"] for item in fitted] == ["使用 Seedance 2.0", "生成 4K 画面"]
 
 
 def test_localization_pipeline_honors_cancellation_before_llm(monkeypatch):
@@ -2869,3 +2916,9 @@ def test_localized_segment_keeps_only_declared_research_usage():
 )
 def test_normalize_tts_text_replaces_dangling_terminal_separators(source, expected):
     assert localization._normalize_tts_text(source) == expected
+
+
+def test_normalize_display_text_spaces_latin_terms_without_splitting_plain_number_units():
+    assert localization._normalize_display_text("用Acme 3.1做成4K版本 1992年发布") == (
+        "用 Acme 3.1 做成 4K 版本 1992年发布"
+    )

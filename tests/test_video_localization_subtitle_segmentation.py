@@ -333,6 +333,33 @@ def test_high_confidence_avoid_review_is_never_selected_as_final_boundary():
     assert boundaries[-1] == len(state.words)
 
 
+def test_terminal_sentence_boundary_can_override_incorrect_avoid_review():
+    state = _state(
+        [
+            ("This", 0, 300, "asr_0001"),
+            ("ends.", 320, 700, "asr_0001"),
+            ("Another", 720, 1100, "asr_0001"),
+            ("sentence", 1120, 1500, "asr_0001"),
+        ]
+    )
+    left = state.words[1]
+    right = state.words[2]
+    review = VideoLocalizationBoundaryReview(
+        boundary_id=f"{left.word_id}:{right.word_id}",
+        left_word_id=left.word_id,
+        right_word_id=right.word_id,
+        decision="avoid",
+        confidence=0.95,
+        reason="incorrect_incomplete_syntax",
+    )
+
+    assert subtitle_segmentation._boundary_forbidden_by_review(
+        state.words,
+        2,
+        {(left.word_id, right.word_id): review},
+    ) is False
+
+
 def test_semantic_integrity_can_relax_word_target_instead_of_using_forbidden_boundary():
     state = _state([(f"word{index}", index * 400, index * 400 + 300, "asr_0001") for index in range(24)])
     reviews = {}

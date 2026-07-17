@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { VideoLocalizationCue, VideoLocalizationQualityIssue } from '$lib/api/types';
+import type { VideoLocalizationCue, VideoLocalizationDraft, VideoLocalizationQualityIssue } from '$lib/api/types';
 import {
 	DEFAULT_ASR_ENGINE_ID,
 	asrSelectionRequiresUploadConfirmation,
+	inspectorSectionOnProjectLoad,
 	isDubbingInspectorSection,
+	mergeDraftAfterConflict,
 	protectCueManualEdit,
 	qualityIssueAppliesToStage
 } from './+page.svelte';
@@ -51,6 +53,66 @@ describe('video localization ASR engine policy', () => {
 		expect(asrSelectionRequiresUploadConfirmation('qwen3-asr-mlx')).toBe(false);
 		expect(asrSelectionRequiresUploadConfirmation('faster-whisper-turbo')).toBe(false);
 		expect(asrSelectionRequiresUploadConfirmation('mimo-v2.5-asr')).toBe(true);
+	});
+});
+
+describe('video localization inspector policy', () => {
+	it('opens every project on the task tab', () => {
+		expect(inspectorSectionOnProjectLoad()).toBe('tasks');
+	});
+});
+
+describe('draft conflict merge policy', () => {
+	function draft(revisionId: string, cues: VideoLocalizationCue[]): VideoLocalizationDraft {
+		return {
+			transcription: { revision_id: revisionId },
+			cues,
+			localized_subtitles: [],
+			localization_state: {},
+			timeline_clips: [],
+			ui_state: {},
+			glossary: [],
+			scene_context: ''
+		} as unknown as VideoLocalizationDraft;
+	}
+
+	it('keeps the complete server cue set when a new ASR revision finishes', () => {
+		const local = draft('revision_old', [cue({ cue_id: 'old_cue', transcription_revision_id: 'revision_old' })]);
+		const latest = draft('revision_new', [
+			cue({ cue_id: 'new_cue_1', transcription_revision_id: 'revision_new' }),
+			cue({ cue_id: 'new_cue_2', transcription_revision_id: 'revision_new' })
+		]);
+
+		const merged = mergeDraftAfterConflict(latest, local);
+
+		expect(merged.cues.map((item) => item.cue_id)).toEqual(['new_cue_1', 'new_cue_2']);
+	});
+
+	it('preserves a local deletion within the same ASR revision', () => {
+		const kept = cue({ cue_id: 'kept', transcription_revision_id: 'revision_1' });
+		const removed = cue({ cue_id: 'removed', transcription_revision_id: 'revision_1' });
+		const latest = draft('revision_1', [kept, removed]);
+		const local = draft('revision_1', [kept]);
+
+		const merged = mergeDraftAfterConflict(latest, local);
+
+		expect(merged.cues.map((item) => item.cue_id)).toEqual(['kept']);
+	});
+
+	it('does not restore a localized track after the server clears its revision', () => {
+		const latest = draft('revision_1', [cue()]);
+		latest.localization_state = {};
+		latest.localized_subtitles = [];
+		const local = draft('revision_1', [cue()]);
+		local.localization_state = { created_at: '2026-07-17T10:00:00Z' };
+		local.localized_subtitles = [
+			{ subtitle_id: 'localized_1', start_ms: 0, end_ms: 1000, text: '旧字幕', quality_flags: [] }
+		];
+
+		const merged = mergeDraftAfterConflict(latest, local);
+
+		expect(merged.localized_subtitles).toEqual([]);
+		expect(merged.localization_state).toEqual({});
 	});
 });
 
