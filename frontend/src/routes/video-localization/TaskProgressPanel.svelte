@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { AlertTriangle, Check, ChevronDown, ChevronRight, Circle, CircleOff, CircleStop, Clock3, Info, LoaderCircle } from 'lucide-svelte';
+	import { AlertTriangle, Check, ChevronDown, ChevronRight, Circle, CircleOff, CircleStop, Clock3, Info, LoaderCircle, RotateCcw } from 'lucide-svelte';
 	import { untrack } from 'svelte';
 	import { hoverTooltip } from '$lib/components/shared/hover-tooltip';
 	import {
@@ -21,11 +21,13 @@
 	let {
 		tasks = [],
 		onCancelTask = undefined,
+		onRetryTask = undefined,
 		pulseKey = 0,
 		full = false
 	}: {
 		tasks?: ActivityTask[];
 		onCancelTask?: (task: ActivityTask) => void | Promise<void>;
+		onRetryTask?: (task: ActivityTask) => void | Promise<void>;
 		pulseKey?: number;
 		full?: boolean;
 	} = $props();
@@ -87,6 +89,11 @@
 	function cancelTask(task: ActivityTask) {
 		if (!task.cancellable || task.cancelPending || !onCancelTask) return;
 		void onCancelTask(task);
+	}
+
+	function retryTask(task: ActivityTask) {
+		if (!task.operationId || !onRetryTask || (task.status !== 'failed' && task.status !== 'cancelled')) return;
+		void onRetryTask(task);
 	}
 
 	function toggleHistoryTask(taskId: string) {
@@ -252,16 +259,27 @@
 								class:highlighted={highlightedTaskId === task.id}
 								class:expanded
 							>
-								<button class="history-summary" type="button" aria-expanded={expanded} onclick={() => toggleHistoryTask(task.id)}>
-									<span class="task-state" aria-hidden="true">
-										{#if task.status === 'success'}<Check size={13} />
-										{:else if task.status === 'failed'}<AlertTriangle size={13} />
-										{:else}<CircleOff size={13} />{/if}
-									</span>
-									<strong>{displayLabel(task)}</strong>
-									<span class="history-time"><b>{duration(task)}</b><time>{historyTime(task)}</time></span>
-									<span class="history-chevron" aria-hidden="true"><ChevronRight size={13} /></span>
-								</button>
+								<div class="history-row-head">
+									<button class="history-summary" type="button" aria-expanded={expanded} onclick={() => toggleHistoryTask(task.id)}>
+										<span class="task-state" aria-hidden="true">
+											{#if task.status === 'success'}<Check size={13} />
+											{:else if task.status === 'failed'}<AlertTriangle size={13} />
+											{:else}<CircleOff size={13} />{/if}
+										</span>
+										<strong>{displayLabel(task)}</strong>
+										<span class="history-time"><b>{duration(task)}</b><time>{historyTime(task)}</time></span>
+										<span class="history-chevron" aria-hidden="true"><ChevronRight size={13} /></span>
+									</button>
+									{#if (task.status === 'failed' || task.status === 'cancelled') && task.operationId && onRetryTask}
+										<button
+											class="task-retry"
+											type="button"
+											aria-label={`重试${displayLabel(task)}`}
+											use:hoverTooltip={'重试任务｜使用原参数重新提交这项任务。'}
+											onclick={() => retryTask(task)}
+										><RotateCcw size={12} strokeWidth={1.9} /></button>
+									{/if}
+								</div>
 								{#if expanded}
 									<div class="task-details history-details">
 										{#if meta.length}
@@ -501,7 +519,24 @@
 		text-align: left;
 		cursor: pointer;
 	}
+	.history-row-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 	.history-summary:hover { background: rgba(255, 255, 255, 0.025); }
+	.task-retry {
+		width: 24px;
+		height: 24px;
+		display: grid;
+		place-items: center;
+		margin-right: 6px;
+		padding: 0;
+		border: 0;
+		border-radius: 4px;
+		background: transparent;
+		color: #84969e;
+		line-height: 0;
+		cursor: pointer;
+	}
+	.task-retry:hover { background: #273238; color: #b6d7df; }
+	.task-retry:focus-visible { outline: 1px solid #69abc0; outline-offset: 1px; }
 	.history-time { display: grid; justify-items: end; gap: 2px; white-space: nowrap; }
 	.history-time b { color: #8b9aa1; font-size: 9px; font-weight: 650; }
 	.history-time time { color: #697880; font-size: 9px; }

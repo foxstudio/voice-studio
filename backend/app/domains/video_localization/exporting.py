@@ -257,6 +257,15 @@ def localized_video_file(project_id: str, project_name: str, draft: VideoLocaliz
     if not source_video_path or not source_video_path.exists():
         raise AppException(400, "VIDEO_LOCALIZATION_RENDER_SOURCE_VIDEO_MISSING", "Source video is required to render localized video")
 
+    missing_speech_targets = _missing_localized_speech_targets(draft)
+    if missing_speech_targets:
+        raise AppException(
+            400,
+            "VIDEO_LOCALIZATION_RENDER_TTS_INCOMPLETE",
+            f"还有 {len(missing_speech_targets)} 个配音片段没有可用音频，暂时不能导出本土化视频。",
+            {"missing_targets": missing_speech_targets},
+        )
+
     manifest = timeline_audio_package(project_id, project_name, draft)
     package_dir = Path(str(manifest["package_dir"]))
     dub_track_path = Path(str(manifest["dub_track_path"]))
@@ -277,6 +286,55 @@ def localized_video_file(project_id: str, project_name: str, draft: VideoLocaliz
     manifest_path = package_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return manifest
+
+
+def _missing_localized_speech_targets(draft: VideoLocalizationDraft) -> list[dict]:
+    routed_cues = {
+        cue.cue_id: cue
+        for cue in draft.cues
+        if cue.audio_route in {"clone_from_source", "preset_tts"}
+    }
+    if not routed_cues:
+        return []
+
+    dub_clips = [dict(item) for item in draft.timeline_clips if dict(item).get("track_id", "dub") == "dub"]
+
+    def has_clip_audio(*, cue_id: str | None = None, subtitle_id: str | None = None) -> bool:
+        for clip in dub_clips:
+            if subtitle_id and str(clip.get("subtitle_id") or "") != subtitle_id:
+                continue
+            if cue_id and str(clip.get("cue_id") or "") != cue_id:
+                continue
+            if _clip_audio_path(draft, clip):
+                return True
+        return False
+
+    missing: list[dict] = []
+    covered_cue_ids: set[str] = set()
+    for subtitle in draft.localized_subtitles:
+        source_cue_ids = list(dict.fromkeys([*subtitle.source_cue_ids, subtitle.linked_cue_id]))
+        routed_source_ids = [cue_id for cue_id in source_cue_ids if cue_id in routed_cues]
+        if not routed_source_ids:
+            continue
+        covered_cue_ids.update(routed_source_ids)
+        subtitle_audio = _existing_path(subtitle.tts_audio_path)
+        if subtitle_audio or has_clip_audio(subtitle_id=subtitle.subtitle_id):
+            continue
+        missing.append(
+            {
+                "target_type": "localized_subtitle",
+                "target_id": subtitle.subtitle_id,
+                "source_cue_ids": routed_source_ids,
+            }
+        )
+
+    for cue_id, cue in routed_cues.items():
+        if cue_id in covered_cue_ids:
+            continue
+        if _existing_path(cue.tts_audio_path) or has_clip_audio(cue_id=cue_id):
+            continue
+        missing.append({"target_type": "cue", "target_id": cue_id, "source_cue_ids": [cue_id]})
+    return missing
 
 
 def production_readiness(project_id: str, project_name: str, draft: VideoLocalizationDraft) -> dict:

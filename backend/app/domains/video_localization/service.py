@@ -244,32 +244,110 @@ async def import_source_media(project_id: str, file: UploadFile) -> VideoLocaliz
     return save_video_localization(project_id, await source_pipeline.with_imported_source_media(project_id, draft, file))
 
 
-def extract_source_audio(project_id: str) -> VideoLocalizationDraft | None:
+def extract_source_audio(
+    project_id: str,
+    *,
+    commit_guard: Callable[
+        [Callable[[], VideoLocalizationDraft | None]],
+        tuple[bool, VideoLocalizationDraft | None],
+    ]
+    | None = None,
+) -> VideoLocalizationDraft | None:
     project = project_store.get_project(project_id)
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
-    return save_video_localization(project_id, source_pipeline.with_extracted_source_audio(project_id, draft))
+    source_revision = source_pipeline.source_video_revision(draft)
+    extracted = source_pipeline.with_extracted_source_audio(project_id, draft)
+    generated_path = extracted.source_media.audio_path
+    previous_paths = {draft.source_media.audio_path, draft.stems.original_audio_path}
+
+    def commit_extracted_audio() -> VideoLocalizationDraft | None:
+        with _DRAFT_WRITE_LOCK:
+            latest = get_video_localization(project_id)
+            if latest is None:
+                return None
+            if source_pipeline.source_video_revision(latest) != source_revision:
+                raise AppException(
+                    409,
+                    "VIDEO_LOCALIZATION_SOURCE_CHANGED",
+                    "抽取原音轨期间源视频发生了变化，因此没有写入旧音轨。请基于当前视频重新抽取。",
+                )
+            merged = latest.model_copy(
+                update={
+                    "source_media": latest.source_media.model_copy(
+                        update={
+                            "audio_path": extracted.source_media.audio_path,
+                            "audio_sha256": extracted.source_media.audio_sha256,
+                            "duration_ms": extracted.source_media.duration_ms,
+                            "metadata": extracted.source_media.metadata,
+                        }
+                    ),
+                    "stems": latest.stems.model_copy(
+                        update={
+                            "original_audio_path": extracted.stems.original_audio_path,
+                            "original_audio_sha256": extracted.stems.original_audio_sha256,
+                        }
+                    ),
+                }
+            )
+            return draft_store.save(project_id, merged)
+
+    try:
+        if commit_guard is not None:
+            committed, saved = commit_guard(commit_extracted_audio)
+            if not committed:
+                if generated_path and generated_path not in previous_paths:
+                    Path(generated_path).unlink(missing_ok=True)
+                return get_video_localization(project_id)
+            return saved
+        return commit_extracted_audio()
+    except Exception:
+        if generated_path and generated_path not in previous_paths:
+            Path(generated_path).unlink(missing_ok=True)
+        raise
 
 
-def separate_source_audio(project_id: str) -> VideoLocalizationDraft | None:
+def separate_source_audio(
+    project_id: str,
+    *,
+    commit_guard: Callable[
+        [Callable[[], VideoLocalizationDraft | None]],
+        tuple[bool, VideoLocalizationDraft | None],
+    ]
+    | None = None,
+) -> VideoLocalizationDraft | None:
     project = project_store.get_project(project_id)
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    source_revision = source_pipeline.source_audio_revision(draft)
     separated_draft = source_pipeline.with_separated_source_audio(project_id, draft)
     separated_stems = separated_draft.stems
     new_paths = [separated_stems.vocals_clean_path, separated_stems.background_path]
     previous_paths = {draft.stems.vocals_clean_path, draft.stems.background_path}
     try:
-        # Separation can take minutes. Merge only its result into the newest draft so
-        # autosaved UI/timeline changes made while Demucs was running are preserved.
-        with _DRAFT_WRITE_LOCK:
-            latest = get_video_localization(project_id)
-            if latest is None:
-                saved = None
-            else:
-                saved = draft_store.save(project_id, latest.model_copy(update={"stems": separated_stems}))
+        def commit_separated_audio() -> VideoLocalizationDraft | None:
+            # Separation can take minutes. Merge only its result into the newest draft so
+            # autosaved UI/timeline changes made while Demucs was running are preserved.
+            with _DRAFT_WRITE_LOCK:
+                latest = get_video_localization(project_id)
+                if latest is None:
+                    return None
+                if source_pipeline.source_audio_revision(latest) != source_revision:
+                    raise AppException(
+                        409,
+                        "VIDEO_LOCALIZATION_SOURCE_AUDIO_CHANGED",
+                        "分离人声期间源音轨发生了变化，因此没有写入旧的分轨结果。请基于当前音轨重新分离。",
+                    )
+                return draft_store.save(project_id, latest.model_copy(update={"stems": separated_stems}))
+
+        if commit_guard is not None:
+            committed, saved = commit_guard(commit_separated_audio)
+            if not committed:
+                saved = get_video_localization(project_id)
+        else:
+            saved = commit_separated_audio()
     except Exception:
         for value in new_paths:
             if value and value not in previous_paths:
@@ -288,11 +366,17 @@ def transcribe_english_source_audio(
     on_progress: Callable[[float, str], None] | None = None,
     on_preview: Callable[[str, list[dict]], None] | None = None,
     segmentation_profile_id: str = "generic_zh",
+    commit_guard: Callable[
+        [Callable[[], VideoLocalizationDraft | None]],
+        tuple[bool, VideoLocalizationDraft | None],
+    ]
+    | None = None,
 ) -> VideoLocalizationDraft | None:
     project = project_store.get_project(project_id)
     if not project:
         return None
     draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    source_revision = source_pipeline.english_asr_source_revision(draft)
     result = source_pipeline.with_english_asr(
         draft,
         engine_id,
@@ -304,18 +388,31 @@ def transcribe_english_source_audio(
         preview_callback=on_preview,
     )
 
-    # ASR can take minutes. Re-read and merge into the latest draft so autosaved
-    # timeline/UI edits are not overwritten by the snapshot used to start ASR.
-    with _DRAFT_WRITE_LOCK:
-        latest = get_video_localization(project_id)
-        if latest is None:
-            return None
-        if is_cancelled and is_cancelled():
-            return latest
-        merged = source_pipeline.merge_english_asr_result(latest, result)
-        if is_cancelled and is_cancelled():
-            return latest
-        return draft_store.save(project_id, merged)
+    def commit_asr_result() -> VideoLocalizationDraft | None:
+        # ASR can take minutes. Re-read and merge into the latest draft so autosaved
+        # UI edits survive, while changed source media can never receive stale text.
+        with _DRAFT_WRITE_LOCK:
+            latest = get_video_localization(project_id)
+            if latest is None:
+                return None
+            if is_cancelled and is_cancelled():
+                return latest
+            source_pipeline.ensure_english_asr_source_unchanged(
+                latest,
+                result,
+                expected_source_revision=source_revision,
+            )
+            merged = source_pipeline.merge_english_asr_result(latest, result)
+            if is_cancelled and is_cancelled():
+                return latest
+            return draft_store.save(project_id, merged)
+
+    if commit_guard is not None:
+        committed, saved = commit_guard(commit_asr_result)
+        if not committed:
+            return get_video_localization(project_id)
+        return saved
+    return commit_asr_result()
 
 
 def import_subtitles(project_id: str, kind: str, request: VideoLocalizationSubtitleImportRequest) -> VideoLocalizationDraft | None:

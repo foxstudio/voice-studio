@@ -47,10 +47,10 @@ def _localization_stage_id(stage: str) -> str:
     normalized = str(stage or "")
     for stage_id, markers in (
         ("research", ("查证文化",)),
-        ("fit_segments", ("调整字幕长度",)),
-        ("localize", ("生成中文表达",)),
-        ("segment_timing", ("安排字幕分段",)),
-        ("quality_review", ("复核语义",)),
+        ("fit_segments", ("调整字幕长度", "检查字幕长度", "精简过快字幕", "本地精简过快字幕")),
+        ("localize", ("生成中文表达", "生成中文口语", "检查中文表达")),
+        ("segment_timing", ("安排字幕分段", "匹配字幕分段")),
+        ("quality_review", ("复核语义", "复核字幕时间线")),
         ("post_review_constraints", ("确认终审后的字幕限制",)),
         ("write_track", ("写入本土化", "正在保存")),
     ):
@@ -352,10 +352,10 @@ def _process(operation_id: str) -> None:
     stage_timer: _StageTimer | None = None
     try:
         if operation.kind == "source_audio":
-            updated = service.extract_source_audio(project_id)
+            updated = service.extract_source_audio(project_id, commit_guard=commit_gate.commit)
             summary = operation_state.source_audio_summary(updated)
         elif operation.kind == "stems":
-            updated = service.separate_source_audio(project_id)
+            updated = service.separate_source_audio(project_id, commit_guard=commit_gate.commit)
             summary = operation_state.stems_summary(updated)
         elif operation.kind == "english_asr":
             engine_id = str(operation.parameters.get("engine_id") or source_pipeline.DEFAULT_ENGLISH_ASR_ENGINE_ID)
@@ -392,6 +392,7 @@ def _process(operation_id: str) -> None:
                     result_summary={"preview_phase": phase, "preview_cues": cues},
                 ),
                 segmentation_profile_id=segmentation_profile_id,
+                commit_guard=commit_gate.commit,
             )
             summary = operation_state.english_asr_summary(updated)
             summary = _finish_stage_timings(stage_timer, summary)

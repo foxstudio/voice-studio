@@ -1599,6 +1599,67 @@ def test_video_localization_extract_source_audio_requires_video(tmp_path: Path):
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_SOURCE_MISSING"
 
 
+def test_video_localization_extract_source_audio_rejects_stale_video_result(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "抽音频源变更保护", "description": ""}).json()
+    source_dir = _project_root(project["project_id"]) / "source"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    original_video = source_dir / "original.mp4"
+    replacement_video = source_dir / "replacement.mp4"
+    original_video.write_bytes(b"original-video")
+    replacement_video.write_bytes(b"replacement-video")
+    initial = VideoLocalizationDraft(
+        source_media={
+            "filename": original_video.name,
+            "video_path": str(original_video),
+            "content_sha256": "original-revision",
+            "duration_ms": 1000,
+        }
+    )
+    video_localization_service.save_video_localization(project["project_id"], initial)
+    stale_audio = _project_root(project["project_id"]) / "audio" / "stale-source.wav"
+
+    def fake_extract(project_id: str, snapshot: VideoLocalizationDraft) -> VideoLocalizationDraft:
+        stale_audio.parent.mkdir(parents=True, exist_ok=True)
+        stale_audio.write_bytes(b"stale-audio")
+        replacement = snapshot.model_copy(
+            update={
+                "source_media": snapshot.source_media.model_copy(
+                    update={
+                        "filename": replacement_video.name,
+                        "video_path": str(replacement_video),
+                        "content_sha256": "replacement-revision",
+                        "audio_path": None,
+                        "audio_sha256": None,
+                    }
+                )
+            }
+        )
+        video_localization_service.save_video_localization(project_id, replacement)
+        return snapshot.model_copy(
+            update={
+                "source_media": snapshot.source_media.model_copy(
+                    update={"audio_path": str(stale_audio), "audio_sha256": "stale-audio-revision"}
+                ),
+                "stems": snapshot.stems.model_copy(
+                    update={"original_audio_path": str(stale_audio), "original_audio_sha256": "stale-audio-revision"}
+                ),
+            }
+        )
+
+    monkeypatch.setattr(video_localization_source_pipeline, "with_extracted_source_audio", fake_extract)
+
+    with pytest.raises(AppException) as exc_info:
+        video_localization_service.extract_source_audio(project["project_id"])
+
+    assert exc_info.value.code == "VIDEO_LOCALIZATION_SOURCE_CHANGED"
+    saved = video_localization_service.get_video_localization(project["project_id"])
+    assert saved is not None
+    assert saved.source_media.video_path == str(replacement_video)
+    assert saved.source_media.audio_path is None
+    assert not stale_audio.exists()
+
+
 def test_video_localization_async_source_audio_operation_updates_draft(tmp_path: Path, monkeypatch):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "异步抽音频", "description": ""}).json()
@@ -1803,7 +1864,7 @@ def test_video_localization_running_cancel_keeps_cancelled_after_late_exception(
         },
     )
 
-    def fake_extract(project_id: str):
+    def fake_extract(project_id: str, **_kwargs):
         video_localization_operation_queue.cancel(project_id, operation.operation_id)
         raise RuntimeError("late extractor failure")
 
@@ -1905,6 +1966,73 @@ def test_video_localization_separate_source_audio_updates_stems(tmp_path: Path, 
     assert vocals_clip.content == b"vocals"
     assert background_clip.status_code == 200
     assert background_clip.content == b"background"
+
+
+def test_video_localization_separate_source_audio_rejects_stale_audio_result(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "分离源变更保护", "description": ""}).json()
+    audio_dir = _project_root(project["project_id"]) / "audio"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    original_audio = audio_dir / "original.wav"
+    replacement_audio = audio_dir / "replacement.wav"
+    original_audio.write_bytes(b"original-audio")
+    replacement_audio.write_bytes(b"replacement-audio")
+    initial = VideoLocalizationDraft(
+        source_media={
+            "filename": "demo.mp4",
+            "audio_path": str(original_audio),
+            "audio_sha256": "original-revision",
+        },
+        stems={"original_audio_path": str(original_audio), "original_audio_sha256": "original-revision"},
+    )
+    video_localization_service.save_video_localization(project["project_id"], initial)
+    stale_vocals = _project_root(project["project_id"]) / "stems" / "stale-vocals.wav"
+    stale_background = _project_root(project["project_id"]) / "stems" / "stale-background.wav"
+
+    def fake_separate(project_id: str, snapshot: VideoLocalizationDraft) -> VideoLocalizationDraft:
+        stale_vocals.parent.mkdir(parents=True, exist_ok=True)
+        stale_vocals.write_bytes(b"stale-vocals")
+        stale_background.write_bytes(b"stale-background")
+        replacement = snapshot.model_copy(
+            update={
+                "source_media": snapshot.source_media.model_copy(
+                    update={"audio_path": str(replacement_audio), "audio_sha256": "replacement-revision"}
+                ),
+                "stems": snapshot.stems.model_copy(
+                    update={
+                        "original_audio_path": str(replacement_audio),
+                        "original_audio_sha256": "replacement-revision",
+                    }
+                ),
+            }
+        )
+        video_localization_service.save_video_localization(project_id, replacement)
+        return snapshot.model_copy(
+            update={
+                "stems": snapshot.stems.model_copy(
+                    update={
+                        "vocals_clean_path": str(stale_vocals),
+                        "background_path": str(stale_background),
+                        "separation_status": "completed",
+                    }
+                )
+            }
+        )
+
+    monkeypatch.setattr(video_localization_source_pipeline, "with_separated_source_audio", fake_separate)
+
+    with pytest.raises(AppException) as exc_info:
+        video_localization_service.separate_source_audio(project["project_id"])
+
+    assert exc_info.value.code == "VIDEO_LOCALIZATION_SOURCE_AUDIO_CHANGED"
+    saved = video_localization_service.get_video_localization(project["project_id"])
+    assert saved is not None
+    assert saved.source_media.audio_path == str(replacement_audio)
+    assert saved.stems.original_audio_path == str(replacement_audio)
+    assert saved.stems.vocals_clean_path is None
+    assert saved.stems.background_path is None
+    assert not stale_vocals.exists()
+    assert not stale_background.exists()
 
 
 def test_video_localization_separate_audio_file_writes_demucs_outputs(tmp_path: Path, monkeypatch):
@@ -2047,6 +2175,52 @@ def test_video_localization_asr_merges_into_latest_autosaved_draft(tmp_path: Pat
     assert updated.source_media.metadata["english_asr_engine_id"] == "qwen3-asr-mlx"
 
 
+def test_video_localization_asr_rejects_result_after_source_changes(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "ASR 来源竞态", "description": ""}).json()
+    initial = video_localization_service.get_video_localization(project["project_id"])
+    assert initial is not None
+    initial = video_localization_service.save_video_localization(
+        project["project_id"],
+        initial.model_copy(
+            update={
+                "source_media": initial.source_media.model_copy(
+                    update={"audio_path": "project://audio/source-v1.wav", "audio_sha256": "source-v1"}
+                )
+            }
+        ),
+    )
+    assert initial is not None
+
+    def fake_asr(draft, engine_id, source_track_id, **_kwargs):
+        latest = video_localization_service.get_video_localization(project["project_id"])
+        assert latest is not None
+        changed = video_localization_service.save_video_localization(
+            project["project_id"],
+            latest.model_copy(
+                update={
+                    "source_media": latest.source_media.model_copy(
+                        update={"audio_path": "project://audio/source-v2.wav", "audio_sha256": "source-v2"}
+                    )
+                }
+            ),
+        )
+        assert changed is not None
+        return _completed_asr_result(draft, engine_id)
+
+    monkeypatch.setattr(video_localization_source_pipeline, "with_english_asr", fake_asr)
+
+    with pytest.raises(AppException) as exc_info:
+        video_localization_service.transcribe_english_source_audio(project["project_id"])
+
+    assert exc_info.value.code == "VIDEO_LOCALIZATION_ASR_SOURCE_CHANGED"
+    latest = video_localization_service.get_video_localization(project["project_id"])
+    assert latest is not None
+    assert latest.source_media.audio_path == "project://audio/source-v2.wav"
+    assert latest.transcription is None
+    assert latest.cues == []
+
+
 def test_video_localization_operation_progress_merges_into_latest_draft(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "进度原子合并", "description": ""}).json()
@@ -2103,6 +2277,35 @@ def test_asr_stage_timer_records_non_overlapping_step_durations():
         "text_review": {"duration_ms": 3250},
     }
     assert sum(item["duration_ms"] for item in timings.values()) == 6250
+
+
+def test_localization_stage_timer_maps_the_current_full_document_pipeline():
+    now = [20.0]
+    timer = video_localization_operation_queue._StageTimer(
+        video_localization_operation_queue._localization_stage_id,
+        clock=lambda: now[0],
+    )
+
+    now[0] = 21.0
+    timer.update("正在查证文化与背景")
+    now[0] = 23.0
+    timer.update("正在通读全文并生成中文口语")
+    now[0] = 27.0
+    timer.update("正在检查中文表达")
+    now[0] = 28.0
+    timer.update("正在匹配字幕分段与时间")
+    now[0] = 29.5
+    timer.update("正在对照原文复核字幕时间线")
+    now[0] = 31.0
+    timings = timer.finish()
+
+    assert timings == {
+        "prepare_context": {"duration_ms": 1000},
+        "research": {"duration_ms": 2000},
+        "localize": {"duration_ms": 5000},
+        "segment_timing": {"duration_ms": 1500},
+        "quality_review": {"duration_ms": 1500},
+    }
 
 
 def test_video_localization_operation_persists_asr_preview_phases(tmp_path: Path, monkeypatch):
@@ -3636,6 +3839,55 @@ def test_video_localization_localized_video_export_rejects_missing_source_video(
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_RENDER_SOURCE_VIDEO_MISSING"
+
+
+def test_video_localization_localized_video_export_rejects_partial_tts_coverage(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "配音不完整", "description": ""}).json()
+    source_video = tmp_path / "source.mp4"
+    source_video.write_bytes(b"fake-video")
+    first_tts = tmp_path / "tts" / "cue_0001.wav"
+    audio_tools.write_audio(first_tts, np.zeros(12000, dtype=np.float32), 24000)
+    mux_called = False
+
+    def fake_mux(*_args):
+        nonlocal mux_called
+        mux_called = True
+
+    monkeypatch.setattr(video_localization_exporting, "_mux_localized_video", fake_mux)
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "source.mp4", "duration_ms": 2200, "video_path": str(source_video)},
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "start_ms": 0,
+                    "end_ms": 1000,
+                    "audio_route": "clone_from_source",
+                    "tts_audio_path": str(first_tts),
+                },
+                {
+                    "cue_id": "cue_0002",
+                    "start_ms": 1100,
+                    "end_ms": 2100,
+                    "audio_route": "clone_from_source",
+                },
+            ],
+        },
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/export/timeline/video")
+
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert error["code"] == "VIDEO_LOCALIZATION_RENDER_TTS_INCOMPLETE"
+    assert error["detail"]["missing_targets"] == [
+        {"target_type": "cue", "target_id": "cue_0002", "source_cue_ids": ["cue_0002"]}
+    ]
+    assert mux_called is False
 
 
 def test_video_localization_tts_batch_submits_ready_clean_reference_cues(tmp_path: Path, monkeypatch):

@@ -29,7 +29,7 @@
 		selectionRange,
 		selectedVoiceId,
 		selectedRecipeId,
-		inspectorSection = 'subtitle',
+		inspectorSection = 'tasks',
 		inspectorVoiceTab = 'library',
 		subtitlePreview = defaultSubtitlePreviewState(),
 		onSelectedVoiceIdChange,
@@ -61,6 +61,7 @@
 		generatingVoice,
 		taskHistory = [],
 		onCancelTask = undefined,
+		onRetryTask = undefined,
 		subtitleRuntimeBusy = false,
 		localizationRuntimeBusy = false,
 		taskCenterPulseKey = 0
@@ -104,6 +105,7 @@
 		generatingVoice: boolean;
 		taskHistory?: ActivityTask[];
 		onCancelTask?: (task: ActivityTask) => void | Promise<void>;
+		onRetryTask?: (task: ActivityTask) => void | Promise<void>;
 		subtitleRuntimeBusy?: boolean;
 		localizationRuntimeBusy?: boolean;
 		taskCenterPulseKey?: number;
@@ -125,7 +127,7 @@
 	let recipeDescription = $state('');
 	let recipeTags = $state('');
 	let recipeSnapshotText = $state('');
-	let activeSection = $state<'tasks' | 'voice' | 'generate' | 'subtitle' | 'style'>('subtitle');
+	let activeSection = $state<'tasks' | 'voice' | 'generate' | 'subtitle' | 'style'>('tasks');
 
 	const selectedVoice = $derived(
 		(draft?.reference_clips ?? []).find((clip) => clip.reference_clip_id === selectedVoiceId) ?? draft?.reference_clips[0] ?? null
@@ -325,7 +327,7 @@
 
 	{#if activeSection === 'tasks'}
 		<div class="task-view-content">
-			<TaskProgressPanel tasks={taskHistory} {onCancelTask} pulseKey={taskCenterPulseKey} full />
+			<TaskProgressPanel tasks={taskHistory} {onCancelTask} {onRetryTask} pulseKey={taskCenterPulseKey} full />
 		</div>
 	{/if}
 

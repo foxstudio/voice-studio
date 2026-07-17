@@ -14,6 +14,7 @@ if str(BACKEND) not in sys.path:
 
 from app.domains.video_localization import transcription  # noqa: E402
 from app.domains.video_localization.schemas import (  # noqa: E402
+    VideoLocalizationAlignedWord,
     VideoLocalizationBoundaryReview,
     VideoLocalizationGlossaryEntry,
     VideoLocalizationTranscriptSegment,
@@ -1046,6 +1047,51 @@ def test_aligned_words_caps_zero_duration_anchor_before_long_silence():
     assert words[1].start_ms == 5000
     assert "alignment_zero_duration_repaired" in flags
     assert "alignment_zero_duration_capped" in flags
+
+
+def test_repair_collapsed_word_run_uses_following_in_segment_gap():
+    flags: set[str] = set()
+    words = [
+        VideoLocalizationAlignedWord(
+            word_id=f"word_{index:04d}",
+            segment_id="asr_0001" if index < 5 else "asr_0002",
+            text=text,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            timing_confidence="medium",
+            timing_source="forced_aligner",
+        )
+        for index, (text, start_ms, end_ms) in enumerate(
+            [
+                ("before", 0, 400),
+                ("That's", 400, 401),
+                ("months", 401, 402),
+                ("of", 402, 403),
+                ("work", 403, 404),
+                ("and", 404, 405),
+                ("a", 405, 406),
+                ("massive", 406, 450),
+                ("budget", 450, 700),
+                ("next", 2400, 2700),
+            ]
+        )
+    ]
+
+    repaired = transcription._repair_collapsed_word_runs(
+        words,
+        segments=[
+            _segment("asr_0001", "Before. That's months of work.", 0, 1200),
+            _segment("asr_0002", "And a massive budget next.", 1200, 3000),
+        ],
+        quality_flags=flags,
+    )
+
+    assert repaired[1].start_ms == 400
+    assert repaired[8].end_ms == 2400
+    assert all(word.timing_source == "asr_segment_interpolation" for word in repaired[1:9])
+    assert all(word.timing_confidence == "low" for word in repaired[1:9])
+    assert "alignment_collapsed_run_repaired" in flags
+    assert "timing_review_required" in flags
 
 
 def test_aligned_words_rejects_token_count_mismatch():

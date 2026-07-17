@@ -121,6 +121,8 @@
 		Check,
 		ChevronDown,
 		Clapperboard,
+		Download,
+		Film,
 		FolderOpen,
 		FileUp,
 		ListTodo,
@@ -152,7 +154,7 @@
 	import PreviewPanel from './PreviewPanel.svelte';
 	import SubtitleWorkflowSettings from './SubtitleWorkflowSettings.svelte';
 	import VideoCuttingTimeline from './VideoCuttingTimeline.svelte';
-	import { activityTaskAffectsTrack, activityTaskDisplayName, asrSubtitleActionLabel, operationActivityTask, type ActivityTask } from './activity-notice';
+	import { activityTaskAffectsTrack, activityTaskDisplayName, asrSubtitleActionLabel, operationActivityTask, pendingOperationActivityTask, type ActivityTask } from './activity-notice';
 	import { resolveAsrOperationPreview } from './asr-operation-preview';
 	import {
 		extendSubtitleCuesAcrossShortGaps,
@@ -219,7 +221,7 @@
 	let rightPanelMode = $state<'speakers' | 'references' | 'delivery'>('speakers');
 	let inspectorCollapsed = $state(false);
 	let inspectorWidth = $state(380);
-	let inspectorSection = $state<InspectorSection>('subtitle');
+	let inspectorSection = $state<InspectorSection>('tasks');
 	let inspectorVoiceTab = $state<'library' | 'save-selection'>('library');
 	let selectedVoiceId = $state('');
 	let selectedRecipeId = $state('');
@@ -508,7 +510,7 @@
 			selectedRecipeId = draft.voice_recipes.some((recipe) => recipe.recipe_id === savedRecipeId) ? savedRecipeId : (draft.voice_recipes.find((recipe) => recipe.reference_clip_id === selectedVoiceId)?.recipe_id ?? '');
 			inspectorCollapsed = draft.ui_state?.sidebar_collapsed === true;
 			inspectorWidth = clampNumber(draft.ui_state?.inspector_width, 320, 560, 380);
-			inspectorSection = isInspectorSection(savedInspectorSection) ? savedInspectorSection : 'subtitle';
+			inspectorSection = isInspectorSection(savedInspectorSection) ? savedInspectorSection : 'tasks';
 			inspectorVoiceTab = isInspectorVoiceTab(savedInspectorVoiceTab) ? savedInspectorVoiceTab : 'library';
 			previewTimeMs = clampNumber(draft.ui_state?.playhead_ms, 0, Number.MAX_SAFE_INTEGER, 0);
 			autoSaveStatus = draft.updated_at ? 'saved' : 'idle';
@@ -845,20 +847,24 @@
 			const confirmed = window.confirm('重新生成会替换当前本土化字幕初稿，上屏字幕和配音台词都会更新。是否继续？');
 			if (!confirmed) return;
 		}
-		if (!(await flushPendingAutosave())) {
-			error = '存在未保存的字幕修改，请先处理保存错误后再生成本土化字幕。';
-			return;
-		}
+		const pendingTaskId = beginPendingOperation('localization_draft', '正在保存修改并提交任务');
 		error = '';
+		message = '正在提交本土化字幕任务';
 		try {
+			if (!(await flushPendingAutosave())) {
+				error = '存在未保存的字幕修改，请先处理保存错误后再生成本土化字幕。';
+				return;
+			}
 			await submitMediaOperation('localization_draft', '本土化字幕初稿任务已开始', {
 				source_language: draft.transcription?.language || 'en',
 				target_language: 'zh-Hans',
 				localization_level: 'L1',
 				worldview_permeability: 'W0'
-			});
+			}, pendingTaskId);
 		} catch (e) {
 			error = (e as Error).message || '提交本土化字幕任务失败';
+		} finally {
+			endPendingOperation(pendingTaskId);
 		}
 	}
 
@@ -875,14 +881,38 @@
 		}
 	}
 
-	async function submitMediaOperation(kind: VideoLocalizationOperation['kind'], successMessage: string, parameters: Record<string, unknown> = {}) {
+	function beginPendingOperation(kind: VideoLocalizationOperation['kind'], stage = '正在提交任务') {
+		const taskId = `submit-operation:${projectId}:${kind}`;
+		if (!foregroundTasks.some((task) => task.id === taskId)) {
+			foregroundTasks = [...foregroundTasks, pendingOperationActivityTask(kind, taskId, stage)];
+		}
+		return taskId;
+	}
+
+	function endPendingOperation(taskId: string) {
+		foregroundTasks = foregroundTasks.filter((task) => task.id !== taskId);
+	}
+
+	async function submitMediaOperation(
+		kind: VideoLocalizationOperation['kind'],
+		successMessage: string,
+		parameters: Record<string, unknown> = {},
+		pendingTaskId = ''
+	) {
 		if (!projectId) return;
-		const operation = await Api.submitVideoLocalizationOperation(projectId, kind, parameters);
-		operations = sortOperations([operation, ...operations.filter((item) => item.operation_id !== operation.operation_id)]);
-		await refreshDraftOnly();
-		message = successMessage;
-		setTimeout(() => (message = ''), 1800);
-		startOperationPolling();
+		const taskId = pendingTaskId || beginPendingOperation(kind);
+		try {
+			const operation = await Api.submitVideoLocalizationOperation(projectId, kind, parameters);
+			operations = sortOperations([operation, ...operations.filter((item) => item.operation_id !== operation.operation_id)]);
+			message = successMessage;
+			setTimeout(() => (message = ''), 1800);
+			startOperationPolling(0);
+			void refreshDraftOnly().catch((refreshError) => {
+				error = (refreshError as Error).message || '任务已开始，但刷新项目状态失败，正在继续同步';
+			});
+		} finally {
+			endPendingOperation(taskId);
+		}
 	}
 
 	async function cancelOperation(operation: VideoLocalizationOperation) {
@@ -1179,18 +1209,18 @@
 		}
 	}
 
-	async function exportBilingualSrt() {
+	async function exportSubtitleSrt(kind: 'en' | 'zh' | 'bilingual') {
 		if (!projectId) return;
 		error = '';
 		try {
-			const response = await fetch(`/api/projects/${projectId}/video-localization/subtitles/bilingual`);
+			const response = await fetch(`/api/projects/${projectId}/video-localization/subtitles/${kind}`);
 			if (!response.ok) {
 				const data = await response.json().catch(() => null);
 				throw new Error(data?.error?.message || '导出字幕失败');
 			}
 			const text = await response.text();
-			downloadText(`${projectId}-video-localization-bilingual.srt`, text, 'application/x-subrip;charset=utf-8');
-			message = '中英字幕草稿已导出';
+			downloadText(`${projectId}-video-localization-${kind}.srt`, text, 'application/x-subrip;charset=utf-8');
+			message = kind === 'en' ? 'ASR 字幕已导出' : kind === 'zh' ? '本土化字幕已导出' : '双语字幕已导出';
 			setTimeout(() => (message = ''), 1800);
 		} catch (e) {
 			error = (e as Error).message || '导出字幕失败';
@@ -2327,6 +2357,12 @@
 		if (operation) await cancelOperation(operation);
 	}
 
+	async function retryActivityTask(task: ActivityTask) {
+		if (!task.operationId || (task.status !== 'failed' && task.status !== 'cancelled')) return;
+		const operation = operations.find((item) => item.operation_id === task.operationId);
+		if (operation) await retryOperation(operation);
+	}
+
 	function focusSaveSelectionAsVoice(startMs: number, endMs: number) {
 		audioSelectionRange = { start_ms: startMs, end_ms: endMs };
 		focusInspector('voice', 'save-selection');
@@ -2707,6 +2743,18 @@
 			<input bind:this={localizationSrtInput} data-video-localization-srt-file class="visually-hidden" type="file" accept=".srt,application/x-subrip,text/plain" onchange={(event) => importLocalizationSrtFile(event.currentTarget.files?.[0])} />
 			<button
 				class="icon-action"
+				class:active={subtitleWorkflowSettingsOpen}
+				type="button"
+				disabled={!draft}
+				aria-label="字幕规则与术语"
+				aria-expanded={subtitleWorkflowSettingsOpen}
+				data-tooltip="字幕规则与术语：维护场景上下文、原词校正和本土化术语。"
+				onclick={() => updateDraftUiState({ subtitle_workflow_settings_open: !subtitleWorkflowSettingsOpen })}
+			>
+				<BookOpenText size={15} />
+			</button>
+			<button
+				class="icon-action"
 				type="button"
 				onclick={closeCurrentProject}
 				disabled={!projectId}
@@ -2751,6 +2799,12 @@
 				onVideoTimeUpdate={updatePreviewTime}
 				onPlaybackStateChange={updatePreviewPlaying}
 				onControllerReady={(controller) => (previewPlaybackController = controller)}
+			/>
+			<SubtitleWorkflowSettings
+				open={subtitleWorkflowSettingsOpen}
+				glossary={draft?.glossary ?? []}
+				sceneContext={draft?.scene_context ?? ''}
+				onChange={updateSubtitleWorkflowSettings}
 			/>
 			<VideoCuttingTimeline
 				{projectId}
@@ -2836,177 +2890,19 @@
 					{/if}
 				</div>
 			{/if}
-			<div class="cutting-utility-row">
-				{#if transcription}
-					<div class="transcription-status" aria-label="字幕听写处理状态">
-						<span class="pipeline-stage good" data-tooltip={`原始识别：保留 ${transcription.segments.length} 个 ASR 原始片段，后续校对不会覆盖原稿。`}>
-							<Check size={12} /> 识别 {transcription.segments.length}
-						</span>
-						<span
-							class="pipeline-stage"
-							class:good={transcription.review_status === 'completed'}
-							class:warning={transcription.review_status === 'partial' || transcription.review_status === 'not_configured' || transcription.review_status === 'skipped'}
-							class:failed={transcription.review_status === 'failed'}
-							data-tooltip={`语义校对：${transcription.review_model_id ?? '未配置模型'}。只修正明确的识别错误，不生成时间码；失败时保留原始识别。`}
-						>
-							{#if transcription.review_status === 'completed'}<Check size={12} />{:else}<AlertTriangle size={12} />{/if}
-							{transcriptReviewLabel(transcription.review_status)}
-						</span>
-						<span
-							class="pipeline-stage"
-							class:good={transcription.alignment_status === 'completed'}
-							class:warning={transcription.alignment_status === 'partial' || transcription.alignment_status === 'not_run'}
-							class:failed={transcription.alignment_status === 'failed'}
-							data-tooltip={`时间对齐：${transcription.words.length} 个词级时间点，置信度 ${transcription.timing_confidence}。${transcription.alignment_error ? `失败原因：${transcription.alignment_error}` : '低置信度时间只用于草稿预览。'}`}
-						>
-							{#if transcription.alignment_status === 'completed'}<Check size={12} />{:else}<AlertTriangle size={12} />{/if}
-							{alignmentStageLabel(transcription.alignment_status)}
-						</span>
-						<span
-							class="pipeline-stage"
-							class:good={transcription.audio_boundary_status === 'completed'}
-							class:warning={transcription.audio_boundary_status === 'not_run' || transcription.audio_boundary_status === 'skipped'}
-							class:failed={transcription.audio_boundary_status === 'failed'}
-							data-tooltip={`声学边界：分析停顿和低能量区间，为字幕断句提供参考。${transcription.audio_boundary_error ? `失败原因：${transcription.audio_boundary_error}。` : ''}失败或跳过时仍保留原始 ASR，断句会使用词级时间回退。`}
-						>
-							{#if transcription.audio_boundary_status === 'completed'}<Check size={12} />{:else}<AlertTriangle size={12} />{/if}
-							{audioBoundaryStageLabel(transcription.audio_boundary_status)}
-						</span>
-						<span
-							class="pipeline-stage"
-							class:good={transcription.boundary_review_status === 'completed'}
-							class:warning={transcription.boundary_review_status === 'partial' || transcription.boundary_review_status === 'not_configured' || transcription.boundary_review_status === 'skipped'}
-							class:failed={transcription.boundary_review_status === 'failed'}
-							data-tooltip={`边界复核：${transcription.boundary_review_model_id ?? '未配置模型'}。结合文本语义复核候选断句点；${transcription.boundary_review_error ? `失败原因：${transcription.boundary_review_error}。` : ''}失败不会阻断原始 ASR 或声学边界结果。`}
-						>
-							{#if transcription.boundary_review_status === 'completed'}<Check size={12} />{:else}<AlertTriangle size={12} />{/if}
-							{boundaryReviewStageLabel(transcription.boundary_review_status)}
-						</span>
-						{#if lowTimingCount}
-							<button class="pipeline-stage failed timing-jump" type="button" onclick={() => jumpToTimingConfidence('low')} data-tooltip="逐条定位低置信度字幕，必须人工复核后才能交付。">低置信 {lowTimingCount}</button>
-						{/if}
-						{#if mediumTimingCount}
-							<button class="pipeline-stage warning timing-jump" type="button" onclick={() => jumpToTimingConfidence('medium')} data-tooltip="逐条定位经过时间修复的字幕，建议抽查。">中置信 {mediumTimingCount}</button>
-						{/if}
-					</div>
-				{/if}
-				<label
-					class="asr-engine-picker"
-					class:unavailable={asrEngineHealth[selectedAsrEngineId]?.healthy === false}
-					data-tooltip={asrEngineHealth[selectedAsrEngineId]?.healthy === false
-						? `${asrEngineLabel(selectedAsrEngineId)}不可用：${asrEngineHealth[selectedAsrEngineId]?.detail}`
-						: '选择字幕听写引擎。本地引擎不可用时不会自动切换到云端。'}
-				>
-					<span>听写引擎</span>
-					<select aria-label="字幕听写引擎" value={selectedAsrEngineId} onchange={handleAsrEngineChange}>
-						{#each ASR_ENGINE_IDS as engineId}
-							<option value={engineId}>{asrEngineOptionLabel(engineId)}</option>
-						{/each}
-					</select>
-				</label>
-				<label class="asr-engine-picker" data-tooltip="断句预设只决定词级时间如何组合成字幕片段，不修改 ASR 原文和时间锚点。">
-					<span>断句预设</span>
-					<select
-						aria-label="字幕断句预设"
-						value={segmentationProfileId}
-						onchange={(event) => updateDraftUiState({ segmentation_profile_id: event.currentTarget.value })}
-					>
-						<option value="generic_zh">通用中文字幕</option>
-						<option value="short_video_large_text">短视频大字</option>
-						<option value="conservative_release">保守发行</option>
-					</select>
-				</label>
-				<button
-					class="mini-btn"
-					class:active={subtitleWorkflowSettingsOpen}
-					type="button"
-					aria-expanded={subtitleWorkflowSettingsOpen}
-					data-tooltip="字幕规则与术语：维护场景上下文、原词校正和中译术语。"
-					onclick={() => updateDraftUiState({ subtitle_workflow_settings_open: !subtitleWorkflowSettingsOpen })}
-					disabled={!draft}
-				>
-					<BookOpenText size={13} /> 字幕规则 / 术语
-				</button>
-				{#if asrSelectionRequiresUploadConfirmation(selectedAsrEngineId)}
-					<span class="cloud-asr-warning"><AlertTriangle size={12} /> 源音频将上传云端</span>
-				{/if}
-				<button class="mini-btn" type="button" data-tooltip="从人声轨生成 ASR 字幕：识别分离后的人声，并生成带时间码的字幕轨。" onclick={generateAsrFromTimeline} disabled={!draft?.stems.vocals_clean_path || transcribingAsr || operationBusy('english_asr')}>
-					<Captions size={13} /> {transcribingAsr || operationBusy('english_asr') ? '生成中' : asrSubtitleActionLabel(Boolean(draft?.cues.length))}
-				</button>
-				<button class="mini-btn" type="button" data-tooltip="导入本土化 SRT：创建独立的本土化字幕轨，不修改 ASR 字幕时间。" onclick={() => localizationSrtInput?.click()} disabled={!draft || localizationRuntimeBusy}>
-					<FileUp size={13} /> 导入本土化 SRT
-				</button>
-				<button class="mini-btn" type="button" data-tooltip="生成参考音候选：从已识别的干净人声片段创建项目音色候选。" onclick={createReferenceCandidates} disabled={draft?.stems.separation_status !== 'completed' || creatingReferences}>
-					{creatingReferences ? '生成中' : '生成参考音候选'}
-				</button>
-				<button class="mini-btn btn-danger" type="button" data-tooltip="清空当前任务：移除当前项目的本土化工作数据，保留项目本身。" onclick={resetCurrentTask} disabled={!hasResettableDraft || resetting}>
-					<Trash2 size={13} /> {resetting ? '清空中' : '清空当前任务'}
-				</button>
-			</div>
-			<SubtitleWorkflowSettings
-				open={subtitleWorkflowSettingsOpen}
-				glossary={draft?.glossary ?? []}
-				sceneContext={draft?.scene_context ?? ''}
-				onChange={updateSubtitleWorkflowSettings}
-			/>
-			<div class="studio-command-strip">
-				<section class="job-monitor" aria-label="任务队列">
-					<div class="strip-head">
-						<strong>任务队列</strong>
-						<span>{hasActiveOperation ? '运行中' : operations.length ? '最近任务' : '暂无任务'}</span>
-					</div>
-					{#if operations.length}
-						<div class="operation-list">
-							{#each operations.slice(0, 3) as operation}
-								<div class="operation-row">
-									<div>
-									<strong>{activityTaskDisplayName(operationActivityTask(operation))}</strong>
-										<span>{operationStatusLabel(operation)}</span>
-									</div>
-									<div class="operation-actions">
-										{#if isActiveOperation(operation)}
-											<button class="tiny-btn" type="button" data-tooltip="取消任务：停止该后台处理任务并保留已完成的数据。" onclick={() => cancelOperation(operation)} disabled={operationActionId === operation.operation_id}>取消</button>
-										{:else if operation.status === 'failed' || operation.status === 'cancelled'}
-											<button class="tiny-btn" type="button" data-tooltip="重试任务：使用相同参数重新提交失败或已取消的任务。" onclick={() => retryOperation(operation)} disabled={operationActionId === operation.operation_id}>重试</button>
-										{/if}
-									</div>
-								</div>
-							{/each}
-						</div>
-					{:else}
-						<p>导入、分离、ASR 和参考音生成会显示在这里。</p>
-					{/if}
-				</section>
-				<section class="delivery-strip" aria-label="批处理与产物">
-					<div class="strip-head">
-						<strong>交付输出</strong>
-						<span>{readyCount} 可生成 / {generatedCount} 已有音频 / {blockedCount} 阻断</span>
-					</div>
-					<div class="delivery-actions">
-						<button class="mini-btn" type="button" data-tooltip="批量 TTS：提交所有满足条件且尚未生成音频的字幕片段。" onclick={submitBatchTts} disabled={!canSubmitCount || submittingBatch}>
-							{submittingBatch ? '提交中' : `批量 TTS ${canSubmitCount || ''}`}
-						</button>
-						<input class="batch-input" value={ttsBatchId} placeholder="Batch ID" oninput={(event) => (ttsBatchId = event.currentTarget.value)} />
-						<button class="mini-btn" type="button" data-tooltip="同步结果：按 Batch ID 拉取已完成的 TTS 音频并回填时间线。" onclick={syncBatchTtsResults} disabled={!ttsBatchId.trim() || syncingBatch}>{syncingBatch ? '同步中' : '同步结果'}</button>
-						<button class="mini-btn" type="button" data-tooltip="导出 SRT：下载包含原文和本土化文本的字幕文件。" onclick={exportBilingualSrt} disabled={!draft?.cues.length}>导出 SRT</button>
-						<button class="mini-btn" type="button" data-tooltip="导出 EDL：下载时间线片段、轨道路由和字幕信息。" onclick={exportTimelineEdl} disabled={!draft}>导出 EDL</button>
-						<button class="mini-btn" type="button" data-tooltip="导出音频包：输出对齐后的合成配音轨、分段音频和清单。" onclick={exportTimelineAudioPackage} disabled={!generatedCount || exportingAudioPackage}>
-							{exportingAudioPackage ? '导出中' : `导出音频包${generatedCount ? ` ${generatedCount}` : ''}`}
-						</button>
-						<button class="mini-btn" type="button" data-tooltip="导出合成视频：按当前时间线生成本土化视频文件。" onclick={exportLocalizedVideo} disabled={!draft?.source_media.video_path || !generatedCount || exportingLocalizedVideo}>
-							{exportingLocalizedVideo ? '合成中' : '导出合成视频'}
-						</button>
-						<button class="mini-btn" type="button" data-tooltip="交付检查：导出阻断项、警告和可生成片段统计。" onclick={exportReadinessAudit} disabled={!draft}>交付检查</button>
-					</div>
-					<p class="delivery-note">
-						{draft?.exports.localized_video_path
-							? `上次合成视频：${String(draft.exports.localized_video_path).split('/').pop()}`
-							: draft?.exports.timeline_audio_package_path
-								? `上次音频包：${String(draft.exports.timeline_audio_package_path).split('/').pop()}`
-								: '音频包会包含按时间线对齐的 dub-track.wav、分段 wav 和 manifest.json。'}
-					</p>
-				</section>
-			</div>
+			<footer class="delivery-bar" aria-label="交付输出">
+				<div class="delivery-summary">
+					<Download size={14} />
+					<strong>交付</strong>
+					<span>{draft?.cues.length ?? 0} 条原字幕 · {localizedCount} 条本土化字幕</span>
+				</div>
+				<div class="delivery-actions">
+					<button class="mini-btn" type="button" onclick={() => exportSubtitleSrt('en')} disabled={!draft?.cues.length} data-tooltip="导出 ASR 字幕：下载当前原文字幕轨。"><Download size={13} /> ASR 字幕</button>
+					<button class="mini-btn" type="button" onclick={() => exportSubtitleSrt('zh')} disabled={!localizedCount} data-tooltip="导出本土化字幕：下载当前本土化字幕轨。"><Download size={13} /> 本土化字幕</button>
+					<button class="mini-btn" type="button" onclick={() => exportSubtitleSrt('bilingual')} disabled={!draft?.cues.length || !localizedCount} data-tooltip="导出双语字幕：下载原文与本土化字幕。"><Download size={13} /> 双语字幕</button>
+					<button class="mini-btn" type="button" onclick={exportLocalizedVideo} disabled={!draft?.source_media.video_path || !generatedCount || exportingLocalizedVideo} data-tooltip="导出视频：合成配音轨完成后，按当前时间线输出本土化视频。"><Film size={13} /> {exportingLocalizedVideo ? '导出中' : '视频'}</button>
+				</div>
+			</footer>
 		</section>
 
 		{#if !inspectorCollapsed}
@@ -3051,6 +2947,7 @@
 					generatingVoice={submittingBatch}
 					{taskHistory}
 					onCancelTask={cancelActivityTask}
+					onRetryTask={retryActivityTask}
 					{subtitleRuntimeBusy}
 					{localizationRuntimeBusy}
 					{taskCenterPulseKey}
@@ -3334,8 +3231,7 @@
 		outline: none;
 	}
 
-	.cutting-actions,
-	.cutting-utility-row {
+	.cutting-actions {
 		display: flex;
 		align-items: center;
 		gap: 7px;
@@ -3403,12 +3299,6 @@
 		background: #242b31;
 	}
 
-	.cutting-mode .mini-btn.active {
-		border-color: var(--studio-accent);
-		background: #173a37;
-		color: #d4fffb;
-	}
-
 	.cutting-shell {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) 7px var(--inspector-width, 380px);
@@ -3468,106 +3358,6 @@
 		justify-items: center;
 	}
 
-	.cutting-utility-row {
-		padding: 8px 10px;
-		border: 1px solid var(--line);
-		border-radius: 8px;
-		background: #15191e;
-		flex-wrap: wrap;
-	}
-
-	.transcription-status {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		min-width: 0;
-		margin-right: 2px;
-		padding-right: 8px;
-		border-right: 1px solid rgba(255, 255, 255, 0.08);
-	}
-
-	.asr-engine-picker {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		min-height: 27px;
-		padding: 2px 3px 2px 7px;
-		border: 1px solid var(--line);
-		border-radius: 6px;
-		background: #1b2025;
-		color: #93a0a7;
-		font-size: 10px;
-	}
-
-	.asr-engine-picker.unavailable {
-		border-color: rgba(215, 116, 85, 0.6);
-		color: #e6a388;
-	}
-
-	.asr-engine-picker select {
-		max-width: 190px;
-		min-height: 21px;
-		border: 0;
-		border-radius: 4px;
-		padding: 1px 22px 1px 6px;
-		background: #252c32;
-		color: #dce4e7;
-		font: inherit;
-		font-size: 11px;
-		cursor: pointer;
-	}
-
-	.asr-engine-picker select:focus-visible {
-		outline: 1px solid rgba(87, 208, 200, 0.78);
-		outline-offset: 1px;
-	}
-
-	.cloud-asr-warning {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		min-height: 23px;
-		padding: 2px 6px;
-		border: 1px solid rgba(205, 151, 73, 0.42);
-		border-radius: 5px;
-		background: rgba(104, 72, 24, 0.2);
-		color: #dec17e;
-		font-size: 10px;
-		white-space: nowrap;
-	}
-
-	.pipeline-stage {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		min-height: 22px;
-		padding: 2px 6px;
-		border: 1px solid #3b454c;
-		border-radius: 5px;
-		background: #1b2025;
-		color: #aeb8bd;
-		font-size: 10px;
-		white-space: nowrap;
-	}
-
-	.pipeline-stage.good {
-		border-color: rgba(73, 167, 132, 0.42);
-		color: #9ed8bd;
-		background: rgba(31, 82, 65, 0.24);
-	}
-
-	.pipeline-stage.warning {
-		border-color: rgba(194, 158, 74, 0.46);
-		color: #ddc582;
-		background: rgba(93, 71, 26, 0.2);
-	}
-
-	.pipeline-stage.failed {
-		border-color: rgba(198, 82, 91, 0.46);
-		color: #efa3a9;
-		background: rgba(101, 35, 42, 0.2);
-	}
-
 	.inspector-rail {
 		display: grid;
 		align-content: start;
@@ -3600,18 +3390,6 @@
 		color: var(--text);
 		border-color: #4d626b;
 		background: #222b31;
-	}
-
-	.btn-danger {
-		color: #ffb0b0;
-		border-color: #6d3030;
-		background: #261617;
-	}
-
-	.btn-danger:disabled {
-		color: var(--muted);
-		border-color: var(--line);
-		background: #15181d;
 	}
 
 	.visually-hidden {
@@ -3648,136 +3426,55 @@
 		gap: 8px;
 	}
 
-	.quality-issue,
-	.timing-jump {
+	.quality-issue {
 		font: inherit;
 		cursor: pointer;
 	}
 
 	.quality-issue:hover,
-	.quality-issue:focus-visible,
-	.timing-jump:hover,
-	.timing-jump:focus-visible {
+	.quality-issue:focus-visible {
 		filter: brightness(1.14);
 		outline: 1px solid rgba(255, 255, 255, 0.2);
 		outline-offset: 1px;
 	}
 
-	.studio-command-strip {
-		display: grid;
-		grid-template-columns: minmax(260px, 0.8fr) minmax(380px, 1.2fr);
-		gap: 10px;
-	}
-
-	.job-monitor,
-	.delivery-strip {
-		min-width: 0;
-		border: 1px solid var(--line);
-		border-radius: 8px;
-		background: #14191e;
-		overflow: hidden;
-	}
-
-	.strip-head {
+	.delivery-bar {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		gap: 10px;
-		min-height: 34px;
-		padding: 7px 10px;
-		border-bottom: 1px solid #303941;
+		gap: 12px;
+		min-width: 0;
+		padding: 7px 9px;
+		border-top: 1px solid var(--line);
+		background: #14191e;
 	}
 
-	.strip-head strong,
-	.strip-head span {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.strip-head strong {
-		font-size: 12px;
-	}
-
-	.strip-head span,
-	.job-monitor p,
-	.operation-row span {
-		color: var(--muted);
-		font-size: 11px;
-	}
-
-	.job-monitor p {
-		margin: 0;
-		padding: 9px 10px;
-	}
-
-	.operation-list {
-		display: grid;
-	}
-
-	.operation-row {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
+	.delivery-summary {
+		display: inline-flex;
 		align-items: center;
-		gap: 8px;
-		min-height: 38px;
-		padding: 6px 10px;
-		border-bottom: 1px solid #303941;
+		gap: 6px;
+		min-width: 0;
+		color: #dce4e7;
 	}
 
-	.operation-row:last-child {
-		border-bottom: 0;
+	.delivery-summary strong {
+		font-size: 11px;
 	}
 
-	.operation-row strong,
-	.operation-row span {
-		display: block;
+	.delivery-summary span {
 		overflow: hidden;
+		color: var(--muted);
+		font-size: 10px;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-	}
-
-	.operation-row strong {
-		font-size: 12px;
-	}
-
-	.tiny-btn {
-		min-height: 24px;
-		border: 1px solid var(--line);
-		border-radius: 6px;
-		background: #20262c;
-		color: var(--text);
-		font-size: 11px;
-		padding: 2px 7px;
-		cursor: pointer;
 	}
 
 	.delivery-actions {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 7px;
+		justify-content: flex-end;
+		gap: 5px;
 		align-items: center;
-		padding: 8px 10px;
-	}
-
-	.delivery-note {
-		margin: 0;
-		padding: 0 10px 9px;
-		color: var(--muted);
-		font-size: 11px;
-		line-height: 1.45;
-	}
-
-	.batch-input {
-		min-width: 104px;
-		flex: 1 1 112px;
-		height: 31px;
-		border: 1px solid var(--line);
-		border-radius: 7px;
-		background: #11161b;
-		color: var(--text);
-		padding: 5px 8px;
-		font-size: 12px;
 	}
 
 	.panel-inline {
@@ -3814,8 +3511,13 @@
 			border-bottom: 1px solid var(--line);
 		}
 
-		.studio-command-strip {
-			grid-template-columns: 1fr;
+		.delivery-bar {
+			align-items: flex-start;
+			flex-direction: column;
+		}
+
+		.delivery-actions {
+			justify-content: flex-start;
 		}
 
 		.inspector-rail {

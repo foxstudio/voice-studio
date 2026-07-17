@@ -337,7 +337,7 @@ def test_timing_quality_gate_applies_hard_localized_subtitle_limits():
             {
                 "subtitle_id": "subtitle_long",
                 "start_ms": 3000,
-                "end_ms": 10001,
+                "end_ms": 11001,
                 "text": "长",
                 "linked_cue_id": "cue_01",
             },

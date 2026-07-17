@@ -116,7 +116,7 @@ def complete_json(
     timeout: float = 90,
     allow_array: bool = False,
 ) -> dict | list:
-    """Run an OpenAI-compatible completion and return one JSON object."""
+    """Run an OpenAI-compatible completion and return validated JSON."""
 
     if not isinstance(user_payload, dict):
         raise LlmRuntimeError(
@@ -139,8 +139,9 @@ def complete_json(
         ) from None
 
     profile = resolve_profile(profile_id)
+    output_shape = "JSON 对象或数组" if allow_array else "JSON 对象"
     user_content = (
-        f"请处理以下 JSON 数据。\nJSON 数据：\n{payload_json}\n\n只返回 JSON 对象，不要返回 Markdown、解释或其他文本。"
+        f"请处理以下 JSON 数据。\nJSON 数据：\n{payload_json}\n\n只返回 {output_shape}，不要返回 Markdown、解释或其他文本。"
     )
     request_body = {
         "model": profile.model_id,

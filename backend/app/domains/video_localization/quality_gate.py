@@ -19,10 +19,10 @@ from app.domains.video_localization.schemas import (
 
 
 LOCALIZED_SUBTITLE_TARGET_CPS = 9
-LOCALIZED_SUBTITLE_HARD_MAX_CPS = 12
+LOCALIZED_SUBTITLE_HARD_MAX_CPS = 12.1
 LOCALIZED_SUBTITLE_MIN_DURATION_MS = 800
 LOCALIZED_SUBTITLE_SOFT_MAX_DURATION_MS = 6000
-LOCALIZED_SUBTITLE_HARD_MAX_DURATION_MS = 7000
+LOCALIZED_SUBTITLE_HARD_MAX_DURATION_MS = 8000
 LOCALIZED_SUBTITLE_MAX_LINES = 2
 LOCALIZED_SUBTITLE_MAX_LINE_UNITS = 14
 LOCALIZED_SUBTITLE_MAX_TOTAL_UNITS = 28
@@ -855,7 +855,7 @@ def _check_localized_text(
         blockers.append(
             _issue(
                 "LOCALIZED_SUBTITLE_DURATION_TOO_LONG",
-                "本土化字幕时长超过 7 秒，未达到导出硬门槛",
+                "本土化字幕时长超过 8 秒，未达到导出硬门槛",
                 "blocker",
                 cue_id=cue_id,
             )
@@ -875,7 +875,7 @@ def _check_localized_text(
         blockers.append(
             _issue(
                 "LOCALIZED_SUBTITLE_CPS_HARD_LIMIT",
-                "本土化字幕阅读速度超过 12 字/秒，需调整后再导出",
+                "本土化字幕阅读速度明显超过 12 字/秒，需调整后再导出",
                 "blocker",
                 cue_id=cue_id,
             )

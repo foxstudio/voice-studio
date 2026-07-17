@@ -428,6 +428,124 @@ def merge_english_asr_result(
     )
 
 
+def ensure_english_asr_source_unchanged(
+    latest: VideoLocalizationDraft,
+    result: VideoLocalizationDraft,
+    *,
+    expected_source_revision: str,
+) -> None:
+    """Reject a completed ASR result when any source used by the run changed."""
+    if english_asr_source_revision(latest) != expected_source_revision:
+        raise _asr_source_changed()
+    transcript = result.transcription
+    if transcript is None or not transcript.source_track_id:
+        raise AppException(500, "VIDEO_LOCALIZATION_ASR_RESULT_INVALID", "语音识别结果缺少来源音轨信息。")
+
+    source_track_id = transcript.source_track_id
+    if source_track_id == "dub":
+        expected_state = result.source_media.metadata.get("english_asr_source_state_sha256")
+        try:
+            current_state = dub_asr_source_state_sha256(latest)
+        except AppException as exc:
+            raise _asr_source_changed() from exc
+        if not expected_state or current_state != expected_state:
+            raise _asr_source_changed()
+        return
+
+    # Legacy/imported test results may not carry content fingerprints. The
+    # structural source revision above still prevents cross-media writeback.
+    if not transcript.source_audio_sha256 or not transcript.alignment_audio_sha256:
+        return
+
+    try:
+        source_path, current_source_track_id = resolve_english_asr_source(latest, source_track_id)
+        alignment_path, current_alignment_track_id = resolve_english_alignment_source(
+            latest,
+            source_path,
+            current_source_track_id,
+        )
+        current_source_sha256 = media_assets.file_sha256(source_path)
+        current_alignment_sha256 = media_assets.file_sha256(alignment_path)
+    except (AppException, OSError) as exc:
+        raise _asr_source_changed() from exc
+
+    if (
+        current_source_track_id != source_track_id
+        or current_alignment_track_id != transcript.alignment_source_track_id
+        or current_source_sha256 != transcript.source_audio_sha256
+        or current_alignment_sha256 != transcript.alignment_audio_sha256
+    ):
+        raise _asr_source_changed()
+
+
+def _asr_source_changed() -> AppException:
+    return AppException(
+        409,
+        "VIDEO_LOCALIZATION_ASR_SOURCE_CHANGED",
+        "听写期间视频或音轨发生了变化，因此没有覆盖当前字幕。请基于最新音轨重新生成 ASR 字幕。",
+    )
+
+
+def english_asr_source_revision(draft: VideoLocalizationDraft) -> str:
+    """Fingerprint source-bearing draft fields without including UI/editor state."""
+    payload = {
+        "source_media": {
+            "filename": draft.source_media.filename,
+            "video_path": draft.source_media.video_path,
+            "audio_path": draft.source_media.audio_path,
+            "duration_ms": draft.source_media.duration_ms,
+            "content_sha256": draft.source_media.content_sha256,
+            "audio_sha256": draft.source_media.audio_sha256,
+        },
+        "stems": {
+            "original_audio_path": draft.stems.original_audio_path,
+            "original_audio_sha256": draft.stems.original_audio_sha256,
+            "vocals_clean_path": draft.stems.vocals_clean_path,
+            "vocals_clean_sha256": draft.stems.vocals_clean_sha256,
+        },
+        "dub_clips": [
+            {
+                "clip_id": str(clip.get("clip_id") or ""),
+                "audio_path": str(clip.get("audio_path") or ""),
+                "start_ms": clip.get("start_ms"),
+                "end_ms": clip.get("end_ms"),
+                "source_start_ms": clip.get("source_start_ms"),
+                "source_end_ms": clip.get("source_end_ms"),
+            }
+            for item in draft.timeline_clips
+            if (clip := dict(item)).get("track_id") == "dub"
+        ],
+    }
+    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def source_video_revision(draft: VideoLocalizationDraft) -> str:
+    return _revision_hash(
+        {
+            "video_path": draft.source_media.video_path,
+            "content_sha256": draft.source_media.content_sha256,
+            "duration_ms": draft.source_media.duration_ms,
+        }
+    )
+
+
+def source_audio_revision(draft: VideoLocalizationDraft) -> str:
+    return _revision_hash(
+        {
+            "audio_path": draft.source_media.audio_path,
+            "audio_sha256": draft.source_media.audio_sha256,
+            "original_audio_path": draft.stems.original_audio_path,
+            "original_audio_sha256": draft.stems.original_audio_sha256,
+        }
+    )
+
+
+def _revision_hash(payload: dict) -> str:
+    encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _ordered_cues(cues: list[VideoLocalizationCue]) -> list[VideoLocalizationCue]:
     return sorted(
         cues,

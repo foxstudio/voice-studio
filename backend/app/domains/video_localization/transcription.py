@@ -36,6 +36,10 @@ REVIEW_REQUEST_TIMEOUT_SECONDS = 120
 ALIGNMENT_WINDOW_MS = 60_000
 ALIGNMENT_CONTEXT_MS = 1_000
 ZERO_DURATION_MAX_TOKEN_MS = 600
+COLLAPSED_WORD_MAX_DURATION_MS = 5
+COLLAPSED_WORD_MIN_RUN = 3
+COLLAPSED_WORD_RECOVERY_GAP_MS = 600
+COLLAPSED_WORD_MAX_LOOKAHEAD = 24
 SPEECH_ONSET_FRAME_MS = 20
 SPEECH_ONSET_HOP_MS = 10
 SPEECH_ONSET_MAX_SCAN_MS = 600
@@ -841,6 +845,7 @@ def align_segments(
     if not any(word.timing_source == "asr_segment_interpolation" for word in words):
         alignment_quality_flags.discard("alignment_leaf_interpolated")
 
+    words = _repair_collapsed_word_runs(words, segments=segments, quality_flags=alignment_quality_flags)
     words = _ensure_monotonic_word_times(words, quality_flags=alignment_quality_flags)
     if aligned_count == len(segments):
         timing_confidence = "high" if all(word.timing_confidence == "high" for word in words) else "medium"
@@ -1276,6 +1281,92 @@ def _ensure_monotonic_word_times(
         )
         previous_end_ms = end_ms
     return normalized
+
+
+def _repair_collapsed_word_runs(
+    words: list[VideoLocalizationAlignedWord],
+    *,
+    segments: list[VideoLocalizationTranscriptSegment],
+    quality_flags: set[str] | None = None,
+) -> list[VideoLocalizationAlignedWord]:
+    repaired = list(words)
+    segment_by_id = {segment.segment_id: segment for segment in segments}
+    index = 0
+    while index < len(repaired):
+        if repaired[index].end_ms - repaired[index].start_ms > COLLAPSED_WORD_MAX_DURATION_MS:
+            index += 1
+            continue
+        run_end = index + 1
+        while (
+            run_end < len(repaired)
+            and repaired[run_end].end_ms - repaired[run_end].start_ms <= COLLAPSED_WORD_MAX_DURATION_MS
+        ):
+            run_end += 1
+        if run_end - index < COLLAPSED_WORD_MIN_RUN:
+            index = run_end
+            continue
+
+        repair_end = run_end
+        right_ms = None
+        lookahead_end = min(len(repaired) - 1, run_end + COLLAPSED_WORD_MAX_LOOKAHEAD)
+        for probe in range(run_end - 1, lookahead_end):
+            current = repaired[probe]
+            following = repaired[probe + 1]
+            gap_ms = following.start_ms - current.end_ms
+            if gap_ms >= COLLAPSED_WORD_RECOVERY_GAP_MS and current.segment_id == following.segment_id:
+                repair_end = probe + 1
+                right_ms = following.start_ms
+                break
+
+        left_ms = repaired[index - 1].end_ms if index else repaired[index].start_ms
+        if right_ms is None:
+            impacted_segments = {
+                repaired[word_index].segment_id for word_index in range(index, repair_end)
+            }
+            segment_end_ms = max(
+                (
+                    segment_by_id[segment_id].end_ms
+                    for segment_id in impacted_segments
+                    if segment_id in segment_by_id
+                ),
+                default=repaired[repair_end - 1].end_ms,
+            )
+            next_start_ms = repaired[repair_end].start_ms if repair_end < len(repaired) else segment_end_ms
+            right_ms = min(segment_end_ms, next_start_ms) if next_start_ms > left_ms else segment_end_ms
+
+        group = repaired[index:repair_end]
+        if right_ms - left_ms < len(group) * 20:
+            index = run_end
+            continue
+        weights = [max(1, len(re.sub(r"[^\w\u3400-\u9fff]", "", word.text))) for word in group]
+        total_weight = sum(weights)
+        consumed = 0
+        for offset, (word, weight) in enumerate(zip(group, weights)):
+            start_ms = left_ms + round((right_ms - left_ms) * consumed / total_weight)
+            consumed += weight
+            end_ms = (
+                right_ms
+                if offset == len(group) - 1
+                else left_ms + round((right_ms - left_ms) * consumed / total_weight)
+            )
+            repaired[index + offset] = word.model_copy(
+                update={
+                    "start_ms": start_ms,
+                    "end_ms": max(start_ms + 1, end_ms),
+                    "timing_confidence": "low",
+                    "timing_source": "asr_segment_interpolation",
+                }
+            )
+        if quality_flags is not None:
+            quality_flags.update(
+                {
+                    "alignment_collapsed_run_repaired",
+                    "alignment_timing_adjusted",
+                    "timing_review_required",
+                }
+            )
+        index = repair_end
+    return repaired
 
 
 def _normalize_alignment_token(token: str) -> str:

@@ -9,7 +9,8 @@ import {
 	activityTaskStepTimingLabel,
 	activityTaskSummary,
 	formatActivityTaskDuration,
-	operationActivityTask
+	operationActivityTask,
+	pendingOperationActivityTask
 } from './activity-notice';
 
 describe('activity notice tasks', () => {
@@ -24,6 +25,23 @@ describe('activity notice tasks', () => {
 			{ id: 'one', label: '清空 ASR 字幕轨', progress: null, status: 'running' },
 			{ id: 'two', label: '分离人声与背景', progress: 0.5, status: 'running' }
 		])).toMatchObject({ text: '清空 ASR 字幕轨 · 处理中', countLabel: '2 项运行中' });
+	});
+
+	it('locks the destination track while an operation is being submitted', () => {
+		const task = pendingOperationActivityTask(
+			'localization_draft',
+			'submit:project:localization',
+			'正在保存修改并提交任务'
+		);
+
+		expect(task).toMatchObject({
+			label: '生成本土化字幕初稿',
+			stage: '正在保存修改并提交任务',
+			status: 'queued',
+			progress: null
+		});
+		expect(activityTaskAffectsTrack(task, 'localizedSubtitles')).toBe(true);
+		expect(task.cancellable).toBe(false);
 	});
 
 	it('normalizes backend operations and clamps progress', () => {
@@ -294,7 +312,8 @@ describe('activity notice tasks', () => {
 			{ id: 'localize', label: '生成中文表达', status: 'success', durationMs: 4_500 },
 			{ id: 'fit_segments', label: '调整字幕长度', status: 'success', durationMs: 600 },
 			{ id: 'segment_timing', label: '安排字幕分段与时间', status: 'success', durationMs: 800 },
-			{ id: 'quality_review', label: '复核语义与可读性', status: 'running', durationMs: 400 },
+			{ id: 'quality_review', label: '对照原文复核时间线', status: 'running', durationMs: 400 },
+			{ id: 'post_review_constraints', label: '确认终审字幕限制', status: 'todo', durationMs: undefined },
 			{ id: 'write_track', label: '写入本土化字幕轨', status: 'todo', durationMs: undefined }
 		]);
 		expect(task.steps?.[0].result?.summary).toBe('已梳理主题、人物关系和表达习惯。');
@@ -302,6 +321,36 @@ describe('activity notice tasks', () => {
 			before: 'You nailed it.',
 			after: '这事你办得漂亮'
 		});
+	});
+
+	it('uses the stable ASR stage id to advance the visible current step', () => {
+		const task = operationActivityTask({
+			operation_id: 'asr-running', project_id: 'project', kind: 'english_asr', status: 'running',
+			label: null, progress: 0.58, error_code: null, error_message: null, cancel_requested: false,
+			parameters: { source_track_id: 'vocals' },
+			result_summary: {
+				stage: '正在生成逐词时间码',
+				stage_id: 'alignment',
+				preview_phase: 'text_review',
+				task_stage_timings: {
+					asr: { duration_ms: 5_000 },
+					web_research: { duration_ms: 1_000 },
+					text_review: { duration_ms: 19_000 },
+					alignment: { duration_ms: 400, running: true }
+				}
+			},
+			created_at: '2026-07-17T08:00:00Z', started_at: '2026-07-17T08:00:01Z', completed_at: null
+		});
+
+		expect(task.steps?.map(({ id, status }) => [id, status])).toEqual([
+			['recognize', 'success'],
+			['research', 'success'],
+			['review', 'success'],
+			['timestamps', 'running'],
+			['boundaries', 'todo'],
+			['boundary-review', 'todo'],
+			['subtitles', 'todo']
+		]);
 	});
 
 	it('keeps localization draft cancellation disabled once cancellation is requested', () => {

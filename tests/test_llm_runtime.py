@@ -209,15 +209,22 @@ def test_complete_json_classifies_invalid_responses(monkeypatch, payload, expect
 
 def test_complete_json_can_explicitly_allow_top_level_array(monkeypatch):
     _configure(monkeypatch)
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["body"] = json.loads(request.data)
+        return FakeResponse(_completion('[{"segment_id":"asr_0001"}]'))
+
     monkeypatch.setattr(
         llm_runtime.urllib.request,
         "urlopen",
-        lambda request, timeout: FakeResponse(_completion('[{"segment_id":"asr_0001"}]')),
+        fake_urlopen,
     )
 
     result = llm_runtime.complete_json("system", {}, allow_array=True)
 
     assert result == [{"segment_id": "asr_0001"}]
+    assert "只返回 JSON 对象或数组" in captured["body"]["messages"][1]["content"]
 
 
 def test_complete_json_classifies_refusal(monkeypatch):

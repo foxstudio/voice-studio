@@ -14,6 +14,7 @@ from app.domains.video_localization.schemas import (  # noqa: E402
     VideoLocalizationAlignedWord,
     VideoLocalizationCue,
     VideoLocalizationDraft,
+    VideoLocalizationTranscriptSegment,
     VideoLocalizationTranscriptionState,
 )
 from app.errors import AppException  # noqa: E402
@@ -42,7 +43,21 @@ def _draft() -> VideoLocalizationDraft:
     )
 
 
-def test_localization_batches_balance_context_size_without_tiny_requests():
+def _timed_item(index: int, *, gap_ms: int = 100) -> dict:
+    start_ms = index * 1000 + gap_ms
+    return {
+        "id": f"localized_{index + 1:04d}",
+        "start_ms": start_ms,
+        "end_ms": start_ms + 800,
+        "source_text": f"Source phrase {chr(97 + index % 26)}",
+        "display_text": f"第{chr(0x4E00 + index % 20)}句",
+        "tts_text": f"第{chr(0x4E00 + index % 20)}句。",
+        "quality_flags": [],
+        "cps": 4.0,
+    }
+
+
+def test_localization_batches_keep_a_medium_transcript_in_one_request():
     cues = [
         VideoLocalizationCue(
             cue_id=f"cue_{index:04d}",
@@ -56,7 +71,7 @@ def test_localization_batches_balance_context_size_without_tiny_requests():
 
     batches = localization._localization_batches(cues)
 
-    assert [(start, len(batch)) for start, batch in batches] == [(0, 35), (35, 35)]
+    assert [(start, len(batch)) for start, batch in batches] == [(0, 70)]
     assert all(
         sum(len(cue.source_word_ids) for cue in batch) <= localization.LOCALIZATION_BATCH_MAX_WORDS
         for _, batch in batches
@@ -110,6 +125,224 @@ def test_context_analysis_retries_one_invalid_structured_response(monkeypatch):
     assert len(prompts) == 2
     assert "上次响应无法解析" in prompts[1]
     assert result["overview"] == "创作者介绍工作流"
+
+
+def test_context_analysis_samples_long_transcript_across_the_full_document(monkeypatch):
+    cues = [
+        VideoLocalizationCue(
+            cue_id=f"cue_{index:04d}",
+            start_ms=index * 1000,
+            end_ms=(index + 1) * 1000,
+            en_subtitle_text=f"section {index} has useful context",
+        )
+        for index in range(12)
+    ]
+    monkeypatch.setattr(localization, "CONTEXT_ANALYSIS_MAX_SOURCE_CHARS", 120)
+
+    sampled, diagnostics = localization._context_transcript_sample(VideoLocalizationDraft(cues=cues))
+
+    sampled_ids = {item["cue_id"] for item in sampled}
+    assert "cue_0000" in sampled_ids
+    assert "cue_0004" in sampled_ids
+    assert "cue_0008" in sampled_ids
+    assert diagnostics["mode"] == "distributed"
+    assert diagnostics["included_chars"] <= localization.CONTEXT_ANALYSIS_MAX_SOURCE_CHARS
+    assert diagnostics["included_cue_count"] < diagnostics["source_cue_count"]
+
+
+def test_semantic_bundles_keep_text_cues_without_aligned_words():
+    word = VideoLocalizationAlignedWord(
+        word_id="word_0001",
+        segment_id="segment_0001",
+        text="first",
+        start_ms=0,
+        end_ms=400,
+    )
+    draft = VideoLocalizationDraft(
+        cues=[
+            VideoLocalizationCue(
+                cue_id="cue_0001",
+                speaker_id="speaker_01",
+                start_ms=0,
+                end_ms=500,
+                en_subtitle_text="First line.",
+                source_word_ids=[word.word_id],
+            ),
+            VideoLocalizationCue(
+                cue_id="cue_0002",
+                speaker_id="speaker_01",
+                start_ms=600,
+                end_ms=1200,
+                en_subtitle_text="Second line without aligned words.",
+            ),
+        ],
+        transcription=VideoLocalizationTranscriptionState(
+            words=[word],
+            segments=[
+                VideoLocalizationTranscriptSegment(
+                    segment_id="segment_0001",
+                    start_ms=0,
+                    end_ms=500,
+                    raw_text="First line.",
+                ),
+                VideoLocalizationTranscriptSegment(
+                    segment_id="segment_0002",
+                    start_ms=600,
+                    end_ms=1200,
+                    raw_text="Second line without aligned words.",
+                ),
+            ],
+        ),
+    )
+
+    bundles = localization._semantic_localization_bundles(draft)
+
+    assert [cue_id for bundle in bundles for cue_id in bundle["source_cue_ids"]] == ["cue_0001", "cue_0002"]
+    assert "Second line without aligned words." in " ".join(bundle["source"] for bundle in bundles)
+
+
+def test_semantic_bundles_never_join_different_speakers_mid_sentence():
+    draft = VideoLocalizationDraft(
+        cues=[
+            VideoLocalizationCue(
+                cue_id="cue_0001",
+                speaker_id="speaker_01",
+                start_ms=0,
+                end_ms=500,
+                en_subtitle_text="I think",
+            ),
+            VideoLocalizationCue(
+                cue_id="cue_0002",
+                speaker_id="speaker_02",
+                start_ms=600,
+                end_ms=1200,
+                en_subtitle_text="No absolutely not.",
+            ),
+        ]
+    )
+
+    bundles = localization._semantic_localization_bundles(draft)
+
+    assert [bundle["speaker_id"] for bundle in bundles] == ["speaker_01", "speaker_02"]
+    assert [bundle["source_cue_ids"] for bundle in bundles] == [["cue_0001"], ["cue_0002"]]
+
+
+def test_full_document_localization_retries_one_damaged_json_response(monkeypatch):
+    bundles = [
+        {
+            "id": "bundle_001",
+            "speaker_id": "speaker_01",
+            "source": "This is real footage.",
+        }
+    ]
+    prompts = []
+    payloads = []
+
+    def complete_json(**kwargs):
+        prompts.append(kwargs["system_prompt"])
+        payloads.append(kwargs["user_payload"])
+        if len(prompts) == 1:
+            raise LlmRuntimeError("invalid json", code="llm_json_invalid", status_code=502)
+        return {"items": [{"id": "bundle_001", "text": "这是真实拍摄的画面"}]}
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    localized, diagnostics = localization._localize_semantic_bundles(
+        bundles,
+        draft=_draft(),
+        context={},
+        research={},
+        profile_id="llm_default",
+        source_language="en",
+        target_language="zh-Hans",
+        localization_level="L1",
+        worldview_permeability="W0",
+        is_cancelled=None,
+    )
+
+    assert localized[0]["text"] == "这是真实拍摄的画面"
+    assert diagnostics["request_count"] == 2
+    assert len(prompts) == 2
+    assert "上次结构化响应损坏" in prompts[1]
+    assert any("人物的 walk/gait" in rule for rule in payloads[0]["editorial_rules"])
+
+
+def test_oversized_localization_document_uses_continuous_anchored_chapters(monkeypatch):
+    bundles = [
+        {"id": f"bundle_{index:03d}", "speaker_id": "speaker_01", "source": character * 10}
+        for index, character in enumerate(("A", "B", "C", "D"), start=1)
+    ]
+    payloads: list[dict] = []
+
+    def complete_json(**kwargs):
+        payload = kwargs["user_payload"]
+        payloads.append(payload)
+        return {
+            "items": [
+                {"id": item["id"], "text": f"中文 {item['id']}"}
+                for item in payload["document"]
+            ]
+        }
+
+    monkeypatch.setattr(localization, "LOCALIZATION_DOCUMENT_MAX_SOURCE_CHARS", 20)
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    localized, diagnostics = localization._localize_semantic_bundles(
+        bundles,
+        draft=_draft(),
+        context={"overview": "完整视频"},
+        research={},
+        profile_id="llm_default",
+        source_language="en",
+        target_language="zh-Hans",
+        localization_level="L1",
+        worldview_permeability="W0",
+        is_cancelled=None,
+    )
+
+    assert [item["id"] for item in localized] == [item["id"] for item in bundles]
+    assert [[item["id"] for item in payload["document"]] for payload in payloads] == [
+        ["bundle_001", "bundle_002"],
+        ["bundle_003", "bundle_004"],
+    ]
+    assert payloads[0]["document_scope"]["next_anchor"]["id"] == "bundle_003"
+    assert payloads[1]["document_scope"]["previous_anchor"]["id"] == "bundle_002"
+    assert diagnostics["partition_count"] == 2
+    assert diagnostics["request_count"] == 2
+    assert diagnostics["source_chars"] == 40
+
+
+def test_full_document_localization_retries_one_structurally_empty_item(monkeypatch):
+    bundles = [
+        {
+            "id": "bundle_001",
+            "speaker_id": "speaker_01",
+            "source": "This is real footage.",
+        }
+    ]
+    responses = iter(
+        [
+            {"items": [{"id": "bundle_001", "text": ""}]},
+            {"items": [{"id": "bundle_001", "text": "这是真实拍摄的画面"}]},
+        ]
+    )
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", lambda **_kwargs: next(responses))
+
+    localized, diagnostics = localization._localize_semantic_bundles(
+        bundles,
+        draft=_draft(),
+        context={},
+        research={},
+        profile_id="llm_default",
+        source_language="en",
+        target_language="zh-Hans",
+        localization_level="L1",
+        worldview_permeability="W0",
+        is_cancelled=None,
+    )
+
+    assert localized[0]["text"] == "这是真实拍摄的画面"
+    assert diagnostics["request_count"] == 2
 
 
 def test_pause_split_candidates_require_both_audio_gap_and_longer_chinese():
@@ -179,6 +412,134 @@ def test_localization_review_focus_flags_calques_collocations_and_real_referents
     assert any("工具或 AI" in hint for hint in tool_pronoun)
 
 
+def test_bundle_review_allows_a_focused_item_to_need_no_change(monkeypatch):
+    bundles = [
+        {
+            "id": "bundle_0001",
+            "source": "The image looks clean.",
+            "text": "画面看起来很干净",
+        }
+    ]
+    monkeypatch.setattr(
+        localization.llm_runtime,
+        "complete_json",
+        lambda **_kwargs: {"checked_count": 1, "changes": []},
+    )
+
+    reviewed, changes, diagnostics = localization._review_localized_bundles(
+        bundles,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert reviewed == bundles
+    assert changes == []
+    assert diagnostics["request_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("source", "chinese", "expected"),
+    [
+        ("My face, my walk and the light", "我的脸、我的走路和光线", "不能按英语所有格直译"),
+        ("Preserve the exact handheld camera move", "保留精确的手持运动", "手持运镜"),
+        ("The rig framing the whole driving motion", "摄影机架设角度和整个开车的运动", "行车动作"),
+        ("The rig keeps the framing stable", "保持摄影机架设角度稳定", "构图"),
+        (
+            "The rig framing the whole driving motion",
+            "拍摄装置的整体行车动作取景",
+            "并列保护项",
+        ),
+        (
+            "The handheld move I shot on the ground is now a few thousand feet up",
+            "我拍摄的手持运镜现在变成了几千英尺高",
+            "运镜本身不会变成",
+        ),
+        ("A location swap with a moving camera", "用移动相机做场景替换", "不能写成像在搬设备"),
+        ("That was a slow and steady camera movement", "刚才是个缓慢平稳的镜头", "不能只写成"),
+    ],
+)
+def test_bundle_review_focus_distinguishes_action_motion_and_camera_language(source, chinese, expected):
+    focus = localization._localized_bundle_review_focus(source, chinese)
+
+    assert any(expected in hint for hint in focus)
+
+
+def test_bundle_review_focus_does_not_turn_every_motion_into_a_trajectory():
+    focus = localization._localized_bundle_review_focus(
+        "The ball follows a visible curved trajectory",
+        "球沿着清晰的弧形轨迹移动",
+    )
+
+    assert focus == []
+
+
+def test_bundle_review_repairs_a_replacement_that_keeps_a_motion_relation_error(monkeypatch):
+    responses = iter(
+        [
+            {
+                "checked_count": 1,
+                "changes": [
+                    {
+                        "id": "bundle_0001",
+                        "replacement": "我在地面拍摄的手持运镜变成了几千英尺高",
+                        "reason": "改用运镜术语",
+                    }
+                ],
+            },
+            {
+                "items": [
+                    {
+                        "id": "bundle_0001",
+                        "replacement": "原本在地面拍下的手持运镜 现在被搬到了几千英尺的高空",
+                        "reason": "修正动作与空间关系",
+                    }
+                ]
+            },
+        ]
+    )
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", lambda **_kwargs: next(responses))
+
+    reviewed, changes, diagnostics = localization._review_localized_bundles(
+        [
+            {
+                "id": "bundle_0001",
+                "source": "The handheld move I shot on the ground is now a few thousand feet up",
+                "text": "我站在地上拍的手持运动现在变成了几千英尺高",
+            }
+        ],
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert reviewed[0]["text"] == "原本在地面拍下的手持运镜 现在被搬到了几千英尺的高空"
+    assert changes[0]["reason"] == "修正动作与空间关系"
+    assert diagnostics["request_count"] == 2
+
+
+def test_bundle_review_still_requires_a_missing_number_to_be_repaired(monkeypatch):
+    bundles = [
+        {
+            "id": "bundle_0001",
+            "source": "Version 2.0 renders in 4K.",
+            "text": "这个版本可以渲染画面",
+        }
+    ]
+    monkeypatch.setattr(
+        localization.llm_runtime,
+        "complete_json",
+        lambda **_kwargs: {"checked_count": 1, "changes": []},
+    )
+
+    with pytest.raises(AppException) as exc_info:
+        localization._review_localized_bundles(
+            bundles,
+            profile_id="llm_default",
+            is_cancelled=None,
+        )
+
+    assert exc_info.value.code == "VIDEO_LOCALIZATION_REVIEW_INVALID"
+
+
 def test_reading_speed_counts_a_contiguous_product_name_as_one_unit():
     mixed_language = localization._candidate_budget_report(
         {
@@ -195,14 +556,37 @@ def test_reading_speed_counts_a_contiguous_product_name_as_one_unit():
         }
     )
 
-    assert mixed_language["visible_chars"] == 13
+    assert mixed_language["visible_chars"] == 6
     assert mixed_language["reading_units"] == 6
     assert mixed_language["cps"] == 4.48
     assert mixed_language["violations"] == []
     assert chinese_only["visible_chars"] == 13
     assert chinese_only["reading_units"] == 13
     assert chinese_only["cps"] == 9.7
-    assert chinese_only["violations"] == ["阅读速度超过每秒9字，需要在不丢信息的前提下精简表达"]
+    assert chinese_only["violations"] == ["阅读速度超过每秒9.5字，需要在不丢信息的前提下精简表达"]
+
+    short_boundary = localization._candidate_budget_report(
+        {
+            "start_ms": 0,
+            "end_ms": 880,
+            "display_text": "一二三四五六七八",
+        }
+    )
+    assert short_boundary["cps"] == 9.09
+    assert short_boundary["violations"] == []
+
+
+def test_monotonic_alignment_uses_shared_product_and_number_anchors():
+    source_units = [
+        {"source": "First we prepare several ordinary clips", "word_count": 6},
+        {"source": "Then Seedance 2.0 generates the result", "word_count": 6},
+    ]
+    target_chunks = ["先把普通素材准备好", "接着交给 Seedance 2.0 直接生成"]
+
+    groups = localization._monotonic_length_alignment(source_units, target_chunks)
+
+    anchored_group = next(group for group in groups if "Seedance" in " ".join(group[1]))
+    assert any("Seedance 2.0" in unit["source"] for unit in anchored_group[0])
 
 
 def test_quality_review_batches_obey_item_and_text_limits(monkeypatch):
@@ -379,28 +763,9 @@ def test_localization_pipeline_creates_non_one_to_one_dual_text_track(monkeypatc
                 "needs_research": False,
                 "research_questions": [],
             },
-            {
-                "segments": [
-                    {
-                        "source_cue_ids": ["cue_0001", "cue_0002"],
-                        "source_word_ids": [],
-                        "display_text": "1992 年，这彻底改变了创作者。",
-                        "tts_text": "1992 年，这彻底改变了创作者。",
-                        "adaptation_note": "合并为一个完整语义",
-                    }
-                ]
-            },
-            {
-                "checked_ids": ["localized_0001"],
-                "changes": [
-                    {
-                        "id": "localized_0001",
-                        "display_text": "1992 年 这彻底改变了创作者",
-                        "tts_text": "1992 年，这彻底改变了创作者。",
-                        "reason": "语义和口吻准确",
-                    }
-                ]
-            },
+            {"items": [{"id": "bundle_001", "text": "1992 年，这彻底改变了创作者。"}]},
+            {"checked_count": 1, "changes": []},
+            {"checked_count": 1, "changes": []},
         ]
     )
     monkeypatch.setattr(
@@ -447,18 +812,24 @@ def test_localization_pipeline_creates_non_one_to_one_dual_text_track(monkeypatc
     quality_metrics = {
         item["label"]: item["value"] for item in run.summary["task_step_results"]["quality_review"]["metrics"]
     }
-    assert quality_metrics["计划批次"] == "1"
-    assert quality_metrics["模型请求"] == "1"
+    assert quality_metrics["计划批次"] == "2"
+    assert quality_metrics["模型请求"] == "2"
     assert quality_metrics["失败拆分"] == "0"
-    assert [phase for phase, _items in previews] == ["localized_draft", "localized_timing", "localized_review"]
+    assert [phase for phase, _items in previews] == ["localized_review"]
     assert progress[-1][1] == "本土化字幕初稿已生成，正在保存"
-    localize_rules = next(payload["rules"] for payload in payloads if payload["task"].endswith(":localize"))
-    assert "speaker_voice" in localize_rules
-    assert "discourse_markers" in localize_rules
-    assert "cultural_function" in localize_rules
+    localize_payload = next(payload for payload in payloads if payload["task"].endswith(":localize"))
+    assert localize_payload["document"] == [
+        {
+            "id": "bundle_001",
+            "speaker_id": "speaker_01",
+            "source": "In 1992, this changed everything for creators",
+        }
+    ]
+    assert not any("start_ms" in item or "end_ms" in item for item in localize_payload["document"])
+    assert "source_word_ids" not in str(localize_payload)
 
 
-def test_localization_pipeline_refits_a_review_change_that_breaks_reading_budget(monkeypatch):
+def test_localization_pipeline_uses_one_generation_and_one_sparse_review(monkeypatch):
     draft = VideoLocalizationDraft(
         cues=[
             VideoLocalizationCue(
@@ -486,42 +857,15 @@ def test_localization_pipeline_refits_a_review_change_that_breaks_reading_budget
                 "research_questions": [],
             }
         if task.endswith(":localize"):
-            return [
-                {
-                    "source_cue_ids": ["cue_0001"],
-                    "source_word_ids": [],
-                    "display_text": "看效果",
-                    "tts_text": "看效果。",
-                }
+            assert kwargs["allow_array"] is True
+            assert payload["document"] == [
+                {"id": "bundle_001", "speaker_id": "speaker_01", "source": "Show the result"}
             ]
+            return {"items": [{"id": "bundle_001", "text": "接下来看最终效果。"}]}
         if task.endswith(":quality-review"):
-            return {
-                "checked_ids": ["localized_0001"],
-                "changes": [
-                    {
-                        "id": "localized_0001",
-                        "display_text": "接下来我将向你详细展示这个最终生成出来的效果",
-                        "tts_text": "接下来，我将向你详细展示这个最终生成出来的效果。",
-                        "reason": "补充表达",
-                    }
-                ],
-            }
-        if task.endswith(":fit-segments"):
-            return {
-                "items": [
-                    {
-                        "parent_id": "candidate_0000",
-                        "segments": [
-                            {
-                                "end_cue_id": "cue_0001",
-                                "display_text": "接下来看最终效果",
-                                "tts_text": "接下来看最终效果。",
-                                "adaptation_note": "压缩为自然口语",
-                            }
-                        ],
-                    }
-                ]
-            }
+            return {"checked_count": 1, "changes": []}
+        if task.endswith(":timed-review-detect"):
+            return {"issue_ids": [], "has_more_critical_issues": False}
         raise AssertionError(task)
 
     monkeypatch.setattr(
@@ -534,16 +878,19 @@ def test_localization_pipeline_refits_a_review_change_that_breaks_reading_budget
     run = localization.generate_localization_draft(draft)
 
     assert run.draft.localized_subtitles[0].text == "接下来看最终效果"
-    assert sum(task.endswith(":fit-segments") for task in tasks) == 1
+    assert sum(task.endswith(":localize") for task in tasks) == 1
+    assert sum(task.endswith(":quality-review") for task in tasks) == 1
+    assert sum(task.endswith(":timed-review-detect") for task in tasks) == 1
+    assert not any(task.endswith(":fit-segments") for task in tasks)
     metrics = {
         item["label"]: item["value"]
         for item in run.summary["task_step_results"]["post_review_constraints"]["metrics"]
     }
-    assert metrics["二次返修"] == "1"
-    assert metrics["剩余超限"] == "0"
+    assert metrics["二次返修"] == "0"
+    assert metrics["剩余硬性超限"] == "0"
 
 
-def test_localization_pipeline_repairs_changed_numbers_once(monkeypatch):
+def test_localization_sparse_review_repairs_changed_numbers_once(monkeypatch):
     responses = iter(
         [
             {
@@ -554,37 +901,14 @@ def test_localization_pipeline_repairs_changed_numbers_once(monkeypatch):
                 "needs_research": False,
                 "research_questions": [],
             },
+            {"items": [{"id": "bundle_001", "text": "这彻底改变了创作者。"}]},
             {
-                "segments": [
-                    {
-                        "source_cue_ids": ["cue_0001", "cue_0002"],
-                        "source_word_ids": [],
-                        "display_text": "这彻底改变了创作者",
-                        "tts_text": "这彻底改变了创作者。",
-                    }
-                ]
+                "checked_count": 1,
+                "changes": [
+                    {"id": "bundle_001", "replacement": "1992 年，这彻底改变了创作者。", "reason": "补回年份"}
+                ],
             },
-            {
-                "segments": [
-                    {
-                        "source_cue_ids": ["cue_0001", "cue_0002"],
-                        "source_word_ids": [],
-                        "display_text": "1992 年 这彻底改变了创作者",
-                        "tts_text": "1992 年，这彻底改变了创作者。",
-                    }
-                ]
-            },
-            {
-                "items": [
-                    {
-                        "id": "localized_0001",
-                        "approved": True,
-                        "display_text": "1992 年 这彻底改变了创作者",
-                        "tts_text": "1992 年，这彻底改变了创作者。",
-                        "reason": "数字和含义一致",
-                    }
-                ]
-            },
+            {"checked_count": 1, "changes": []},
         ]
     )
     monkeypatch.setattr(
@@ -603,21 +927,13 @@ def test_localization_pipeline_repairs_changed_numbers_once(monkeypatch):
     run = localization.generate_localization_draft(_draft())
 
     assert run.draft.localized_subtitles[0].text.startswith("1992")
-    assert any(task.endswith(":repair-numbers") for task in tasks)
+    assert sum(task.endswith(":localize") for task in tasks) == 1
+    assert sum(task.endswith(":quality-review") for task in tasks) == 1
 
 
 def test_localization_pipeline_rejects_numbers_when_repair_still_changes_them(monkeypatch):
     draft = _draft().model_copy(update={"cues": [_draft().cues[0]]})
-    bad = {
-        "segments": [
-            {
-                "source_cue_ids": ["cue_0001"],
-                "source_word_ids": [],
-                "display_text": "这彻底改变了创作者",
-                "tts_text": "这彻底改变了创作者。",
-            }
-        ]
-    }
+    bad = {"items": [{"id": "bundle_001", "text": "这彻底改变了创作者。"}]}
     responses = iter(
         [
             {
@@ -629,7 +945,12 @@ def test_localization_pipeline_rejects_numbers_when_repair_still_changes_them(mo
                 "research_questions": [],
             },
             bad,
-            bad,
+            {
+                "checked_count": 1,
+                "changes": [
+                    {"id": "bundle_001", "replacement": "这彻底改变了创作者。", "reason": "未补回数字"}
+                ],
+            },
         ]
     )
     monkeypatch.setattr(
@@ -645,7 +966,7 @@ def test_localization_pipeline_rejects_numbers_when_repair_still_changes_them(mo
     assert exc_info.value.code == "VIDEO_LOCALIZATION_NUMBER_CHANGED"
 
 
-def test_localization_pipeline_splits_only_a_truncated_or_incomplete_batch(monkeypatch):
+def test_localization_pipeline_keeps_a_medium_document_in_one_request(monkeypatch):
     draft = VideoLocalizationDraft(
         cues=[
             VideoLocalizationCue(
@@ -658,9 +979,6 @@ def test_localization_pipeline_splits_only_a_truncated_or_incomplete_batch(monke
             for index in range(1, 5)
         ]
     )
-    monkeypatch.setattr(localization, "LOCALIZATION_BATCH_MAX_CUES", 4)
-    monkeypatch.setattr(localization, "LOCALIZATION_BATCH_MAX_WORDS", 10_000)
-    monkeypatch.setattr(localization, "LOCALIZATION_BATCH_MAX_SOURCE_CHARS", 10_000)
     monkeypatch.setattr(
         localization.llm_runtime,
         "resolve_profile",
@@ -682,35 +1000,14 @@ def test_localization_pipeline_splits_only_a_truncated_or_incomplete_batch(monke
                 "research_questions": [],
             }
         if task.endswith(":localize"):
-            cue_ids = [item["cue_id"] for item in payload["source_cues"]]
-            localize_calls.append(cue_ids)
-            if len(cue_ids) == 4:
-                raise LlmRuntimeError("truncated", code="llm_output_truncated", status_code=502)
-            source_cues = payload["source_cues"][:1] if cue_ids == ["cue_0001", "cue_0002"] else payload["source_cues"]
-            return [
-                {
-                    "source_cue_ids": [item["cue_id"]],
-                    "source_word_ids": [],
-                    "display_text": f"译文 {'甲乙丙丁'[index]}",
-                    "tts_text": f"译文 {'甲乙丙丁'[index]}。",
-                }
-                for index, item in enumerate(source_cues)
-            ]
+            localize_calls.append([item["id"] for item in payload["document"]])
+            return {"items": [{"id": "bundle_001", "text": "译文甲，译文乙，译文丙，译文丁。"}]}
         if task.endswith(":quality-review"):
-            item_ids = [item["id"] for item in payload["items"]]
+            item_ids = [item["id"] for item in payload["document"]]
             quality_review_calls.append(item_ids)
-            if len(item_ids) == 4:
-                raise LlmRuntimeError("timeout", code="llm_timeout", status_code=504)
-            return [
-                {
-                    "id": item["id"],
-                    "approved": True,
-                    "display_text": item["display_text"],
-                    "tts_text": item["tts_text"],
-                    "reason": "通过",
-                }
-                for item in payload["items"]
-            ]
+            return {"checked_count": len(item_ids), "changes": []}
+        if task.endswith(":timed-review-detect"):
+            return {"issue_ids": [], "has_more_critical_issues": False}
         raise AssertionError(task)
 
     monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
@@ -721,21 +1018,530 @@ def test_localization_pipeline_splits_only_a_truncated_or_incomplete_batch(monke
         on_progress=lambda value, stage: progress.append((value, stage)),
     )
 
-    assert localize_calls == [
-        ["cue_0001", "cue_0002", "cue_0003", "cue_0004"],
-        ["cue_0001", "cue_0002"],
-        ["cue_0001"],
-        ["cue_0002"],
-        ["cue_0003", "cue_0004"],
-    ]
-    assert len(run.draft.localized_subtitles) == 4
-    assert any("内容较长，正在拆分" in stage for _value, stage in progress)
-    assert [len(item_ids) for item_ids in quality_review_calls] == [4, 2, 2]
+    assert localize_calls == [["bundle_001"]]
+    assert len(run.draft.localized_subtitles) >= 1
+    assert not any("拆分" in stage for _value, stage in progress)
+    assert quality_review_calls == [["bundle_001"]]
     quality_metrics = {
         item["label"]: item["value"] for item in run.summary["task_step_results"]["quality_review"]["metrics"]
     }
-    assert quality_metrics["模型请求"] == "3"
-    assert quality_metrics["失败拆分"] == "1"
+    assert quality_metrics["模型请求"] == "2"
+    assert quality_metrics["失败拆分"] == "0"
+
+
+def test_timed_review_keeps_a_medium_timeline_in_one_compact_request(monkeypatch):
+    timed = [_timed_item(index) for index in range(130)]
+    timed[60]["start_ms"] = timed[59]["end_ms"] + 1800
+    calls: list[dict] = []
+
+    def complete_json(**kwargs):
+        payload = kwargs["user_payload"]
+        calls.append(payload)
+        return {"checked_count": len(payload["items"]), "changes": []}
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    reviewed, changes, diagnostics = localization._review_timed_localization(
+        timed,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert len(calls) == 1
+    assert len(calls[0]["items"]) == 130
+    assert diagnostics["planned_batch_count"] == 1
+    assert diagnostics["request_count"] == 1
+    assert [item["id"] for item in reviewed] == [item["id"] for item in timed]
+    assert changes == []
+
+
+def test_timed_review_uses_one_sparse_window_for_a_long_timeline(monkeypatch):
+    timed = [_timed_item(index) for index in range(localization.TIMED_REVIEW_BATCH_MAX_ITEMS + 1)]
+    calls: list[dict] = []
+
+    def complete_json(**kwargs):
+        calls.append(kwargs["user_payload"])
+        return {"issue_ids": [], "has_more_critical_issues": False}
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    reviewed, changes, diagnostics = localization._review_timed_localization(
+        timed,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert reviewed == timed
+    assert changes == []
+    assert len(calls) == 1
+    assert len(calls[0]["items"]) == localization.TIMED_REVIEW_BATCH_MAX_ITEMS
+    assert diagnostics["request_count"] == 1
+    assert diagnostics["timed_review_mode"] == "llm_risk_window"
+    assert diagnostics["reviewed_item_count"] == localization.TIMED_REVIEW_BATCH_MAX_ITEMS
+    assert calls[0]["coverage"]["mode"] == "risk_window"
+    assert calls[0]["coverage"]["total_item_count"] == len(timed)
+
+
+def test_timed_review_long_timeline_window_follows_high_risk_item(monkeypatch):
+    timed = [_timed_item(index) for index in range(localization.TIMED_REVIEW_BATCH_MAX_ITEMS * 2)]
+    timed[-1]["quality_flags"] = ["semantic_mapping_review"]
+    calls: list[dict] = []
+
+    def complete_json(**kwargs):
+        calls.append(kwargs["user_payload"])
+        return {"issue_ids": [], "has_more_critical_issues": False}
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    reviewed, changes, diagnostics = localization._review_timed_localization(
+        timed,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert reviewed == timed
+    assert changes == []
+    assert calls[0]["items"][-1]["id"] == timed[-1]["id"]
+    assert diagnostics["reviewed_start_index"] == len(timed) - localization.TIMED_REVIEW_BATCH_MAX_ITEMS
+
+
+def test_timed_review_falls_back_to_local_checks_when_sparse_ids_are_truncated(monkeypatch):
+    timed = [_timed_item(index) for index in range(20)]
+
+    def complete_json(**_kwargs):
+        raise localization.llm_runtime.LlmRuntimeError(
+            "truncated",
+            code="llm_output_truncated",
+            status_code=502,
+        )
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    reviewed, changes, diagnostics = localization._review_timed_localization(
+        timed,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert reviewed == timed
+    assert changes == []
+    assert diagnostics["request_count"] == 1
+    assert diagnostics["fallback_count"] == 1
+    assert diagnostics["timed_review_mode"] == "deterministic_fallback"
+
+
+def test_timed_review_detects_on_full_timeline_then_repairs_only_reported_ids(monkeypatch):
+    timed = [_timed_item(index) for index in range(40)]
+    timed[20].update(
+        end_ms=timed[20]["start_ms"] + 5000,
+        source_text="He snaps his fingers and the scene changes",
+        display_text="画面变了 他打了个响指",
+        tts_text="画面变了，他打了个响指。",
+    )
+    calls: list[dict] = []
+
+    def complete_json(**kwargs):
+        payload = kwargs["user_payload"]
+        calls.append(payload)
+        if payload["task"].endswith("timed-review-detect"):
+            return {"issue_ids": ["localized_0021"], "has_more_critical_issues": False}
+        assert payload["task"].endswith("timed-review-repair")
+        assert payload["issue_ids"] == ["localized_0021"]
+        assert [item["id"] for item in payload["editable_items"]] == ["localized_0021"]
+        assert len(payload["ordered_context"]) == 7
+        return {
+            "changes": [
+                {"id": "localized_0021", "text": "他打了个响指，画面立刻变了。", "reason": "修正语义顺序"}
+            ]
+        }
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    reviewed, changes, diagnostics = localization._review_timed_localization(
+        timed,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert len(calls) == 2
+    assert len(calls[0]["items"]) == 40
+    assert reviewed[20]["display_text"] == "他打了个响指 画面立刻变了"
+    assert len(changes) == 1
+    assert diagnostics["request_count"] == 2
+
+
+def test_timed_review_can_redistribute_meaning_across_adjacent_subtitles(monkeypatch):
+    timed = [_timed_item(0), _timed_item(1)]
+    timed[0].update(source_text="He snaps his fingers", display_text="画面已经变了", tts_text="画面已经变了。")
+    timed[1].update(source_text="and the scene changes", display_text="他打了个响指", tts_text="他打了个响指。")
+
+    monkeypatch.setattr(
+        localization.llm_runtime,
+        "complete_json",
+        lambda **_kwargs: {
+            "checked_count": 2,
+            "changes": [
+                {"id": "localized_0001", "text": "他打了个响指。", "reason": "修正语义错位"},
+                {"id": "localized_0002", "text": "画面立刻变了。", "reason": "修正语义错位"},
+            ],
+        },
+    )
+
+    reviewed, changes, _diagnostics = localization._review_timed_localization(
+        timed,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert [item["tts_text"] for item in reviewed] == ["他打了个响指。", "画面立刻变了。"]
+    assert [item["id"] for item in reviewed] == ["localized_0001", "localized_0002"]
+    assert len(changes) == 2
+
+
+def test_timed_review_does_not_trust_a_model_reported_checked_count(monkeypatch):
+    timed = [_timed_item(0), _timed_item(1)]
+    monkeypatch.setattr(
+        localization.llm_runtime,
+        "complete_json",
+        lambda **_kwargs: {"checked_count": 1, "changes": []},
+    )
+
+    reviewed, changes, diagnostics = localization._review_timed_localization(
+        timed,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert reviewed == timed
+    assert changes == []
+    assert diagnostics["request_count"] == 1
+
+
+def test_timed_review_stops_when_model_reports_more_critical_issues(monkeypatch):
+    timed = [_timed_item(0)]
+    monkeypatch.setattr(
+        localization.llm_runtime,
+        "complete_json",
+        lambda **_kwargs: {"changes": [], "has_more_critical_issues": True},
+    )
+
+    with pytest.raises(AppException) as exc_info:
+        localization._review_timed_localization(timed, profile_id="llm_default", is_cancelled=None)
+
+    assert exc_info.value.code == "VIDEO_LOCALIZATION_TIMED_REVIEW_OVERFLOW"
+
+
+def test_timed_review_rejects_changes_outside_the_editable_batch(monkeypatch):
+    timed = [_timed_item(0)]
+    monkeypatch.setattr(
+        localization.llm_runtime,
+        "complete_json",
+        lambda **_kwargs: {
+            "checked_count": 1,
+            "changes": [{"id": "localized_9999", "text": "越界修改。", "reason": "错误"}],
+        },
+    )
+
+    with pytest.raises(AppException) as exc_info:
+        localization._review_timed_localization(timed, profile_id="llm_default", is_cancelled=None)
+
+    assert exc_info.value.code == "VIDEO_LOCALIZATION_REVIEW_INVALID"
+
+
+def test_timed_review_reverts_a_change_that_alters_numbers(monkeypatch):
+    timed = [_timed_item(0)]
+    timed[0].update(source_text="Version 2.0", display_text="2.0 版本", tts_text="2.0 版本。")
+    monkeypatch.setattr(
+        localization.llm_runtime,
+        "complete_json",
+        lambda **_kwargs: {
+            "checked_count": 1,
+            "changes": [{"id": "localized_0001", "text": "3.0 版本。", "reason": "错误改数"}],
+        },
+    )
+
+    reviewed, changes, _diagnostics = localization._review_timed_localization(
+        timed,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert reviewed == timed
+    assert changes == []
+
+
+def test_timed_review_ignores_a_change_that_creates_a_hard_subtitle_violation(monkeypatch):
+    timed = [_timed_item(0)]
+    timed[0].update(
+        start_ms=0,
+        end_ms=5000,
+        source_text="A concise source sentence",
+        display_text="这句原本长度合适",
+        tts_text="这句原本长度合适。",
+    )
+    overlong = "这是一条被时间线终审扩写得明显过长并且超过单条字幕三十二个字硬限制的中文表达"
+    monkeypatch.setattr(
+        localization.llm_runtime,
+        "complete_json",
+        lambda **_kwargs: {
+            "changes": [{"id": "localized_0001", "text": overlong, "reason": "错误扩写"}],
+            "has_more_critical_issues": False,
+        },
+    )
+
+    reviewed, changes, _diagnostics = localization._review_timed_localization(
+        timed,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert reviewed == timed
+    assert changes == []
+
+
+def test_timed_review_reverts_numbers_swapped_between_subtitles(monkeypatch):
+    timed = [_timed_item(0), _timed_item(1)]
+    timed[0].update(source_text="The budget is 10 dollars", display_text="预算是 10 美元", tts_text="预算是 10 美元。")
+    timed[1].update(source_text="It took 20 days", display_text="用了 20 天", tts_text="用了 20 天。")
+    monkeypatch.setattr(
+        localization.llm_runtime,
+        "complete_json",
+        lambda **_kwargs: {
+            "checked_count": 2,
+            "changes": [
+                {"id": "localized_0001", "text": "预算是 20 美元。", "reason": "错误交换"},
+                {"id": "localized_0002", "text": "用了 10 天。", "reason": "错误交换"},
+            ],
+        },
+    )
+
+    reviewed, changes, _diagnostics = localization._review_timed_localization(
+        timed,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert reviewed == timed
+    assert changes == []
+
+
+def test_timed_review_still_rejects_a_preexisting_unresolved_number_loss(monkeypatch):
+    timed = [_timed_item(0)]
+    timed[0].update(source_text="Version 2.0", display_text="这个版本", tts_text="这个版本。")
+    monkeypatch.setattr(
+        localization.llm_runtime,
+        "complete_json",
+        lambda **_kwargs: {"changes": [], "has_more_critical_issues": False},
+    )
+
+    with pytest.raises(AppException) as exc_info:
+        localization._review_timed_localization(timed, profile_id="llm_default", is_cancelled=None)
+
+    assert exc_info.value.code == "VIDEO_LOCALIZATION_NUMBER_CHANGED"
+
+
+def test_timed_review_allows_a_preexisting_number_shift_to_be_fixed_as_one_cluster(monkeypatch):
+    timed = [_timed_item(0), _timed_item(1)]
+    timed[0].update(source_text="Created with Seedance 2.", display_text="这是用 Seedance", tts_text="这是用 Seedance，")
+    timed[1].update(source_text="0 in 4K", display_text="2.0 的 4K 画面", tts_text="2.0 的 4K 画面。")
+    payloads = []
+
+    def complete_json(**kwargs):
+        payloads.append(kwargs["user_payload"])
+        return {"changes": [], "has_more_critical_issues": False}
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    reviewed, changes, _diagnostics = localization._review_timed_localization(
+        timed,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert reviewed == timed
+    assert changes == []
+    number_groups = [item["number_mapping_group"] for item in payloads[0]["items"]]
+    assert number_groups[0] == number_groups[1]
+    assert number_groups[0]["required_numbers"] == ["2.0", "4K"]
+    assert all(item["required_numbers"] == [] for item in payloads[0]["items"])
+
+
+def test_timed_review_keeps_number_mapping_across_a_number_free_bundle_item(monkeypatch):
+    timed = [_timed_item(0), _timed_item(1), _timed_item(2)]
+    for item in timed:
+        item["source_bundle_id"] = "bundle_001"
+    timed[0].update(source_text="The budget is 10 dollars", display_text="预算", tts_text="预算")
+    timed[1].update(source_text="for the animation", display_text="动画部分", tts_text="动画部分")
+    timed[2].update(
+        source_text="and it takes 20 days",
+        display_text="要 10 美元 做 20 天",
+        tts_text="要 10 美元，做 20 天",
+    )
+    payloads = []
+
+    def complete_json(**kwargs):
+        payloads.append(kwargs["user_payload"])
+        return {"changes": [], "has_more_critical_issues": False}
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    reviewed, changes, _diagnostics = localization._review_timed_localization(
+        timed,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert reviewed == timed
+    assert changes == []
+    number_groups = [item["number_mapping_group"] for item in payloads[0]["items"]]
+    assert all(group == number_groups[0] for group in number_groups)
+    assert number_groups[0]["required_numbers"] == ["10", "20"]
+
+
+def test_final_localized_timeline_gate_rejects_unresolved_reading_speed():
+    item = _timed_item(0)
+    item.update(
+        start_ms=0,
+        end_ms=1000,
+        display_text="这是一条终审后仍然明显太长的中文字幕",
+        tts_text="这是一条终审后仍然明显太长的中文字幕。",
+        source_cue_ids=["cue_0001"],
+    )
+
+    with pytest.raises(AppException) as exc_info:
+        localization._ensure_localized_timeline_constraints([item])
+
+    assert exc_info.value.code == "VIDEO_LOCALIZATION_TIMING_BUDGET_UNRESOLVED"
+
+
+def test_final_localized_timeline_gate_allows_target_overage_below_hard_limit():
+    item = _timed_item(0)
+    item.update(
+        start_ms=0,
+        end_ms=833,
+        display_text="一二三四五六七八九十",
+        tts_text="一二三四五六七八九十。",
+        source_cue_ids=["cue_0001"],
+    )
+
+    assert localization._candidate_exceeds_budget(item)
+    assert not localization._candidate_exceeds_hard_budget(item)
+    localization._ensure_localized_timeline_constraints([item])
+
+
+def test_local_reading_speed_compression_preserves_meaning_and_numbers():
+    item = _timed_item(0)
+    item.update(
+        start_ms=0,
+        end_ms=1300,
+        source_text="Version 2.0 can already be used directly",
+        display_text="这个 2.0 版本已经可以直接使用",
+        tts_text="这个 2.0 版本已经可以直接使用。",
+    )
+
+    replacement = localization._compress_candidate_locally(item, item)
+
+    assert replacement is not None
+    assert replacement["display_text"] == "这个 2.0 版本已经能直接使用"
+    assert "2.0" in replacement["display_text"]
+    assert not localization._candidate_exceeds_budget({**item, **replacement})
+
+
+@pytest.mark.parametrize(
+    ("text", "expected", "duration_ms"),
+    [
+        ("我做这个视频的原因是", "原因是", 880),
+        ("我做这期视频的原因是", "原因是", 880),
+        ("看起来像电影里出来的效果", "就像电影里的效果", 1220),
+        ("并在过程中改变光照", "同时改变光照", 833),
+        ("好了 这就是向你的镜头添加东西", "好了 这就是给镜头加东西", 1280),
+        ("已经知道我想在它里面看到什么", "已经知道我想在里面看到什么", 1380),
+    ],
+)
+def test_local_reading_speed_compression_removes_common_spoken_redundancy(text, expected, duration_ms):
+    item = _timed_item(0)
+    item.update(
+        start_ms=0,
+        end_ms=duration_ms,
+        source_text="Generic source without numbers",
+        display_text=text,
+        tts_text=text,
+    )
+
+    replacement = localization._compress_candidate_locally(item, item)
+
+    assert replacement is not None
+    assert replacement["display_text"] == expected
+    assert not localization._candidate_exceeds_budget({**item, **replacement})
+
+
+def test_readability_extension_borrows_only_a_small_leading_gap_when_needed():
+    timed = [
+        {**_timed_item(0), "start_ms": 0, "end_ms": 900, "display_text": "前一句"},
+        {**_timed_item(1), "start_ms": 1000, "end_ms": 1833, "display_text": "如果按老方法做呢"},
+        {**_timed_item(2), "start_ms": 1833, "end_ms": 3000, "display_text": "后一句"},
+    ]
+
+    localization._extend_timed_for_readability(timed, _draft())
+
+    assert timed[1]["start_ms"] == 990
+    assert timed[1]["end_ms"] == 1833
+    assert localization._candidate_budget_report(timed[1])["cps"] <= localization.MAX_CHINESE_CPS
+
+
+def test_localization_reuses_collapsed_alignment_repair_without_mutating_source_draft():
+    words = [
+        VideoLocalizationAlignedWord(
+            word_id=f"word_{index:04d}",
+            segment_id="segment_0001",
+            text=text,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        for index, (text, start_ms, end_ms) in enumerate(
+            [
+                ("That's", 1000, 1001),
+                ("months", 1001, 1002),
+                ("work", 1002, 1003),
+                ("next", 3000, 3300),
+            ]
+        )
+    ]
+    draft = VideoLocalizationDraft(
+        cues=[
+            VideoLocalizationCue(
+                cue_id="cue_0001",
+                start_ms=1000,
+                end_ms=1003,
+                en_subtitle_text="That's months work",
+                source_word_ids=[word.word_id for word in words[:3]],
+            ),
+            VideoLocalizationCue(
+                cue_id="cue_0002",
+                start_ms=3000,
+                end_ms=3300,
+                en_subtitle_text="next",
+                source_word_ids=[words[3].word_id],
+            ),
+        ],
+        transcription=VideoLocalizationTranscriptionState(
+            words=words,
+            segments=[
+                VideoLocalizationTranscriptSegment(
+                    segment_id="segment_0001",
+                    start_ms=1000,
+                    end_ms=3300,
+                    raw_text="That's months work next",
+                )
+            ],
+        ),
+    )
+
+    repaired = localization._draft_with_repaired_alignment_timing(draft)
+
+    assert repaired.transcription.words[2].end_ms == 3000
+    assert repaired.transcription.words[0].timing_source == "asr_segment_interpolation"
+    assert draft.transcription.words[2].end_ms == 1003
 
 
 def test_localization_number_check_rejoins_split_decimal_word_tokens():
@@ -958,7 +1764,7 @@ def test_fit_candidate_segments_refines_only_items_over_budget(monkeypatch):
     def complete_json(**kwargs):
         assert kwargs["user_payload"]["task"].endswith(":fit-segments")
         current = kwargs["user_payload"]["items"][0]["current"]
-        assert current["violations"] == ["时长超过7秒，需要按完整语义拆分"]
+        assert current["violations"] == ["时长超过8秒，需要按完整语义拆分"]
         assert current["suggested_min_segments"] == 2
         return {
             "items": [
@@ -1014,7 +1820,7 @@ def test_fit_candidate_segments_uses_stable_batches_and_compact_boundaries(monke
                 VideoLocalizationCue(
                     cue_id=right_id,
                     start_ms=index * 10_000 + 4_100,
-                    end_ms=index * 10_000 + 8_100,
+                    end_ms=index * 10_000 + 8_400,
                     en_subtitle_text="Second complete idea",
                 ),
             ]
@@ -1075,18 +1881,18 @@ def test_fit_candidate_segments_uses_stable_batches_and_compact_boundaries(monke
         diagnostics=diagnostics,
     )
 
-    assert calls == [12, 12, 9]
+    assert calls == [33]
     assert len(fitted) == 66
-    assert diagnostics["request_count"] == 3
+    assert diagnostics["request_count"] == 1
     assert len(diagnostics["rounds"]) == 1
     assert diagnostics["rounds"][0] | {"duration_ms": 0} == {
         "round": 1,
         "problem_count": 33,
-        "batch_count": 3,
+        "batch_count": 1,
         "duration_ms": 0,
     }
-    assert len(previews) == 3
-    assert progress[0][:3] == (0, 3, 1)
+    assert len(previews) == 1
+    assert progress[0][:3] == (0, 1, 1)
 
 
 def test_fit_batch_splits_after_invalid_json(monkeypatch):
@@ -1532,8 +2338,8 @@ def test_fit_candidate_segments_retries_one_parent_when_llm_drops_a_number(monke
             word_id=f"word_{index:04d}",
             segment_id="segment_01",
             text=text,
-            start_ms=(index - 1) * 2000,
-            end_ms=index * 2000,
+            start_ms=(index - 1) * 2100,
+            end_ms=index * 2100,
         )
         for index, text in enumerate(["Seedance", "2.0", "in", "4K"], start=1)
     ]
@@ -1542,7 +2348,7 @@ def test_fit_candidate_segments_retries_one_parent_when_llm_drops_a_number(monke
             VideoLocalizationCue(
                 cue_id="cue_0001",
                 start_ms=0,
-                end_ms=8000,
+                end_ms=8400,
                 en_subtitle_text="Seedance 2.0 in 4K",
                 source_word_ids=[word.word_id for word in words],
             )

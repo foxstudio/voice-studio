@@ -109,17 +109,35 @@ const FALLBACK_SCOPES: Record<VideoLocalizationOperation['kind'], ActivityTaskSc
 	reference_clips: { trackIds: [], itemIds: [], area: 'voice', exclusive: false }
 };
 
+export function pendingOperationActivityTask(
+	kind: VideoLocalizationOperation['kind'],
+	id: string,
+	stage = '正在提交任务'
+): ActivityTask {
+	return {
+		id,
+		kind,
+		label: OPERATION_LABELS[kind],
+		stage,
+		progress: null,
+		status: 'queued',
+		scope: FALLBACK_SCOPES[kind],
+		cancellable: false,
+		createdAt: new Date().toISOString()
+	};
+}
+
 const TRACK_IDS = new Set<VideoLocalizationTrackId>(['original', 'vocals', 'background', 'subtitles', 'localizedSubtitles', 'dub']);
 const AREAS = new Set<ActivityTaskScope['area']>(['project', 'timeline', 'voice', 'generate', 'subtitle']);
 
 const ASR_STEP_DEFINITIONS = [
-	{ id: 'recognize', label: '识别人声内容', stages: ['准备处理', '识别人声'], timingStages: ['asr'] },
-	{ id: 'research', label: '查证名称与背景', stages: ['判断是否需要联网核验', '联网核验'], timingStages: ['web_research'] },
-	{ id: 'review', label: '校对识别文本', stages: ['校对识别', '文本校对'], timingStages: ['text_review'] },
-	{ id: 'timestamps', label: '给每个词定位', stages: ['逐词时间码', '强制对齐'], timingStages: ['alignment'] },
-	{ id: 'boundaries', label: '找出声音停顿', stages: ['声学边界'], timingStages: ['audio_boundaries'] },
-	{ id: 'boundary-review', label: '检查字幕断句', stages: ['字幕断句', '复核断句'], timingStages: ['boundary_review'] },
-	{ id: 'subtitles', label: '写入 ASR 字幕轨', stages: ['生成字幕轨'], timingStages: ['subtitle_track'] }
+	{ id: 'recognize', label: '识别人声内容', stages: ['asr', '准备处理', '识别人声'], timingStages: ['asr'] },
+	{ id: 'research', label: '查证名称与背景', stages: ['web_research', '判断是否需要联网核验', '联网核验'], timingStages: ['web_research'] },
+	{ id: 'review', label: '校对识别文本', stages: ['text_review', '校对识别', '文本校对'], timingStages: ['text_review'] },
+	{ id: 'timestamps', label: '给每个词定位', stages: ['alignment', '逐词时间码', '强制对齐'], timingStages: ['alignment'] },
+	{ id: 'boundaries', label: '找出声音停顿', stages: ['audio_boundaries', '声学边界'], timingStages: ['audio_boundaries'] },
+	{ id: 'boundary-review', label: '检查字幕断句', stages: ['boundary_review', '字幕断句', '复核断句'], timingStages: ['boundary_review'] },
+	{ id: 'subtitles', label: '写入 ASR 字幕轨', stages: ['subtitle_track', '生成字幕轨'], timingStages: ['subtitle_track'] }
 ] as const;
 
 const LOCALIZATION_STEP_DEFINITIONS = [
@@ -128,7 +146,7 @@ const LOCALIZATION_STEP_DEFINITIONS = [
 	{ id: 'localize', label: '生成中文表达', stages: ['localize', '生成中文表达'] },
 	{ id: 'fit_segments', label: '调整字幕长度', stages: ['fit_segments', '调整字幕长度'] },
 	{ id: 'segment_timing', label: '安排字幕分段与时间', stages: ['segment_timing', '安排字幕分段与时间'] },
-	{ id: 'quality_review', label: '复核语义与可读性', stages: ['quality_review', '复核语义与可读性'] },
+	{ id: 'quality_review', label: '对照原文复核时间线', stages: ['quality_review', '对照原文复核时间线'] },
 	{ id: 'post_review_constraints', label: '确认终审字幕限制', stages: ['post_review_constraints', '确认终审后的字幕限制'] },
 	{ id: 'write_track', label: '写入本土化字幕轨', stages: ['write_track', '写入本土化字幕轨'] }
 ] as const;

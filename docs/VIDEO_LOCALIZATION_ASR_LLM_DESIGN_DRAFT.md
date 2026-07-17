@@ -1,7 +1,8 @@
 # Video Localization ASR and LLM Design Draft
 
-Status: source-language subtitle pipeline implemented and validated; Chinese
-localization remains a downstream stage.
+Status: source-language subtitle pipeline and first-pass Chinese localization
+pipeline implemented and validated; synthesized-dub alignment remains a
+downstream stage.
 
 ## Product Goal
 
@@ -16,22 +17,26 @@ register, habitual phrasing, humor, restraint, and other speaking traits.
 2. Qwen3-ForcedAligner is the source of word/character timing truth.
 3. Word-level timing must remain available through the subtitle pipeline. Do
    not collapse it into coarse ASR segments before segmentation.
-4. The production boundary path combines acoustic pauses, punctuation, ASR
+4. If the aligner compresses three or more consecutive words into near-zero
+   durations immediately before an implausible in-segment gap, repair that
+   local run deterministically across the available span, downgrade those
+   words to low-confidence interpolated timing, and require timing review.
+5. The production boundary path combines acoustic pauses, punctuation, ASR
    segment transitions, subtitle constraints, and optional LLM semantic
    review. Speaker changes and shot cuts remain future evidence sources.
-5. Cue selection should use deterministic global optimization rather than
+6. Cue selection should use deterministic global optimization rather than
    splitting at every pause or delegating all decisions to an LLM.
-6. The core workflow remains fully usable offline without an LLM.
-7. An LLM is an optional semantic quality layer. It never invents timestamps.
-8. TTS, voice cloning, and dubbing synthesis are downstream production stages.
+7. The core workflow remains fully usable offline without an LLM.
+8. An LLM is an optional semantic quality layer. It never invents timestamps.
+9. TTS, voice cloning, and dubbing synthesis are downstream production stages.
    They are not loaded or required while producing source-language subtitles.
-9. `segment-any-text/sat-3l-sm` remains an evaluated offline fallback, not a
+10. `segment-any-text/sat-3l-sm` remains an evaluated offline fallback, not a
    production dependency. It must not be downloaded or loaded implicitly.
-10. When clean vocals and the original mix are both available, ASR uses clean
+11. When clean vocals and the original mix are both available, ASR uses clean
     vocals for recognition and acoustic pause analysis, while forced alignment
     uses the original mix. Store independent track IDs and SHA-256 fingerprints
     for both inputs; never imply they are the same source.
-11. Web research is a project-level evidence stage, not a tool call inside
+12. Web research is a project-level evidence stage, not a tool call inside
     every subtitle batch. The LLM first decides whether research is necessary
     and emits at most three queries. Search results keep source IDs and URLs
     and never edit subtitle text directly.
@@ -48,7 +53,9 @@ source audio/video
   -> constrained global cue segmentation
   -> platform/language timing and layout QC
   -> source-language subtitles
-  -> Chinese localization preserving speaker persona
+  -> whole-document Chinese localization without timestamps
+  -> monotonic mapping back to the source timeline
+  -> sparse bilingual timeline review
 ```
 
 The source-subtitle stage ends after source-language subtitle QC and export.
@@ -174,14 +181,19 @@ remain unchanged.
 
 ### localization-zh-v1
 
-Input: verified source cue groups, surrounding context, speaker profile,
-terminology, scene context, and target subtitle constraints.
+Input: verified source semantic bundles without timestamps or word IDs, plus
+speaker profile, terminology, scene context, and bounded research evidence.
 
-Output: Chinese localization plus structured notes for intentional adaptation.
-The result preserves factual meaning, speaker identity, attitude, recurring
-verbal habits, social relationship, humor, and cultural intent. It should sound
-spoken rather than translated, without inventing Chinese cultural references
-that are absent from the source.
+Output: one spoken-Chinese block per source semantic bundle plus sparse notes
+for intentional adaptation. The model reads the whole document before writing;
+the input bundles are continuity anchors, not sentence-by-sentence translation
+units. Code then performs monotonic alignment to the source timeline. A final
+bounded review receives source and Chinese cues with time ranges and may return
+only sparse Chinese-text replacements; it cannot edit timestamps or IDs.
+
+The normal request budget is one context pass, one whole-document generation,
+one sparse Chinese review, and at most two parallel timeline-review batches.
+There is no open-ended review loop.
 
 ## Generic LLM Provider Configuration
 
@@ -266,7 +278,7 @@ Completed for source-language subtitles:
 
 Downstream work remains separate:
 
-1. Persona-aware Chinese localization and its review workflow.
+1. Forced alignment of accepted synthesized Chinese audio and final Chinese SRT timing.
 2. Optional speaker-change and shot-cut evidence.
 3. Broader platform profiles and a representative human-reviewed evaluation
    set.
