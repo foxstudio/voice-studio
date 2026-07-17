@@ -22,7 +22,7 @@ from app.errors import AppException
 from app.services import llm_runtime, settings_store, web_search
 
 
-LOCALIZATION_PROMPT_VERSION = "localization-draft-v10"
+LOCALIZATION_PROMPT_VERSION = "localization-draft-v11"
 LOCALIZATION_BATCH_MAX_CUES = 512
 LOCALIZATION_BATCH_MAX_WORDS = 4_000
 LOCALIZATION_BATCH_MAX_SOURCE_CHARS = 24_000
@@ -1140,6 +1140,7 @@ def _review_timed_localization(
                 "number_mapping_group": number_group,
                 "cps": item.get("cps"),
                 "flags": item.get("quality_flags") or [],
+                "review_focus": _timed_localization_review_focus(item),
             }
 
         payload = {
@@ -1159,6 +1160,9 @@ def _review_timed_localization(
             "rules": [
                 "先通读本批和只读相邻上下文，再逐条核对同一时间段的源语与中文语义是否对应",
                 "只修改事实遗漏或增加、相邻字幕语义错位、数字归属错误、切断紧密结构，或 flags 明确标出的阅读速度问题",
+                "每条 zh 必须表达同一条 source 的意思；不能把反应、判断、动作或笑点提前放到上一条，也不能推迟到下一条",
+                "检查机械精简是否产生重复连接词、重复主语或类似‘还我还能’的拼接痕迹，这类问题必须报告",
+                "source 中的感叹、反问、评价和情绪强度必须保留在同一条 zh；不能因为同条还有后续动作就把它省略",
                 "number_mapping_group 非空时，组内 member_ids 的中文合计必须把 required_numbers 各保留一次；版本号被源语切成 2. 和 0 时按连续的 2.0 理解",
                 "number_mapping_group 为空时，每条修改后的中文必须保留该条 required_numbers，不能交换不同字幕的数字",
                 "需要把中文意义在相邻条目间重新分配时，issue_ids 必须包含每个受影响 id",
@@ -1184,6 +1188,7 @@ def _review_timed_localization(
                 temperature=0.05,
                 max_tokens=512,
                 timeout=300,
+                disable_reasoning=True,
             )
         except llm_runtime.LlmRuntimeError as exc:
             if exc.code != "llm_output_truncated":
@@ -1213,6 +1218,11 @@ def _review_timed_localization(
             or not set(issue_ids) <= expected_ids
         ):
             raise AppException(422, "VIDEO_LOCALIZATION_REVIEW_INVALID", "时间线终审返回了无效的问题范围。")
+        if legacy_changes is None:
+            required_focus_ids = [
+                item["id"] for item in items if _timed_localization_review_focus(item)
+            ]
+            issue_ids = list(dict.fromkeys([*issue_ids, *required_focus_ids]))
         if (
             len(issue_ids) > TIMED_REVIEW_MAX_CHANGES_PER_BATCH
             or raw.get("has_more_critical_issues") is True
@@ -1265,6 +1275,7 @@ def _review_timed_localization(
                 temperature=0.05,
                 max_tokens=4_000,
                 timeout=300,
+                disable_reasoning=True,
             )
             raw_changes = repaired.get("changes") if isinstance(repaired, dict) else None
             if (
@@ -1354,6 +1365,17 @@ def _review_timed_localization(
         "reviewed_end_index": batches[-1][0] + len(batches[-1][1]),
         "duration_ms": _elapsed_ms(started_at),
     }
+
+
+def _timed_localization_review_focus(item: dict) -> list[str]:
+    source = str(item.get("source_text") or "")
+    chinese = str(item.get("tts_text") or item.get("display_text") or "")
+    focus: list[str] = []
+    if "?" in source and not re.search(r"[？?]|(?:吗|呢|吧)[，。,.！!]*$", chinese):
+        focus.append("源文包含问句或反问，但中文没有保留提问、反问或评价功能")
+    if re.search(r"还(?:我|你|他|她|它|我们|你们|他们|她们|它们)还", chinese):
+        focus.append("中文含有机械精简造成的重复连接词或重复主语")
+    return focus
 
 
 def _timed_review_risk_window(timed: list[dict]) -> tuple[int, list[dict]]:
@@ -1596,7 +1618,11 @@ def _localized_bundles_to_candidates(bundles: list[dict], draft: VideoLocalizati
         mappings = _monotonic_length_alignment(bundle["units"], target_chunks)
         for mapping_index, (source_units, target_group) in enumerate(mappings):
             group_word_ids = [word_id for unit in source_units for word_id in unit["source_word_ids"]]
-            word_partitions = _partition_ids_by_text_weight(group_word_ids, target_group)
+            word_partitions = _partition_ids_by_text_weight(
+                group_word_ids,
+                target_group,
+                word_by_id=word_by_id,
+            )
             for target_text, source_word_ids in zip(target_group, word_partitions):
                 source_cue_ids = sorted(
                     {cue_id for word_id in source_word_ids for cue_id in cue_by_word.get(word_id, [])},
@@ -1766,7 +1792,12 @@ def _alignment_anchor_counts(text: str) -> Counter:
     return Counter([*numbers, *latin_tokens])
 
 
-def _partition_ids_by_text_weight(word_ids: list[str], texts: list[str]) -> list[list[str]]:
+def _partition_ids_by_text_weight(
+    word_ids: list[str],
+    texts: list[str],
+    *,
+    word_by_id: dict[str, object] | None = None,
+) -> list[list[str]]:
     if len(texts) <= 1:
         return [word_ids]
     weights = [max(1, _reading_units(text)) for text in texts]
@@ -1776,14 +1807,88 @@ def _partition_ids_by_text_weight(word_ids: list[str], texts: list[str]) -> list
     consumed = 0
     for index, weight in enumerate(weights):
         consumed += weight
-        boundary = len(word_ids) if index == len(weights) - 1 else round(len(word_ids) * consumed / total_weight)
+        ideal_boundary = len(word_ids) if index == len(weights) - 1 else round(len(word_ids) * consumed / total_weight)
         minimum_boundary = min(len(word_ids), cursor + 1)
         remaining_targets = len(weights) - index - 1
         maximum_boundary = max(minimum_boundary, len(word_ids) - remaining_targets)
-        boundary = max(minimum_boundary, min(boundary, maximum_boundary))
+        ideal_boundary = max(minimum_boundary, min(ideal_boundary, maximum_boundary))
+        if index == len(weights) - 1 or not word_by_id:
+            boundary = ideal_boundary
+        else:
+            boundary = min(
+                range(minimum_boundary, maximum_boundary + 1),
+                key=lambda value: (
+                    abs(value - ideal_boundary)
+                    + _source_partition_boundary_penalty(word_ids, value, word_by_id),
+                    abs(value - ideal_boundary),
+                    value,
+                ),
+            )
         partitions.append(word_ids[cursor:boundary])
         cursor = boundary
     return partitions
+
+
+def _source_partition_boundary_penalty(
+    word_ids: list[str], boundary: int, word_by_id: dict[str, object]
+) -> int:
+    if boundary <= 0 or boundary >= len(word_ids):
+        return 0
+    left = word_by_id.get(word_ids[boundary - 1])
+    right = word_by_id.get(word_ids[boundary])
+    if left is None or right is None:
+        return 0
+    left_text = str(getattr(left, "text", "") or "").strip()
+    right_text = str(getattr(right, "text", "") or "").strip()
+    left_token = re.sub(r"[^A-Za-z']+", "", left_text).casefold()
+    right_token = re.sub(r"[^A-Za-z']+", "", right_text).casefold()
+    penalty = 0
+    if re.search(r"[.!?][\"'”’)]*$", left_text):
+        penalty -= 6
+    elif re.search(r"[,;:][\"'”’)]*$", left_text):
+        penalty -= 3
+    if getattr(left, "segment_id", None) != getattr(right, "segment_id", None):
+        penalty -= 4
+    gap_ms = int(getattr(right, "start_ms", 0) or 0) - int(getattr(left, "end_ms", 0) or 0)
+    if gap_ms >= 180:
+        penalty -= min(4, max(1, gap_ms // 180))
+    if left_token in {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "to",
+        "of",
+        "in",
+        "on",
+        "at",
+        "for",
+        "from",
+        "with",
+        "by",
+        "not",
+        "no",
+        "never",
+        "can",
+        "could",
+        "should",
+        "would",
+        "will",
+        "must",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+    }:
+        penalty += 12
+    if left_token == "not" and right_token in {"be", "have", "do"}:
+        penalty += 8
+    return penalty
 
 
 def _localization_batches(cues: list[VideoLocalizationCue]) -> list[tuple[int, list[VideoLocalizationCue]]]:
@@ -2224,7 +2329,7 @@ def _validate_localized_segments(
             item for item in _string_list(raw.get("source_word_ids"), 200, 120) if item in allowed_word_ids
         ]
         display_text = _normalize_display_text(_text(raw.get("display_text"), 800))
-        tts_text = _text(raw.get("tts_text"), 1000) or display_text
+        tts_text = _normalize_tts_text(_text(raw.get("tts_text"), 1000) or display_text)
         research_usage = [
             {"question_id": question_id, "effect": effect}
             for item in _dict_list(raw.get("research_usage"), 8)
@@ -2665,7 +2770,9 @@ def _compress_candidate_locally(source: dict, timed: dict) -> dict | None:
         ("整个", "全"),
         ("全部", "全"),
         ("然后", "再"),
-        ("而且", "还"),
+        ("而且我们还能", "我们还能"),
+        ("而且我还能", "我还能"),
+        ("而且还能", "还能"),
         ("但是", "但"),
         ("就是", "就"),
         ("这个", "这"),
@@ -3299,13 +3406,15 @@ def _quality_review(
                 spoken_text = _text(decision.get("text"), 1000)
                 if spoken_text:
                     display_text = _normalize_display_text(spoken_text) or source["display_text"]
-                    tts_text = spoken_text
+                    tts_text = _normalize_tts_text(spoken_text)
                 else:
                     display_text = (
                         _normalize_display_text(_text(decision.get("display_text"), 800))
                         or source["display_text"]
                     )
-                    tts_text = _text(decision.get("tts_text"), 1000) or source["tts_text"]
+                    tts_text = _normalize_tts_text(
+                        _text(decision.get("tts_text"), 1000) or source["tts_text"]
+                    )
                 if not _numbers_preserved(source["source_text"], display_text) or not _numbers_preserved(
                     source["source_text"], tts_text
                 ):
@@ -3536,6 +3645,8 @@ def _with_localized_track(
     localization_level: str,
     worldview_permeability: str,
 ) -> VideoLocalizationDraft:
+    for item in items:
+        item["tts_text"] = _normalize_tts_text(item["tts_text"])
     subtitles = [
         VideoLocalizationSubtitleCue(
             subtitle_id=item["id"],
@@ -4142,6 +4253,11 @@ def _normalize_display_text(value: str) -> str:
             characters.append(" ")
     text = "".join(characters)
     return " ".join(text.split()).strip()
+
+
+def _normalize_tts_text(value: str) -> str:
+    text = str(value or "").strip()
+    return re.sub(r"[，,:：;；、]+([”’」』】)]*)$", r"。\1", text)
 
 
 def _numbers_preserved(source: str, localized: str) -> bool:

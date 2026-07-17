@@ -78,6 +78,30 @@ def test_localization_batches_keep_a_medium_transcript_in_one_request():
     )
 
 
+def test_source_word_partition_avoids_splitting_negation_before_sentence_end():
+    tokens = ["that", "definitely", "should", "not", "be", "there.", "Insane,", "right?"]
+    words = {
+        f"word_{index:04d}": VideoLocalizationAlignedWord(
+            word_id=f"word_{index:04d}",
+            segment_id="segment_1",
+            text=token,
+            start_ms=index * 200,
+            end_ms=index * 200 + 160,
+        )
+        for index, token in enumerate(tokens, start=1)
+    }
+    word_ids = list(words)
+
+    partitions = localization._partition_ids_by_text_weight(
+        word_ids,
+        ["比如在身后放个不该出现的东西", "很夸张吧？"],
+        word_by_id=words,
+    )
+
+    assert [words[word_id].text for word_id in partitions[0]][-3:] == ["not", "be", "there."]
+    assert [words[word_id].text for word_id in partitions[1]] == ["Insane,", "right?"]
+
+
 def test_localization_batches_reject_a_single_unbounded_source_cue():
     cue = VideoLocalizationCue(
         cue_id="cue_too_large",
@@ -1142,7 +1166,7 @@ def test_timed_review_detects_on_full_timeline_then_repairs_only_reported_ids(mo
 
     def complete_json(**kwargs):
         payload = kwargs["user_payload"]
-        calls.append(payload)
+        calls.append(kwargs)
         if payload["task"].endswith("timed-review-detect"):
             return {"issue_ids": ["localized_0021"], "has_more_critical_issues": False}
         assert payload["task"].endswith("timed-review-repair")
@@ -1164,9 +1188,52 @@ def test_timed_review_detects_on_full_timeline_then_repairs_only_reported_ids(mo
     )
 
     assert len(calls) == 2
-    assert len(calls[0]["items"]) == 40
+    assert len(calls[0]["user_payload"]["items"]) == 40
+    assert calls[0]["disable_reasoning"] is True
+    assert calls[1]["disable_reasoning"] is True
     assert reviewed[20]["display_text"] == "他打了个响指 画面立刻变了"
     assert len(changes) == 1
+    assert diagnostics["request_count"] == 2
+
+
+def test_timed_review_sends_missing_question_function_to_llm_repair(monkeypatch):
+    timed = [_timed_item(0)]
+    timed[0].update(
+        end_ms=timed[0]["start_ms"] + 5000,
+        source_text="Insane, right? Then I keep talking.",
+        display_text="然后我继续说话",
+        tts_text="然后我继续说话。",
+    )
+    tasks = []
+
+    def complete_json(**kwargs):
+        payload = kwargs["user_payload"]
+        tasks.append(payload["task"])
+        if payload["task"].endswith("timed-review-detect"):
+            assert payload["items"][0]["review_focus"]
+            return {"issue_ids": [], "has_more_critical_issues": False}
+        assert payload["issue_ids"] == ["localized_0001"]
+        return {
+            "changes": [
+                {
+                    "id": "localized_0001",
+                    "text": "很夸张吧？然后我继续说话。",
+                    "reason": "补回反问语气",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    reviewed, changes, diagnostics = localization._review_timed_localization(
+        timed,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert len(tasks) == 2
+    assert reviewed[0]["display_text"] == "很夸张吧？然后我继续说话"
+    assert changes[0]["reason"] == "补回反问语气"
     assert diagnostics["request_count"] == 2
 
 
@@ -1444,6 +1511,24 @@ def test_local_reading_speed_compression_preserves_meaning_and_numbers():
     assert replacement is not None
     assert replacement["display_text"] == "这个 2.0 版本已经能直接使用"
     assert "2.0" in replacement["display_text"]
+    assert not localization._candidate_exceeds_budget({**item, **replacement})
+
+
+def test_local_reading_speed_compression_does_not_create_transition_echo():
+    item = _timed_item(0)
+    item.update(
+        start_ms=0,
+        end_ms=1160,
+        source_text="And there is so much more I can do with it",
+        display_text="而且我还能用它做更多事情",
+        tts_text="而且我还能用它做更多事情，",
+    )
+
+    replacement = localization._compress_candidate_locally(item, item)
+
+    assert replacement is not None
+    assert replacement["display_text"] == "我还能用它做更多事情"
+    assert "还我还" not in replacement["display_text"]
     assert not localization._candidate_exceeds_budget({**item, **replacement})
 
 
@@ -2508,3 +2593,16 @@ def test_localized_segment_keeps_only_declared_research_usage():
     )
 
     assert parsed[0]["research_usage"] == [{"question_id": "research_01", "effect": "确认产品采用官方中文名称"}]
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("而且我还能用它做更多事：", "而且我还能用它做更多事。"),
+        ("我的脸、走路时的动作、手上的戒指，", "我的脸、走路时的动作、手上的戒指。"),
+        ("离谱吧？", "离谱吧？"),
+        ("他说完了：‘可以，’", "他说完了：‘可以。’"),
+    ],
+)
+def test_normalize_tts_text_replaces_dangling_terminal_separators(source, expected):
+    assert localization._normalize_tts_text(source) == expected

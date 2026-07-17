@@ -115,6 +115,7 @@ def complete_json(
     max_tokens: int = 4096,
     timeout: float = 90,
     allow_array: bool = False,
+    disable_reasoning: bool = False,
 ) -> dict | list:
     """Run an OpenAI-compatible completion and return validated JSON."""
 
@@ -153,6 +154,8 @@ def complete_json(
         "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
     }
+    if disable_reasoning and _supports_thinking_control(profile):
+        request_body["thinking"] = {"type": "disabled"}
     headers = llm_provider.build_auth_headers(profile.api_key)
     headers["Content-Type"] = "application/json"
     request = _completion_request(profile.base_url, request_body, headers)
@@ -173,6 +176,13 @@ def complete_json(
         fallback_body.pop("response_format", None)
         raw = _send_with_retries(_completion_request(profile.base_url, fallback_body, headers), remaining)
     return _parse_completion(raw, allow_array=allow_array)
+
+
+def _supports_thinking_control(profile: ResolvedProfile) -> bool:
+    """Return whether the provider accepts DeepSeek's thinking toggle."""
+
+    hostname = (urlsplit(profile.base_url).hostname or "").casefold()
+    return hostname == "deepseek.com" or hostname.endswith(".deepseek.com")
 
 
 def _completion_request(base_url: str, request_body: dict[str, Any], headers: dict[str, str]) -> urllib.request.Request:

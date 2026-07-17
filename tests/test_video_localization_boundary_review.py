@@ -107,6 +107,7 @@ def test_boundary_review_uses_stable_word_ids_and_audio_as_supporting_evidence(m
     assert candidates[0]["features"]["audio_pause"]["low_energy_ms"] == 330
     assert "timestamps" in captured["user_payload"]["policy"]["forbidden"]
     assert captured["timeout"] == boundary_review.REQUEST_TIMEOUT_SECONDS
+    assert captured["disable_reasoning"] is True
     assert boundary_review.MIN_OUTPUT_TOKENS <= captured["max_tokens"] <= boundary_review.MAX_OUTPUT_TOKENS
     assert metadata["rounds"][0]["batches"] == [
         {

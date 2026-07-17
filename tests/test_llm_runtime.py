@@ -101,6 +101,37 @@ def test_complete_json_posts_openai_request_and_returns_object(monkeypatch):
     assert headers["content-type"] == "application/json"
 
 
+def test_complete_json_disables_reasoning_for_direct_deepseek_profile(monkeypatch):
+    _configure(
+        monkeypatch,
+        profiles=[_profile(base_url="https://api.deepseek.com", model_id="deepseek-v4-flash")],
+    )
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["body"] = json.loads(request.data)
+        return FakeResponse(_completion('{"ok":true}'))
+
+    monkeypatch.setattr(llm_runtime.urllib.request, "urlopen", fake_urlopen)
+
+    assert llm_runtime.complete_json("system", {}, disable_reasoning=True) == {"ok": True}
+    assert captured["body"]["thinking"] == {"type": "disabled"}
+
+
+def test_complete_json_does_not_send_provider_specific_reasoning_toggle(monkeypatch):
+    _configure(monkeypatch)
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["body"] = json.loads(request.data)
+        return FakeResponse(_completion('{"ok":true}'))
+
+    monkeypatch.setattr(llm_runtime.urllib.request, "urlopen", fake_urlopen)
+
+    assert llm_runtime.complete_json("system", {}, disable_reasoning=True) == {"ok": True}
+    assert "thinking" not in captured["body"]
+
+
 def test_complete_json_falls_back_when_provider_rejects_json_object(monkeypatch):
     _configure(monkeypatch)
     requests = []
