@@ -16,7 +16,7 @@ from app.domains.video_localization.schemas import (
 from app.services import settings_store
 
 
-PROMPT_VERSION = "boundary-review-v3"
+PROMPT_VERSION = "boundary-review-v4"
 BATCH_SIZE = 8
 MAX_PARALLEL_BATCHES = 4
 MAX_REVIEW_ROUNDS = 2
@@ -395,6 +395,8 @@ def _review_batch(
             ],
             "repair": (
                 "When a boundary should move, return recommended_boundary_id from that candidate's nearby_boundaries. "
+                "Recommend only a boundary that leaves complete grammatical and semantic units on both sides; never move a cut "
+                "into a comparative, relative clause, infinitive, verb-object phrase, product model, or other incomplete construction. "
                 "When words must stay together, return the smallest protected_start_word_id/protected_end_word_id span."
             ),
             "pause_rule": "Pause is supporting evidence only. Never prefer a boundary solely because silence is present.",
@@ -780,6 +782,13 @@ def _merge_reviews(reviews: list[VideoLocalizationBoundaryReview]) -> list[Video
     for review in reviews:
         pair = (review.left_word_id, review.right_word_id)
         current = by_pair.get(pair)
-        if current is None or (rank[review.decision], review.confidence) > (rank[current.decision], current.confidence):
+        review_is_direct = not review.reason.startswith(("recommended:", "protected:"))
+        current_is_direct = current is not None and not current.reason.startswith(("recommended:", "protected:"))
+        if current is None or (
+            review_is_direct and not current_is_direct
+        ) or (
+            review_is_direct == current_is_direct
+            and (rank[review.decision], review.confidence) > (rank[current.decision], current.confidence)
+        ):
             by_pair[pair] = review
     return list(by_pair.values())

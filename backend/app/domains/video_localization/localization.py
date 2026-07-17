@@ -233,6 +233,15 @@ def generate_localization_draft(
         profile_id=profile.profile_id,
         is_cancelled=is_cancelled,
     )
+    timed, boundary_merge_changes, merged_id_map = _merge_unsafe_localized_boundaries(
+        timed,
+        draft=processing_draft,
+    )
+    timed_review_changes = [
+        {**change, "id": merged_id_map.get(str(change.get("id") or ""), change.get("id"))}
+        for change in timed_review_changes
+    ]
+    timed_review_changes.extend(boundary_merge_changes)
     timed = _finalize_timing(timed, processing_draft)
     _ensure_localized_timeline_constraints(timed)
     review_changes.extend(timed_review_changes)
@@ -686,7 +695,8 @@ def _must_join_source_units(left: str, right: str) -> bool:
 
 def _join_semantic_sources(texts: list[str]) -> str:
     result = " ".join(text.strip() for text in texts if text.strip())
-    return re.sub(r"(?<=\d)\.\s+(?=\d\b)", ".", result).strip()
+    result = re.sub(r"(?<=\d)\.\s+(?=\d\b)", ".", result)
+    return re.sub(r"(?<=\d)\s+\.(?=\d\b)", ".", result).strip()
 
 
 def _localize_semantic_bundles(
@@ -773,6 +783,8 @@ def _localize_semantic_bundles(
             "使用中国大陆创作者真实的流程说法，例如上传素材、把素材交给工具、输入提示词、直接出结果或成片；必须按上下文选择，不能机械套词",
             "clean 要按对象写成清晰、自然、瑕疵少、完成度高或能直接用，不能机械写成干净；do it justice 写成看不出真实效果或体现不出效果",
             "drop into 不一律写丢进，squeeze the most out of 不写榨干，insane 或 crazy 不要每次都翻成疯狂",
+            "in 4K 要按语义写成4K画质、4K版本、以4K分辨率等自然说法，不能机械写成‘在4K下’",
+            "人物对自己的身体或随身物做动作时，my own、his own、her own 要按中文习惯写自己或自己的，不能机械保留英语所有格",
             (
                 "遇到 walk、move、movement、motion、tracking、framing、rig 等动作或镜头词，必须先结合主语、宾语和前后文判断类型："
                 "人物的 walk/gait 是走路动作或步态，物体 motion 是物体运动，camera move 是运镜或镜头移动，handheld move 是手持运镜，"
@@ -784,6 +796,7 @@ def _localize_semantic_bundles(
                 "人物或车辆动作硬拼成多层定语。还要保留动作与空间变化的真实关系：某段运镜可以被搬到新的场景或高度，运镜本身不会‘变成几千英尺高’"
             ),
             "保留原作者的惊叹、转折、教程推进和自我修正，但不要堆砌其实、你知道吧、对吧，也不要润色成播音稿",
+            "每个 id 只能表达同一 id 的 source；不得把后一块的反应、问句、判断或笑点提前，也不得在相邻块重复表达同一个语气",
             "每个语义块内部可以重排、合并或拆开句子，只要全文顺序、块级事实覆盖和 id 不变",
             "只返回一份可直接配音的中文 text；使用自然标点标出中文呼吸和语义边界，代码随后负责字幕时间",
         ],
@@ -906,6 +919,7 @@ def _review_localized_bundles(
             "chinese": item["text"],
             "required_numbers": list(_normalized_numbers(item["source"]).elements()),
             "must_repair_numbers": not _numbers_preserved(item["source"], item["text"]),
+            "must_repair_speech_act": _adds_question_function(item["source"], item["text"]),
             "review_focus": _localized_bundle_review_focus(item["source"], item["text"]),
         }
         for item in bundles
@@ -915,6 +929,7 @@ def _review_localized_bundles(
         "document": payload_items,
         "rules": [
             "must_repair_numbers 为 true 的块必须进入 changes，并在 replacement 中保留 required_numbers 的每个数字、百分比、版本号和规格",
+            "must_repair_speech_act 为 true 的块必须进入 changes，删除或改写原文没有的问句、反问或‘对吧’式评价，不能挪用相邻块的语气",
             "review_focus 非空的块必须逐项检查；确认点名的表达有问题时必须进入 changes，不能原样保留被点名的翻译腔",
             "只找确实仍像翻译稿、中文搭配错误、行业流程说法不自然、事实数字不一致或前后指代不连贯的块",
             "changes 只列必须修改的块；不要为了显得在工作而反复润色已经自然的中文",
@@ -941,7 +956,11 @@ def _review_localized_bundles(
         timeout=300,
     )
     raw_changes = raw.get("changes") if isinstance(raw, dict) else None
-    required_change_ids = {item["id"] for item in payload_items if item["must_repair_numbers"]}
+    required_change_ids = {
+        item["id"]
+        for item in payload_items
+        if item["must_repair_numbers"] or item["must_repair_speech_act"]
+    }
     if (
         not isinstance(raw, dict)
         or raw.get("checked_count") != len(bundles)
@@ -1048,6 +1067,8 @@ def _review_localized_bundles(
 
 def _localized_bundle_review_focus(source: str, text: str) -> list[str]:
     focus = []
+    if _adds_question_function(source, text):
+        focus.append("中文新增了原文没有的问句、反问或评价语气；检查是否提前或重复了相邻语义块的反应")
     if "干净" in text:
         focus.append("检查‘干净’是否在机械翻译 clean；按对象改成清晰、自然、瑕疵少、完成度高或能直接用")
     if "体现不了" in text or "体现不出" in text:
@@ -1060,6 +1081,16 @@ def _localized_bundle_review_focus(source: str, text: str) -> list[str]:
         focus.append("教程口播中的‘我将’通常过于书面，按语气改成接下来我来、我会或直接说动作")
     if any(marker in text for marker in ("进行创建", "从而实现", "获得效果", "向你展示怎样")):
         focus.append("存在名词化或英文语序，改成简短主动的中文口语")
+    if re.search(r"(?:一|这|同)条镜头", text):
+        focus.append("中文把镜头搭配成了‘一条/这条/同条’，量词不自然；结合上下文改成一个镜头、同一个镜头或这段画面")
+    if re.search(r"疯狂[，, ]*(?:对吧|吧)[？?]?", text):
+        focus.append("‘疯狂，对吧’是机械翻译的反应句；按人物语气和上下文改成自然的惊叹或评价，不能套用固定译词")
+    if re.search(r"\bin\s+4k\b", source, flags=re.IGNORECASE) and "在4K下" in text:
+        focus.append("‘在4K下’机械映射了 in 4K；按语义写成4K画质、4K版本或以4K分辨率呈现")
+    if re.search(r"\bmy\s+own\b", source, flags=re.IGNORECASE) and re.search(
+        r"(?:把|让|给)我(?:的)?(?:头|脑袋|脸|手|身体|衣服)", text
+    ):
+        focus.append("自我动作中的 my own 不能机械写成‘我的’；按中文习惯改成自己或自己的，并保持动作主体不变")
     focus.extend(_motion_localization_review_focus(source, text))
     return focus
 
@@ -1373,9 +1404,192 @@ def _timed_localization_review_focus(item: dict) -> list[str]:
     focus: list[str] = []
     if "?" in source and not re.search(r"[？?]|(?:吗|呢|吧)[，。,.！!]*$", chinese):
         focus.append("源文包含问句或反问，但中文没有保留提问、反问或评价功能")
+    if _adds_question_function(source, chinese):
+        focus.append("中文新增了原文没有的问句、反问或评价语气；检查是否提前或重复了相邻字幕的反应")
     if re.search(r"还(?:我|你|他|她|它|我们|你们|他们|她们|它们)还", chinese):
         focus.append("中文含有机械精简造成的重复连接词或重复主语")
+    if re.search(r"(?:一|这|同)条镜头", chinese):
+        focus.append("中文使用了不自然的镜头量词；结合原意改成一个镜头、同一个镜头或这段画面")
+    if re.search(r"疯狂[，, ]*(?:对吧|吧)[？?]?", chinese):
+        focus.append("反应句仍有‘疯狂，对吧’式机械翻译；按人物语气改成自然的惊叹或评价")
+    if re.search(r"\bin\s+4k\b", source, flags=re.IGNORECASE) and "在4K下" in chinese:
+        focus.append("‘在4K下’不符合当前画质语境；改成4K画质、4K版本或以4K分辨率呈现")
+    if re.search(r"\bmy\s+own\b", source, flags=re.IGNORECASE) and re.search(
+        r"(?:把|让|给)我(?:的)?(?:头|脑袋|脸|手|身体|衣服)", chinese
+    ):
+        focus.append("自我动作仍机械保留了英语所有格；按中文习惯改成自己或自己的身体部位")
     return focus
+
+
+def _adds_question_function(source: str, chinese: str) -> bool:
+    return "?" not in str(source or "") and bool(re.search(r"[？?]", str(chinese or "")))
+
+
+def _merge_unsafe_localized_boundaries(
+    timed: list[dict],
+    *,
+    draft: VideoLocalizationDraft | None = None,
+) -> tuple[list[dict], list[dict], dict[str, str]]:
+    """Merge adjacent Chinese fragments when a model cut leaves a protected lead-in dangling."""
+
+    unsafe_ending = re.compile(
+        r"(?:比如|例如|绝对|非常|特别|比较|更加|更|太|因为|如果|虽然|但是|不过|而且|然后|以及|或者)$"
+    )
+    merged: list[dict] = []
+    changes: list[dict] = []
+    id_map: dict[str, str] = {}
+    index = 0
+    while index < len(timed):
+        left = timed[index]
+        right = timed[index + 1] if index + 1 < len(timed) else None
+        if right is None or not _can_merge_unsafe_localized_boundary(
+            left,
+            right,
+            unsafe_ending=unsafe_ending,
+            draft=draft,
+        ):
+            merged.append(left)
+            index += 1
+            continue
+
+        before = f"{left.get('display_text') or ''} ｜ {right.get('display_text') or ''}"
+        display_text = _join_localized_fragments(left.get("display_text") or "", right.get("display_text") or "")
+        tts_text = _join_localized_fragments(left.get("tts_text") or "", right.get("tts_text") or "")
+        combined = {
+            **left,
+            "end_ms": right["end_ms"],
+            "source_text": _join_semantic_sources([left.get("source_text") or "", right.get("source_text") or ""]),
+            "display_text": _normalize_display_text(display_text),
+            "tts_text": tts_text,
+            "source_bundle_id": (
+                left.get("source_bundle_id")
+                if left.get("source_bundle_id") == right.get("source_bundle_id")
+                else None
+            ),
+            "source_cue_ids": list(
+                dict.fromkeys([*(left.get("source_cue_ids") or []), *(right.get("source_cue_ids") or [])])
+            ),
+            "source_word_ids": list(
+                dict.fromkeys([*(left.get("source_word_ids") or []), *(right.get("source_word_ids") or [])])
+            ),
+            "adaptation_note": _join_metadata_values(
+                left.get("adaptation_note"),
+                right.get("adaptation_note"),
+                separator="；",
+            ),
+            "timing_source": _join_metadata_values(
+                left.get("timing_source"),
+                right.get("timing_source"),
+                separator=" + ",
+            ),
+            "research_usage": _deduplicate_dicts(
+                [*(left.get("research_usage") or []), *(right.get("research_usage") or [])]
+            ),
+            "quality_flags": sorted(
+                set(
+                    [
+                        *(left.get("quality_flags") or []),
+                        *(right.get("quality_flags") or []),
+                        "semantic_boundary_merged",
+                    ]
+                )
+            ),
+        }
+        if _candidate_exceeds_hard_budget(combined):
+            merged.append(left)
+            index += 1
+            continue
+        merged.append(combined)
+        id_map[str(right["id"])] = str(left["id"])
+        changes.append(
+            {
+                "id": left["id"],
+                "before": before,
+                "after": combined["display_text"],
+                "reason": "避免切断紧密中文结构",
+            }
+        )
+        index += 2
+    return merged, changes, id_map
+
+
+def _can_merge_unsafe_localized_boundary(
+    left: dict,
+    right: dict,
+    *,
+    unsafe_ending: re.Pattern[str],
+    draft: VideoLocalizationDraft | None,
+) -> bool:
+    left_display = _normalize_display_text(left.get("display_text") or "")
+    right_display = _normalize_display_text(right.get("display_text") or "")
+    if not unsafe_ending.search(left_display) or unsafe_ending.search(right_display):
+        return False
+    if str(left.get("tts_text") or "").rstrip().endswith(("。", "！", "？", ".", "!", "?", "；", ";")):
+        return False
+    gap_ms = int(right.get("start_ms") or 0) - int(left.get("end_ms") or 0)
+    if gap_ms < 0 or gap_ms > 600:
+        return False
+    if draft is None:
+        return True
+    return _localized_sources_are_adjacent(left, right, draft)
+
+
+def _localized_sources_are_adjacent(left: dict, right: dict, draft: VideoLocalizationDraft) -> bool:
+    cue_order = {cue.cue_id: index for index, cue in enumerate(draft.cues)}
+    cue_by_id = {cue.cue_id: cue for cue in draft.cues}
+    left_cue_ids = [cue_id for cue_id in left.get("source_cue_ids") or [] if cue_id in cue_order]
+    right_cue_ids = [cue_id for cue_id in right.get("source_cue_ids") or [] if cue_id in cue_order]
+    if not left_cue_ids or not right_cue_ids:
+        return False
+    left_speakers = {cue_by_id[cue_id].speaker_id for cue_id in left_cue_ids if cue_by_id[cue_id].speaker_id}
+    right_speakers = {cue_by_id[cue_id].speaker_id for cue_id in right_cue_ids if cue_by_id[cue_id].speaker_id}
+    if (left_speakers or right_speakers) and left_speakers != right_speakers:
+        return False
+    left_cue_end = max(cue_order[cue_id] for cue_id in left_cue_ids)
+    right_cue_start = min(cue_order[cue_id] for cue_id in right_cue_ids)
+    if right_cue_start not in {left_cue_end, left_cue_end + 1}:
+        return False
+
+    word_order = {
+        word.word_id: index
+        for index, word in enumerate(draft.transcription.words if draft.transcription else [])
+    }
+    word_by_id = {
+        word.word_id: word
+        for word in (draft.transcription.words if draft.transcription else [])
+    }
+    left_word_ids = [word_id for word_id in left.get("source_word_ids") or [] if word_id in word_order]
+    right_word_ids = [word_id for word_id in right.get("source_word_ids") or [] if word_id in word_order]
+    if left_word_ids and right_word_ids:
+        left_boundary_id = max(left_word_ids, key=word_order.__getitem__)
+        right_boundary_id = min(right_word_ids, key=word_order.__getitem__)
+        if not left_speakers and word_by_id[left_boundary_id].segment_id != word_by_id[right_boundary_id].segment_id:
+            return False
+        return word_order[right_boundary_id] == max(
+            word_order[word_id] for word_id in left_word_ids
+        ) + 1
+    return True
+
+
+def _join_metadata_values(left: object, right: object, *, separator: str) -> str:
+    values = list(dict.fromkeys(value.strip() for value in (str(left or ""), str(right or "")) if value.strip()))
+    return separator.join(values)
+
+
+def _deduplicate_dicts(items: list[dict]) -> list[dict]:
+    seen: set[str] = set()
+    result = []
+    for item in items:
+        key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            result.append(item)
+    return result
+
+
+def _join_localized_fragments(left: str, right: str) -> str:
+    joined = f"{str(left or '').rstrip()} {str(right or '').lstrip()}".strip()
+    return re.sub(r"(?<=[\u3400-\u9fff])\s+(?=[\u3400-\u9fff])", "", joined)
 
 
 def _timed_review_risk_window(timed: list[dict]) -> tuple[int, list[dict]]:

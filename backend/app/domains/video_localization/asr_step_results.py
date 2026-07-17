@@ -80,6 +80,7 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
     accepted_edits = sum(operation.status == "accepted" for _segment, operation in review_operations)
     rejected_edits = sum(operation.status == "rejected" for _segment, operation in review_operations)
     correction_items = _correction_items(segments, review_operations, research_source_by_id)
+    title_resolution = stage("text_review").get("research_title_resolution") or {}
     correction_notes = [transcription.review_error]
     if len(review_operations) > DETAIL_LIMIT:
         correction_notes.append(
@@ -94,6 +95,9 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
             ("发生修正", len(changed_segments)),
             ("采纳修改", accepted_edits),
             ("拒绝修改", rejected_edits),
+            ("标题专名候选", title_resolution.get("candidate_count")),
+            ("标题专名修正", title_resolution.get("applied_count")),
+            ("专名复核耗时", _duration_label(title_resolution.get("duration_ms")) if title_resolution else None),
         ),
         "sections": _sections(("逐项校对记录", correction_items)),
         "notes": _notes(*correction_notes),

@@ -609,6 +609,27 @@ def test_boundary_review_rechecks_new_boundary_selected_after_semantic_avoid(mon
     assert metadata["review_round_count"] == 2
 
 
+def test_direct_followup_review_overrides_an_indirect_boundary_recommendation():
+    pair = ("word_000001", "word_000002")
+    recommended = VideoLocalizationBoundaryReview(
+        boundary_id=":".join(pair),
+        left_word_id=pair[0],
+        right_word_id=pair[1],
+        decision="prefer",
+        confidence=0.9,
+        reason="recommended:incomplete_syntax",
+        prompt_version=boundary_review.PROMPT_VERSION,
+        model_id="review-model",
+    )
+    direct = recommended.model_copy(update={"decision": "allow", "reason": "unclear"})
+
+    merged = boundary_review._merge_reviews([recommended, direct])
+
+    assert len(merged) == 1
+    assert merged[0].decision == "allow"
+    assert merged[0].reason == "unclear"
+
+
 def test_boundary_review_only_checks_newly_selected_boundary_in_followup_round(monkeypatch):
     _configure_llm(monkeypatch)
     from app.services import llm_runtime

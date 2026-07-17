@@ -11,7 +11,12 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.domains.video_localization import web_research  # noqa: E402
-from app.domains.video_localization.schemas import VideoLocalizationTranscriptSegment  # noqa: E402
+from app.domains.video_localization.schemas import (  # noqa: E402
+    VideoLocalizationResearchQuery,
+    VideoLocalizationResearchSource,
+    VideoLocalizationResearchState,
+    VideoLocalizationTranscriptSegment,
+)
 from app.models.schemas import LlmProviderProfile, LlmProviderListResponse, WebSearchSettings  # noqa: E402
 from app.services import web_search  # noqa: E402
 
@@ -64,6 +69,120 @@ def test_research_plans_once_searches_and_reuses_cache(tmp_path: Path, monkeypat
     assert second.cache_hits == 1
     assert calls == ["Seedance 2.0 AI video"]
     assert web_research.evidence_payload(first)[0]["source_id"] == first.sources[0].source_id
+
+
+def test_research_planner_treats_source_title_as_proper_name_evidence(monkeypatch):
+    settings = WebSearchSettings(enabled=True, provider="wikipedia", max_queries=1)
+    profile = LlmProviderProfile(
+        profile_id="work", name="Work", base_url="https://example.com/v1", model_id="chat", enabled=True
+    )
+    monkeypatch.setattr(web_research.settings_store, "web_search_settings", lambda: settings)
+    monkeypatch.setattr(
+        web_research.settings_store,
+        "llm_profiles",
+        lambda: LlmProviderListResponse(profiles=[profile], default_profile_id="work"),
+    )
+    monkeypatch.setattr(web_research.settings_store, "llm_profile", lambda _profile_id: profile)
+    captured = {}
+
+    def complete_json(**kwargs):
+        captured.update(kwargs)
+        return {"needs_research": False, "reason": "title resolves the likely product name", "queries": []}
+
+    monkeypatch.setattr(web_research.llm_runtime, "complete_json", complete_json)
+
+    result = web_research.research_transcript(
+        _segments(),
+        language="en",
+        scene_context="源视频标题：seedance-speech-30s.mp4",
+    )
+
+    assert result.status == "not_needed"
+    assert captured["user_payload"]["scene_context"] == "源视频标题：seedance-speech-30s.mp4"
+    assert "title token" in captured["system_prompt"]
+    assert "complete product name or version" in captured["system_prompt"]
+
+
+def test_title_conflict_candidates_require_scene_title_exact_result_and_shared_version():
+    state = VideoLocalizationResearchState(
+        status="completed",
+        queries=[
+            VideoLocalizationResearchQuery(
+                query_id="query_01",
+                query="seedance",
+                category="proper_noun",
+                target_terms=["seedance"],
+            ),
+            VideoLocalizationResearchQuery(
+                query_id="query_02",
+                query="Cinebench 2.0",
+                category="proper_noun",
+                target_terms=["Cinebench 2.0", "Cinebench"],
+            ),
+        ],
+        sources=[
+            VideoLocalizationResearchSource(
+                source_id="source_seedance",
+                query_id="query_01",
+                title="Seedance 2.0",
+                url="https://example.com/seedance",
+                snippet="AI video model",
+                provider="wikipedia",
+            ),
+            VideoLocalizationResearchSource(
+                source_id="source_cinema",
+                query_id="query_02",
+                title="Cinema 4D",
+                url="https://example.com/cinema",
+                snippet="Cinebench benchmark",
+                provider="wikipedia",
+            ),
+        ],
+    )
+
+    conflicts = web_research.title_conflict_candidates(
+        state,
+        scene_context="源视频标题：seedance-speech-30s.mp4",
+        transcript="The same shot mixed with Cinebench 2. 0 in 4K.",
+    )
+
+    assert conflicts == [
+        {
+            "conflict_id": "title_conflict_01",
+            "source_text": "Cinebench",
+            "corrected_source_text": "Seedance",
+            "version": "2.0",
+            "scene_term": "seedance",
+            "confirmed_title": "Seedance 2.0",
+            "evidence_source_ids": ["source_seedance"],
+            "raw_term_exact_title_supported": False,
+        }
+    ]
+
+
+def test_scene_title_query_replaces_redundant_second_raw_name_query():
+    planned = [
+        web_research.PlannedQuery(
+            query="Cinebench 2.0",
+            category="proper_noun",
+            target_terms=["Cinebench", "2.0"],
+        ),
+        web_research.PlannedQuery(
+            query="Cinebench 20",
+            category="proper_noun",
+            target_terms=["Cinebench", "20"],
+        ),
+    ]
+
+    guarded = web_research._ensure_scene_title_query(
+        planned,
+        scene_context="源视频标题：seedance-speech-30s-720p.mp4",
+        transcript="The shot was mixed with Cinebench 2. 0 in 4K. Insane, right?",
+        limit=2,
+    )
+
+    assert [item.query for item in guarded] == ["Cinebench 2.0", "seedance"]
+    assert guarded[1].target_terms == ["seedance"]
 
 
 def test_research_skips_llm_when_disabled(monkeypatch):

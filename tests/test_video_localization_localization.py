@@ -1237,6 +1237,89 @@ def test_timed_review_sends_missing_question_function_to_llm_repair(monkeypatch)
     assert diagnostics["request_count"] == 2
 
 
+def test_bundle_review_requires_repair_when_chinese_borrows_next_question(monkeypatch):
+    bundles = [
+        {
+            "id": "bundle_001",
+            "source": "I can put something behind me that definitely should not be there.",
+            "text": "我可以在身后放一个绝对不该出现的东西，离谱吧？",
+        }
+    ]
+    calls = []
+
+    def complete_json(**kwargs):
+        payload = kwargs["user_payload"]
+        calls.append(payload)
+        assert payload["document"][0]["must_repair_speech_act"] is True
+        return {
+            "checked_count": 1,
+            "changes": [
+                {
+                    "id": "bundle_001",
+                    "replacement": "我可以在身后放一个绝对不该出现的东西",
+                    "reason": "移除提前的反应",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    reviewed, changes, diagnostics = localization._review_localized_bundles(
+        bundles,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert len(calls) == 1
+    assert reviewed[0]["text"] == "我可以在身后放一个绝对不该出现的东西"
+    assert changes[0]["reason"] == "移除提前的反应"
+    assert diagnostics["request_count"] == 1
+
+
+def test_timed_review_requires_repair_when_chinese_borrows_next_question(monkeypatch):
+    timed = [_timed_item(0)]
+    timed[0].update(
+        end_ms=timed[0]["start_ms"] + 5000,
+        source_text="I can put something behind me that definitely should not be there.",
+        display_text="我可以在身后放一个绝对不该出现的东西 离谱吧？",
+        tts_text="我可以在身后放一个绝对不该出现的东西，离谱吧？",
+    )
+    tasks = []
+
+    def complete_json(**kwargs):
+        payload = kwargs["user_payload"]
+        tasks.append(payload["task"])
+        if payload["task"].endswith("timed-review-detect"):
+            assert payload["items"][0]["review_focus"]
+            return {"issue_ids": [], "has_more_critical_issues": False}
+        assert payload["issue_ids"] == ["localized_0001"]
+        return {
+            "changes": [
+                {
+                    "id": "localized_0001",
+                    "text": "我可以在身后放一个绝对不该出现的东西。",
+                    "reason": "移除提前的反应",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+
+    reviewed, changes, diagnostics = localization._review_timed_localization(
+        timed,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    assert tasks == [
+        f"{localization.LOCALIZATION_PROMPT_VERSION}:timed-review-detect",
+        f"{localization.LOCALIZATION_PROMPT_VERSION}:timed-review-repair",
+    ]
+    assert reviewed[0]["display_text"] == "我可以在身后放一个绝对不该出现的东西"
+    assert changes[0]["reason"] == "移除提前的反应"
+    assert diagnostics["request_count"] == 2
+
+
 def test_timed_review_can_redistribute_meaning_across_adjacent_subtitles(monkeypatch):
     timed = [_timed_item(0), _timed_item(1)]
     timed[0].update(source_text="He snaps his fingers", display_text="画面已经变了", tts_text="画面已经变了。")
@@ -1669,6 +1752,186 @@ def test_localization_number_check_rejoins_split_decimal_word_tokens():
 
     assert result[0]["source_text"] == "2.0 in 4K."
     assert localization._normalized_numbers(result[0]["display_text"]) == {"2.0": 1, "4K": 1}
+
+
+def test_semantic_source_join_rejoins_decimal_when_period_starts_next_segment():
+    assert localization._join_semantic_sources(["Seedance 2", ".0 in 4K."]) == "Seedance 2.0 in 4K."
+    assert localization._normalized_numbers(
+        localization._join_semantic_sources(["Seedance 2", ".0 in 4K."])
+    ) == {"2.0": 1, "4K": 1}
+
+
+def test_post_review_merge_keeps_degree_adverb_with_negative_predicate():
+    left = _timed_item(0)
+    right = _timed_item(1)
+    left.update(
+        id="localized_0004",
+        source_text="I can put something behind me",
+        display_text="比如在我身后放一个绝对",
+        tts_text="比如在我身后放一个绝对",
+        source_cue_ids=["cue_0005"],
+        source_word_ids=["word_0001"],
+    )
+    right.update(
+        id="localized_0005",
+        source_text="that definitely should not be there",
+        display_text="不该出现的东西",
+        tts_text="不该出现的东西。",
+        source_cue_ids=["cue_0006"],
+        source_word_ids=["word_0002"],
+    )
+
+    merged, changes, id_map = localization._merge_unsafe_localized_boundaries([left, right])
+
+    assert len(merged) == 1
+    assert merged[0]["display_text"] == "比如在我身后放一个绝对不该出现的东西"
+    assert merged[0]["tts_text"] == "比如在我身后放一个绝对不该出现的东西。"
+    assert merged[0]["source_cue_ids"] == ["cue_0005", "cue_0006"]
+    assert merged[0]["source_word_ids"] == ["word_0001", "word_0002"]
+    assert "semantic_boundary_merged" in merged[0]["quality_flags"]
+    assert changes[0]["reason"] == "避免切断紧密中文结构"
+    assert id_map == {"localized_0005": "localized_0004"}
+
+
+def test_post_review_merge_keeps_example_lead_in_with_following_subtitle():
+    left = _timed_item(0)
+    right = _timed_item(1)
+    left.update(
+        id="localized_0005",
+        source_text="For example",
+        display_text="比如",
+        tts_text="比如",
+        source_cue_ids=["cue_0005"],
+        source_word_ids=["word_0001"],
+        adaptation_note="引出例子",
+        timing_source="逐词时间",
+        research_usage=[{"question_id": "research_01", "effect": "确认术语"}],
+    )
+    right.update(
+        id="localized_0006",
+        source_text="I can put something behind me",
+        display_text="我可以在身后放点东西",
+        tts_text="我可以在身后放点东西。",
+        source_cue_ids=["cue_0006"],
+        source_word_ids=["word_0002"],
+        adaptation_note="保持口语",
+        timing_source="ASR 字幕范围",
+        research_usage=[
+            {"question_id": "research_01", "effect": "确认术语"},
+            {"question_id": "research_02", "effect": "确认背景"},
+        ],
+    )
+
+    merged, changes, id_map = localization._merge_unsafe_localized_boundaries([left, right])
+
+    assert len(merged) == 1
+    assert merged[0]["display_text"] == "比如我可以在身后放点东西"
+    assert merged[0]["source_cue_ids"] == ["cue_0005", "cue_0006"]
+    assert merged[0]["adaptation_note"] == "引出例子；保持口语"
+    assert merged[0]["timing_source"] == "逐词时间 + ASR 字幕范围"
+    assert merged[0]["research_usage"] == [
+        {"question_id": "research_01", "effect": "确认术语"},
+        {"question_id": "research_02", "effect": "确认背景"},
+    ]
+    assert changes[0]["reason"] == "避免切断紧密中文结构"
+    assert id_map == {"localized_0006": "localized_0005"}
+
+
+def test_post_review_merge_does_not_merge_complete_or_distant_subtitles():
+    complete = _timed_item(0)
+    nearby = _timed_item(1)
+    complete.update(display_text="不过", tts_text="不过。")
+    nearby.update(display_text="那就继续", tts_text="那就继续。")
+
+    merged, changes, id_map = localization._merge_unsafe_localized_boundaries([complete, nearby])
+
+    assert len(merged) == 2
+    assert not changes
+    assert not id_map
+
+    distant = {**nearby, "start_ms": complete["end_ms"] + 1200, "end_ms": complete["end_ms"] + 2200}
+    complete.update(display_text="比如", tts_text="比如")
+    merged, changes, id_map = localization._merge_unsafe_localized_boundaries([complete, distant])
+
+    assert len(merged) == 2
+    assert not changes
+    assert not id_map
+
+
+def test_post_review_merge_does_not_chain_across_three_subtitles():
+    first = _timed_item(0)
+    second = _timed_item(1)
+    third = _timed_item(2)
+    first.update(display_text="比如", tts_text="比如")
+    second.update(display_text="例如", tts_text="例如")
+    third.update(display_text="这里放个东西", tts_text="这里放个东西。")
+
+    merged, changes, id_map = localization._merge_unsafe_localized_boundaries([first, second, third])
+
+    assert [item["display_text"] for item in merged] == ["比如", "例如这里放个东西"]
+    assert len(changes) == 1
+    assert id_map == {third["id"]: second["id"]}
+
+
+def test_post_review_merge_rejects_cross_speaker_boundary():
+    draft = _draft()
+    draft.cues[1] = draft.cues[1].model_copy(update={"speaker_id": "speaker_02"})
+    left = _timed_item(0)
+    right = _timed_item(1)
+    left.update(
+        display_text="比如",
+        tts_text="比如",
+        source_cue_ids=["cue_0001"],
+        source_word_ids=[],
+    )
+    right.update(
+        display_text="这里放个东西",
+        tts_text="这里放个东西。",
+        source_cue_ids=["cue_0002"],
+        source_word_ids=[],
+    )
+
+    merged, changes, id_map = localization._merge_unsafe_localized_boundaries([left, right], draft=draft)
+
+    assert len(merged) == 2
+    assert not changes
+    assert not id_map
+
+
+def test_review_focus_flags_unnatural_shot_classifier():
+    assert localization._localized_bundle_review_focus("This is the same shot.", "这是同一条镜头")
+    assert localization._timed_localization_review_focus(
+        {
+            "source_text": "This is the same shot.",
+            "display_text": "这是同一条镜头",
+            "tts_text": "这是同一条镜头。",
+        }
+    )
+
+
+def test_review_focus_flags_literal_reaction_and_4k_phrasing():
+    source = "Insane, right? This is the same shot mixed with Seedance 2.0 in 4K."
+    chinese = "疯狂 对吧？这是同一个镜头 用Seedance 2.0在4K下混合"
+
+    bundle_focus = localization._localized_bundle_review_focus(source, chinese)
+    timed_focus = localization._timed_localization_review_focus(
+        {"source_text": source, "display_text": chinese, "tts_text": chinese}
+    )
+
+    assert any("机械翻译" in item for item in bundle_focus)
+    assert any("4K" in item for item in bundle_focus)
+    assert any("机械翻译" in item for item in timed_focus)
+    assert any("4K" in item for item in timed_focus)
+
+
+def test_review_focus_flags_literal_english_possessive_in_self_action():
+    source = "Set my own head on fire and keep talking."
+    chinese = "把我的脑袋点上火 然后继续讲"
+
+    assert any("my own" in item for item in localization._localized_bundle_review_focus(source, chinese))
+    assert localization._timed_localization_review_focus(
+        {"source_text": source, "display_text": chinese, "tts_text": chinese}
+    )
 
 
 def test_localization_mapping_rejects_cross_speaker_and_missing_words():

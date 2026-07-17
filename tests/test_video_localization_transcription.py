@@ -17,6 +17,9 @@ from app.domains.video_localization.schemas import (  # noqa: E402
     VideoLocalizationAlignedWord,
     VideoLocalizationBoundaryReview,
     VideoLocalizationGlossaryEntry,
+    VideoLocalizationResearchQuery,
+    VideoLocalizationResearchSource,
+    VideoLocalizationResearchState,
     VideoLocalizationTranscriptSegment,
 )
 from app.models.schemas import LlmProviderListResponse, LlmProviderProfile  # noqa: E402
@@ -325,8 +328,78 @@ def test_review_segments_sends_glossary_and_stable_source_word_ids(monkeypatch):
     payload = captured["user_payload"]
     assert payload["segments"][0]["words"][0] == {"word_id": "source_word_000001", "text": "Built"}
     assert payload["scene_context"] == "源视频标题：Seedance 2.0 VFX workflow"
+    assert "high-signal spelling evidence" in payload["scene_context_policy"]
     assert payload["glossary"][0]["corrected_source_text"] == "Seedance"
     assert "timestamps" in payload["rules"]["forbidden"]
+
+
+def test_research_title_conflict_resolution_applies_focused_llm_decision(monkeypatch):
+    from app.services import llm_runtime
+
+    research = VideoLocalizationResearchState(
+        status="completed",
+        queries=[
+            VideoLocalizationResearchQuery(
+                query_id="query_01",
+                query="seedance",
+                category="proper_noun",
+                target_terms=["seedance"],
+            ),
+            VideoLocalizationResearchQuery(
+                query_id="query_02",
+                query="Cinebench 2.0",
+                category="proper_noun",
+                target_terms=["Cinebench 2.0"],
+            ),
+        ],
+        sources=[
+            VideoLocalizationResearchSource(
+                source_id="source_seedance",
+                query_id="query_01",
+                title="Seedance 2.0",
+                url="https://example.com/seedance",
+                snippet="AI video model",
+                provider="wikipedia",
+            ),
+            VideoLocalizationResearchSource(
+                source_id="source_cinema",
+                query_id="query_02",
+                title="Cinema 4D",
+                url="https://example.com/cinema",
+                snippet="Cinebench benchmark",
+                provider="wikipedia",
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        llm_runtime,
+        "complete_json",
+        lambda **_kwargs: {
+            "decisions": [
+                {
+                    "conflict_id": "title_conflict_01",
+                    "decision": "apply",
+                    "confidence": 0.94,
+                    "reason": "文件名和精确产品标题一致，且读音近似",
+                }
+            ]
+        },
+    )
+
+    reviewed, diagnostics = transcription._resolve_research_title_conflicts(
+        [_segment("asr_0001", "The same shot mixed with Cinebench 2.0 in 4K.")],
+        scene_context="源视频标题：seedance-speech-30s.mp4",
+        research=research,
+        profile_id="work",
+        is_cancelled=None,
+    )
+
+    assert reviewed[0].corrected_text == "The same shot mixed with Seedance 2.0 in 4K."
+    assert reviewed[0].review_operations[0].evidence_source_ids == ["source_seedance"]
+    assert "research_title_corrected" in reviewed[0].review_flags
+    assert diagnostics["candidate_count"] == 1
+    assert diagnostics["request_count"] == 1
+    assert diagnostics["applied_count"] == 1
 
 
 def test_review_segments_rejects_empty_candidate_without_failing_the_batch(monkeypatch):
