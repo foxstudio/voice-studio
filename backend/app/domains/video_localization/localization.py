@@ -22,7 +22,7 @@ from app.errors import AppException
 from app.services import llm_runtime, settings_store, web_search
 
 
-LOCALIZATION_PROMPT_VERSION = "localization-draft-v11"
+LOCALIZATION_PROMPT_VERSION = "localization-draft-v12"
 LOCALIZATION_BATCH_MAX_CUES = 512
 LOCALIZATION_BATCH_MAX_WORDS = 4_000
 LOCALIZATION_BATCH_MAX_SOURCE_CHARS = 24_000
@@ -175,6 +175,7 @@ def generate_localization_draft(
     _report(on_progress, 0.64, "正在检查中文表达")
     reviewed_bundles, review_changes, review_diagnostics = _review_localized_bundles(
         localized_bundles,
+        context=context,
         profile_id=profile.profile_id,
         is_cancelled=is_cancelled,
     )
@@ -185,11 +186,7 @@ def generate_localization_draft(
     _extend_timed_for_readability(timed, processing_draft)
     timed = _finalize_timing(timed, processing_draft)
     timed_before_fit = [{**item, "quality_flags": list(item.get("quality_flags") or [])} for item in timed]
-    problem_entries = [
-        (index, item, item)
-        for index, item in enumerate(timed)
-        if _candidate_exceeds_budget(item)
-    ]
+    problem_entries = [(index, item, item) for index, item in enumerate(timed) if _candidate_exceeds_budget(item)]
     fit_diagnostics: dict = {
         "request_count": 0,
         "round_count": 0,
@@ -198,9 +195,7 @@ def generate_localization_draft(
         "unresolved_count": len(problem_entries),
         "local_adjustment_count": 0,
     }
-    compressible_entries = [
-        entry for entry in problem_entries if _candidate_only_needs_compression(entry[2])
-    ]
+    compressible_entries = [entry for entry in problem_entries if _candidate_only_needs_compression(entry[2])]
     if compressible_entries:
         _report(on_progress, 0.82, f"正在本地精简过快字幕 · {len(compressible_entries)} 段")
         fit_started_at = time.perf_counter()
@@ -230,6 +225,7 @@ def generate_localization_draft(
     _report(on_progress, 0.88, "正在对照原文复核字幕时间线")
     timed, timed_review_changes, timed_review_diagnostics = _review_timed_localization(
         timed,
+        context=context,
         profile_id=profile.profile_id,
         is_cancelled=is_cancelled,
     )
@@ -338,6 +334,129 @@ def _validate_source(draft: VideoLocalizationDraft) -> None:
         raise AppException(400, "VIDEO_LOCALIZATION_SOURCE_TIMING_INVALID", "ASR 字幕中存在无效时间，请先修正。")
 
 
+def _normalize_localization_content_type(value: object) -> str:
+    normalized = re.sub(r"[\s/-]+", "_", str(value or "").strip().lower())
+    aliases = {
+        "technology_tutorial": "technology_tutorial",
+        "technology": "technology_tutorial",
+        "tech": "technology_tutorial",
+        "tutorial": "technology_tutorial",
+        "科技": "technology_tutorial",
+        "科技教程": "technology_tutorial",
+        "教程": "technology_tutorial",
+        "interview": "interview",
+        "访谈": "interview",
+        "采访": "interview",
+        "news": "news",
+        "新闻": "news",
+        "documentary_history": "documentary_history",
+        "documentary": "documentary_history",
+        "history": "documentary_history",
+        "纪录片": "documentary_history",
+        "历史": "documentary_history",
+        "drama_dialogue": "drama_dialogue",
+        "drama": "drama_dialogue",
+        "dialogue": "drama_dialogue",
+        "剧情": "drama_dialogue",
+        "剧情对话": "drama_dialogue",
+        "general": "general",
+        "通用": "general",
+    }
+    return aliases.get(normalized, "general")
+
+
+def _localization_prompt_policy(context: dict | None) -> dict:
+    context = context or {}
+    content_type = _normalize_localization_content_type(context.get("content_type"))
+    audience = _text(context.get("audience"), 200) or "中国大陆普通观众"
+    register = _text(context.get("register"), 200) or "自然、清晰、符合场景的中文表达"
+    policies = {
+        "technology_tutorial": {
+            "label": "科技教程",
+            "role": "科技与教程内容的中文本土化主编",
+            "generation_rules": [
+                "按实际操作顺序准确表达工具、模型、素材、参数、提示词、处理动作和输出结果，不机械套用固定流程词",
+                "同一句出现工具或模型与画质、分辨率、版本等输出规格时，必须区分处理主体与结果属性",
+                "mixed with、combined with 等表达要先判断 with 后是工具/模型还是素材：工具或模型负责处理，只有真实素材、图层、音轨等对象之间才写混合、合成或混音",
+                "clean 等质量词要按对象写成清晰、自然、瑕疵少、完成度高或能直接用；in 4K 要按语义写成 4K 画质、4K 版本或以 4K 分辨率呈现",
+            ],
+            "review_rules": [
+                "重点复核工具操作动词、模型与输出规格的语义归属，以及教程步骤是否准确连贯",
+                "遇到 mixed with、combined with 时检查介词对象：工具/模型应写用其处理，素材、图层或音轨才可写混合、合成或混音",
+                "检查 AI、4K、HD、提示词、素材与成片等术语是否按真实对象表达，不能把模型名误当成画质或版本的所有者",
+            ],
+            "technology_rules_enabled": True,
+        },
+        "interview": {
+            "label": "访谈",
+            "role": "访谈与对谈内容的中文本土化主编",
+            "generation_rules": [
+                "保留问答轮次、追问、接话、迟疑、自我修正和打断，不能把不同说话人的表达统一成同一种口吻",
+                "根据主持人、采访者与受访者的身份和关系分别处理正式程度、礼貌距离与情绪强度",
+            ],
+            "review_rules": [
+                "重点复核说话人轮次、问答关系、指代和接话逻辑，避免把迟疑或自我修正润色成播音稿",
+            ],
+            "technology_rules_enabled": False,
+        },
+        "news": {
+            "label": "新闻",
+            "role": "新闻内容的中文本土化主编",
+            "generation_rules": [
+                "保持中性、克制、清楚的事实语气，准确保留消息来源、引述对象、时间地点、数字和不确定性",
+                "区分主播、记者、受访者和被引述人物，不把观点写成无来源的既定事实",
+            ],
+            "review_rules": [
+                "重点复核事实归属、引语来源、时间地点、数字和确定性强弱，不做煽情扩写或立场强化",
+            ],
+            "technology_rules_enabled": False,
+        },
+        "documentary_history": {
+            "label": "纪录片/历史",
+            "role": "纪录片与历史内容的中文本土化主编",
+            "generation_rules": [
+                "保持年代、事件先后、史料来源、因果边界和不确定性，历史概念与专名按时代语境准确表达",
+                "旁白可以自然清晰，但不能把推测写成定论，也不能用现代流行说法改写历史人物立场",
+            ],
+            "review_rules": [
+                "重点复核年代顺序、史料归属、历史术语、因果关系和推测语气，避免时代错置",
+            ],
+            "technology_rules_enabled": False,
+        },
+        "drama_dialogue": {
+            "label": "剧情对话",
+            "role": "剧情与角色对白的中文本土化主编",
+            "generation_rules": [
+                "保留角色意图、关系、冲突、潜台词、情绪转折、打断和未说完的话，不把对白改成解释剧情的完整书面句",
+                "不同角色应保留各自年龄、身份、亲疏距离与表达习惯，笑点和威胁等话语功能不能被抹平",
+            ],
+            "review_rules": [
+                "重点复核角色关系、潜台词、冲突强度、接话与未完成表达，不能用旁白口吻替代人物对白",
+            ],
+            "technology_rules_enabled": False,
+        },
+        "general": {
+            "label": "通用内容",
+            "role": "跨类型视听内容的中文本土化主编",
+            "generation_rules": [
+                "根据原文证据保持内容本身的叙述方式、人物身份和正式程度，不预设为教程、访谈、新闻或剧情",
+            ],
+            "review_rules": [
+                "按当前场景复核叙述方式、人物身份和正式程度，不套用某一种内容类型的固定口吻",
+            ],
+            "technology_rules_enabled": False,
+        },
+    }
+    selected = policies[content_type]
+    return {
+        **selected,
+        "content_type": content_type,
+        "audience": audience,
+        "register": register,
+        "role": f"{selected['role']}，面向{audience}，采用{register}",
+    }
+
+
 def _analyze_context(
     draft: VideoLocalizationDraft,
     *,
@@ -363,13 +482,16 @@ def _analyze_context(
         "transcript": transcript,
         "transcript_sampling": transcript_sampling,
         "output": (
-            "返回 overview、era、setting、topics、speakers、style_rules、needs_research、research_questions。"
+            "返回 content_type、audience、register、overview、era、setting、topics、speakers、style_rules、needs_research、research_questions。"
+            "content_type 只能是 technology_tutorial、interview、news、documentary_history、drama_dialogue、general 之一；"
+            "必须依据字幕、人物和场景证据判断，不得默认成科技、教程或短视频。audience 写目标观众，register 写成片语体。"
             "speakers 每项包含 speaker_id、persona、speech_habits、relationship、emotion。"
             "research_questions 每项包含 query、reason、category、target_terms；只有外部资料能减少误译时才提出。"
         ),
     }
     system_prompt = (
-        "你是影视本土化总编。先理解内容、时代、场景、人物关系、说话习惯与情绪，再决定哪些事实或文化背景需要外部查证。"
+        "你是跨类型视听内容的本土化总编。先判断内容类型、目标受众与表达语体，再理解时代、场景、人物关系、说话习惯与情绪，"
+        "最后决定哪些事实或文化背景需要外部查证。"
         "人物口吻来自原文证据，不得凭空编造。把本土化强度与世界观渗透程度分开考虑。只返回约定 JSON。"
     )
     raw = None
@@ -379,7 +501,8 @@ def _analyze_context(
                 system_prompt=(
                     system_prompt
                     if attempt == 0
-                    else system_prompt + "上次响应无法解析；这次必须返回一个紧凑、完整、有效的 JSON 对象，不要输出说明文字。"
+                    else system_prompt
+                    + "上次响应无法解析；这次必须返回一个紧凑、完整、有效的 JSON 对象，不要输出说明文字。"
                 ),
                 user_payload=payload,
                 profile_id=profile_id,
@@ -399,6 +522,9 @@ def _analyze_context(
     if not isinstance(raw, dict):
         raise AppException(422, "VIDEO_LOCALIZATION_CONTEXT_INVALID", "语言模型没有返回可用的内容理解结果。")
     return {
+        "content_type": _normalize_localization_content_type(raw.get("content_type")),
+        "audience": _text(raw.get("audience"), 200) or "中国大陆普通观众",
+        "register": _text(raw.get("register"), 200) or "自然、清晰、符合场景的中文表达",
         "overview": _text(raw.get("overview"), 1200),
         "era": _text(raw.get("era"), 200),
         "setting": _text(raw.get("setting"), 300),
@@ -596,9 +722,7 @@ def _semantic_localization_bundles(draft: VideoLocalizationDraft) -> list[dict]:
         )
         transition = _starts_localization_transition(unit["source"])
         protected_join = bool(
-            current
-            and not speaker_changed
-            and _must_join_source_units(current[-1]["source"], unit["source"])
+            current and not speaker_changed and _must_join_source_units(current[-1]["source"], unit["source"])
         )
         should_flush = bool(
             current
@@ -606,10 +730,7 @@ def _semantic_localization_bundles(draft: VideoLocalizationDraft) -> list[dict]:
             and (
                 speaker_changed
                 or current_words + unit["word_count"] > LOCALIZATION_BUNDLE_MAX_WORDS
-                or (
-                    current_words >= LOCALIZATION_BUNDLE_MIN_WORDS_AT_TRANSITION
-                    and transition
-                )
+                or (current_words >= LOCALIZATION_BUNDLE_MIN_WORDS_AT_TRANSITION and transition)
                 or current_words >= LOCALIZATION_BUNDLE_TARGET_WORDS
                 and current[-1]["source"].rstrip().endswith((".", "?", "!"))
             )
@@ -669,7 +790,9 @@ def _validate_bundle_source_coverage(bundles: list[dict], draft: VideoLocalizati
 
 def _unit_speaker(cue_ids: list[str], draft: VideoLocalizationDraft) -> str | None:
     cue_by_id = {cue.cue_id: cue for cue in draft.cues}
-    speakers = [cue_by_id[cue_id].speaker_id for cue_id in cue_ids if cue_id in cue_by_id and cue_by_id[cue_id].speaker_id]
+    speakers = [
+        cue_by_id[cue_id].speaker_id for cue_id in cue_ids if cue_id in cue_by_id and cue_by_id[cue_id].speaker_id
+    ]
     return Counter(speakers).most_common(1)[0][0] if speakers else None
 
 
@@ -759,9 +882,9 @@ def _localize_semantic_bundles(
             "duration_ms": _elapsed_ms(started_at),
         }
     request_items = [
-        {"id": item["id"], "speaker_id": item.get("speaker_id"), "source": item["source"]}
-        for item in bundles
+        {"id": item["id"], "speaker_id": item.get("speaker_id"), "source": item["source"]} for item in bundles
     ]
+    policy = _localization_prompt_policy(context)
     payload = {
         "task": f"{LOCALIZATION_PROMPT_VERSION}:localize",
         "source_language": source_language,
@@ -769,7 +892,9 @@ def _localize_semantic_bundles(
         "profile": {
             "localization_level": localization_level,
             "worldview_permeability": worldview_permeability,
-            "audience": "熟悉短视频和 AI 创作工具的中国大陆普通观众",
+            "content_type": policy["content_type"],
+            "audience": policy["audience"],
+            "register": policy["register"],
         },
         "context": context,
         "research": _research_payload(research),
@@ -780,14 +905,8 @@ def _localize_semantic_bundles(
             "必须先通读全部输入，按整篇中文口播来写，再用输入 id 切回连续语义块；输入块不是逐句翻译单位",
             "保留事实、数字、品牌、否定、因果、比较、人物意图和情绪强度，不得增加原文没有的事实或梗",
             "删掉中文不需要反复出现的主语、将来时和名词化结构，把英语长从句改成自然的中文短句",
-            "使用中国大陆创作者真实的流程说法，例如上传素材、把素材交给工具、输入提示词、直接出结果或成片；必须按上下文选择，不能机械套词",
-            "clean 要按对象写成清晰、自然、瑕疵少、完成度高或能直接用，不能机械写成干净；do it justice 写成看不出真实效果或体现不出效果",
+            "词语必须按当前对象、人物身份和行业语境表达，不能机械取词典首义；do it justice 等表达要还原实际话语功能",
             "drop into 不一律写丢进，squeeze the most out of 不写榨干，insane 或 crazy 不要每次都翻成疯狂",
-            "in 4K 要按语义写成4K画质、4K版本、以4K分辨率等自然说法，不能机械写成‘在4K下’",
-            (
-                "同一句同时出现工具/模型和画质、分辨率、版本等输出规格时，必须分清语义角色：工具或模型负责处理/生成，"
-                "4K、HD、竖屏等只描述结果；不能把它们硬拼成‘混了某模型的4K画质’一类错位定语"
-            ),
             "人物对自己的身体或随身物做动作时，my own、his own、her own 要按中文习惯写自己或自己的，不能机械保留英语所有格",
             (
                 "遇到 walk、move、movement、motion、tracking、framing、rig 等动作或镜头词，必须先结合主语、宾语和前后文判断类型："
@@ -799,17 +918,18 @@ def _localize_semantic_bundles(
                 "源文来自 ASR，连续名词之间可能缺少逗号；必须结合上下文恢复并列项和修饰关系，不能把本来并列的拍摄装置、机位/构图、"
                 "人物或车辆动作硬拼成多层定语。还要保留动作与空间变化的真实关系：某段运镜可以被搬到新的场景或高度，运镜本身不会‘变成几千英尺高’"
             ),
-            "保留原作者的惊叹、转折、教程推进和自我修正，但不要堆砌其实、你知道吧、对吧，也不要润色成播音稿",
+            "保留原作者的惊叹、转折、内容推进和自我修正，但不要堆砌其实、你知道吧、对吧，也不要统一润色成播音稿",
             "每个 id 只能表达同一 id 的 source；不得把后一块的反应、问句、判断或笑点提前，也不得在相邻块重复表达同一个语气",
             "每个语义块内部可以重排、合并或拆开句子，只要全文顺序、块级事实覆盖和 id 不变",
             "只返回一份可直接配音的中文 text；使用自然标点标出中文呼吸和语义边界，代码随后负责字幕时间",
+            *policy["generation_rules"],
         ],
         "output": "优先返回包含 items 数组的对象；若只能输出顶层数组，也可直接返回 items。每项仅含与输入一致的 id、text，可选 note 和 research；数量、顺序、id 必须完全一致。",
     }
     started_at = time.perf_counter()
     system_prompt = (
-        "你是中国大陆科技视频的口播总编。任务不是逐句翻译，而是先理解整篇论述、人物口吻、前后照应和行业语境，"
-        "再让同一个创作者像原本就用中文录制这期视频一样自然表达。输出前在内部完成全文理解、中文重写和事实核对，"
+        f"你是{policy['role']}。任务不是逐句翻译，而是先理解整篇内容、人物口吻、前后照应和相关语境，"
+        "再让内容中的说话人像原本就用中文表达一样自然。输出前在内部完成全文理解、中文重写和事实核对，"
         "但只返回约定 JSON。"
     )
     raw = None
@@ -834,6 +954,7 @@ def _localize_semantic_bundles(
                 max_tokens=18_000,
                 timeout=300,
                 allow_array=True,
+                disable_reasoning=True,
             )
         except llm_runtime.LlmRuntimeError as exc:
             if attempt or exc.code not in {
@@ -848,9 +969,7 @@ def _localize_semantic_bundles(
         rows = raw.get("items") if isinstance(raw, dict) else raw if isinstance(raw, list) else None
         returned_ids = [str(item.get("id")) for item in rows or [] if isinstance(item, dict)]
         blank_ids = [
-            str(item.get("id"))
-            for item in rows or []
-            if isinstance(item, dict) and not _text(item.get("text"), 8000)
+            str(item.get("id")) for item in rows or [] if isinstance(item, dict) and not _text(item.get("text"), 8000)
         ]
         if isinstance(rows, list) and returned_ids == expected_ids and not blank_ids:
             break
@@ -912,10 +1031,12 @@ def _partition_localization_document(bundles: list[dict]) -> list[list[dict]]:
 def _review_localized_bundles(
     bundles: list[dict],
     *,
+    context: dict | None = None,
     profile_id: str,
     is_cancelled: CancelCallback | None,
 ) -> tuple[list[dict], list[dict], dict]:
     _ensure_active(is_cancelled)
+    policy = _localization_prompt_policy(context)
     payload_items = [
         {
             "id": item["id"],
@@ -924,7 +1045,7 @@ def _review_localized_bundles(
             "required_numbers": list(_normalized_numbers(item["source"]).elements()),
             "must_repair_numbers": not _numbers_preserved(item["source"], item["text"]),
             "must_repair_speech_act": _adds_question_function(item["source"], item["text"]),
-            "review_focus": _localized_bundle_review_focus(item["source"], item["text"]),
+            "review_focus": _localized_bundle_review_focus(item["source"], item["text"], context),
         }
         for item in bundles
     ]
@@ -938,19 +1059,24 @@ def _review_localized_bundles(
             "只找确实仍像翻译稿、中文搭配错误、行业流程说法不自然、事实数字不一致或前后指代不连贯的块",
             "changes 只列必须修改的块；不要为了显得在工作而反复润色已经自然的中文",
             "replacement 必须是该块完整替换文本，保留事实、数字、品牌、人物口吻和块级信息覆盖",
-            "重点检查英文字面映射、书面腔、工具操作动词、行业术语、中文固定搭配和全文一致性",
+            "重点检查英文字面映射、书面腔、行业术语、中文固定搭配和全文一致性",
             (
                 "动作与镜头词必须按语义角色复核：区分人物动作/步态、物体运动、车辆行驶、镜头移动/运镜、手持运镜、"
                 "跟踪/跟拍、构图/取景和真正的空间轨迹；不能因英文共用 move 或 motion 就在中文里统一写成运动或轨迹"
             ),
             "源文若是缺少标点的连续名词，要先恢复并列关系；replacement 必须逐句默读，不能产生多层名词硬拼或动作‘变成某个高度/距离’的语义错位",
-            "同一句里的工具/模型、处理动作和输出规格必须各自挂到正确对象，不能把模型名误当成画质、分辨率或版本的所有者",
+            *policy["review_rules"],
         ],
+        "content_profile": {
+            "content_type": policy["content_type"],
+            "audience": policy["audience"],
+            "register": policy["register"],
+        },
         "output": "返回 checked_count 和 changes；checked_count 等于输入数量。changes 每项含 id、replacement、reason，reason 最多20字。",
     }
     started_at = time.perf_counter()
     review_system_prompt = (
-        "你是中文科技视频终稿质检编辑。通读完整原文和中文稿，只返回确有必要的稀疏修改，"
+        f"你是{policy['role']}，负责终稿质检。通读完整原文和中文稿，只返回确有必要的稀疏修改，"
         "不要统一抹平人物口吻，不要逐句解释，只返回约定 JSON。"
     )
     raw = None
@@ -971,6 +1097,7 @@ def _review_localized_bundles(
                 temperature=0.05 if attempt == 0 else 0.01,
                 max_tokens=review_max_tokens,
                 timeout=300,
+                disable_reasoning=True,
             )
             break
         except llm_runtime.LlmRuntimeError as exc:
@@ -984,9 +1111,7 @@ def _review_localized_bundles(
                 raise
     raw_changes = raw.get("changes") if isinstance(raw, dict) else None
     required_change_ids = {
-        item["id"]
-        for item in payload_items
-        if item["must_repair_numbers"] or item["must_repair_speech_act"]
+        item["id"] for item in payload_items if item["must_repair_numbers"] or item["must_repair_speech_act"]
     }
     if (
         not isinstance(raw, dict)
@@ -1006,7 +1131,7 @@ def _review_localized_bundles(
     unresolved_focus = []
     for item_id, decision in changes_by_id.items():
         replacement = _text(decision.get("replacement"), 8000)
-        remaining_focus = _localized_bundle_review_focus(by_id[item_id]["source"], replacement)
+        remaining_focus = _localized_bundle_review_focus(by_id[item_id]["source"], replacement, context)
         if replacement and remaining_focus:
             unresolved_focus.append(
                 {
@@ -1021,7 +1146,7 @@ def _review_localized_bundles(
         repair_request_count = 1
         repaired_raw = llm_runtime.complete_json(
             system_prompt=(
-                "你是中文科技视频终稿修复编辑。上一轮改写仍有明确的中文搭配或语义关系错误。"
+                f"你是{policy['role']}，负责终稿修复。上一轮改写仍有明确的中文搭配或语义关系错误。"
                 "只修复点名问题，保持事实、数字、人物口吻和信息覆盖，只返回约定 JSON。"
             ),
             user_payload={
@@ -1039,18 +1164,17 @@ def _review_localized_bundles(
             temperature=0.02,
             max_tokens=min(2_000, max(600, len(unresolved_focus) * 180)),
             timeout=180,
+            disable_reasoning=True,
         )
         repaired_rows = repaired_raw.get("items") if isinstance(repaired_raw, dict) else None
         expected_repair_ids = [item["id"] for item in unresolved_focus]
-        returned_repair_ids = [
-            str(item.get("id")) for item in repaired_rows or [] if isinstance(item, dict)
-        ]
+        returned_repair_ids = [str(item.get("id")) for item in repaired_rows or [] if isinstance(item, dict)]
         if not isinstance(repaired_rows, list) or returned_repair_ids != expected_repair_ids:
             raise AppException(422, "VIDEO_LOCALIZATION_REVIEW_INVALID", "本土化终审修复没有返回完整结果。")
         for repaired in repaired_rows:
             item_id = str(repaired["id"])
             replacement = _text(repaired.get("replacement"), 8000)
-            if not replacement or _localized_bundle_review_focus(by_id[item_id]["source"], replacement):
+            if not replacement or _localized_bundle_review_focus(by_id[item_id]["source"], replacement, context):
                 raise AppException(422, "VIDEO_LOCALIZATION_REVIEW_INVALID", "本土化终审修复后仍有明确表达问题。")
             changes_by_id[item_id] = {
                 **changes_by_id[item_id],
@@ -1084,38 +1208,50 @@ def _review_localized_bundles(
                 }
             )
         reviewed.append({**source, "text": text})
-    return reviewed, changes, {
-        "planned_batch_count": 1,
-        "request_count": review_request_count + repair_request_count,
-        "split_count": 0,
-        "duration_ms": _elapsed_ms(started_at),
-    }
+    return (
+        reviewed,
+        changes,
+        {
+            "planned_batch_count": 1,
+            "request_count": review_request_count + repair_request_count,
+            "split_count": 0,
+            "duration_ms": _elapsed_ms(started_at),
+        },
+    )
 
 
-def _localized_bundle_review_focus(source: str, text: str) -> list[str]:
+def _localized_bundle_review_focus(source: str, text: str, context: dict | None = None) -> list[str]:
     focus = []
+    technology_rules_enabled = _localization_prompt_policy(context)["technology_rules_enabled"]
     if _adds_question_function(source, text):
         focus.append("中文新增了原文没有的问句、反问或评价语气；检查是否提前或重复了相邻语义块的反应")
     if "干净" in text:
         focus.append("检查‘干净’是否在机械翻译 clean；按对象改成清晰、自然、瑕疵少、完成度高或能直接用")
     if "体现不了" in text or "体现不出" in text:
         focus.append("检查‘体现不了/体现不出’是否笼统生硬；优先说观众具体看不出的画质、细节、规模或效果")
-    if re.search(r"(?:榨干|榨取).{0,8}(?:AI|效果|价值|潜力)", text, flags=re.IGNORECASE):
+    if technology_rules_enabled and re.search(r"(?:榨干|榨取).{0,8}(?:AI|效果|价值|潜力)", text, flags=re.IGNORECASE):
         focus.append("避免把 squeeze the most out of 直译成榨干或榨取，改成把能力发挥到极致或做出最佳效果")
     if "这就是如何" in text:
         focus.append("‘这就是如何’多半保留了英文句法，改成直接自然的中文陈述")
     if "我将" in text:
-        focus.append("教程口播中的‘我将’通常过于书面，按语气改成接下来我来、我会或直接说动作")
+        focus.append("‘我将’在自然口语中可能过于书面；按当前人物身份和语体改成更自然的表达")
     if any(marker in text for marker in ("进行创建", "从而实现", "获得效果", "向你展示怎样")):
         focus.append("存在名词化或英文语序，改成简短主动的中文口语")
     if re.search(r"(?:一|这|同)条镜头", text):
         focus.append("中文把镜头搭配成了‘一条/这条/同条’，量词不自然；结合上下文改成一个镜头、同一个镜头或这段画面")
     if re.search(r"疯狂[，, ]*(?:对吧|吧)[？?]?", text):
         focus.append("‘疯狂，对吧’是机械翻译的反应句；按人物语气和上下文改成自然的惊叹或评价，不能套用固定译词")
-    if re.search(r"\bin\s+4k\b", source, flags=re.IGNORECASE) and "在4K下" in text:
+    if technology_rules_enabled and re.search(r"\bin\s+4k\b", source, flags=re.IGNORECASE) and "在4K下" in text:
         focus.append("‘在4K下’机械映射了 in 4K；按语义写成4K画质、4K版本或以4K分辨率呈现")
+    if technology_rules_enabled and re.search(r"\b(?:mix\w*|combin\w*)\s+with\b", source, flags=re.IGNORECASE) and re.search(
+        r"(?:混合|混了|混在|掺入|掺进)", text
+    ):
+        focus.append("先判断 with 后是工具/模型还是素材；工具或模型应写‘用其处理’，只有素材、图层或音轨之间才写混合、合成或混音")
     if (
-        re.search(r"\b(?:mix\w*|process\w*|generat\w*|creat\w*|enhanc\w*|upscal\w*|render\w*)\b", source, flags=re.IGNORECASE)
+        technology_rules_enabled
+        and re.search(
+            r"\b(?:mix\w*|process\w*|generat\w*|creat\w*|enhanc\w*|upscal\w*|render\w*)\b", source, flags=re.IGNORECASE
+        )
         and re.search(r"\b(?:with|using|via|through)\b", source, flags=re.IGNORECASE)
         and re.search(r"\b(?:\d+k|hd|uhd|hdr)\b", source, flags=re.IGNORECASE)
         and re.search(
@@ -1124,7 +1260,9 @@ def _localized_bundle_review_focus(source: str, text: str) -> list[str]:
             flags=re.IGNORECASE,
         )
     ):
-        focus.append("工具或模型负责处理/生成，4K、HD 等只描述输出规格；重排中文语序，不能把模型名挂成画质、分辨率或版本的定语")
+        focus.append(
+            "工具或模型负责处理/生成，4K、HD 等只描述输出规格；重排中文语序，不能把模型名挂成画质、分辨率或版本的定语"
+        )
     if re.search(r"\bmy\s+own\b", source, flags=re.IGNORECASE) and re.search(
         r"(?:把|让|给)我(?:的)?(?:头|脑袋|脸|手|身体|衣服)", text
     ):
@@ -1143,29 +1281,36 @@ def _motion_localization_review_focus(source: str, chinese: str) -> list[str]:
     if re.search(r"\b(?:camera|handheld)\s+(?:move|movement|motion)\b", source_lower) and any(
         marker in chinese for marker in ("摄像机运动", "摄影机运动", "相机运动", "手持运动", "摄像机动", "摄影机动")
     ):
-        focus.append("camera/handheld move 在影视语境通常是运镜、镜头移动或手持运镜；结合句意选择，不能机械写成‘摄像机运动’或‘手持运动’")
+        focus.append(
+            "camera/handheld move 在影视语境通常是运镜、镜头移动或手持运镜；结合句意选择，不能机械写成‘摄像机运动’或‘手持运动’"
+        )
     if re.search(r"\bmoving\s+camera\b", source_lower) and any(
         marker in chinese for marker in ("移动相机", "移动摄影机", "移动摄像机")
     ):
-        focus.append("moving camera 描述镜头处于运动状态，通常写移动镜头、运动镜头或运镜，不能写成像在搬设备的‘移动相机’")
-    if re.search(r"\bcamera\s+movement\b", source_lower) and "镜头" in chinese and not any(
-        marker in chinese for marker in ("运镜", "镜头移动", "移动镜头", "运动镜头", "镜头在动", "镜头动")
+        focus.append(
+            "moving camera 描述镜头处于运动状态，通常写移动镜头、运动镜头或运镜，不能写成像在搬设备的‘移动相机’"
+        )
+    if (
+        re.search(r"\bcamera\s+movement\b", source_lower)
+        and "镜头" in chinese
+        and not any(marker in chinese for marker in ("运镜", "镜头移动", "移动镜头", "运动镜头", "镜头在动", "镜头动"))
     ):
         focus.append("camera movement 指运镜或镜头移动；不能只写成某个‘镜头’而丢掉运动方式")
     if re.search(r"\b(?:driv\w*\s+)?motion\b", source_lower) and re.search(r"(?:开车|行车).{0,4}运动", chinese):
-        focus.append("driving motion 要结合上下文说明行车动作、连续运动或构图关系，不能笼统写成‘开车的运动’，也不要无依据改成轨迹")
+        focus.append(
+            "driving motion 要结合上下文说明行车动作、连续运动或构图关系，不能笼统写成‘开车的运动’，也不要无依据改成轨迹"
+        )
     if re.search(r"\b(?:rig|framing)\b", source_lower) and any(
         marker in chinese for marker in ("架设角度", "摄影机架设", "摄像机架设")
     ):
         focus.append("rig/framing 要按画面语境判断机位、构图、取景或拍摄装置，不能默认拼成生硬的‘摄影机架设角度’")
-    if (
-        re.search(r"\brig\b.*\bframing\b.*\b(?:driv\w*\s+)?motion\b", source_lower)
-        and re.search(
-            r"(?:装置|机位|构图|取景)(?:的|对).{0,12}(?:行车|开车).{0,8}(?:动作|运动|取景|构图)",
-            chinese,
-        )
+    if re.search(r"\brig\b.*\bframing\b.*\b(?:driv\w*\s+)?motion\b", source_lower) and re.search(
+        r"(?:装置|机位|构图|取景)(?:的|对).{0,12}(?:行车|开车).{0,8}(?:动作|运动|取景|构图)",
+        chinese,
     ):
-        focus.append("源 ASR 可能漏掉并列标点；分别判断拍摄装置、机位/构图和行车动作是否为并列保护项，不能硬拼成多层名词定语")
+        focus.append(
+            "源 ASR 可能漏掉并列标点；分别判断拍摄装置、机位/构图和行车动作是否为并列保护项，不能硬拼成多层名词定语"
+        )
     if re.search(r"\b(?:camera|handheld)\s+(?:move|movement|motion)\b", source_lower) and re.search(
         r"(?:运镜|镜头移动).{0,8}变成.{0,12}(?:高|远|近)", chinese
     ):
@@ -1176,6 +1321,7 @@ def _motion_localization_review_focus(source: str, chinese: str) -> list[str]:
 def _review_timed_localization(
     timed: list[dict],
     *,
+    context: dict | None = None,
     profile_id: str,
     is_cancelled: CancelCallback | None,
 ) -> tuple[list[dict], list[dict], dict]:
@@ -1203,13 +1349,11 @@ def _review_timed_localization(
                 "t": [item["start_ms"], item["end_ms"]],
                 "source": item["source_text"],
                 "zh": item["tts_text"],
-                "required_numbers": (
-                    [] if number_group else list(_normalized_numbers(item["source_text"]).elements())
-                ),
+                "required_numbers": ([] if number_group else list(_normalized_numbers(item["source_text"]).elements())),
                 "number_mapping_group": number_group,
                 "cps": item.get("cps"),
                 "flags": item.get("quality_flags") or [],
-                "review_focus": _timed_localization_review_focus(item),
+                "review_focus": _timed_localization_review_focus(item, context),
             }
 
         payload = {
@@ -1238,7 +1382,11 @@ def _review_timed_localization(
                 "不得修改时间、顺序、id 或来源；时间码只能帮助理解顺序和时长，不能用来臆测真实开口",
                 "这一层不再做文风润色或翻译腔普查；没有明确映射或硬约束问题的条目不要放入 changes",
                 f"issue_ids 最多 {TIMED_REVIEW_MAX_CHANGES_PER_BATCH} 项；优先报告语义和事实错误，不得为填满数量而上报",
+                *_localization_prompt_policy(context)["review_rules"],
             ],
+            "content_profile": {
+                key: _localization_prompt_policy(context)[key] for key in ("content_type", "audience", "register")
+            },
             "output": (
                 "只返回 issue_ids 和 has_more_critical_issues，不得返回字幕正文、修改文本、解释、逐条检查结果或其他字段。"
                 "issue_ids 仅列确有关键问题的 id；没有问题时返回空数组。达到上限后仍有明确关键问题时，"
@@ -1288,9 +1436,7 @@ def _review_timed_localization(
         ):
             raise AppException(422, "VIDEO_LOCALIZATION_REVIEW_INVALID", "时间线终审返回了无效的问题范围。")
         if legacy_changes is None:
-            required_focus_ids = [
-                item["id"] for item in items if _timed_localization_review_focus(item)
-            ]
+            required_focus_ids = [item["id"] for item in items if _timed_localization_review_focus(item, context)]
             issue_ids = list(dict.fromkeys([*issue_ids, *required_focus_ids]))
         if (
             len(issue_ids) > TIMED_REVIEW_MAX_CHANGES_PER_BATCH
@@ -1310,17 +1456,14 @@ def _review_timed_localization(
         if legacy_changes is None and issue_ids:
             issue_indexes = {index for index, item in enumerate(items) if item["id"] in set(issue_ids)}
             context_indexes = {
-                nearby
-                for index in issue_indexes
-                for nearby in range(max(0, index - 3), min(len(items), index + 4))
+                nearby for index in issue_indexes for nearby in range(max(0, index - 3), min(len(items), index + 4))
             }
             repair_payload = {
                 "task": f"{LOCALIZATION_PROMPT_VERSION}:timed-review-repair",
                 "issue_ids": issue_ids,
                 "editable_items": [compact(items[index]) for index in sorted(issue_indexes)],
                 "ordered_context": [
-                    {**compact(items[index]), "editable": index in issue_indexes}
-                    for index in sorted(context_indexes)
+                    {**compact(items[index]), "editable": index in issue_indexes} for index in sorted(context_indexes)
                 ],
                 "rules": [
                     "只修复 issue_ids 中已经确认的关键问题，不得修改其他 id",
@@ -1347,17 +1490,11 @@ def _review_timed_localization(
                 disable_reasoning=True,
             )
             raw_changes = repaired.get("changes") if isinstance(repaired, dict) else None
-            if (
-                not isinstance(raw_changes, list)
-                or any(not isinstance(item, dict) for item in raw_changes)
-            ):
+            if not isinstance(raw_changes, list) or any(not isinstance(item, dict) for item in raw_changes):
                 raise AppException(422, "VIDEO_LOCALIZATION_REVIEW_INVALID", "时间线终审没有返回有效的修复结果。")
 
         change_ids = [str(item.get("id")) for item in raw_changes]
-        if (
-            len(change_ids) != len(set(change_ids))
-            or not set(change_ids) <= set(issue_ids)
-        ):
+        if len(change_ids) != len(set(change_ids)) or not set(change_ids) <= set(issue_ids):
             raise AppException(422, "VIDEO_LOCALIZATION_REVIEW_INVALID", "时间线终审返回了无效的字幕修改范围。")
         replacements = {str(item["id"]): item for item in raw_changes}
         reviewed = []
@@ -1415,28 +1552,32 @@ def _review_timed_localization(
     restored_number_ids = _validate_timed_review_numbers(timed, reviewed)
     if restored_number_ids:
         changes = [item for item in changes if item["id"] not in restored_number_ids]
-    return reviewed, changes, {
-        "planned_batch_count": len(batches),
-        "request_count": request_count,
-        "fallback_count": fallback_count,
-        "timed_review_mode": (
-            "llm_risk_window"
-            if long_timeline and not fallback_count
-            else "deterministic_long_timeline_fallback"
-            if long_timeline
-            else "llm_sparse"
-            if not fallback_count
-            else "deterministic_fallback"
-        ),
-        "reviewed_start_index": batches[0][0] if long_timeline else 0,
-        "reviewed_item_count": sum(len(batch) for _first_index, batch in batches),
-        "total_item_count": len(timed),
-        "reviewed_end_index": batches[-1][0] + len(batches[-1][1]),
-        "duration_ms": _elapsed_ms(started_at),
-    }
+    return (
+        reviewed,
+        changes,
+        {
+            "planned_batch_count": len(batches),
+            "request_count": request_count,
+            "fallback_count": fallback_count,
+            "timed_review_mode": (
+                "llm_risk_window"
+                if long_timeline and not fallback_count
+                else "deterministic_long_timeline_fallback"
+                if long_timeline
+                else "llm_sparse"
+                if not fallback_count
+                else "deterministic_fallback"
+            ),
+            "reviewed_start_index": batches[0][0] if long_timeline else 0,
+            "reviewed_item_count": sum(len(batch) for _first_index, batch in batches),
+            "total_item_count": len(timed),
+            "reviewed_end_index": batches[-1][0] + len(batches[-1][1]),
+            "duration_ms": _elapsed_ms(started_at),
+        },
+    )
 
 
-def _timed_localization_review_focus(item: dict) -> list[str]:
+def _timed_localization_review_focus(item: dict, context: dict | None = None) -> list[str]:
     source = str(item.get("source_text") or "")
     chinese = str(item.get("tts_text") or item.get("display_text") or "")
     focus: list[str] = []
@@ -1450,8 +1591,16 @@ def _timed_localization_review_focus(item: dict) -> list[str]:
         focus.append("中文使用了不自然的镜头量词；结合原意改成一个镜头、同一个镜头或这段画面")
     if re.search(r"疯狂[，, ]*(?:对吧|吧)[？?]?", chinese):
         focus.append("反应句仍有‘疯狂，对吧’式机械翻译；按人物语气改成自然的惊叹或评价")
-    if re.search(r"\bin\s+4k\b", source, flags=re.IGNORECASE) and "在4K下" in chinese:
+    if (
+        _localization_prompt_policy(context)["technology_rules_enabled"]
+        and re.search(r"\bin\s+4k\b", source, flags=re.IGNORECASE)
+        and "在4K下" in chinese
+    ):
         focus.append("‘在4K下’不符合当前画质语境；改成4K画质、4K版本或以4K分辨率呈现")
+    if _localization_prompt_policy(context)["technology_rules_enabled"] and re.search(
+        r"\b(?:mix\w*|combin\w*)\s+with\b", source, flags=re.IGNORECASE
+    ) and re.search(r"(?:混合|混了|混在|掺入|掺进)", chinese):
+        focus.append("复核 with 后的对象；若是工具或模型，应写用其处理，不能把操作关系直译成混合")
     if re.search(r"\bmy\s+own\b", source, flags=re.IGNORECASE) and re.search(
         r"(?:把|让|给)我(?:的)?(?:头|脑袋|脸|手|身体|衣服)", chinese
     ):
@@ -1500,9 +1649,7 @@ def _merge_unsafe_localized_boundaries(
             "display_text": _normalize_display_text(display_text),
             "tts_text": tts_text,
             "source_bundle_id": (
-                left.get("source_bundle_id")
-                if left.get("source_bundle_id") == right.get("source_bundle_id")
-                else None
+                left.get("source_bundle_id") if left.get("source_bundle_id") == right.get("source_bundle_id") else None
             ),
             "source_cue_ids": list(
                 dict.fromkeys([*(left.get("source_cue_ids") or []), *(right.get("source_cue_ids") or [])])
@@ -1589,13 +1736,9 @@ def _localized_sources_are_adjacent(left: dict, right: dict, draft: VideoLocaliz
         return False
 
     word_order = {
-        word.word_id: index
-        for index, word in enumerate(draft.transcription.words if draft.transcription else [])
+        word.word_id: index for index, word in enumerate(draft.transcription.words if draft.transcription else [])
     }
-    word_by_id = {
-        word.word_id: word
-        for word in (draft.transcription.words if draft.transcription else [])
-    }
+    word_by_id = {word.word_id: word for word in (draft.transcription.words if draft.transcription else [])}
     left_word_ids = [word_id for word_id in left.get("source_word_ids") or [] if word_id in word_order]
     right_word_ids = [word_id for word_id in right.get("source_word_ids") or [] if word_id in word_order]
     if left_word_ids and right_word_ids:
@@ -1603,9 +1746,7 @@ def _localized_sources_are_adjacent(left: dict, right: dict, draft: VideoLocaliz
         right_boundary_id = min(right_word_ids, key=word_order.__getitem__)
         if not left_speakers and word_by_id[left_boundary_id].segment_id != word_by_id[right_boundary_id].segment_id:
             return False
-        return word_order[right_boundary_id] == max(
-            word_order[word_id] for word_id in left_word_ids
-        ) + 1
+        return word_order[right_boundary_id] == max(word_order[word_id] for word_id in left_word_ids) + 1
     return True
 
 
@@ -1652,9 +1793,8 @@ def _timed_review_risk_window(timed: list[dict]) -> tuple[int, list[dict]]:
             score += 25
         if index:
             previous = timed[index - 1]
-            if (
-                _normalize_display_text(previous.get("tts_text") or "")
-                == _normalize_display_text(item.get("tts_text") or "")
+            if _normalize_display_text(previous.get("tts_text") or "") == _normalize_display_text(
+                item.get("tts_text") or ""
             ):
                 score += 40
             if set(previous.get("source_cue_ids") or []) & set(item.get("source_cue_ids") or []):
@@ -1747,9 +1887,7 @@ def _validate_timed_review_numbers(timed: list[dict], reviewed: list[dict]) -> s
 
 def _timed_number_group_map(timed: list[dict]) -> dict[str, dict]:
     mismatches = {
-        index
-        for index, item in enumerate(timed)
-        if not _numbers_preserved(item["source_text"], item["tts_text"])
+        index for index, item in enumerate(timed) if not _numbers_preserved(item["source_text"], item["tts_text"])
     }
     result: dict[str, dict] = {}
     mismatch_ids = {timed[index]["id"] for index in mismatches}
@@ -1881,7 +2019,9 @@ def _localized_bundles_to_candidates(bundles: list[dict], draft: VideoLocalizati
                     key=lambda cue_id: cue_order.get(cue_id, len(cue_order)),
                 )
                 if not source_cue_ids:
-                    source_cue_ids = list(dict.fromkeys(cue_id for unit in source_units for cue_id in unit["source_cue_ids"]))
+                    source_cue_ids = list(
+                        dict.fromkeys(cue_id for unit in source_units for cue_id in unit["source_cue_ids"])
+                    )
                 source_text = _join_source_words(
                     [word_by_id[word_id].text for word_id in source_word_ids if word_id in word_by_id]
                 ) or _join_semantic_sources([unit["source"] for unit in source_units])
@@ -1952,7 +2092,9 @@ def _hard_split_spoken_piece(text: str) -> list[str]:
         limit = _character_index_for_reading_units(remaining, LOCALIZATION_TARGET_CUE_VISIBLE_CHARS)
         candidates = [
             match.start()
-            for match in re.finditer(r"(?:但是|不过|所以|然后|而且|如果|因为|就是|同时|只要|甚至|还是|以及|或者|但|而)", remaining)
+            for match in re.finditer(
+                r"(?:但是|不过|所以|然后|而且|如果|因为|就是|同时|只要|甚至|还是|以及|或者|但|而)", remaining
+            )
             if 10 <= match.start() <= MAX_CHARS_PER_LINE * 2
         ]
         split = min(candidates, key=lambda value: abs(value - limit)) if candidates else limit
@@ -1975,8 +2117,12 @@ def _character_index_for_reading_units(text: str, target_units: int) -> int:
     return min(best, len(text) - 1)
 
 
-def _monotonic_length_alignment(source_units: list[dict], target_chunks: list[str]) -> list[tuple[list[dict], list[str]]]:
-    source_weights = [max(1, int(unit.get("word_count") or len(unit.get("source_word_ids") or []))) for unit in source_units]
+def _monotonic_length_alignment(
+    source_units: list[dict], target_chunks: list[str]
+) -> list[tuple[list[dict], list[str]]]:
+    source_weights = [
+        max(1, int(unit.get("word_count") or len(unit.get("source_word_ids") or []))) for unit in source_units
+    ]
     target_weights = [max(1, _reading_units(text)) for text in target_chunks]
     ratio = sum(target_weights) / max(1, sum(source_weights))
     source_anchor_counts = _alignment_anchor_counts(" ".join(unit.get("source") or "" for unit in source_units))
@@ -1997,16 +2143,14 @@ def _monotonic_length_alignment(source_units: list[dict], target_chunks: list[st
                     length_cost = abs(math.log((target_weight + 1) / (source_weight * ratio + 1)))
                     source_group_anchors = _alignment_anchor_counts(
                         " ".join(
-                            unit.get("source") or ""
-                            for unit in source_units[source_index : source_index + source_take]
+                            unit.get("source") or "" for unit in source_units[source_index : source_index + source_take]
                         )
                     )
                     target_group_anchors = _alignment_anchor_counts(
                         " ".join(target_chunks[target_index : target_index + target_take])
                     )
                     anchor_cost = 2.5 * sum(
-                        abs(source_group_anchors[anchor] - target_group_anchors[anchor])
-                        for anchor in shared_anchors
+                        abs(source_group_anchors[anchor] - target_group_anchors[anchor]) for anchor in shared_anchors
                     )
                     merge_cost = 0.08 * max(0, source_take + target_take - 2)
                     next_cost = costs[source_index][target_index] + length_cost + anchor_cost + merge_cost
@@ -2070,8 +2214,7 @@ def _partition_ids_by_text_weight(
             boundary = min(
                 range(minimum_boundary, maximum_boundary + 1),
                 key=lambda value: (
-                    abs(value - ideal_boundary)
-                    + _source_partition_boundary_penalty(word_ids, value, word_by_id),
+                    abs(value - ideal_boundary) + _source_partition_boundary_penalty(word_ids, value, word_by_id),
                     abs(value - ideal_boundary),
                     value,
                 ),
@@ -2081,9 +2224,7 @@ def _partition_ids_by_text_weight(
     return partitions
 
 
-def _source_partition_boundary_penalty(
-    word_ids: list[str], boundary: int, word_by_id: dict[str, object]
-) -> int:
+def _source_partition_boundary_penalty(word_ids: list[str], boundary: int, word_by_id: dict[str, object]) -> int:
     if boundary <= 0 or boundary >= len(word_ids):
         return 0
     left = word_by_id.get(word_ids[boundary - 1])
@@ -2227,6 +2368,7 @@ def _localize_cues(
     _context_start: int = 0,
 ) -> list[dict]:
     cues = [cue for cue in draft.cues if (cue.en_subtitle_text or "").strip()]
+    policy = _localization_prompt_policy(context)
     context_cues = _context_cues or cues
     cue_by_id = {cue.cue_id: cue for cue in cues}
     word_by_id = {word.word_id: word for word in (draft.transcription.words if draft.transcription else [])}
@@ -2251,9 +2393,7 @@ def _localize_cues(
                 is_cancelled=is_cancelled,
                 on_batch=lambda _completed, _total: None,
                 on_repair=(
-                    (lambda _batch_number, _total: on_repair(batch_index + 1, len(batches)))
-                    if on_repair
-                    else None
+                    (lambda _batch_number, _total: on_repair(batch_index + 1, len(batches))) if on_repair else None
                 ),
                 on_split=(
                     (lambda _batch_number, _total: on_split(batch_index + 1, len(batches))) if on_split else None
@@ -2275,9 +2415,7 @@ def _localize_cues(
                 completed += 1
                 on_batch(completed, len(batches))
                 if on_batch_preview:
-                    on_batch_preview(
-                        [item for result in batch_results if result is not None for item in result]
-                    )
+                    on_batch_preview([item for result in batch_results if result is not None for item in result])
         return [item for result in batch_results if result is not None for item in result]
 
     candidates: list[dict] = []
@@ -2294,7 +2432,9 @@ def _localize_cues(
             "profile": {
                 "localization_level": localization_level,
                 "worldview_permeability": worldview_permeability,
-                "audience": "中国大陆观众",
+                "content_type": policy["content_type"],
+                "audience": policy["audience"],
+                "register": policy["register"],
             },
             "context": context,
             "research": _research_payload(research),
@@ -2306,9 +2446,7 @@ def _localize_cues(
                 ],
                 "next": [
                     {"cue_id": cue.cue_id, "text": cue.en_subtitle_text}
-                    for cue in context_cues[
-                        context_batch_start + len(batch) : context_batch_start + len(batch) + 2
-                    ]
+                    for cue in context_cues[context_batch_start + len(batch) : context_batch_start + len(batch) + 2]
                 ],
             },
             "source_cues": compact_contract["source_cues"],
@@ -2343,14 +2481,13 @@ def _localize_cues(
                 ),
                 "lexical_context": (
                     "术语和形容词必须按当前对象与行业语境翻译，不能只取词典首义；"
-                    "优先说出观众能直接感知的结果，区分画面清晰、自然、少噪点/少瑕疵、动作流畅、结果可直接使用等不同含义。"
-                    "例如英文 clean 在 AI 画面语境不能机械写成‘干净’，应按上下文选择清晰、自然、没瑕疵或可直接用。"
+                    "优先说出目标观众能直接理解的具体含义，不能脱离对象套用固定译词。"
                 ),
                 "cohesion": (
                     "检查中文固定搭配、动词补语、介词和指代是否完整；"
-                    "根据真实指代而不是英文代词字面区分人物的他/她与产品、模型、画面、提示词等非人物的它；"
-                    "如果上下文明确指向工具或 AI，即使 ASR 原文误写 he/she，也应改为它或省略代词。"
+                    "根据真实指代而不是英文代词字面区分人物与非人物，必要时自然省略中文里的代词。"
                 ),
+                "content_specific": policy["generation_rules"],
                 "hard_display_limits": {
                     "max_duration_ms": MAX_SUBTITLE_DURATION_MS,
                     "max_visible_chars": MAX_CHARS_PER_LINE * 2,
@@ -2409,8 +2546,8 @@ def _localize_cues(
         try:
             raw = llm_runtime.complete_json(
                 system_prompt=(
-                    "你是中文影视字幕本土化编辑，不是逐句翻译器。先通读上下文，保持说话行为、事实和人物口吻，"
-                    "再改写成中国大陆创作者面对镜头时自然会说的口语。中文必须能直接说出口，不能保留英语语序、书面腔或生硬直译。"
+                    f"你是{policy['role']}，不是逐句翻译器。先通读上下文，保持说话行为、事实和人物口吻，"
+                    "再改写成符合当前内容类型、受众和语体的自然中文。中文必须能直接说出口，不能保留英语语序、书面腔或生硬直译。"
                     "不要逐字硬译，不要擅自植入中国历史人物、地名、典故或网络热梗。只写一份自然口语，代码会据此生成无普通标点的上屏字幕。"
                     "源字幕行只是识别容器，不是目标语言分段边界。只返回约定 JSON。"
                 ),
@@ -2827,9 +2964,7 @@ def _fit_candidate_segments(
                     round_number,
                     f"并行处理 {len(batches)} 组共 {len(problem_indexes)} 段",
                 )
-            with ThreadPoolExecutor(
-                max_workers=min(LOCALIZATION_FIT_MAX_PARALLEL_BATCHES, len(batches))
-            ) as executor:
+            with ThreadPoolExecutor(max_workers=min(LOCALIZATION_FIT_MAX_PARALLEL_BATCHES, len(batches))) as executor:
                 futures = {executor.submit(refine_batch, indexes): indexes for indexes in batches}
                 completed = 0
                 for future in as_completed(futures):
@@ -3497,6 +3632,7 @@ def _quality_review(
     diagnostics: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     started_at = time.perf_counter()
+    policy = _localization_prompt_policy(context)
     split_count = 0
     batches = _quality_review_batches(timed)
     # Each planned batch may need one binary recovery pass: the original
@@ -3519,10 +3655,10 @@ def _quality_review(
             try:
                 raw = llm_runtime.complete_json(
                     system_prompt=(
-                        "你是中国大陆影视本土化终审，要像中文母语口播编辑一样按顺序通读整批字幕。"
+                        f"你是{policy['role']}，负责终审，要像中文母语编辑一样按顺序通读整批字幕。"
                         "逐项核对原文意图、数字、否定、因果、人物口吻、文化转述和字幕可读性；"
                         "还要主动找出英语语序、书面公文腔、词典式直译、中文搭配或补语缺失，以及人和物的代词指代错误。"
-                        "把生硬表达改成同一个人面对镜头时会自然说出口的短句，可调整语序并省略中文里多余的主语和将来时，"
+                        "把生硬表达改成符合当前内容场景、人物身份和语体的自然中文，可调整语序并省略中文里多余的主语和将来时，"
                         "但不能删掉事实、论证、情绪强度或关键动作。术语和形容词必须结合当前对象与行业语境判断。"
                         "只修正确有问题的项目；不要把自然口语改回翻译腔，也不要为了口语化添加原文没有的网络热梗。"
                         "不要把人物原有的迟疑、自我修正、接话、质疑或强调统一润色成顺滑播音稿；语气词要按话语功能保留或删除。"
@@ -3535,20 +3671,14 @@ def _quality_review(
                         "target_language": target_language,
                         "context": context,
                         "review_rules": {
-                            "spoken_chinese": "听起来应像同一位说话人即兴讲解，不像译稿、说明书或演讲稿",
+                            "spoken_chinese": "听起来应符合当前内容类型、人物身份和表达语体，不像逐句翻译稿",
                             "sentence_order": (
                                 "优先使用中文自然语序和短主动句；逐项检查‘我将、怎样、进行、创建、获得、实现、其、该、从而’"
                                 "是否只是英文句法或书面稿残留，有翻译腔就改写，没有问题才保留"
                             ),
                             "collocation": "检查动词与宾语、结果补语、介词和固定搭配是否完整自然，不能漏掉‘出、到、起来、下去’等必要补语",
-                            "pronouns": (
-                                "按真实指代而不是英文代词字面区分人物的他/她和产品、模型、画面、提示词等非人物的它；"
-                                "上下文明显指向 AI 或工具时，即使 ASR 写成 he/she，也要改为它或省略代词"
-                            ),
-                            "terminology": (
-                                "同一个英文词必须按具体对象说成观众能感知的结果；例如 AI 画面语境的 clean 不默认译为‘干净’，"
-                                "应按上下文选清晰、自然、没瑕疵或可直接使用，其他行业词也按同一原则处理"
-                            ),
+                            "pronouns": ("按真实指代而不是英文代词字面区分人物与非人物；必要时用它或自然省略代词"),
+                            "terminology": ("同一个英文词必须按具体对象、行业语境和话语功能表达，不能机械采用词典首义"),
                             "speaker_voice": (
                                 "保持说话人的正式或随意、专业或外行、笃定或迟疑、节奏与强调方式；"
                                 "保留有意义的自我修正、接话、质疑和打断，不要统一改成播音稿"
@@ -3561,8 +3691,19 @@ def _quality_review(
                                 "文化、地点、产品、头衔、笑点、比喻和典故要让中国观众听懂，同时保留原世界与原功能；"
                                 "不得替换成无关中国梗或增加原文没有的事实"
                             ),
-                            "read_aloud_test": "逐条默读一遍；如果正常中国创作者面对镜头不会这样说，就在不丢信息的前提下改成能直接说出口的表达",
-                            "preserve": ["事实", "数字", "专名", "否定", "因果", "比较", "动作", "人物口吻", "情绪强度"],
+                            "read_aloud_test": "逐条默读一遍；如果不符合当前场景中人物的自然表达，就在不丢信息的前提下改写",
+                            "content_specific": policy["review_rules"],
+                            "preserve": [
+                                "事实",
+                                "数字",
+                                "专名",
+                                "否定",
+                                "因果",
+                                "比较",
+                                "动作",
+                                "人物口吻",
+                                "情绪强度",
+                            ],
                         },
                         "display_limits": {
                             "max_duration_ms": MAX_SUBTITLE_DURATION_MS,
@@ -3593,13 +3734,17 @@ def _quality_review(
                     timeout=timeout,
                 )
             except llm_runtime.LlmRuntimeError as exc:
-                if exc.code not in {
-                    "llm_output_truncated",
-                    "llm_timeout",
-                    "llm_response_too_large",
-                    "llm_json_invalid",
-                    "llm_json_not_object",
-                } or len(items) <= 1:
+                if (
+                    exc.code
+                    not in {
+                        "llm_output_truncated",
+                        "llm_timeout",
+                        "llm_response_too_large",
+                        "llm_json_invalid",
+                        "llm_json_not_object",
+                    }
+                    or len(items) <= 1
+                ):
                     raise
                 raw = None
 
@@ -3630,7 +3775,9 @@ def _quality_review(
             )
             changes_valid = isinstance(raw_changes, list) and all(isinstance(item, dict) for item in raw_changes)
             change_ids = [str(item.get("id")) for item in raw_changes] if changes_valid else []
-            changes_valid = changes_valid and len(change_ids) == len(set(change_ids)) and set(change_ids) <= set(expected_ids)
+            changes_valid = (
+                changes_valid and len(change_ids) == len(set(change_ids)) and set(change_ids) <= set(expected_ids)
+            )
             if returned_ids != expected_ids or not changes_valid:
                 if len(items) <= 1:
                     raise AppException(
@@ -3661,12 +3808,9 @@ def _quality_review(
                     tts_text = _normalize_tts_text(spoken_text)
                 else:
                     display_text = (
-                        _normalize_display_text(_text(decision.get("display_text"), 800))
-                        or source["display_text"]
+                        _normalize_display_text(_text(decision.get("display_text"), 800)) or source["display_text"]
                     )
-                    tts_text = _normalize_tts_text(
-                        _text(decision.get("tts_text"), 1000) or source["tts_text"]
-                    )
+                    tts_text = _normalize_tts_text(_text(decision.get("tts_text"), 1000) or source["tts_text"])
                 if not _numbers_preserved(source["source_text"], display_text) or not _numbers_preserved(
                     source["source_text"], tts_text
                 ):
@@ -3730,17 +3874,28 @@ def _localization_review_focus(item: dict, context: dict) -> list[str]:
     display = str(item.get("display_text") or "")
     focus: list[str] = []
     if re.search(r"\b(clean|cleanest|clear|clearest|sharp|sharpest)\b", source_lower) and "干净" in display:
-        focus.append("面向普通观众不能单独用‘干净’描述视觉质量；必须结合画面语境改成清晰、自然、少瑕疵或可直接使用等具体结果")
+        focus.append(
+            f"面向{_localization_prompt_policy(context)['audience']}不能脱离对象机械使用‘干净’；"
+            "必须结合画面语境改成清晰、自然、少瑕疵或可直接使用等具体结果"
+        )
     if re.search(r"\b(he|him|his|she|her|hers)\b", source_lower) and re.search(r"[他她]", display):
         focus.append("英文人称代词可能来自 ASR 或口语指代；结合整批上下文确认实际对象是人物还是 AI、工具、模型或提示词")
     if "不了" in display:
-        focus.append("检查‘不了’是否缺少中文必要的结果补语；按真实含义判断应保留‘不了’还是改为‘不出、不到、不开、不了解’等完整搭配")
+        focus.append(
+            "检查‘不了’是否缺少中文必要的结果补语；按真实含义判断应保留‘不了’还是改为‘不出、不到、不开、不了解’等完整搭配"
+        )
     if "体现不了" in display:
         focus.append("‘体现不了’在当前观看效果语境搭配生硬，必须按原意改成‘看不出、体现不出、展现不出’一类自然结果表达")
     if any(marker in display for marker in ("我将", "向你展示怎样", "进行创建", "获得效果", "从而实现")):
-        focus.append("存在明显书面句式或英文语序，改为同一说话人面对镜头时会直接说出口的短主动句")
-    if context.get("speakers") and len(context.get("speakers") or []) == 1:
-        if re.search(r"[他她]", display) and any(term in source_lower for term in ("prompt", "model", "tool", "ai", "seedance")):
+        focus.append("存在明显书面句式或英文语序，改为符合当前人物身份和表达语体的自然中文")
+    if (
+        _localization_prompt_policy(context)["technology_rules_enabled"]
+        and context.get("speakers")
+        and len(context.get("speakers") or []) == 1
+    ):
+        if re.search(r"[他她]", display) and any(
+            term in source_lower for term in ("prompt", "model", "tool", "ai", "seedance")
+        ):
             focus.append("当前场景只有一位主讲人且句中涉及工具或 AI，重点复核‘他/她’是否应为‘它’或直接省略")
     focus.extend(_motion_localization_review_focus(source, display))
     return focus
@@ -4305,10 +4460,7 @@ def _cue_payload(cue: VideoLocalizationCue, word_by_id: dict) -> dict:
 
 def _compact_localization_contract(cues: list[VideoLocalizationCue], word_by_id: dict) -> dict:
     cue_ids = [cue.cue_id for cue in cues]
-    cue_word_ids = [
-        [word_id for word_id in cue.source_word_ids if word_id in word_by_id]
-        for cue in cues
-    ]
+    cue_word_ids = [[word_id for word_id in cue.source_word_ids if word_id in word_by_id] for cue in cues]
     source_cues = []
     for cue_index, cue in enumerate(cues, start=1):
         duration_ms = max(1, int(cue.end_ms or 0) - int(cue.start_ms or 0))

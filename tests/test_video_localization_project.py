@@ -35,6 +35,7 @@ from app.schemas.voice_studio import (  # noqa: E402
     VideoLocalizationResearchQuery,
     VideoLocalizationResearchSource,
     VideoLocalizationResearchState,
+    VideoLocalizationSubtitleCue,
     VideoLocalizationTranscriptSegment,
     VideoLocalizationTranscriptEditOperation,
     VideoLocalizationTranscriptionState,
@@ -2186,7 +2187,7 @@ def test_video_localization_english_asr_creates_cue_draft(tmp_path: Path, monkey
     def fake_transcribe(*, engine_id: str, audio_path: str, language: str):
         assert engine_id == "qwen3-asr-mlx"
         assert Path(audio_path).name == "source.wav"
-        assert language == "en"
+        assert language == "auto"
         return {
             "text": "We shipped the first localization pass.",
             "segments": [
@@ -2215,6 +2216,26 @@ def test_video_localization_english_asr_creates_cue_draft(tmp_path: Path, monkey
     assert "CUE_SPEAKER_MISSING" not in blocker_codes
     assert "ZH_SUBTITLE_MISSING" not in blocker_codes
     assert "TTS_TEXT_MISSING" not in blocker_codes
+
+
+def test_video_localization_legacy_asr_accepts_explicit_source_language(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "显式听写语言", "description": ""}).json()
+    captured = {}
+
+    def fake_transcribe(project_id: str, **kwargs):
+        captured.update({"project_id": project_id, **kwargs})
+        return VideoLocalizationDraft()
+
+    monkeypatch.setattr(video_localization_service, "transcribe_english_source_audio", fake_transcribe)
+
+    response = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/asr/en?source_language=zh"
+    )
+
+    assert response.status_code == 200
+    assert captured["project_id"] == project["project_id"]
+    assert captured["source_language"] == "zh"
 
 
 def test_video_localization_asr_merges_into_latest_autosaved_draft(tmp_path: Path, monkeypatch):
@@ -3335,6 +3356,183 @@ def test_video_localization_chinese_draft_requires_cues(tmp_path: Path):
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_CUES_MISSING"
+
+
+@pytest.mark.parametrize(
+    ("source_text", "expected_language"),
+    [
+        ("这是没有转录语言标记的字幕文本", "zh"),
+        ("This subtitle has no detected language metadata", "en"),
+    ],
+)
+def test_video_localization_auto_localization_language_falls_back_to_cue_text(
+    tmp_path: Path,
+    monkeypatch,
+    source_text: str,
+    expected_language: str,
+):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "字幕语言推断", "description": ""}).json()
+    draft = VideoLocalizationDraft(
+        transcription=VideoLocalizationTranscriptionState(language="auto"),
+        cues=[
+            VideoLocalizationCue(
+                cue_id="cue_0001",
+                start_ms=0,
+                end_ms=1600,
+                en_subtitle_text=source_text,
+            )
+        ]
+    )
+    assert video_localization_service.save_video_localization(project["project_id"], draft) is not None
+    captured = {}
+
+    def fake_localization(snapshot: VideoLocalizationDraft, *, source_language: str, target_language: str, **_kwargs):
+        captured.update({"source_language": source_language, "target_language": target_language})
+        return video_localization_localization.LocalizationRun(draft=snapshot, summary={})
+
+    monkeypatch.setattr(video_localization_localization, "generate_localization_draft", fake_localization)
+
+    updated, _summary = video_localization_service.run_localization_draft(project["project_id"])
+
+    assert updated is not None
+    assert captured == {"source_language": expected_language, "target_language": "zh-Hans"}
+    assert updated.language_config.detected_source_language == expected_language
+
+
+def test_video_localization_operation_rejects_non_chinese_localization_target(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "拒绝非简中目标", "description": ""}).json()
+    draft = VideoLocalizationDraft(
+        cues=[
+            VideoLocalizationCue(
+                cue_id="cue_0001",
+                start_ms=0,
+                end_ms=1600,
+                en_subtitle_text="A valid source subtitle",
+            )
+        ]
+    )
+    assert video_localization_service.save_video_localization(project["project_id"], draft) is not None
+
+    response = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/operations",
+        json={"kind": "localization_draft", "parameters": {"target_language": "en-US"}},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VIDEO_LOCALIZATION_TARGET_LANGUAGE_UNSUPPORTED"
+
+
+def test_video_localization_mocked_api_pipeline_propagates_operation_state(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "完整流程状态", "description": ""}).json()
+    project_id = project["project_id"]
+    monkeypatch.setattr(media_assets, "probe_video", lambda _path: {"duration_ms": 2400})
+    monkeypatch.setattr(video_localization_operation_queue, "_enqueue", lambda _operation_id: None)
+
+    def fake_extract(_video_path: Path, audio_path: Path) -> dict:
+        audio_path.parent.mkdir(parents=True, exist_ok=True)
+        audio_path.write_bytes(b"source-audio")
+        return {"duration_ms": 2400, "sample_rate": 48000, "channels": 2}
+
+    def fake_separate(_source_audio: Path, stems_dir: Path) -> dict:
+        vocals = stems_dir / "vocals.wav"
+        background = stems_dir / "background.wav"
+        stems_dir.mkdir(parents=True, exist_ok=True)
+        vocals.write_bytes(b"vocals")
+        background.write_bytes(b"background")
+        return {
+            "vocals_clean_path": vocals,
+            "background_path": background,
+            "engine_id": "demucs:mock",
+            "quality_flags": [],
+        }
+
+    captured = {}
+
+    def fake_asr(draft: VideoLocalizationDraft, engine_id: str, source_track_id: str, *, source_language: str, **_kwargs):
+        captured["asr_source_language"] = source_language
+        return _completed_asr_result(draft, engine_id)
+
+    def fake_localization(snapshot: VideoLocalizationDraft, *, source_language: str, target_language: str, **_kwargs):
+        captured["localization_languages"] = (source_language, target_language)
+        source_cue = snapshot.cues[0]
+        localized_cue = source_cue.model_copy(
+            update={"zh_localized_subtitle_text": "并发 ASR 结果", "tts_recommended_text": "并发 ASR 结果"}
+        )
+        subtitle = VideoLocalizationSubtitleCue(
+            subtitle_id="localized_0001",
+            start_ms=int(source_cue.start_ms or 0),
+            end_ms=int(source_cue.end_ms or 1200),
+            text="并发 ASR 结果",
+            source_cue_ids=[source_cue.cue_id],
+            source_word_ids=source_cue.source_word_ids,
+        )
+        generated = snapshot.model_copy(
+            update={
+                "cues": [localized_cue],
+                "localized_subtitles": [subtitle],
+                "localization_state": {"created_at": "mock-run"},
+            }
+        )
+        return video_localization_localization.LocalizationRun(
+            draft=generated,
+            summary={"localized_subtitle_count": 1},
+        )
+
+    monkeypatch.setattr(media_assets, "extract_audio_file", fake_extract)
+    monkeypatch.setattr(media_assets, "separate_audio_file", fake_separate)
+    monkeypatch.setattr(video_localization_source_pipeline, "with_english_asr", fake_asr)
+    monkeypatch.setattr(video_localization_localization, "generate_localization_draft", fake_localization)
+    monkeypatch.setattr(video_localization_service.llm_runtime, "resolve_profile", lambda _profile_id=None: object())
+
+    imported = client.post(
+        f"/api/projects/{project_id}/video-localization/source-media",
+        files={"file": ("pipeline.mp4", b"video", "video/mp4")},
+    )
+    assert imported.status_code == 200
+    assert imported.json()["source_media"]["metadata"]["upload_status"] == "stored"
+
+    def run_operation(kind: str, parameters: dict | None = None):
+        submitted = client.post(
+            f"/api/projects/{project_id}/video-localization/operations",
+            json={"kind": kind, "parameters": parameters or {}},
+        )
+        assert submitted.status_code == 200
+        operation = submitted.json()
+        assert operation["status"] == "queued"
+        video_localization_operation_queue._process(operation["operation_id"])
+        completed = client.get(
+            f"/api/projects/{project_id}/video-localization/operations/{operation['operation_id']}"
+        )
+        assert completed.status_code == 200
+        assert completed.json()["status"] == "success"
+        draft_response = client.get(f"/api/projects/{project_id}/video-localization")
+        assert draft_response.status_code == 200
+        return draft_response.json()
+
+    after_audio = run_operation("source_audio")
+    assert after_audio["source_media"]["metadata"]["audio_extract_status"] == "completed"
+
+    after_stems = run_operation("stems")
+    assert after_stems["stems"]["separation_status"] == "completed"
+
+    after_asr = run_operation("english_asr", {"source_language": "auto", "source_track_id": "auto"})
+    assert after_asr["source_media"]["metadata"]["english_asr_status"] == "completed"
+    assert after_asr["language_config"]["detected_source_language"] == "en"
+
+    after_localization = run_operation(
+        "localization_draft",
+        {"source_language": "auto", "target_language": "zh-Hans"},
+    )
+    assert after_localization["source_media"]["metadata"]["localization_draft_status"] == "completed"
+    assert after_localization["language_config"]["target_language"] == "zh-Hans"
+    assert after_localization["localized_subtitles"][0]["text"] == "并发 ASR 结果"
+    assert captured == {
+        "asr_source_language": "auto",
+        "localization_languages": ("en", "zh-Hans"),
+    }
 
 
 def test_video_localization_chinese_draft_requires_configured_llm(tmp_path: Path):

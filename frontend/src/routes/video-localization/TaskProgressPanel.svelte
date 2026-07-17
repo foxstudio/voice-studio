@@ -266,7 +266,7 @@
 											{:else if task.status === 'failed'}<AlertTriangle size={13} />
 											{:else}<CircleOff size={13} />{/if}
 										</span>
-										<strong>{displayLabel(task)}</strong>
+										<strong>{displayLabel(task)}{task.status === 'failed' ? ' · 失败' : task.status === 'cancelled' ? ' · 已取消' : ''}</strong>
 										<span class="history-time"><b>{duration(task)}</b><time>{historyTime(task)}</time></span>
 										<span class="history-chevron" aria-hidden="true"><ChevronRight size={13} /></span>
 									</button>
@@ -427,6 +427,7 @@
 	.task-state { display: grid; place-items: center; color: #6f8088; }
 	.running .task-state { color: #72b9ce; }
 	.failed .task-state { color: #dc8587; }
+	.failed .history-summary > strong { color: #d89496; }
 	.spinning { animation: task-spin 900ms linear infinite; }
 
 	.task-title { min-width: 0; display: flex; align-items: center; gap: 6px; }

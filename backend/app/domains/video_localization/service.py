@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
+import re
 import shutil
 import threading
+from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import UploadFile
@@ -362,7 +363,7 @@ def transcribe_english_source_audio(
     project_id: str,
     engine_id: str = source_pipeline.DEFAULT_ENGLISH_ASR_ENGINE_ID,
     source_track_id: source_pipeline.EnglishAsrSourceTrackId | str = "auto",
-    source_language: str = "en",
+    source_language: str = "auto",
     is_cancelled: Callable[[], bool] | None = None,
     on_progress: Callable[[float, str], None] | None = None,
     on_preview: Callable[[str, list[dict]], None] | None = None,
@@ -572,11 +573,11 @@ def run_localization_draft(
         source_language or snapshot.language_config.source_language
     )
     if resolved_source_language == "auto":
-        resolved_source_language = (
-            snapshot.language_config.detected_source_language
-            or (snapshot.transcription.language if snapshot.transcription else None)
-            or "en"
-        )
+        detected_source_language = snapshot.language_config.detected_source_language
+        if detected_source_language is None and snapshot.transcription is not None:
+            transcription_language = source_pipeline.normalize_source_language(snapshot.transcription.language)
+            detected_source_language = transcription_language if transcription_language != "auto" else None
+        resolved_source_language = detected_source_language or _infer_source_language_from_cues(snapshot)
     resolved_target_language = target_language or snapshot.language_config.target_language
     fingerprint = localization.source_fingerprint(snapshot)
     try:
@@ -646,6 +647,17 @@ def run_localization_draft(
             return get_video_localization(project_id), run.summary
         return saved, run.summary
     return commit_generated_track(), run.summary
+
+
+def _infer_source_language_from_cues(draft: VideoLocalizationDraft) -> str:
+    text = "\n".join(
+        value
+        for cue in draft.cues
+        if (value := (cue.en_subtitle_text or "").strip())
+    )
+    cjk_count = len(re.findall(r"[\u3400-\u9fff]", text))
+    latin_count = len(re.findall(r"[A-Za-z]", text))
+    return "zh" if cjk_count > latin_count else "en"
 
 
 def build_tts_batch_request(project_id: str, engine_id: str = "indextts-v2") -> BatchGenerateRequest | None:

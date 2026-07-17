@@ -167,7 +167,6 @@
 		VideoLocalizationDraft,
 		VideoLocalizationGeneratedCandidate,
 		VideoLocalizationOperation,
-		VideoLocalizationQualityIssue,
 		VideoLocalizationReferenceClip,
 		VideoLocalizationReferenceClipCreate,
 		VideoLocalizationReferenceClipUpdate,
@@ -177,7 +176,6 @@
 		VideoLocalizationSpeakerCreate
 	} from '$lib/api/types';
 	import {
-		AlertTriangle,
 		AudioLines,
 		BookOpenText,
 		Captions,
@@ -230,8 +228,6 @@
 		type VideoLocalizationTrackState
 	} from './studio-state';
 
-	type SubtitleSegmentationProfileId = 'generic_zh' | 'short_video_large_text' | 'conservative_release';
-
 	let projects = $state<Project[]>([]);
 	let operations = $state<VideoLocalizationOperation[]>([]);
 	let foregroundTasks = $state<ActivityTask[]>([]);
@@ -251,6 +247,7 @@
 	let projectNameDraft = $state('');
 	let projectNameSaving = $state(false);
 	let projectMenuOpen = $state(false);
+	let deliveryMenuOpen = $state(false);
 	let projectMenuSyncing = $state(false);
 	let extractingAudio = $state(false);
 	let separatingStems = $state(false);
@@ -339,22 +336,6 @@
 	);
 	const mediumTimingCount = $derived(draft?.cues.filter((cue) => cue.timing_confidence === 'medium').length ?? 0);
 	const generatedCount = $derived(draft?.cues.filter((cue) => cue.tts_audio_path).length ?? 0);
-	const hasLocalizationWork = $derived(
-		Boolean(
-			(draft?.localized_subtitles?.length ?? 0) ||
-				draft?.cues.some((cue) => Boolean(cue.zh_localized_subtitle_text?.trim()))
-		)
-	);
-	const dubbingStageActive = $derived(isDubbingInspectorSection(inspectorSection));
-	const visibleQualityBlockers = $derived(
-		(draft?.quality_gate.blockers ?? []).filter((issue) => qualityIssueAppliesToStage(issue, hasLocalizationWork, dubbingStageActive))
-	);
-	const visibleQualityWarnings = $derived(
-		(draft?.quality_gate.warnings ?? []).filter((issue) => qualityIssueAppliesToStage(issue, hasLocalizationWork, dubbingStageActive))
-	);
-	const firstVisibleQualityIssue = $derived(
-		[...visibleQualityBlockers, ...visibleQualityWarnings][0] ?? null
-	);
 	const transcription = $derived(draft?.transcription ?? null);
 	const noticeText = $derived(error ? summarizeVideoLocalizationError(error) : message);
 	const localizedCount = $derived(draft?.localized_subtitles?.length ?? 0);
@@ -378,9 +359,6 @@
 	const cueTimelineAudioLabel = $derived(draft?.stems.vocals_clean_path ? '分离后人声' : '源音轨');
 	const cueTimelineDurationMs = $derived(draft?.source_media.duration_ms ?? null);
 	const subtitlePreview = $derived(resolveSubtitlePreviewState(draft?.ui_state?.subtitle_preview));
-	const segmentationProfileId = $derived(
-		(draft?.ui_state?.segmentation_profile_id as SubtitleSegmentationProfileId | undefined) ?? 'generic_zh'
-	);
 	const subtitleWorkflowSettingsOpen = $derived(draft?.ui_state?.subtitle_workflow_settings_open === true);
 	const trackStates = $derived(resolveTrackStates(draft?.ui_state?.track_states));
 	const audioTrackOrder = $derived(resolveAudioTrackOrder(draft?.ui_state?.audio_track_order));
@@ -613,11 +591,19 @@
 
 	function closeProjectMenuFromPage(event: PointerEvent) {
 		if (!(event.target as HTMLElement | null)?.closest('.project-switcher')) projectMenuOpen = false;
+		if (!(event.target as HTMLElement | null)?.closest('.delivery-menu')) deliveryMenuOpen = false;
+	}
+
+	function toggleDeliveryMenu(event: MouseEvent) {
+		event.stopPropagation();
+		deliveryMenuOpen = !deliveryMenuOpen;
+		projectMenuOpen = false;
 	}
 
 	function handlePageKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape') {
 			projectMenuOpen = false;
+			deliveryMenuOpen = false;
 			return;
 		}
 		if (event.code !== 'Space' || event.repeat || event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -802,8 +788,7 @@
 			await submitMediaOperation('english_asr', '正在从人声轨生成 ASR 字幕', {
 				engine_id: DEFAULT_ASR_ENGINE_ID,
 				source_track_id: sourceTrackId,
-				source_language: sourceTrackId === 'dub' ? 'zh' : (draft?.language_config?.source_language || 'auto'),
-				segmentation_profile_id: segmentationProfileId
+				source_language: sourceTrackId === 'dub' ? 'zh' : (draft?.language_config?.source_language || 'auto')
 			});
 		} catch (e) {
 			error = (e as Error).message || '提交字幕听写失败';
@@ -1119,18 +1104,6 @@
 		const subtitle = draft?.localized_subtitles.find((item) => item.subtitle_id === subtitleId);
 		if (subtitle?.linked_cue_id) selectedCueId = subtitle.linked_cue_id;
 		focusInspector('subtitle');
-	}
-
-	function focusQualityIssue(issue: VideoLocalizationQualityIssue) {
-		if (!issue.cue_id || !draft) {
-			focusInspector('subtitle');
-			message = issue.message;
-			return;
-		}
-		const cue = draft.cues.find((item) => item.cue_id === issue.cue_id);
-		if (!cue) return;
-		selectCue(cue.cue_id);
-		if (cue.start_ms !== null) seekPreview(cue.start_ms);
 	}
 
 	function jumpToTimingConfidence(confidence: 'low' | 'medium') {
@@ -2580,6 +2553,20 @@
 			>
 				<BookOpenText size={15} />
 			</button>
+			<div class="delivery-menu">
+				<button class="icon-action" class:active={deliveryMenuOpen} type="button" disabled={!draft} aria-label="导出" aria-haspopup="menu" aria-expanded={deliveryMenuOpen} data-tooltip="导出：下载字幕或在配音完成后输出视频。" onclick={toggleDeliveryMenu}>
+					<Download size={15} />
+				</button>
+				{#if deliveryMenuOpen}
+					<div class="delivery-popover" role="menu" aria-label="导出内容">
+						<button class="delivery-menu-item" role="menuitem" type="button" onclick={() => { deliveryMenuOpen = false; void exportSubtitleSrt('en'); }} disabled={!draft?.cues.length}><Download size={14} /><span><strong>ASR 字幕</strong><small>原文字幕 SRT</small></span></button>
+						<button class="delivery-menu-item" role="menuitem" type="button" onclick={() => { deliveryMenuOpen = false; void exportSubtitleSrt('zh'); }} disabled={!localizedCount}><Download size={14} /><span><strong>本土化字幕</strong><small>中文上屏字幕 SRT</small></span></button>
+						<button class="delivery-menu-item" role="menuitem" type="button" onclick={() => { deliveryMenuOpen = false; void exportSubtitleSrt('bilingual'); }} disabled={!draft?.cues.length || !localizedCount}><Download size={14} /><span><strong>双语字幕</strong><small>原文与本土化字幕 SRT</small></span></button>
+						<div class="delivery-menu-separator"></div>
+						<button class="delivery-menu-item" role="menuitem" type="button" onclick={() => { deliveryMenuOpen = false; void exportLocalizedVideo(); }} disabled={!draft?.source_media.video_path || !generatedCount || exportingLocalizedVideo}><Film size={14} /><span><strong>{exportingLocalizedVideo ? '正在导出视频' : '本土化视频'}</strong><small>使用当前时间线和合成配音</small></span></button>
+					</div>
+				{/if}
+			</div>
 			<button
 				class="icon-action"
 				type="button"
@@ -2693,28 +2680,6 @@
 				canUndoTimeline={timelineUndoStack.length > 0}
 				canRedoTimeline={timelineRedoStack.length > 0}
 			/>
-			<footer class="delivery-bar" aria-label="交付输出">
-				<div class="delivery-summary">
-					<Download size={14} />
-					<strong>交付</strong>
-					<span>{draft?.cues.length ?? 0} 条原字幕 · {localizedCount} 条本土化字幕</span>
-					{#if visibleQualityBlockers.length || visibleQualityWarnings.length}
-						<button
-							class="delivery-quality"
-							class:blocking={visibleQualityBlockers.length > 0}
-							type="button"
-							onclick={() => firstVisibleQualityIssue && focusQualityIssue(firstVisibleQualityIssue)}
-							data-tooltip={firstVisibleQualityIssue ? `质量检查｜${firstVisibleQualityIssue.message}` : '质量检查'}
-						><AlertTriangle size={11} /> {visibleQualityBlockers.length ? `${visibleQualityBlockers.length} 项需处理` : `${visibleQualityWarnings.length} 项待检查`}</button>
-					{/if}
-				</div>
-				<div class="delivery-actions">
-					<button class="mini-btn" type="button" onclick={() => exportSubtitleSrt('en')} disabled={!draft?.cues.length} data-tooltip="导出 ASR 字幕：下载当前原文字幕轨。"><Download size={13} /> ASR 字幕</button>
-					<button class="mini-btn" type="button" onclick={() => exportSubtitleSrt('zh')} disabled={!localizedCount} data-tooltip="导出本土化字幕：下载当前本土化字幕轨。"><Download size={13} /> 本土化字幕</button>
-					<button class="mini-btn" type="button" onclick={() => exportSubtitleSrt('bilingual')} disabled={!draft?.cues.length || !localizedCount} data-tooltip="导出双语字幕：下载原文与本土化字幕。"><Download size={13} /> 双语字幕</button>
-					<button class="mini-btn" type="button" onclick={exportLocalizedVideo} disabled={!draft?.source_media.video_path || !generatedCount || exportingLocalizedVideo} data-tooltip="导出视频：合成配音轨完成后，按当前时间线输出本土化视频。"><Film size={13} /> {exportingLocalizedVideo ? '导出中' : '视频'}</button>
-				</div>
-			</footer>
 		</section>
 
 		{#if !inspectorCollapsed}
@@ -3056,7 +3021,6 @@
 		justify-content: flex-end;
 	}
 
-	.cutting-mode .mini-btn,
 	.cutting-mode .icon-action {
 		min-height: 27px;
 		border: 1px solid var(--line);
@@ -3084,7 +3048,6 @@
 		outline: none;
 	}
 
-	.cutting-mode .mini-btn,
 	.cutting-mode .icon-action {
 		display: inline-flex;
 		align-items: center;
@@ -3099,13 +3062,11 @@
 		padding: 0;
 	}
 
-	.cutting-mode .mini-btn:disabled,
 	.cutting-mode .icon-action:disabled {
 		opacity: 0.55;
 		cursor: not-allowed;
 	}
 
-	.cutting-mode .mini-btn:hover:not(:disabled),
 	.cutting-mode .icon-action:hover:not(:disabled) {
 		border-color: #4f606a;
 		background: #242b31;
@@ -3216,46 +3177,63 @@
 		border: 0;
 	}
 
-	.mini-btn {
-		border: 1px solid var(--line);
+	.delivery-menu {
+		position: relative;
+	}
+
+	.delivery-popover {
+		position: absolute;
+		top: calc(100% + 7px);
+		right: 0;
+		z-index: 120;
+		display: grid;
+		width: 220px;
+		padding: 4px;
+		border: 1px solid #3a424b;
 		border-radius: 6px;
-		background: #15181d;
+		background: #171b20;
+		box-shadow: 0 12px 30px rgb(0 0 0 / 38%);
+	}
+
+	.delivery-menu-item {
+		display: grid;
+		grid-template-columns: 20px minmax(0, 1fr);
+		align-items: center;
+		gap: 7px;
+		width: 100%;
+		min-height: 42px;
+		padding: 5px 7px;
+		border: 0;
+		border-radius: 4px;
+		background: transparent;
 		color: var(--text);
-		padding: 3px 7px;
-		font-size: 11px;
+		text-align: left;
 		cursor: pointer;
 	}
 
-	.mini-btn:disabled {
-		color: var(--muted);
+	.delivery-menu-item:hover:not(:disabled),
+	.delivery-menu-item:focus-visible {
+		background: #242a31;
+		outline: none;
+	}
+
+	.delivery-menu-item:disabled {
+		opacity: 0.42;
 		cursor: not-allowed;
-		opacity: 0.65;
 	}
 
-	.delivery-bar {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
+	.delivery-menu-item span {
+		display: grid;
+		gap: 1px;
 		min-width: 0;
-		padding: 7px 9px;
-		border-top: 1px solid var(--line);
-		background: #14191e;
 	}
 
-	.delivery-summary {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		min-width: 0;
-		color: #dce4e7;
-	}
-
-	.delivery-summary strong {
+	.delivery-menu-item strong {
 		font-size: 11px;
+		font-weight: 600;
 	}
 
-	.delivery-summary span {
+	.delivery-menu-item small {
 		overflow: hidden;
 		color: var(--muted);
 		font-size: 10px;
@@ -3263,33 +3241,10 @@
 		white-space: nowrap;
 	}
 
-	.delivery-quality {
-		display: inline-flex;
-		align-items: center;
-		gap: 3px;
-		border: 0;
-		background: transparent;
-		color: #d7b76c;
-		font: inherit;
-		font-size: 10px;
-		cursor: pointer;
-	}
-
-	.delivery-quality.blocking {
-		color: #e88989;
-	}
-
-	.delivery-quality:disabled {
-		cursor: default;
-		opacity: 0.7;
-	}
-
-	.delivery-actions {
-		display: flex;
-		flex-wrap: wrap;
-		justify-content: flex-end;
-		gap: 5px;
-		align-items: center;
+	.delivery-menu-separator {
+		height: 1px;
+		margin: 3px 5px;
+		background: var(--line);
 	}
 
 	@media (max-width: 1560px) {
@@ -3317,15 +3272,6 @@
 		.cutting-stage {
 			border-right: 0;
 			border-bottom: 1px solid var(--line);
-		}
-
-		.delivery-bar {
-			align-items: flex-start;
-			flex-direction: column;
-		}
-
-		.delivery-actions {
-			justify-content: flex-start;
 		}
 
 		.inspector-rail {

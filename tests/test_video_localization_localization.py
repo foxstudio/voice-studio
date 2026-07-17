@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -125,6 +126,9 @@ def test_context_analysis_retries_one_invalid_structured_response(monkeypatch):
         if len(prompts) == 1:
             raise LlmRuntimeError("invalid json", code="llm_json_invalid", status_code=502)
         return {
+            "content_type": "tutorial",
+            "audience": "刚开始学习视频制作的观众",
+            "register": "清楚、亲切的教程口语",
             "overview": "创作者介绍工作流",
             "era": "当代",
             "setting": "教程",
@@ -149,6 +153,9 @@ def test_context_analysis_retries_one_invalid_structured_response(monkeypatch):
     assert len(prompts) == 2
     assert "上次响应无法解析" in prompts[1]
     assert result["overview"] == "创作者介绍工作流"
+    assert result["content_type"] == "technology_tutorial"
+    assert result["audience"] == "刚开始学习视频制作的观众"
+    assert result["register"] == "清楚、亲切的教程口语"
 
 
 def test_context_analysis_samples_long_transcript_across_the_full_document(monkeypatch):
@@ -291,6 +298,86 @@ def test_full_document_localization_retries_one_damaged_json_response(monkeypatc
     assert any("人物的 walk/gait" in rule for rule in payloads[0]["editorial_rules"])
 
 
+@pytest.mark.parametrize(
+    ("content_type", "audience", "register", "role_marker", "rule_marker"),
+    [
+        ("technology_tutorial", "软件入门观众", "清楚亲切的教程口语", "科技与教程", "工具、模型"),
+        ("interview", "关注人物故事的观众", "自然克制的对谈口语", "访谈与对谈", "问答轮次"),
+        ("news", "大众新闻观众", "中性准确的新闻表达", "新闻内容", "消息来源"),
+        ("documentary_history", "历史纪录片观众", "沉稳严谨的旁白", "纪录片与历史", "史料来源"),
+        ("drama_dialogue", "剧情片观众", "贴近角色的生活化对白", "剧情与角色对白", "潜台词"),
+    ],
+)
+def test_localization_prompts_follow_content_profile_without_leaking_technology_rules(
+    monkeypatch,
+    content_type,
+    audience,
+    register,
+    role_marker,
+    rule_marker,
+):
+    calls: list[dict] = []
+
+    def complete_json(**kwargs):
+        calls.append(kwargs)
+        if kwargs["user_payload"]["task"].endswith(":localize"):
+            return {"items": [{"id": "bundle_001", "text": "示例中文"}]}
+        return {"checked_count": 1, "changes": []}
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
+    context = {
+        "content_type": content_type,
+        "audience": audience,
+        "register": register,
+    }
+    bundles = [{"id": "bundle_001", "speaker_id": "speaker_01", "source": "Example source."}]
+
+    localized, _diagnostics = localization._localize_semantic_bundles(
+        bundles,
+        draft=_draft(),
+        context=context,
+        research={},
+        profile_id="llm_default",
+        source_language="en",
+        target_language="zh-Hans",
+        localization_level="L1",
+        worldview_permeability="W0",
+        is_cancelled=None,
+    )
+    localization._review_localized_bundles(
+        localized,
+        context=context,
+        profile_id="llm_default",
+        is_cancelled=None,
+    )
+
+    generation_call, review_call = calls
+    assert generation_call["user_payload"]["profile"] == {
+        "localization_level": "L1",
+        "worldview_permeability": "W0",
+        "content_type": content_type,
+        "audience": audience,
+        "register": register,
+    }
+    assert review_call["user_payload"]["content_profile"] == {
+        "content_type": content_type,
+        "audience": audience,
+        "register": register,
+    }
+    prompt_text = json.dumps(calls, ensure_ascii=False, default=str)
+    assert role_marker in generation_call["system_prompt"]
+    assert role_marker in review_call["system_prompt"]
+    assert generation_call["disable_reasoning"] is True
+    assert review_call["disable_reasoning"] is True
+    assert rule_marker in prompt_text
+    if content_type == "technology_tutorial":
+        assert "4K" in prompt_text
+    else:
+        assert "4K" not in prompt_text
+        assert "科技视频" not in prompt_text
+        assert "短视频和 AI 创作工具" not in prompt_text
+
+
 def test_oversized_localization_document_uses_continuous_anchored_chapters(monkeypatch):
     bundles = [
         {"id": f"bundle_{index:03d}", "speaker_id": "speaker_01", "source": character * 10}
@@ -301,12 +388,7 @@ def test_oversized_localization_document_uses_continuous_anchored_chapters(monke
     def complete_json(**kwargs):
         payload = kwargs["user_payload"]
         payloads.append(payload)
-        return {
-            "items": [
-                {"id": item["id"], "text": f"中文 {item['id']}"}
-                for item in payload["document"]
-            ]
-        }
+        return {"items": [{"id": item["id"], "text": f"中文 {item['id']}"} for item in payload["document"]]}
 
     monkeypatch.setattr(localization, "LOCALIZATION_DOCUMENT_MAX_SOURCE_CHARS", 20)
     monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
@@ -415,7 +497,10 @@ def test_pause_split_candidates_require_both_audio_gap_and_longer_chinese():
 
 
 def test_localization_review_focus_flags_calques_collocations_and_real_referents():
-    context = {"speakers": [{"speaker_id": "speaker_01"}]}
+    context = {
+        "content_type": "technology_tutorial",
+        "speakers": [{"speaker_id": "speaker_01"}],
+    }
     visual = localization._localization_review_focus(
         {
             "source_text": "This is the cleanest 4K AI and a small screen does not do it justice",
@@ -431,7 +516,7 @@ def test_localization_review_focus_flags_calques_collocations_and_real_referents
         context,
     )
 
-    assert any("不能单独用‘干净’" in hint for hint in visual)
+    assert any("不能脱离对象机械使用‘干净’" in hint for hint in visual)
     assert any("体现不了" in hint for hint in visual)
     assert any("工具或 AI" in hint for hint in tool_pronoun)
 
@@ -536,6 +621,7 @@ def test_bundle_review_focus_does_not_turn_every_motion_into_a_trajectory():
 
 
 def test_bundle_review_repairs_a_replacement_that_keeps_a_motion_relation_error(monkeypatch):
+    calls = []
     responses = iter(
         [
             {
@@ -559,7 +645,11 @@ def test_bundle_review_repairs_a_replacement_that_keeps_a_motion_relation_error(
             },
         ]
     )
-    monkeypatch.setattr(localization.llm_runtime, "complete_json", lambda **_kwargs: next(responses))
+    def complete_json(**kwargs):
+        calls.append(kwargs)
+        return next(responses)
+
+    monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
 
     reviewed, changes, diagnostics = localization._review_localized_bundles(
         [
@@ -576,6 +666,7 @@ def test_bundle_review_repairs_a_replacement_that_keeps_a_motion_relation_error(
     assert reviewed[0]["text"] == "原本在地面拍下的手持运镜 现在被搬到了几千英尺的高空"
     assert changes[0]["reason"] == "修正动作与空间关系"
     assert diagnostics["request_count"] == 2
+    assert calls[1]["disable_reasoning"] is True
 
 
 def test_bundle_review_still_requires_a_missing_number_to_be_repaired(monkeypatch):
@@ -945,8 +1036,7 @@ def test_localization_pipeline_uses_one_generation_and_one_sparse_review(monkeyp
     assert sum(task.endswith(":timed-review-detect") for task in tasks) == 1
     assert not any(task.endswith(":fit-segments") for task in tasks)
     metrics = {
-        item["label"]: item["value"]
-        for item in run.summary["task_step_results"]["post_review_constraints"]["metrics"]
+        item["label"]: item["value"] for item in run.summary["task_step_results"]["post_review_constraints"]["metrics"]
     }
     assert metrics["二次返修"] == "0"
     assert metrics["剩余硬性超限"] == "0"
@@ -966,9 +1056,7 @@ def test_localization_sparse_review_repairs_changed_numbers_once(monkeypatch):
             {"items": [{"id": "bundle_001", "text": "这彻底改变了创作者。"}]},
             {
                 "checked_count": 1,
-                "changes": [
-                    {"id": "bundle_001", "replacement": "1992 年，这彻底改变了创作者。", "reason": "补回年份"}
-                ],
+                "changes": [{"id": "bundle_001", "replacement": "1992 年，这彻底改变了创作者。", "reason": "补回年份"}],
             },
             {"checked_count": 1, "changes": []},
         ]
@@ -1009,9 +1097,7 @@ def test_localization_pipeline_rejects_numbers_when_repair_still_changes_them(mo
             bad,
             {
                 "checked_count": 1,
-                "changes": [
-                    {"id": "bundle_001", "replacement": "这彻底改变了创作者。", "reason": "未补回数字"}
-                ],
+                "changes": [{"id": "bundle_001", "replacement": "这彻底改变了创作者。", "reason": "未补回数字"}],
             },
         ]
     )
@@ -1211,11 +1297,7 @@ def test_timed_review_detects_on_full_timeline_then_repairs_only_reported_ids(mo
         assert payload["issue_ids"] == ["localized_0021"]
         assert [item["id"] for item in payload["editable_items"]] == ["localized_0021"]
         assert len(payload["ordered_context"]) == 7
-        return {
-            "changes": [
-                {"id": "localized_0021", "text": "他打了个响指，画面立刻变了。", "reason": "修正语义顺序"}
-            ]
-        }
+        return {"changes": [{"id": "localized_0021", "text": "他打了个响指，画面立刻变了。", "reason": "修正语义顺序"}]}
 
     monkeypatch.setattr(localization.llm_runtime, "complete_json", complete_json)
 
@@ -1530,7 +1612,9 @@ def test_timed_review_still_rejects_a_preexisting_unresolved_number_loss(monkeyp
 
 def test_timed_review_allows_a_preexisting_number_shift_to_be_fixed_as_one_cluster(monkeypatch):
     timed = [_timed_item(0), _timed_item(1)]
-    timed[0].update(source_text="Created with Seedance 2.", display_text="这是用 Seedance", tts_text="这是用 Seedance，")
+    timed[0].update(
+        source_text="Created with Seedance 2.", display_text="这是用 Seedance", tts_text="这是用 Seedance，"
+    )
     timed[1].update(source_text="0 in 4K", display_text="2.0 的 4K 画面", tts_text="2.0 的 4K 画面。")
     payloads = []
 
@@ -1794,9 +1878,10 @@ def test_localization_number_check_rejoins_split_decimal_word_tokens():
 
 def test_semantic_source_join_rejoins_decimal_when_period_starts_next_segment():
     assert localization._join_semantic_sources(["Seedance 2", ".0 in 4K."]) == "Seedance 2.0 in 4K."
-    assert localization._normalized_numbers(
-        localization._join_semantic_sources(["Seedance 2", ".0 in 4K."])
-    ) == {"2.0": 1, "4K": 1}
+    assert localization._normalized_numbers(localization._join_semantic_sources(["Seedance 2", ".0 in 4K."])) == {
+        "2.0": 1,
+        "4K": 1,
+    }
 
 
 def test_post_review_merge_keeps_degree_adverb_with_negative_predicate():
@@ -1950,10 +2035,12 @@ def test_review_focus_flags_unnatural_shot_classifier():
 def test_review_focus_flags_literal_reaction_and_4k_phrasing():
     source = "Insane, right? This is the same shot mixed with Seedance 2.0 in 4K."
     chinese = "疯狂 对吧？这是同一个镜头 用Seedance 2.0在4K下混合"
+    context = {"content_type": "technology_tutorial"}
 
-    bundle_focus = localization._localized_bundle_review_focus(source, chinese)
+    bundle_focus = localization._localized_bundle_review_focus(source, chinese, context)
     timed_focus = localization._timed_localization_review_focus(
-        {"source_text": source, "display_text": chinese, "tts_text": chinese}
+        {"source_text": source, "display_text": chinese, "tts_text": chinese},
+        context,
     )
 
     assert any("机械翻译" in item for item in bundle_focus)
@@ -1966,9 +2053,14 @@ def test_review_focus_flags_model_and_output_spec_attached_to_the_wrong_object()
     source = "This is the same shot mixed with Acme 3.1 in 4K."
     chinese = "这是同一个画面混了Acme 3.1的4K画质"
 
-    focus = localization._localized_bundle_review_focus(source, chinese)
+    focus = localization._localized_bundle_review_focus(
+        source,
+        chinese,
+        {"content_type": "technology_tutorial"},
+    )
 
     assert any("输出规格" in item for item in focus)
+    assert any("工具/模型还是素材" in item for item in focus)
 
 
 def test_review_focus_flags_literal_english_possessive_in_self_action():

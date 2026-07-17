@@ -147,12 +147,14 @@ async def get_video_localization_stem_audio(project_id: str, kind: str):
 async def transcribe_video_localization_english(
     project_id: str,
     source_track_id: Literal["auto", "original", "vocals", "dub"] = Query(default="auto"),
+    source_language: Literal["auto", "en", "zh"] = Query(default="auto"),
     segmentation_profile_id: Literal["generic_zh", "short_video_large_text", "conservative_release"] = Query(default="generic_zh"),
 ):
     updated = await asyncio.to_thread(
         video_localization_service.transcribe_english_source_audio,
         project_id,
         source_track_id=source_track_id,
+        source_language=source_language,
         segmentation_profile_id=segmentation_profile_id,
     )
     return require_resource(updated)
