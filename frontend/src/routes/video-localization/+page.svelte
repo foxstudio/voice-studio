@@ -311,6 +311,9 @@
 	const visibleQualityWarnings = $derived(
 		(draft?.quality_gate.warnings ?? []).filter((issue) => qualityIssueAppliesToStage(issue, hasLocalizationWork, dubbingStageActive))
 	);
+	const firstVisibleQualityIssue = $derived(
+		[...visibleQualityBlockers, ...visibleQualityWarnings][0] ?? null
+	);
 	const transcription = $derived(draft?.transcription ?? null);
 	const noticeText = $derived(error ? summarizeVideoLocalizationError(error) : message);
 	const localizedCount = $derived(draft?.localized_subtitles?.length ?? 0);
@@ -726,6 +729,10 @@
 			const project = await Api.createProject(projectName, '外文视频中文配音草稿');
 			projects = [...projects, project];
 			projectId = project.project_id;
+			inspectorCollapsed = false;
+			inspectorSection = 'tasks';
+			inspectorVoiceTab = 'library';
+			taskCenterPulseKey += 1;
 			const targetProjectId = project.project_id;
 			draft = withEditableMediaClips(await Api.importVideoLocalizationSource(targetProjectId, file));
 			if (!draft.source_media.audio_path && !draft.stems.original_audio_path) {
@@ -823,6 +830,7 @@
 			await submitMediaOperation('english_asr', `字幕听写任务已开始（${asrEngineLabel(selectedAsrEngineId)}）`, {
 				engine_id: selectedAsrEngineId,
 				source_track_id: sourceTrackId,
+				source_language: sourceTrackId === 'dub' ? 'zh' : (draft?.language_config?.source_language || 'auto'),
 				segmentation_profile_id: segmentationProfileId
 			});
 		} catch (e) {
@@ -856,8 +864,8 @@
 				return;
 			}
 			await submitMediaOperation('localization_draft', '本土化字幕初稿任务已开始', {
-				source_language: draft.transcription?.language || 'en',
-				target_language: 'zh-Hans',
+				source_language: draft.language_config?.detected_source_language || draft.transcription?.language || 'en',
+				target_language: draft.language_config?.target_language || 'zh-Hans',
 				localization_level: 'L1',
 				worldview_permeability: 'W0'
 			}, pendingTaskId);
@@ -1242,7 +1250,11 @@
 	}
 
 	function focusQualityIssue(issue: VideoLocalizationQualityIssue) {
-		if (!issue.cue_id || !draft) return;
+		if (!issue.cue_id || !draft) {
+			focusInspector('subtitle');
+			message = issue.message;
+			return;
+		}
 		const cue = draft.cues.find((item) => item.cue_id === issue.cue_id);
 		if (!cue) return;
 		selectCue(cue.cue_id);
@@ -2246,6 +2258,9 @@
 		selectedVoiceId = '';
 		selectedRecipeId = '';
 		ttsBatchId = '';
+		inspectorCollapsed = false;
+		inspectorSection = 'tasks';
+		inspectorVoiceTab = 'library';
 		autoSaveStatus = 'idle';
 		stopOperationPolling();
 	}
@@ -2866,35 +2881,20 @@
 				canUndoTimeline={timelineUndoStack.length > 0}
 				canRedoTimeline={timelineRedoStack.length > 0}
 			/>
-			{#if visibleQualityWarnings.length || visibleQualityBlockers.length}
-				<div class="quality-bar panel-inline">
-					{#each visibleQualityBlockers.slice(0, 3) as issue}
-						{#if issue.cue_id}
-							<button class="badge fail quality-issue" type="button" onclick={() => focusQualityIssue(issue)} data-tooltip="定位到对应字幕片段并移动播放头。"><AlertTriangle size={13} /> {issue.message}</button>
-						{:else}
-							<span class="badge fail"><AlertTriangle size={13} /> {issue.message}</span>
-						{/if}
-					{/each}
-					{#if visibleQualityBlockers.length > 3}
-						<span class="badge fail"><AlertTriangle size={13} /> 另有 {visibleQualityBlockers.length - 3} 条阻断项</span>
-					{/if}
-					{#each visibleQualityWarnings.slice(0, 4) as issue}
-						{#if issue.cue_id}
-							<button class="badge warn quality-issue" type="button" onclick={() => focusQualityIssue(issue)} data-tooltip="定位到对应字幕片段并移动播放头。"><AlertTriangle size={13} /> {issue.message}</button>
-						{:else}
-							<span class="badge warn"><AlertTriangle size={13} /> {issue.message}</span>
-						{/if}
-					{/each}
-					{#if visibleQualityWarnings.length > 4}
-						<span class="badge warn"><AlertTriangle size={13} /> 另有 {visibleQualityWarnings.length - 4} 条待处理提示</span>
-					{/if}
-				</div>
-			{/if}
 			<footer class="delivery-bar" aria-label="交付输出">
 				<div class="delivery-summary">
 					<Download size={14} />
 					<strong>交付</strong>
 					<span>{draft?.cues.length ?? 0} 条原字幕 · {localizedCount} 条本土化字幕</span>
+					{#if visibleQualityBlockers.length || visibleQualityWarnings.length}
+						<button
+							class="delivery-quality"
+							class:blocking={visibleQualityBlockers.length > 0}
+							type="button"
+							onclick={() => firstVisibleQualityIssue && focusQualityIssue(firstVisibleQualityIssue)}
+							data-tooltip={firstVisibleQualityIssue ? `质量检查｜${firstVisibleQualityIssue.message}` : '质量检查'}
+						><AlertTriangle size={11} /> {visibleQualityBlockers.length ? `${visibleQualityBlockers.length} 项需处理` : `${visibleQualityWarnings.length} 项待检查`}</button>
+					{/if}
 				</div>
 				<div class="delivery-actions">
 					<button class="mini-btn" type="button" onclick={() => exportSubtitleSrt('en')} disabled={!draft?.cues.length} data-tooltip="导出 ASR 字幕：下载当前原文字幕轨。"><Download size={13} /> ASR 字幕</button>
@@ -3420,24 +3420,6 @@
 		opacity: 0.65;
 	}
 
-	.quality-bar {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 8px;
-	}
-
-	.quality-issue {
-		font: inherit;
-		cursor: pointer;
-	}
-
-	.quality-issue:hover,
-	.quality-issue:focus-visible {
-		filter: brightness(1.14);
-		outline: 1px solid rgba(255, 255, 255, 0.2);
-		outline-offset: 1px;
-	}
-
 	.delivery-bar {
 		display: flex;
 		align-items: center;
@@ -3469,19 +3451,33 @@
 		white-space: nowrap;
 	}
 
+	.delivery-quality {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		border: 0;
+		background: transparent;
+		color: #d7b76c;
+		font: inherit;
+		font-size: 10px;
+		cursor: pointer;
+	}
+
+	.delivery-quality.blocking {
+		color: #e88989;
+	}
+
+	.delivery-quality:disabled {
+		cursor: default;
+		opacity: 0.7;
+	}
+
 	.delivery-actions {
 		display: flex;
 		flex-wrap: wrap;
 		justify-content: flex-end;
 		gap: 5px;
 		align-items: center;
-	}
-
-	.panel-inline {
-		border: 1px solid var(--line);
-		border-radius: 8px;
-		padding: 10px;
-		background: #101215;
 	}
 
 	@media (max-width: 1560px) {

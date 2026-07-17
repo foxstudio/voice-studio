@@ -1,16 +1,17 @@
 # Video Localization Domain
 
-This package owns the backend business rules for English video to Chinese subtitle and dubbing localization.
+This package owns the backend business rules for source-video transcription and Chinese subtitle/dubbing localization. The persisted `english_asr` operation name remains a v1 compatibility identifier; new queued work carries an explicit source language and defaults to automatic English/Chinese detection.
 
 ## Layers
 
 - `service.py`: thin application facade used by API routes, task queues, and legacy callers. It checks project existence, loads drafts, and delegates to domain modules.
 - `draft_store.py`: project-parameter persistence for the `video_localization` draft plus quality-gate refresh before save/export.
 - `schemas.py`: domain schema facade. It re-exports the current stable Pydantic models so domain code has one import boundary while preserving class identity.
-- `source_pipeline.py`: source media import, source-audio extraction, stem separation, and English ASR draft generation.
+- `source_pipeline.py`: atomic source media import, source-audio extraction, stem separation, and source-language ASR draft generation. Replacing source media invalidates the detected language together with the old transcription.
 - `cues.py`: ASR cue creation, cue patch validation, and cue quality flags.
 - `speakers.py`: speaker roster creation/update plus cue/reference-derived speaker timeline reconciliation.
-- `localization.py`: Chinese subtitle draft and TTS-readable text draft rules.
+- `localization.py`: Chinese subtitle draft and TTS-readable text draft rules, including semantic-aware source-word boundary mapping for localized timing.
+- `boundary_review.py`: sparse LLM review of ambiguous ASR subtitle boundaries. Structured DeepSeek calls disable reasoning output so JSON capacity is reserved for decisions instead of hidden thought tokens.
 - `reference_clips.py`: clean-vocal reference clip candidates and manual reference review updates.
 - `tts_pipeline.py`: pure cue-level TTS request/result mapping.
 - `tts_orchestration.py`: adapter between this domain and the shared batch TTS queue.

@@ -362,6 +362,7 @@ def transcribe_english_source_audio(
     project_id: str,
     engine_id: str = source_pipeline.DEFAULT_ENGLISH_ASR_ENGINE_ID,
     source_track_id: source_pipeline.EnglishAsrSourceTrackId | str = "auto",
+    source_language: str = "en",
     is_cancelled: Callable[[], bool] | None = None,
     on_progress: Callable[[float, str], None] | None = None,
     on_preview: Callable[[str, list[dict]], None] | None = None,
@@ -381,6 +382,7 @@ def transcribe_english_source_audio(
         draft,
         engine_id,
         source_track_id,
+        source_language=source_language,
         project_id=project_id,
         segmentation_profile_id=segmentation_profile_id,
         progress_callback=on_progress,
@@ -548,8 +550,8 @@ def generate_localization_draft(project_id: str) -> VideoLocalizationDraft | Non
 def run_localization_draft(
     project_id: str,
     *,
-    source_language: str = "en",
-    target_language: str = "zh-Hans",
+    source_language: str = "auto",
+    target_language: str | None = None,
     profile_id: str | None = None,
     localization_level: str = "L1",
     worldview_permeability: str = "W0",
@@ -566,12 +568,22 @@ def run_localization_draft(
     if not project:
         return None, {}
     snapshot = get_video_localization(project_id) or VideoLocalizationDraft()
+    resolved_source_language = source_pipeline.normalize_source_language(
+        source_language or snapshot.language_config.source_language
+    )
+    if resolved_source_language == "auto":
+        resolved_source_language = (
+            snapshot.language_config.detected_source_language
+            or (snapshot.transcription.language if snapshot.transcription else None)
+            or "en"
+        )
+    resolved_target_language = target_language or snapshot.language_config.target_language
     fingerprint = localization.source_fingerprint(snapshot)
     try:
         run = localization.generate_localization_draft(
             snapshot,
-            source_language=source_language,
-            target_language=target_language,
+            source_language=resolved_source_language,
+            target_language=resolved_target_language,
             profile_id=profile_id,
             localization_level=localization_level,
             worldview_permeability=worldview_permeability,
@@ -616,6 +628,12 @@ def run_localization_draft(
                     "cues": next_cues,
                     "localized_subtitles": run.draft.localized_subtitles,
                     "localization_state": run.draft.localization_state,
+                    "language_config": latest.language_config.model_copy(
+                        update={
+                            "detected_source_language": resolved_source_language,
+                            "target_language": resolved_target_language,
+                        }
+                    ),
                 }
             )
             if is_cancelled and is_cancelled():

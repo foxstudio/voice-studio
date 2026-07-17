@@ -89,11 +89,26 @@ def validate_prerequisites(kind: OperationKind, draft: VideoLocalizationDraft, p
         from app.domains.video_localization import source_pipeline
 
         source_pipeline.validate_english_asr_source(draft, str((parameters or {}).get("source_track_id") or "auto"))
+        source_pipeline.normalize_source_language(str((parameters or {}).get("source_language") or "auto"))
         return
 
     if kind == "localization_draft":
         if not draft.cues or not any((cue.en_subtitle_text or "").strip() for cue in draft.cues):
             raise AppException(400, "VIDEO_LOCALIZATION_CUES_MISSING", "请先生成并校对 ASR 字幕。")
+        from app.domains.video_localization import source_pipeline
+
+        source_pipeline.normalize_source_language(
+            str((parameters or {}).get("source_language") or draft.language_config.source_language)
+        )
+        target_language = str(
+            (parameters or {}).get("target_language") or draft.language_config.target_language
+        )
+        if target_language != "zh-Hans":
+            raise AppException(
+                400,
+                "VIDEO_LOCALIZATION_TARGET_LANGUAGE_UNSUPPORTED",
+                "当前版本先支持简体中文本土化。",
+            )
         from app.services import llm_runtime
 
         try:
@@ -222,6 +237,8 @@ def english_asr_summary(draft: VideoLocalizationDraft | None) -> dict:
     summary = {
         "engine_id": draft.source_media.metadata.get("english_asr_engine_id"),
         "source_track_id": draft.source_media.metadata.get("english_asr_source_track_id"),
+        "language": draft.source_media.metadata.get("english_asr_language")
+        or (draft.transcription.language if draft.transcription else None),
         "segment_count": draft.source_media.metadata.get("english_asr_raw_segment_count"),
         "cue_count": len(draft.cues),
         "audio_boundary_status": draft.source_media.metadata.get("english_asr_audio_boundary_status"),

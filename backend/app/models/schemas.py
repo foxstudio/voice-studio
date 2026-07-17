@@ -1551,10 +1551,17 @@ class VideoLocalizationGlossaryEntry(VideoLocalizationExtensibleModel):
     notes: str | None = None
 
 
+class VideoLocalizationLanguageConfig(VideoLocalizationExtensibleModel):
+    source_language: Literal["auto", "en", "zh"] = "auto"
+    target_language: str = "zh-Hans"
+    detected_source_language: Literal["en", "zh"] | None = None
+
+
 class VideoLocalizationDraft(BaseModel):
     project_type: Literal["video_localization"] = "video_localization"
     schema_version: str = "v1"
     status: Literal["draft", "reviewing", "ready_for_tts", "tts_running", "candidate", "blocked"] = "draft"
+    language_config: VideoLocalizationLanguageConfig = Field(default_factory=VideoLocalizationLanguageConfig)
     source_media: VideoLocalizationSourceMedia = Field(default_factory=VideoLocalizationSourceMedia)
     stems: VideoLocalizationStems = Field(default_factory=VideoLocalizationStems)
     speakers: list[VideoLocalizationSpeaker] = Field(default_factory=list)

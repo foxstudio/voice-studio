@@ -182,6 +182,32 @@ def test_transcribe_and_process_returns_state_and_reports_stage_progress(monkeyp
     assert result.model_dump()["pipeline_timing"] == result.pipeline_timing
 
 
+@pytest.mark.parametrize(
+    ("segment_language", "text", "expected"),
+    [
+        ("English", "Hello world", "en"),
+        ("Chinese", "你好世界", "zh"),
+        (None, "这是自动检测", "zh"),
+        (None, "Automatic detection", "en"),
+    ],
+)
+def test_auto_source_language_resolves_from_asr_output(segment_language, text, expected):
+    class Segment:
+        language = segment_language
+
+    assert transcription._resolve_transcript_language("auto", [Segment()], text) == expected
+
+
+def test_auto_source_language_tie_uses_first_detected_segment():
+    class Segment:
+        def __init__(self, language: str):
+            self.language = language
+
+    segments = [Segment("English"), Segment("Chinese")]
+
+    assert transcription._resolve_transcript_language("auto", segments, "Hello 你好") == "en"
+
+
 def test_review_segments_applies_conservative_correction(monkeypatch):
     _configure_llm(monkeypatch)
     monkeypatch.setattr(

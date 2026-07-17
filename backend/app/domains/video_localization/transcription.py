@@ -5,6 +5,7 @@ import re
 import tempfile
 import time
 import unicodedata
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from functools import partial
@@ -142,6 +143,7 @@ def transcribe_and_process(
     raw_segments = asr_service.normalize_segments(result.get("segments"))
     segments = _build_segments(raw_segments, str(result.get("text") or "").strip(), duration_ms)
     raw_text = _join_segment_text(segment.raw_text for segment in segments)
+    resolved_language = _resolve_transcript_language(language, raw_segments, raw_text)
     stage_timings["asr"] = {
         "duration_ms": _elapsed_ms(stage_started_at),
         "segment_count": len(segments),
@@ -152,7 +154,7 @@ def transcribe_and_process(
     stage_started_at = time.perf_counter()
     research = web_research.research_transcript(
         segments,
-        language=language,
+        language=resolved_language,
         scene_context=scene_context,
         profile_id=llm_profile_id,
         cache_dir=research_cache_dir,
@@ -171,7 +173,7 @@ def transcribe_and_process(
     stage_started_at = time.perf_counter()
     reviewed_segments, review_meta = review_segments(
         segments,
-        language=language,
+        language=resolved_language,
         profile_id=llm_profile_id,
         glossary=glossary,
         scene_context=scene_context,
@@ -189,7 +191,11 @@ def transcribe_and_process(
     ensure_active()
     _report_progress(progress_callback, 0.58, "正在生成逐词时间码")
     stage_started_at = time.perf_counter()
-    words, alignment_meta = align_segments(resolved_alignment_audio_path, reviewed_segments, language=language)
+    words, alignment_meta = align_segments(
+        resolved_alignment_audio_path,
+        reviewed_segments,
+        language=resolved_language,
+    )
     stage_timings["alignment"] = {
         "duration_ms": _elapsed_ms(stage_started_at),
         "word_count": len(words),
@@ -216,7 +222,7 @@ def transcribe_and_process(
     boundary_reviews, boundary_review_meta = boundary_review.review_candidate_boundaries(
         words,
         boundary_features,
-        language=language,
+        language=resolved_language,
         segmentation_profile_id=segmentation_profile_id,
         audio_analysis_available=boundary_meta.get("status") == "completed",
         profile_id=llm_profile_id,
@@ -253,7 +259,7 @@ def transcribe_and_process(
     }
 
     return VideoLocalizationTranscriptionState(
-        language=language,
+        language=resolved_language,
         source_track_id=source_track_id,
         source_audio_sha256=source_audio_sha256 or media_assets.file_sha256(audio_path),
         alignment_source_track_id=alignment_source_track_id or source_track_id,
@@ -452,6 +458,33 @@ def _build_segments(
             review_flags=["segment_timing_missing"] if not duration_ms else [],
         )
     ]
+
+
+def _resolve_transcript_language(language: str, raw_segments: list, text: str) -> str:
+    requested = str(language or "auto").strip().lower()
+    if requested in {"en", "zh"}:
+        return requested
+
+    aliases = {
+        "en": "en",
+        "english": "en",
+        "zh": "zh",
+        "zh-cn": "zh",
+        "chinese": "zh",
+    }
+    detected = [
+        aliases.get(str(getattr(segment, "language", "") or "").strip().lower())
+        for segment in raw_segments
+    ]
+    detected = [item for item in detected if item]
+    if detected:
+        counts = Counter(detected)
+        highest = max(counts.values())
+        return next(item for item in detected if counts[item] == highest)
+
+    cjk_count = len(CJK_PATTERN.findall(text))
+    latin_count = len(re.findall(r"[A-Za-z]", text))
+    return "zh" if cjk_count > latin_count else "en"
 
 
 def review_segments(

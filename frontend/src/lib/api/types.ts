@@ -820,6 +820,12 @@ export interface VideoLocalizationDraft {
 	project_type: 'video_localization';
 	schema_version: string;
 	status: 'draft' | 'reviewing' | 'ready_for_tts' | 'tts_running' | 'candidate' | 'blocked';
+	language_config?: {
+		source_language: 'auto' | 'en' | 'zh';
+		target_language: string;
+		detected_source_language: 'en' | 'zh' | null;
+		[key: string]: unknown;
+	};
 	source_media: VideoLocalizationSourceMedia;
 	stems: VideoLocalizationStems;
 	speakers: VideoLocalizationSpeaker[];

@@ -203,6 +203,7 @@ def list_operation_summaries(project_id: str) -> list[VideoLocalizationOperation
         "segment_count",
         "localized_subtitle_count",
         "engine_id",
+        "language",
         "llm_profile_id",
         "llm_model_id",
         "source_track_id",
@@ -280,6 +281,41 @@ def retry(project_id: str, operation_id: str) -> VideoLocalizationOperation | No
     return submit(project_id, operation.kind, operation.parameters)
 
 
+def _normalized_operation_parameters(
+    kind: OperationKind,
+    parameters: dict | None,
+    draft: VideoLocalizationDraft,
+) -> dict:
+    normalized = {key: value for key, value in (parameters or {}).items() if key != "scope"}
+    if kind == "english_asr":
+        normalized.update(
+            {
+                "engine_id": str(normalized.get("engine_id") or source_pipeline.DEFAULT_ENGLISH_ASR_ENGINE_ID),
+                "source_track_id": str(normalized.get("source_track_id") or "auto"),
+                "source_language": source_pipeline.normalize_source_language(
+                    str(normalized.get("source_language") or draft.language_config.source_language)
+                ),
+                "segmentation_profile_id": str(normalized.get("segmentation_profile_id") or "generic_zh"),
+            }
+        )
+    elif kind == "localization_draft":
+        normalized.update(
+            {
+                "source_language": source_pipeline.normalize_source_language(
+                    str(normalized.get("source_language") or draft.language_config.source_language)
+                ),
+                "target_language": str(
+                    normalized.get("target_language") or draft.language_config.target_language
+                ),
+                "profile_id": str(normalized.get("profile_id") or ""),
+                "localization_level": str(normalized.get("localization_level") or "L1"),
+                "worldview_permeability": str(normalized.get("worldview_permeability") or "W0"),
+            }
+        )
+    normalized["scope"] = operation_state.operation_scope(kind, normalized)
+    return normalized
+
+
 def submit(project_id: str, kind: OperationKind, parameters: dict | None = None) -> VideoLocalizationOperation | None:
     project = project_store.get_project(project_id)
     if not project:
@@ -287,13 +323,20 @@ def submit(project_id: str, kind: OperationKind, parameters: dict | None = None)
     draft = service.get_video_localization(project_id) or VideoLocalizationDraft()
     operation_state.validate_prerequisites(kind, draft, parameters)
 
+    operation_parameters = _normalized_operation_parameters(kind, parameters, draft)
+
     active = operation_state.active_operation_for_kind(draft, kind)
     if active:
+        active_parameters = _normalized_operation_parameters(kind, active.parameters, draft)
+        if active_parameters != operation_parameters:
+            raise AppException(
+                409,
+                "VIDEO_LOCALIZATION_OPERATION_PARAMETERS_CONFLICT",
+                "同类任务正在使用另一组参数处理，请等待当前任务结束后再试。",
+            )
         _enqueue(active.operation_id)
         return active
 
-    operation_parameters = dict(parameters or {})
-    operation_parameters["scope"] = operation_state.operation_scope(kind, operation_parameters)
     operation = VideoLocalizationOperation(
         project_id=project_id,
         kind=kind,
@@ -360,6 +403,9 @@ def _process(operation_id: str) -> None:
         elif operation.kind == "english_asr":
             engine_id = str(operation.parameters.get("engine_id") or source_pipeline.DEFAULT_ENGLISH_ASR_ENGINE_ID)
             source_track_id = str(operation.parameters.get("source_track_id") or "auto")
+            source_language = source_pipeline.normalize_source_language(
+                str(operation.parameters.get("source_language") or "auto")
+            )
             segmentation_profile_id = str(operation.parameters.get("segmentation_profile_id") or "generic_zh")
             stage_timer = _StageTimer(_asr_stage_id)
 
@@ -382,6 +428,7 @@ def _process(operation_id: str) -> None:
                 project_id,
                 engine_id=engine_id,
                 source_track_id=source_track_id,
+                source_language=source_language,
                 is_cancelled=lambda: _cancel_requested(project_id, operation_id),
                 on_progress=report_asr_progress,
                 on_preview=lambda phase, cues: _mark_operation(
@@ -416,8 +463,8 @@ def _process(operation_id: str) -> None:
 
             updated, summary = service.run_localization_draft(
                 project_id,
-                source_language=str(operation.parameters.get("source_language") or "en"),
-                target_language=str(operation.parameters.get("target_language") or "zh-Hans"),
+                source_language=str(operation.parameters.get("source_language") or "auto"),
+                target_language=str(operation.parameters.get("target_language") or "") or None,
                 profile_id=str(operation.parameters.get("profile_id") or "") or None,
                 localization_level=str(operation.parameters.get("localization_level") or "L1"),
                 worldview_permeability=str(operation.parameters.get("worldview_permeability") or "W0"),

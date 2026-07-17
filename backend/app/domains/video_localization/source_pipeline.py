@@ -20,11 +20,13 @@ from app.services import asr_service, audio_tools
 EnglishAsrSourceTrackId = Literal["auto", "original", "vocals", "dub"]
 ResolvedEnglishAsrSourceTrackId = Literal["original", "vocals", "dub"]
 DEFAULT_ENGLISH_ASR_ENGINE_ID = "qwen3-asr-mlx"
+SUPPORTED_SOURCE_LANGUAGES = {"auto", "en", "zh"}
 
 _ENGLISH_ASR_METADATA_KEYS = {
     "english_asr_status",
     "english_asr_engine_id",
     "english_asr_source_track_id",
+    "english_asr_language",
     "english_asr_source_state_sha256",
     "english_asr_alignment_source_track_id",
     "english_asr_segment_count",
@@ -45,23 +47,36 @@ _ENGLISH_ASR_METADATA_KEYS = {
 }
 
 
+def normalize_source_language(value: str | None, *, default: str = "auto") -> str:
+    language = str(value or default).strip().lower()
+    aliases = {"english": "en", "英文": "en", "chinese": "zh", "中文": "zh"}
+    language = aliases.get(language, language)
+    if language not in SUPPORTED_SOURCE_LANGUAGES:
+        raise AppException(
+            400,
+            "VIDEO_LOCALIZATION_SOURCE_LANGUAGE_UNSUPPORTED",
+            "当前字幕听写支持自动识别、英语或中文。",
+        )
+    return language
+
+
 async def with_imported_source_media(
     project_id: str, draft: VideoLocalizationDraft, file: UploadFile
 ) -> VideoLocalizationDraft:
-    source_path, content = await media_assets.save_uploaded_video(project_id, file)
+    source_path, size_bytes, content_sha256 = await media_assets.save_uploaded_video(project_id, file)
     video_meta = media_assets.probe_video(source_path)
     draft = _without_source_derivatives(draft)
     source_media = draft.source_media.model_copy(
         update={
             "filename": file.filename or source_path.name,
             "video_path": str(source_path),
-            "size_bytes": len(content),
+            "size_bytes": size_bytes,
             "duration_ms": video_meta.get("duration_ms"),
             "width": video_meta.get("width"),
             "height": video_meta.get("height"),
             "frame_rate": video_meta.get("frame_rate"),
             "imported_at": now_iso(),
-            "content_sha256": hashlib.sha256(content).hexdigest(),
+            "content_sha256": content_sha256,
             "audio_path": None,
             "audio_sha256": None,
             "metadata": {
@@ -143,6 +158,7 @@ def _without_source_derivatives(draft: VideoLocalizationDraft) -> VideoLocalizat
         update={
             "status": "draft",
             "source_media": draft.source_media.model_copy(update={"metadata": {}}),
+            "language_config": draft.language_config.model_copy(update={"detected_source_language": None}),
             "stems": type(draft.stems)(),
             "speakers": [],
             "reference_clips": [],
@@ -168,6 +184,7 @@ def without_english_asr(draft: VideoLocalizationDraft) -> VideoLocalizationDraft
     return draft.model_copy(
         update={
             "source_media": draft.source_media.model_copy(update={"metadata": metadata}),
+            "language_config": draft.language_config.model_copy(update={"detected_source_language": None}),
             "cues": [],
             "transcription": None,
             "localized_subtitles": localized_subtitles,
@@ -216,7 +233,7 @@ def validate_english_asr_source(
         raise AppException(
             400,
             "VIDEO_LOCALIZATION_ASR_SOURCE_TRACK_UNSUPPORTED",
-            "英文听写音轨仅支持 auto、original、vocals 或 dub。",
+            "字幕听写音轨仅支持 auto、original、vocals 或 dub。",
         )
 
     original_value = draft.source_media.audio_path or draft.stems.original_audio_path
@@ -228,7 +245,7 @@ def validate_english_asr_source(
         _required_asr_source(
             vocals_value,
             missing_code="VIDEO_LOCALIZATION_CLEAN_VOCALS_MISSING",
-            missing_message="请先完成人声分离，再从纯人声轨执行英文听写。",
+            missing_message="请先完成人声分离，再从纯人声轨执行字幕听写。",
             not_found_code="VIDEO_LOCALIZATION_CLEAN_VOCALS_NOT_FOUND",
             not_found_message="纯人声轨文件不存在，请重新执行人声分离。",
         )
@@ -237,7 +254,7 @@ def validate_english_asr_source(
         _required_asr_source(
             original_value,
             missing_code="VIDEO_LOCALIZATION_SOURCE_AUDIO_MISSING",
-            missing_message="请先提取源音轨，再执行英文听写。",
+            missing_message="请先提取源音轨，再执行字幕听写。",
             not_found_code="VIDEO_LOCALIZATION_SOURCE_AUDIO_NOT_FOUND",
             not_found_message="源音轨文件不存在，请重新提取。",
         )
@@ -248,7 +265,7 @@ def validate_english_asr_source(
     _required_asr_source(
         original_value,
         missing_code="VIDEO_LOCALIZATION_SOURCE_AUDIO_MISSING",
-        missing_message="请先提取源音轨，再执行英文听写。",
+        missing_message="请先提取源音轨，再执行字幕听写。",
         not_found_code="VIDEO_LOCALIZATION_SOURCE_AUDIO_NOT_FOUND",
         not_found_message="源音轨文件不存在，请重新提取。",
     )
@@ -259,6 +276,7 @@ def with_english_asr(
     draft: VideoLocalizationDraft,
     engine_id: str = DEFAULT_ENGLISH_ASR_ENGINE_ID,
     source_track_id: EnglishAsrSourceTrackId | str = "auto",
+    source_language: str = "en",
     project_id: str | None = None,
     segmentation_profile_id: str = subtitle_segmentation.DEFAULT_PROFILE_ID,
     progress_callback: Callable[[float, str], None] | None = None,
@@ -280,6 +298,8 @@ def with_english_asr(
     try:
         source_audio_sha256 = media_assets.file_sha256(audio_path)
         alignment_audio_sha256 = media_assets.file_sha256(alignment_audio_path)
+        requested_language = normalize_source_language(source_language, default="en")
+        asr_language = "zh" if resolved_track_id == "dub" and requested_language == "auto" else requested_language
         previous_transcription = draft.transcription
         can_reuse_boundary_reviews = bool(
             previous_transcription
@@ -288,11 +308,11 @@ def with_english_asr(
             and previous_transcription.engine_id == engine_id
             and previous_transcription.source_track_id == resolved_track_id
             and previous_transcription.alignment_source_track_id == alignment_track_id
+            and (asr_language == "auto" or previous_transcription.language == asr_language)
         )
         asr_duration_ms = draft.source_media.duration_ms
         if resolved_track_id == "dub" and asr_duration_ms is None:
             asr_duration_ms = int(audio_tools.probe_audio(audio_path).get("duration_ms") or 0)
-        asr_language = "zh" if resolved_track_id == "dub" else "en"
         transcript = transcription.transcribe_and_process(
             audio_path=audio_path,
             alignment_audio_path=alignment_audio_path,
@@ -363,6 +383,7 @@ def with_english_asr(
                 "english_asr_status": "completed",
                 "english_asr_engine_id": engine_id,
                 "english_asr_source_track_id": resolved_track_id,
+                "english_asr_language": transcript.language,
                 **({"english_asr_source_state_sha256": source_state_sha256} if source_state_sha256 is not None else {}),
                 "english_asr_alignment_source_track_id": alignment_track_id,
                 "english_asr_segment_count": len(generated_cues),
@@ -386,6 +407,9 @@ def with_english_asr(
     return draft.model_copy(
         update={
             "source_media": source_media,
+            "language_config": draft.language_config.model_copy(
+                update={"detected_source_language": transcript.language}
+            ),
             "transcription": transcript,
             "cues": _ordered_cues([*preserved_cues, *generated_cues]),
         }
@@ -422,6 +446,9 @@ def merge_english_asr_result(
     return latest.model_copy(
         update={
             "source_media": source_media,
+            "language_config": latest.language_config.model_copy(
+                update={"detected_source_language": transcript.language}
+            ),
             "transcription": transcript,
             "cues": _ordered_cues([*preserved_cues, *generated_cues]),
         }

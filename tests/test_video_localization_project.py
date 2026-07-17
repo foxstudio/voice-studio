@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import shutil
@@ -1364,6 +1365,57 @@ def test_video_localization_import_source_media_updates_draft(tmp_path: Path, mo
     assert "导入视频" in str(video_path)
 
 
+@pytest.mark.asyncio
+async def test_video_localization_upload_streams_to_disk_and_hashes_incrementally(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "流式导入", "description": ""}).json()
+    chunks = [b"a" * (1024 * 1024), b"b" * 17, b""]
+
+    class ChunkedUpload:
+        filename = "large.mp4"
+        content_type = "video/mp4"
+
+        def __init__(self):
+            self.read_sizes = []
+
+        async def read(self, size: int):
+            self.read_sizes.append(size)
+            return chunks.pop(0)
+
+    upload = ChunkedUpload()
+    path, size_bytes, content_sha256 = await media_assets.save_uploaded_video(project["project_id"], upload)
+
+    assert upload.read_sizes == [1024 * 1024, 1024 * 1024, 1024 * 1024]
+    assert size_bytes == 1024 * 1024 + 17
+    assert path.stat().st_size == size_bytes
+    assert content_sha256 == media_assets.file_sha256(path)
+
+
+@pytest.mark.asyncio
+async def test_video_localization_cancelled_upload_removes_partial_file(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "取消导入", "description": ""}).json()
+
+    class CancelledUpload:
+        filename = "cancelled.mp4"
+        content_type = "video/mp4"
+
+        def __init__(self):
+            self.read_count = 0
+
+        async def read(self, _size: int):
+            self.read_count += 1
+            if self.read_count == 1:
+                return b"partial-video"
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await media_assets.save_uploaded_video(project["project_id"], CancelledUpload())
+
+    source_dir = _project_root(project["project_id"]) / "source"
+    assert list(source_dir.iterdir()) == []
+
+
 def test_video_localization_reimport_invalidates_source_derived_state(tmp_path: Path, monkeypatch):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "替换源视频", "description": ""}).json()
@@ -1372,6 +1424,11 @@ def test_video_localization_reimport_invalidates_source_derived_state(tmp_path: 
         json={
             "project_type": "video_localization",
             "schema_version": "v1",
+            "language_config": {
+                "source_language": "auto",
+                "target_language": "zh-Hans",
+                "detected_source_language": "en",
+            },
             "source_media": {"filename": "old.mp4", "metadata": {"english_asr_status": "completed"}},
             "stems": {"vocals_clean_path": "/tmp/old-vocals.wav", "separation_status": "completed"},
             "speakers": [{"speaker_id": "old-speaker"}],
@@ -1406,6 +1463,11 @@ def test_video_localization_reimport_invalidates_source_derived_state(tmp_path: 
     assert body["generated_candidates"] == []
     assert body["timeline_clips"] == []
     assert body["ui_state"] == {"timeline_zoom": 4}
+    assert body["language_config"] == {
+        "source_language": "auto",
+        "target_language": "zh-Hans",
+        "detected_source_language": None,
+    }
 
 
 def test_video_localization_project_rename_moves_storage_and_paths(tmp_path: Path, monkeypatch):
@@ -2773,7 +2835,7 @@ def test_video_localization_async_asr_uses_requested_vocals_track(tmp_path: Path
     def fake_transcribe(*, engine_id: str, audio_path: str, language: str):
         assert engine_id == "faster-whisper-turbo"
         assert Path(audio_path) == vocals_path
-        assert language == "en"
+        assert language == "auto"
         return {"segments": [{"start_ms": 0, "end_ms": 1800, "text": "Clean voice", "language": "en"}]}
 
     monkeypatch.setattr(video_localization_source_pipeline.asr_service, "transcribe", fake_transcribe)
@@ -2795,6 +2857,7 @@ def test_video_localization_async_asr_uses_requested_vocals_track(tmp_path: Path
         {"engine_id": "faster-whisper-turbo", "source_track_id": "vocals"},
     )
     assert operation is not None
+    assert operation.parameters["source_language"] == "auto"
     assert operation.parameters["scope"] == {
         "area": "subtitle",
         "exclusive": True,
@@ -2812,6 +2875,12 @@ def test_video_localization_async_asr_uses_requested_vocals_track(tmp_path: Path
     assert updated["source_media"]["metadata"]["english_asr_source_track_id"] == "vocals"
     assert updated["source_media"]["metadata"]["english_asr_alignment_source_track_id"] == "original"
     assert updated["transcription"]["source_track_id"] == "vocals"
+    assert updated["transcription"]["language"] == "en"
+    assert updated["language_config"] == {
+        "source_language": "auto",
+        "target_language": "zh-Hans",
+        "detected_source_language": "en",
+    }
     assert updated["transcription"]["alignment_source_track_id"] == "original"
     assert updated["cues"][0]["en_subtitle_text"] == "Clean voice"
     assert progress_stages == [
@@ -2824,6 +2893,72 @@ def test_video_localization_async_asr_uses_requested_vocals_track(tmp_path: Path
         "正在复核字幕断句",
         "正在生成字幕轨",
     ]
+
+
+def test_video_localization_active_asr_rejects_conflicting_language_parameters(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "ASR 参数冲突", "description": ""}).json()
+    audio_path = _project_root(project["project_id"]) / "audio" / "source.wav"
+    audio_path.parent.mkdir(parents=True, exist_ok=True)
+    audio_path.write_bytes(b"audio")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "source_media": {"filename": "demo.mp4", "audio_path": str(audio_path)},
+        },
+    )
+    monkeypatch.setattr(video_localization_operation_queue, "_enqueue", lambda _operation_id: None)
+
+    first = video_localization_operation_queue.submit(
+        project["project_id"],
+        "english_asr",
+        {"source_track_id": "original", "source_language": "en"},
+    )
+    duplicate = video_localization_operation_queue.submit(
+        project["project_id"],
+        "english_asr",
+        {
+            "engine_id": video_localization_source_pipeline.DEFAULT_ENGLISH_ASR_ENGINE_ID,
+            "source_track_id": "original",
+            "source_language": "en",
+            "segmentation_profile_id": "generic_zh",
+        },
+    )
+
+    assert first is not None and duplicate is not None
+    assert duplicate.operation_id == first.operation_id
+    with pytest.raises(AppException) as exc_info:
+        video_localization_operation_queue.submit(
+            project["project_id"],
+            "english_asr",
+            {"source_track_id": "original", "source_language": "zh"},
+        )
+    assert exc_info.value.code == "VIDEO_LOCALIZATION_OPERATION_PARAMETERS_CONFLICT"
+
+
+def test_video_localization_localization_parameters_normalize_explicit_defaults():
+    draft = VideoLocalizationDraft()
+
+    implicit = video_localization_operation_queue._normalized_operation_parameters(
+        "localization_draft",
+        {},
+        draft,
+    )
+    explicit = video_localization_operation_queue._normalized_operation_parameters(
+        "localization_draft",
+        {
+            "source_language": "auto",
+            "target_language": "zh-Hans",
+            "profile_id": None,
+            "localization_level": "L1",
+            "worldview_permeability": "W0",
+        },
+        draft,
+    )
+
+    assert implicit == explicit
 
 
 def test_video_localization_reference_candidates_require_clean_vocals(tmp_path: Path):
@@ -4613,6 +4748,7 @@ def test_video_localization_clear_asr_subtitle_track_is_atomic_and_idempotent(tm
     project = client.post("/api/projects", json={"name": "清空 ASR 字幕", "description": ""}).json()
     base = _completed_asr_result(VideoLocalizationDraft())
     payload = base.model_dump(mode="json")
+    payload["language_config"]["detected_source_language"] = "en"
     payload["source_media"]["metadata"]["keep_me"] = "yes"
     payload["cues"] = [
         {
@@ -4646,6 +4782,7 @@ def test_video_localization_clear_asr_subtitle_track_is_atomic_and_idempotent(tm
     assert body["localized_subtitles"][0]["text"] == "保留本土化字幕"
     assert body["localized_subtitles"][0]["linked_cue_id"] is None
     assert body["ui_state"]["selected_cue_id"] == ""
+    assert body["language_config"]["detected_source_language"] is None
     assert client.delete(f"/api/projects/{project['project_id']}/video-localization/subtitles/en").status_code == 200
 
 

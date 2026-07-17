@@ -22,22 +22,32 @@ LEGACY_DIR_NAME = "video_localization"
 MIGRATION_CONFLICT_DIR = "migration-conflicts"
 
 
-async def save_uploaded_video(project_id: str, file: UploadFile) -> tuple[Path, bytes]:
+async def save_uploaded_video(project_id: str, file: UploadFile) -> tuple[Path, int, str]:
     filename = file.filename or "source.mp4"
     suffix = Path(filename).suffix.lower()
     if suffix not in VIDEO_EXTENSIONS:
         raise AppException(400, "VIDEO_LOCALIZATION_UNSUPPORTED_MEDIA", "Only mp4, mov, m4v, webm, and mkv videos are supported")
 
-    content = await file.read()
-    if not content:
-        raise AppException(400, "VIDEO_LOCALIZATION_EMPTY_UPLOAD", "Uploaded video is empty")
-
     settings_store.ensure_directories()
     source_dir = project_video_localization_dir(project_id) / "source"
     source_dir.mkdir(parents=True, exist_ok=True)
     destination = unique_path(source_dir / safe_filename(filename))
-    destination.write_bytes(content)
-    return destination, content
+    temporary = unique_path(destination.with_name(f".{destination.name}.part"))
+    digest = hashlib.sha256()
+    size_bytes = 0
+    try:
+        with temporary.open("wb") as handle:
+            while chunk := await file.read(1024 * 1024):
+                handle.write(chunk)
+                digest.update(chunk)
+                size_bytes += len(chunk)
+        if not size_bytes:
+            raise AppException(400, "VIDEO_LOCALIZATION_EMPTY_UPLOAD", "Uploaded video is empty")
+        temporary.replace(destination)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    return destination, size_bytes, digest.hexdigest()
 
 
 def file_sha256(path: str | Path) -> str:
