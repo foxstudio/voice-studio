@@ -18,6 +18,7 @@ describe('timeline context menu', () => {
 		onClearSubtitleTrack: vi.fn(),
 		onDeleteSubtitleItem: vi.fn(),
 		onDeleteAudioClip: vi.fn(),
+		onDeleteSelectedItems: vi.fn(),
 		onFillSubtitleGaps: vi.fn(),
 		onSetSelectionStart: vi.fn(),
 		onSetSelectionEnd: vi.fn(),
@@ -125,6 +126,63 @@ describe('timeline context menu', () => {
 		expect(items[0]).toMatchObject({ id: 'delete-audio-clip-clip_01', tone: 'danger' });
 		await items[0].onSelect();
 		expect(remove).toHaveBeenCalledWith('clip_01');
+	});
+
+	it('deletes the complete multi-selection when right-clicking one selected item', async () => {
+		const remove = vi.fn();
+		const selectedItems = [
+			{ kind: 'subtitle' as const, trackId: 'localizedSubtitles' as const, itemId: 'localized_01' },
+			{ kind: 'audio' as const, trackId: 'dub' as const, itemId: 'clip_01' }
+		];
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'subtitle-clip', trackId: 'localizedSubtitles', subtitleTrack: 'localized', itemId: 'localized_01', timeMs: 900 },
+			context({ selectedItems, onDeleteSelectedItems: remove })
+		);
+
+		expect(items[0]).toMatchObject({ id: 'delete-selected-timeline-items', label: '删除所选片段（2）', tone: 'danger' });
+		await items[0].onSelect();
+		expect(remove).toHaveBeenCalledWith(selectedItems);
+	});
+
+	it('keeps an unselected right-click target as a single-item delete', () => {
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'audio-clip', trackId: 'vocals', itemId: 'clip_02', timeMs: 900 },
+			context({
+				selectedItems: [
+					{ kind: 'audio' as const, trackId: 'vocals' as const, itemId: 'clip_01' },
+					{ kind: 'audio' as const, trackId: 'dub' as const, itemId: 'clip_03' }
+				]
+			})
+		);
+
+		expect(items[0]).toMatchObject({ id: 'delete-audio-clip-clip_02', label: '删除当前音频片段' });
+	});
+
+	it('adds whole-track deletion to empty audio track space', async () => {
+		const removeTrack = vi.fn();
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'track', hit: 'empty', trackId: 'dub', timeMs: 4321 },
+			context({ trackItemCount: 3, onDeleteTrack: removeTrack })
+		);
+
+		expect(items[0]).toMatchObject({ id: 'delete-track-dub', label: '删除整个轨道', disabled: false, tone: 'danger' });
+		await items[0].onSelect();
+		expect(removeTrack).toHaveBeenCalledWith('dub');
+	});
+
+	it('disables multi-selection deletion when any selected item is locked or busy', () => {
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'audio-clip', trackId: 'dub', itemId: 'clip_01', timeMs: 0 },
+			context({
+				selectionLocked: true,
+				selectedItems: [
+					{ kind: 'audio' as const, trackId: 'dub' as const, itemId: 'clip_01' },
+					{ kind: 'subtitle' as const, trackId: 'localizedSubtitles' as const, itemId: 'localized_01' }
+				]
+			})
+		);
+
+		expect(items[0]).toMatchObject({ id: 'delete-selected-timeline-items', disabled: true });
 	});
 
 	it('adds selection commands to every audio track and uses the pointer time', async () => {

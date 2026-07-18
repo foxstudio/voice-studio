@@ -7,7 +7,7 @@
 	import type { VideoLocalizationCue, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationSubtitleCue, VideoLocalizationTimelineClip } from '$lib/api/types';
 	import { durationLabel, timelineClipWaveformUrl } from './utils';
 	import { MIN_SUBTITLE_DURATION_MS, reorderAudioTracks, subtitleCueDragBounds, timeRangeIntersectsViewport, timelineViewportRange, TRACK_LABELS, type SubtitlePreviewSource, type SubtitlePreviewState, type VideoLocalizationAudioTrackId, type VideoLocalizationAudioTrackOrder, type VideoLocalizationTrackId, type VideoLocalizationTrackState, type VideoLocalizationTrackStates } from './studio-state';
-	import { buildSubtitleTrackCommands, buildTimelineContextMenuItems, type SubtitleTrackKind, type TimelineContextMenuTarget } from './timeline-context-menu';
+	import { buildSubtitleTrackCommands, buildTimelineContextMenuItems, type SubtitleTrackKind, type TimelineContextMenuTarget, type TimelineSelectionItem } from './timeline-context-menu';
 	import ActivityNotice from './ActivityNotice.svelte';
 	import { activityTaskAffectsTrack, type ActivityTask } from './activity-notice';
 	import type { AsrOperationPreview } from './asr-operation-preview';
@@ -83,6 +83,7 @@
 		onGenerateToSelection,
 		onUpdateTimelineClip,
 		onDeleteTimelineClip,
+		onDeleteTimelineItems,
 		hoverScrubEnabled = true,
 		onHoverScrubChange = undefined,
 		onHoverScrub = undefined,
@@ -148,6 +149,7 @@
 		onGenerateToSelection: (startMs: number, endMs: number) => void;
 		onUpdateTimelineClip: (clipId: string, startMs: number, endMs: number, sourceStartMs: number, sourceEndMs: number | null) => void;
 		onDeleteTimelineClip: (clipId: string) => void;
+		onDeleteTimelineItems: (items: TimelineSelectionItem[]) => void;
 		hoverScrubEnabled?: boolean;
 		onHoverScrubChange?: (enabled: boolean) => void;
 		onHoverScrub?: (timeMs: number) => void;
@@ -184,11 +186,6 @@
 		sourceStartMs: number;
 		sourceEndMs: number | null;
 		sourceDurationMs: number;
-	};
-	type TimelineSelectionItem = {
-		kind: 'subtitle' | 'audio';
-		trackId: VideoLocalizationTrackId;
-		itemId: string;
 	};
 	type MarqueeState = {
 		startX: number;
@@ -380,7 +377,16 @@
 				: 0;
 		const commands = buildTimelineContextMenuItems(target, {
 			itemCount,
+			trackItemCount: targetTrackId
+				? targetTrackId === 'subtitles'
+					? draft?.cues.length ?? 0
+					: targetTrackId === 'localizedSubtitles'
+						? draft?.localized_subtitles.length ?? 0
+						: clipsForTrack(targetTrackId).length
+				: 0,
 			locked: targetTrackId ? trackStates[targetTrackId].locked === true : false,
+			selectionLocked: selectionContainsLockedItem(selectedTimelineItems),
+			selectedItems: selectedTimelineItems,
 			canGenerateAsr: vocalsTrackReady,
 			asrBusy,
 			canGenerateLocalization: Boolean(draft?.cues.length),
@@ -391,8 +397,10 @@
 			onGenerateAsr,
 			onGenerateLocalization,
 			onClearSubtitleTrack,
-				onDeleteSubtitleItem: deleteSubtitleTimelineItem,
-				onDeleteAudioClip: deleteAudioTimelineItem,
+			onDeleteSubtitleItem: deleteSubtitleTimelineItem,
+			onDeleteAudioClip: deleteAudioTimelineItem,
+			onDeleteSelectedItems: deleteSelectedTimelineItems,
+			onDeleteTrack: deleteTimelineTrack,
 			onFillSubtitleGaps,
 			onSetSelectionStart: (timeMs) => setSelectionPoint('start', timeMs),
 			onSetSelectionEnd: (timeMs) => setSelectionPoint('end', timeMs),
@@ -825,7 +833,7 @@
 			if (canMergeSelectedCue) onMergeCue();
 		} else if (event.key === 'Delete' || event.key === 'Backspace') {
 			event.preventDefault();
-			if (canEditSelectedCue) onDeleteCue();
+			void deleteSelectedTimelineItems();
 		} else if (event.key.toLowerCase() === 'r') {
 			event.preventDefault();
 			if (canEditSelectedCue) setRangeFromSelectedCue();
@@ -1254,6 +1262,26 @@
 	async function deleteAudioTimelineItem(itemId: string) {
 		await onDeleteTimelineClip(itemId);
 		setTimelineSelection(selectedTimelineItems.filter((item) => !(item.kind === 'audio' && item.itemId === itemId)));
+	}
+
+	function selectionContainsLockedItem(items: TimelineSelectionItem[]) {
+		return items.some((item) => trackInteractionLocked(item.trackId, item.itemId));
+	}
+
+	async function deleteSelectedTimelineItems(items = selectedTimelineItems) {
+		const deletable = uniqueTimelineSelection(items);
+		if (!deletable.length || selectionContainsLockedItem(deletable)) return;
+		await onDeleteTimelineItems(deletable);
+		setTimelineSelection(selectedTimelineItems.filter((item) => !deletable.some((deleted) => selectionItemEqual(item, deleted))));
+	}
+
+	async function deleteTimelineTrack(trackId: VideoLocalizationTrackId) {
+		const items: TimelineSelectionItem[] = trackId === 'subtitles'
+			? (draft?.cues ?? []).map((cue) => ({ kind: 'subtitle', trackId, itemId: cue.cue_id }))
+			: trackId === 'localizedSubtitles'
+				? (draft?.localized_subtitles ?? []).map((cue) => ({ kind: 'subtitle', trackId, itemId: cue.subtitle_id }))
+				: clipsForTrack(trackId).map((clip) => ({ kind: 'audio', trackId, itemId: clip.clip_id }));
+		await deleteSelectedTimelineItems(items);
 	}
 
 	function isVideoDerivedAudioTrack(trackId: VideoLocalizationTrackId) {

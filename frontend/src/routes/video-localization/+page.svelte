@@ -6,7 +6,7 @@
 	} from '$lib/api/types';
 
 	export type AsrEngineId = 'faster-whisper-turbo' | 'qwen3-asr-mlx' | 'mimo-v2.5-asr';
-	export type InspectorSection = 'tasks' | 'voice' | 'generate' | 'subtitle' | 'style';
+	export type InspectorSection = 'tasks' | 'subtitle' | 'dubbing';
 	export const DEFAULT_ASR_ENGINE_ID: AsrEngineId = 'qwen3-asr-mlx';
 	type ManualTimingCue = ProtectedCue & {
 		manual_timing_revision?: number;
@@ -94,7 +94,7 @@
 	}
 
 	export function isDubbingInspectorSection(section: InspectorSection) {
-		return section === 'voice' || section === 'generate';
+		return section === 'dubbing';
 	}
 
 	export function cueHasCurrentManualTimingConfirmation(cue: ProtectedCue) {
@@ -195,12 +195,10 @@
 		FolderOpen,
 		FileUp,
 		ListTodo,
-		Palette,
 		PanelRightClose,
 		PanelRightOpen,
 		Pencil,
 		Trash2,
-		WandSparkles,
 		X
 	} from 'lucide-svelte';
 	import { onMount } from 'svelte';
@@ -221,6 +219,7 @@
 	import PreviewPanel from './PreviewPanel.svelte';
 	import SubtitleWorkflowSettings from './SubtitleWorkflowSettings.svelte';
 	import VideoCuttingTimeline from './VideoCuttingTimeline.svelte';
+	import type { TimelineSelectionItem } from './timeline-context-menu';
 	import { activityTaskAffectsTrack, activityTaskDisplayName, asrSubtitleActionLabel, operationActivityTask, pendingOperationActivityTask, type ActivityTask } from './activity-notice';
 	import { resolveAsrOperationPreview } from './asr-operation-preview';
 	import {
@@ -247,7 +246,6 @@
 	let selectedCueId = $state('');
 	let selectedLocalizedSubtitleId = $state('');
 	let selectedTimelineAudioClipId = $state('');
-	type TimelineSelectionItem = { kind: 'subtitle' | 'audio'; trackId: VideoLocalizationTrackId; itemId: string };
 	let timelineSelectionItems = $state<TimelineSelectionItem[]>([]);
 	let loading = $state(true);
 	let resetting = $state(false);
@@ -1182,17 +1180,16 @@
 		if (!clipId) return;
 		const clip = draft?.timeline_clips.find((item) => item.clip_id === clipId);
 		if (!clip || clip.track_id !== 'dub') return;
+		focusInspector('dubbing');
 		if (clip.subtitle_id) {
 			selectedLocalizedSubtitleId = clip.subtitle_id;
 			const subtitle = draft?.localized_subtitles.find((item) => item.subtitle_id === clip.subtitle_id);
 			if (subtitle?.linked_cue_id) selectedCueId = subtitle.linked_cue_id;
-			focusInspector('subtitle');
 			return;
 		}
 		if (clip.cue_id) {
 			selectedCueId = clip.cue_id;
 			selectedLocalizedSubtitleId = '';
-			focusInspector('subtitle');
 		}
 	}
 
@@ -1670,22 +1667,57 @@
 	}
 
 	function deleteTimelineClip(clipId: string) {
-		if (!draft) return;
+		const target = draft?.timeline_clips.find((clip) => clip.clip_id === clipId);
+		if (!target) return;
+		deleteTimelineItems([{ kind: 'audio', trackId: target.track_id as VideoLocalizationTrackId, itemId: clipId }]);
+	}
+
+	function deleteTimelineItems(items: TimelineSelectionItem[]) {
+		if (!draft || !items.length) return;
+		const uniqueItems = items.filter((item, index) => items.findIndex((candidate) =>
+			candidate.kind === item.kind && candidate.trackId === item.trackId && candidate.itemId === item.itemId
+		) === index);
+		const asrIds = new Set(uniqueItems.filter((item) => item.kind === 'subtitle' && item.trackId === 'subtitles').map((item) => item.itemId));
+		const localizedIds = new Set(uniqueItems.filter((item) => item.kind === 'subtitle' && item.trackId === 'localizedSubtitles').map((item) => item.itemId));
+		const audioIds = new Set(uniqueItems.filter((item) => item.kind === 'audio').map((item) => item.itemId));
+		const existingCount = draft.cues.filter((cue) => asrIds.has(cue.cue_id)).length
+			+ draft.localized_subtitles.filter((cue) => localizedIds.has(cue.subtitle_id)).length
+			+ draft.timeline_clips.filter((clip) => audioIds.has(clip.clip_id)).length;
+		if (!existingCount) return;
+
 		rememberTimelineClips();
 		timelineEditRevision += 1;
-		timelineDeletedClipIds.add(clipId);
-		const target = draft.timeline_clips.find((clip) => clip.clip_id === clipId);
-		const isMediaTrack = Boolean(target && ['original', 'vocals', 'background'].includes(target.track_id));
-		const disabledTracks = Array.isArray(draft.ui_state?.disabled_media_tracks) ? draft.ui_state.disabled_media_tracks.map(String) : [];
+		cueSaveRevision += asrIds.size ? 1 : 0;
+		localizedSubtitleSaveRevision += localizedIds.size ? 1 : 0;
+		for (const clipId of audioIds) timelineDeletedClipIds.add(clipId);
+		const nextClips = draft.timeline_clips.filter((clip) => !audioIds.has(clip.clip_id));
+		const affectedMediaTracks = new Set(
+			draft.timeline_clips
+				.filter((clip) => audioIds.has(clip.clip_id) && ['original', 'vocals', 'background'].includes(clip.track_id))
+				.map((clip) => clip.track_id)
+		);
+		const disabledTracks = new Set(Array.isArray(draft.ui_state?.disabled_media_tracks) ? draft.ui_state.disabled_media_tracks.map(String) : []);
+		for (const trackId of affectedMediaTracks) {
+			if (!nextClips.some((clip) => clip.track_id === trackId)) disabledTracks.add(trackId);
+		}
+		const nextCues = draft.cues.filter((cue) => !asrIds.has(cue.cue_id));
 		draft = {
 			...draft,
-			timeline_clips: draft.timeline_clips.filter((clip) => clip.clip_id !== clipId),
-			ui_state: isMediaTrack && target
-				? { ...draft.ui_state, disabled_media_tracks: [...new Set([...disabledTracks, target.track_id])] }
-				: draft.ui_state
+			cues: nextCues,
+			localized_subtitles: draft.localized_subtitles.filter((cue) => !localizedIds.has(cue.subtitle_id)),
+			timeline_clips: nextClips,
+			ui_state: { ...draft.ui_state, disabled_media_tracks: [...disabledTracks] }
 		};
+		draftOnlyCueIds = draftOnlyCueIds.filter((id) => !asrIds.has(id));
+		if (asrIds.has(selectedCueId)) selectedCueId = nextCues[0]?.cue_id ?? '';
+		if (localizedIds.has(selectedLocalizedSubtitleId)) selectedLocalizedSubtitleId = '';
+		if (audioIds.has(selectedTimelineAudioClipId)) selectedTimelineAudioClipId = '';
+		timelineSelectionItems = timelineSelectionItems.filter((item) => !uniqueItems.some((deleted) =>
+			deleted.kind === item.kind && deleted.trackId === item.trackId && deleted.itemId === item.itemId
+		));
+		updateDraftUiState({ selected_cue_id: selectedCueId });
 		scheduleDraftAutosave();
-		message = '音频片段已从时间线移除';
+		message = existingCount > 1 ? `已删除所选的 ${existingCount} 个片段` : '片段已从时间线移除';
 		setTimeout(() => (message = ''), 1600);
 	}
 
@@ -2700,7 +2732,7 @@
 		const nextRecipeId = draft?.voice_recipes.find((recipe) => recipe.reference_clip_id === voiceId)?.recipe_id ?? '';
 		selectedRecipeId = nextRecipeId;
 		updateDraftUiState({ selected_reference_clip_id: voiceId, selected_recipe_id: nextRecipeId });
-		focusInspector('generate');
+		focusInspector('dubbing');
 	}
 
 	function updateSelectedRecipeId(recipeId: string) {
@@ -2810,12 +2842,12 @@
 
 	function focusSaveSelectionAsVoice(startMs: number, endMs: number) {
 		audioSelectionRange = { start_ms: startMs, end_ms: endMs };
-		focusInspector('voice', 'save-selection');
+		focusInspector('dubbing', 'save-selection');
 	}
 
 	function focusGenerateToSelection(startMs: number, endMs: number) {
 		audioSelectionRange = { start_ms: startMs, end_ms: endMs };
-		focusInspector('generate');
+		focusInspector('dubbing');
 	}
 
 	function updatePreviewTime(timeMs: number) {
@@ -3182,7 +3214,7 @@
 			>
 				<FolderOpen size={15} />
 			</button>
-			<button class="icon-action" type="button" onclick={toggleInspectorCollapsed} data-tooltip={inspectorCollapsed ? '展开侧栏：显示音色、字幕与样式检查器。' : '收起侧栏：为视频和时间线释放更多空间。'} aria-label={inspectorCollapsed ? '展开侧栏' : '收起侧栏'}>
+			<button class="icon-action" type="button" onclick={toggleInspectorCollapsed} data-tooltip={inspectorCollapsed ? '展开侧栏：显示任务、字幕与配音检查器。' : '收起侧栏：为视频和时间线释放更多空间。'} aria-label={inspectorCollapsed ? '展开侧栏' : '收起侧栏'}>
 				{#if inspectorCollapsed}
 					<PanelRightOpen size={16} />
 				{:else}
@@ -3270,6 +3302,7 @@
 				onGenerateToSelection={focusGenerateToSelection}
 				onUpdateTimelineClip={updateTimelineClipFromTimeline}
 				onDeleteTimelineClip={deleteTimelineClip}
+				onDeleteTimelineItems={deleteTimelineItems}
 				hoverScrubEnabled={hoverScrubEnabled}
 				onHoverScrubChange={updateHoverScrubEnabled}
 				onHoverScrub={hoverScrubPreview}
@@ -3346,9 +3379,7 @@
 			<aside class="inspector-rail">
 				<button class="rail-tab" type="button" onclick={openTaskCenter} aria-label="任务" data-tooltip="任务｜查看后台处理进度、子步骤和历史结果。"><ListTodo size={15} /></button>
 				<button class="rail-tab" type="button" onclick={() => focusInspector('subtitle')} aria-label="字幕" data-tooltip="字幕｜展开当前字幕片段编辑面板。"><Captions size={15} /></button>
-				<button class="rail-tab" type="button" onclick={() => focusInspector('voice')} aria-label="音色" data-tooltip="音色｜展开项目音色库和样音保存面板。"><AudioLines size={15} /></button>
-				<button class="rail-tab" type="button" onclick={() => focusInspector('generate')} aria-label="生成" data-tooltip="生成｜展开音色参数组和配音候选面板。"><WandSparkles size={15} /></button>
-				<button class="rail-tab" type="button" onclick={() => focusInspector('style')} aria-label="样式" data-tooltip="样式｜展开字幕外观和位置设置。"><Palette size={15} /></button>
+				<button class="rail-tab" type="button" onclick={() => focusInspector('dubbing')} aria-label="配音" data-tooltip="配音｜展开音色、生成参数和配音结果。"><AudioLines size={15} /></button>
 			</aside>
 		{/if}
 	</section>

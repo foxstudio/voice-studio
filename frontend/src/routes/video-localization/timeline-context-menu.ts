@@ -5,6 +5,12 @@ import { asrSubtitleActionLabel, localizationSubtitleActionLabel } from './activ
 
 export type SubtitleTrackKind = 'asr' | 'localized';
 
+export type TimelineSelectionItem = {
+	kind: 'subtitle' | 'audio';
+	trackId: VideoLocalizationTrackId;
+	itemId: string;
+};
+
 export type TimelineContextMenuTarget =
 	| { kind: 'track'; hit: 'empty'; trackId: VideoLocalizationTrackId; subtitleTrack?: SubtitleTrackKind; timeMs: number }
 	| { kind: 'subtitle-clip'; trackId: 'subtitles' | 'localizedSubtitles'; subtitleTrack: SubtitleTrackKind; itemId: string; timeMs: number }
@@ -14,7 +20,10 @@ export type TimelineContextMenuTarget =
 
 export type TimelineContextMenuContext = {
 	itemCount: number;
+	trackItemCount?: number;
 	locked: boolean;
+	selectionLocked?: boolean;
+	selectedItems?: TimelineSelectionItem[];
 	canGenerateAsr: boolean;
 	asrBusy: boolean;
 	canGenerateLocalization?: boolean;
@@ -28,6 +37,8 @@ export type TimelineContextMenuContext = {
 	onClearSubtitleTrack: (track: SubtitleTrackKind) => void | Promise<void>;
 	onDeleteSubtitleItem: (track: SubtitleTrackKind, itemId: string) => void | Promise<void>;
 	onDeleteAudioClip: (itemId: string) => void | Promise<void>;
+	onDeleteSelectedItems?: (items: TimelineSelectionItem[]) => void | Promise<void>;
+	onDeleteTrack?: (trackId: VideoLocalizationTrackId) => void | Promise<void>;
 	onFillSubtitleGaps: (track: SubtitleTrackKind) => void | Promise<void>;
 	onSetSelectionStart: (timeMs: number) => void;
 	onSetSelectionEnd: (timeMs: number) => void;
@@ -163,34 +174,63 @@ export function buildTimelineContextMenuItems(
 		? target.subtitleTrack
 		: undefined;
 	const itemCommands: ContextMenuItem[] = [];
+	const targetSelection = target.kind === 'subtitle-clip'
+		? { kind: 'subtitle' as const, trackId: target.trackId, itemId: target.itemId }
+		: target.kind === 'audio-clip'
+			? { kind: 'audio' as const, trackId: target.trackId, itemId: target.itemId }
+			: null;
+	const selectedItems = targetSelection && context.selectedItems?.some((item) =>
+		item.kind === targetSelection.kind && item.trackId === targetSelection.trackId && item.itemId === targetSelection.itemId
+	)
+		? context.selectedItems
+		: targetSelection ? [targetSelection] : [];
+	const deletingMultiple = selectedItems.length > 1;
 	if (target.kind === 'subtitle-clip') {
 		itemCommands.push({
-			id: `delete-${target.subtitleTrack}-subtitle-${target.itemId}`,
-			label: '删除当前字幕片段',
-			description: context.locked || context.trackBusy
-				? '当前字幕片段暂时不可编辑'
-				: '只删除当前选中的字幕片段，其他字幕不受影响',
+			id: deletingMultiple ? 'delete-selected-timeline-items' : `delete-${target.subtitleTrack}-subtitle-${target.itemId}`,
+			label: deletingMultiple ? `删除所选片段（${selectedItems.length}）` : '删除当前字幕片段',
+			description: context.selectionLocked || context.locked || context.trackBusy
+				? '所选片段包含锁定或正在处理的内容，暂时不能删除'
+				: deletingMultiple ? `一次删除所选的 ${selectedItems.length} 个片段，可使用撤销恢复` : '只删除当前字幕片段，其他字幕不受影响',
 			icon: Trash2,
-			disabled: context.locked || context.trackBusy
+			disabled: context.selectionLocked || context.locked || context.trackBusy
 				|| (target.subtitleTrack === 'asr' ? context.asrBusy : context.localizationBusy === true),
 			tone: 'danger',
-			onSelect: () => context.onDeleteSubtitleItem(target.subtitleTrack, target.itemId)
+			onSelect: () => deletingMultiple && context.onDeleteSelectedItems
+				? context.onDeleteSelectedItems(selectedItems)
+				: context.onDeleteSubtitleItem(target.subtitleTrack, target.itemId)
 		});
 	}
 	if (target.kind === 'audio-clip') {
 		itemCommands.push({
-			id: `delete-audio-clip-${target.itemId}`,
-			label: '删除当前音频片段',
-			description: context.locked || context.trackBusy
-				? '当前音频片段暂时不可编辑'
-				: '从当前轨道移除选中的音频片段，可使用撤销恢复',
+			id: deletingMultiple ? 'delete-selected-timeline-items' : `delete-audio-clip-${target.itemId}`,
+			label: deletingMultiple ? `删除所选片段（${selectedItems.length}）` : '删除当前音频片段',
+			description: context.selectionLocked || context.locked || context.trackBusy
+				? '所选片段包含锁定或正在处理的内容，暂时不能删除'
+				: deletingMultiple ? `一次删除所选的 ${selectedItems.length} 个片段，可使用撤销恢复` : '从当前轨道移除这个音频片段，可使用撤销恢复',
 			icon: Trash2,
-			disabled: context.locked || context.trackBusy,
+			disabled: context.selectionLocked || context.locked || context.trackBusy,
 			tone: 'danger',
-			onSelect: () => context.onDeleteAudioClip(target.itemId)
+			onSelect: () => deletingMultiple && context.onDeleteSelectedItems
+				? context.onDeleteSelectedItems(selectedItems)
+				: context.onDeleteAudioClip(target.itemId)
 		});
 	}
 	const trackCommands = subtitleTrack ? buildSubtitleTrackCommands(subtitleTrack, context) : [];
+	if (target.kind === 'track' && !subtitleTrack && context.onDeleteTrack) {
+		const trackItemCount = context.trackItemCount ?? 0;
+		trackCommands.push({
+			id: `delete-track-${target.trackId}`,
+			label: '删除整个轨道',
+			description: context.locked || context.trackBusy
+				? '当前轨道已锁定或正在处理，暂时不能删除'
+				: trackItemCount ? `移除当前轨道上的 ${trackItemCount} 个片段，可使用撤销恢复` : '当前轨道已经为空',
+			icon: Trash2,
+			disabled: context.locked || context.trackBusy || trackItemCount === 0,
+			tone: 'danger',
+			onSelect: () => context.onDeleteTrack?.(target.trackId)
+		});
+	}
 	const priorCount = itemCommands.length + trackCommands.length;
 	return [...itemCommands, ...trackCommands, ...buildSelectionCommands(target, context, priorCount > 0)];
 }

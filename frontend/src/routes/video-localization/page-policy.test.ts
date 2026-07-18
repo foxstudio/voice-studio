@@ -136,11 +136,10 @@ describe('draft conflict merge policy', () => {
 });
 
 describe('stage-aware quality issues', () => {
-	it('treats only the voice and generate inspectors as the dubbing stage', () => {
+	it('treats only the unified dubbing inspector as the dubbing stage', () => {
 		expect(isDubbingInspectorSection('subtitle')).toBe(false);
-		expect(isDubbingInspectorSection('style')).toBe(false);
-		expect(isDubbingInspectorSection('voice')).toBe(true);
-		expect(isDubbingInspectorSection('generate')).toBe(true);
+		expect(isDubbingInspectorSection('tasks')).toBe(false);
+		expect(isDubbingInspectorSection('dubbing')).toBe(true);
 	});
 
 	it('keeps ASR issues visible without treating TTS as a subtitle dependency', () => {

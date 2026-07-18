@@ -11,7 +11,7 @@
 		VideoLocalizationTimelineClip,
 		VideoLocalizationVoiceRecipe
 	} from '$lib/api/types';
-	import { AudioLines, Captions, CheckCircle2, ListTodo, Palette, WandSparkles } from 'lucide-svelte';
+	import { AudioLines, Captions, CheckCircle2, ListTodo } from 'lucide-svelte';
 	import TaskProgressPanel from './TaskProgressPanel.svelte';
 	import ScrubbableTimeField from './ScrubbableTimeField.svelte';
 	import SubtitleTtsHistory from './SubtitleTtsHistory.svelte';
@@ -95,11 +95,11 @@
 		selectionRange: { start_ms: number; end_ms: number } | null;
 		selectedVoiceId: string;
 		selectedRecipeId: string;
-		inspectorSection?: 'tasks' | 'voice' | 'generate' | 'subtitle' | 'style';
+		inspectorSection?: 'tasks' | 'subtitle' | 'dubbing';
 		inspectorVoiceTab?: 'library' | 'save-selection';
 		subtitlePreview?: SubtitlePreviewState;
 		onSelectedVoiceIdChange: (voiceId: string) => void;
-		onSectionChange: (section: 'tasks' | 'voice' | 'generate' | 'subtitle' | 'style') => void;
+		onSectionChange: (section: 'tasks' | 'subtitle' | 'dubbing') => void;
 		onUpdateCue: (patch: Partial<VideoLocalizationCue>) => void;
 		onPreviewLocalizedSubtitle?: (patch: Partial<VideoLocalizationSubtitleCue>) => void;
 		onUpdateLocalizedSubtitle?: (patch: Partial<VideoLocalizationSubtitleCue>) => void | Promise<void>;
@@ -158,7 +158,8 @@
 	let recipeDescription = $state('');
 	let recipeTags = $state('');
 	let recipeSnapshotText = $state('');
-	let activeSection = $state<'tasks' | 'voice' | 'generate' | 'subtitle' | 'style'>('tasks');
+	let activeSection = $state<'tasks' | 'subtitle' | 'dubbing'>('tasks');
+	let dubbingView = $state<'prepare' | 'results'>('prepare');
 
 	const selectedVoice = $derived(
 		(draft?.reference_clips ?? []).find((clip) => clip.reference_clip_id === selectedVoiceId) ?? draft?.reference_clips[0] ?? null
@@ -389,15 +390,17 @@
 		inspectorVoiceTab;
 		activeTab = inspectorVoiceTab;
 	});
+
+	$effect(() => {
+		if (selectedTimelineAudioClip?.track_id === 'dub') dubbingView = 'results';
+	});
 </script>
 
-<aside class="inspector" class:tasks-view={activeSection === 'tasks'} class:subtitle-view={activeSection === 'subtitle'}>
+<aside class="inspector" class:tasks-view={activeSection === 'tasks'} class:subtitle-view={activeSection === 'subtitle' || activeSection === 'dubbing'}>
 	<div class="inspector-mode-tabs" aria-label="右侧检查器">
 		<button class:active={activeSection === 'tasks'} type="button" data-tooltip="任务：查看后台处理进度、每一步状态和历史结果。" onclick={() => onSectionChange('tasks')}><ListTodo size={14} /><span>任务</span></button>
-		<button class:active={activeSection === 'subtitle'} type="button" data-tooltip="配音：编辑字幕、台词、时间码，并查看当前片段的配音记录。" onclick={() => onSectionChange('subtitle')}><Captions size={14} /><span>配音</span></button>
-		<button class:active={activeSection === 'voice'} type="button" data-tooltip="音色：管理项目样音，或把当前音频选区保存为音色。" onclick={() => onSectionChange('voice')}><AudioLines size={14} /><span>音色</span></button>
-		<button class:active={activeSection === 'generate'} type="button" data-tooltip="生成：使用当前音色和参数组生成所选字幕的配音。" onclick={() => onSectionChange('generate')}><WandSparkles size={14} /><span>生成</span></button>
-		<button class:active={activeSection === 'style'} type="button" data-tooltip="样式：调整视频预览中的字幕位置和外观。" onclick={() => onSectionChange('style')}><Palette size={14} /><span>样式</span></button>
+		<button class:active={activeSection === 'subtitle'} type="button" data-tooltip="字幕：编辑文本、时间码、校对状态和上屏样式。" onclick={() => onSectionChange('subtitle')}><Captions size={14} /><span>字幕</span></button>
+		<button class:active={activeSection === 'dubbing'} type="button" data-tooltip="配音：管理音色与参数，生成、试听并应用配音结果。" onclick={() => onSectionChange('dubbing')}><AudioLines size={14} /><span>配音</span></button>
 	</div>
 
 	{#if activeSection === 'tasks'}
@@ -406,14 +409,21 @@
 		</div>
 	{/if}
 
-	{#if activeSection === 'voice'}
+	{#if activeSection === 'dubbing'}
+		<div class="dubbing-view-tabs" aria-label="配音工作区">
+			<button class:active={dubbingView === 'prepare'} type="button" onclick={() => (dubbingView = 'prepare')}>生成设置</button>
+			<button class:active={dubbingView === 'results'} type="button" onclick={() => (dubbingView = 'results')}>配音结果</button>
+		</div>
+	{/if}
+
+	{#if activeSection === 'dubbing' && dubbingView === 'prepare'}
 		<div class="inspector-tabs">
 			<button class:active={activeTab === 'library'} type="button" data-tooltip="项目音色库：试听、检索和编辑本项目已保存的样音。" onclick={() => (activeTab = 'library')}>项目音色库</button>
 			<button class:active={activeTab === 'save-selection'} type="button" data-tooltip="保存当前选区：把时间线上的自由音频范围裁成项目样音。" onclick={() => (activeTab = 'save-selection')}>保存当前选区</button>
 		</div>
 	{/if}
 
-	{#if activeSection === 'voice' && activeTab === 'library'}
+	{#if activeSection === 'dubbing' && dubbingView === 'prepare' && activeTab === 'library'}
 		<section class="inspector-panel">
 			<div class="panel-head">
 				<h2>已保存音色</h2>
@@ -491,7 +501,7 @@
 				</div>
 			{/if}
 		</section>
-	{:else if activeSection === 'voice'}
+	{:else if activeSection === 'dubbing' && dubbingView === 'prepare'}
 		<section class="inspector-panel">
 			<div class="panel-head">
 				<h2>保存当前选区为音色</h2>
@@ -538,7 +548,7 @@
 		</section>
 	{/if}
 
-	{#if activeSection === 'generate'}
+	{#if activeSection === 'dubbing' && dubbingView === 'prepare'}
 		<section class="inspector-panel voice-lab-panel">
 			<div class="panel-head">
 				<h2>配音生成</h2>
@@ -651,6 +661,35 @@
 			{/if}
 		</div>
 	</section>
+	{/if}
+
+	{#if activeSection === 'dubbing' && dubbingView === 'results' && activeTtsSegmentId && onOpenSubtitleGenerate && onReuseSubtitleHistory}
+		<section class="inspector-panel dubbing-history-panel">
+			<SubtitleTtsHistory
+				items={ttsHistory}
+				selectedSegmentId={activeTtsSegmentId}
+				{segmentLabels}
+				canGenerate={canGenerateSubtitle}
+				busy={generatingVoice}
+				appliedResultId={appliedTtsResultId}
+				canApplyToTimeline={Boolean(activeTtsSegmentId)}
+				timelineClipPresent={Boolean(activeTimelineDubClip)}
+				applyingResultId={historyApplyingResultId}
+				onOpenGenerate={onOpenSubtitleGenerate}
+				onReuse={onReuseSubtitleHistory}
+				onApply={onApplySubtitleHistory}
+				onDelete={onDeleteSubtitleHistory}
+				onDeleteCurrent={onDeleteCurrentSubtitleHistory}
+				onDeleteAll={onDeleteAllSubtitleHistory}
+				selectionCount={selectedLocalizedSubtitles.length || 1}
+				selectionContiguous={selectedLocalizedSubtitlesContiguous}
+				frameRate={draft?.source_media.frame_rate ?? 24}
+			/>
+		</section>
+	{:else if activeSection === 'dubbing' && dubbingView === 'results'}
+		<section class="inspector-panel empty-dubbing-results">
+			<p class="empty-text">选择一条字幕或合成配音片段后，这里会显示对应的生成记录和时间线版本。</p>
+		</section>
 	{/if}
 
 	{#if activeSection === 'subtitle'}
@@ -788,33 +827,11 @@
 		{:else}
 			<p class="empty-text">点击时间线上的字幕片段后，这里会同步显示原文/ASR 与本土化字幕。</p>
 		{/if}
-		{#if activeTtsSegmentId && onOpenSubtitleGenerate && onReuseSubtitleHistory}
-			<SubtitleTtsHistory
-				items={ttsHistory}
-				selectedSegmentId={activeTtsSegmentId}
-				{segmentLabels}
-				canGenerate={canGenerateSubtitle}
-				busy={generatingVoice}
-				appliedResultId={appliedTtsResultId}
-				canApplyToTimeline={Boolean(activeTtsSegmentId)}
-				timelineClipPresent={Boolean(activeTimelineDubClip)}
-				applyingResultId={historyApplyingResultId}
-				onOpenGenerate={onOpenSubtitleGenerate}
-				onReuse={onReuseSubtitleHistory}
-				onApply={onApplySubtitleHistory}
-				onDelete={onDeleteSubtitleHistory}
-				onDeleteCurrent={onDeleteCurrentSubtitleHistory}
-				onDeleteAll={onDeleteAllSubtitleHistory}
-				selectionCount={selectedLocalizedSubtitles.length || 1}
-				selectionContiguous={selectedLocalizedSubtitlesContiguous}
-				frameRate={draft?.source_media.frame_rate ?? 24}
-			/>
-		{/if}
 	</section>
 	{/if}
 
-	{#if activeSection === 'style'}
-	<section class="inspector-panel">
+	{#if activeSection === 'subtitle'}
+	<section class="inspector-panel subtitle-style-panel">
 		<div class="panel-head">
 			<h2>字幕显示</h2>
 			<span>{subtitlePreview.enabled ? SUBTITLE_SOURCE_LABELS[subtitlePreview.source] : '已隐藏'}</span>
@@ -892,9 +909,9 @@
 		max-height: none;
 		min-height: 0;
 		box-sizing: border-box;
-		grid-template-rows: auto minmax(0, 1fr);
-		align-content: stretch;
-		overflow: hidden;
+		grid-template-rows: auto;
+		align-content: start;
+		overflow: auto;
 	}
 
 	.task-view-content {
@@ -913,12 +930,43 @@
 		background: #11161b;
 	}
 
+	.dubbing-view-tabs {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 3px;
+		padding: 3px;
+		border: 1px solid var(--line);
+		border-radius: 7px;
+		background: #11161b;
+	}
+
+	.dubbing-view-tabs button {
+		min-height: 28px;
+		border: 0;
+		border-radius: 5px;
+		background: transparent;
+		color: var(--muted);
+		font-size: 11px;
+		font-weight: 700;
+		cursor: pointer;
+	}
+
+	.dubbing-view-tabs button.active {
+		background: #273038;
+		color: var(--text);
+	}
+
+	.empty-dubbing-results {
+		border: 0;
+		background: transparent;
+	}
+
 	.inspector-mode-tabs {
 		position: sticky;
 		top: 0;
 		z-index: 3;
 		display: grid;
-		grid-template-columns: repeat(5, 1fr);
+		grid-template-columns: repeat(3, 1fr);
 		gap: 4px;
 		padding: 5px;
 		border: 1px solid var(--line);
@@ -972,10 +1020,34 @@
 		display: flex;
 		flex-direction: column;
 		min-height: 0;
-		height: 100%;
+		height: auto;
 		border: 0;
 		border-radius: 0;
 		background: transparent;
+		overflow: visible;
+	}
+
+	.subtitle-style-panel {
+		border: 0;
+		border-top: 1px solid var(--line);
+		border-radius: 0;
+		background: transparent;
+	}
+
+	.dubbing-history-panel {
+		display: flex;
+		min-height: 320px;
+		max-height: min(58vh, 620px);
+		border: 0;
+		border-top: 1px solid var(--line);
+		border-radius: 0;
+		background: transparent;
+		overflow: hidden;
+	}
+
+	.dubbing-history-panel :global(.tts-history) {
+		flex: 1 1 0;
+		min-height: 0;
 		overflow: hidden;
 	}
 
