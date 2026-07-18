@@ -16,6 +16,16 @@ The production order is:
 
 MOSS and CAM++ run in independent external Python environments under `~/VoiceStudio/engines`. Their models live under `~/VoiceStudio/models`. The main application environment does not import either runtime.
 
+Managed locations:
+
+- MOSS runtime: `~/VoiceStudio/engines/moss-transcribe-diarize`
+- MOSS model: `~/VoiceStudio/models/moss-transcribe-diarize-8bit`
+- CAM++ runtime: `~/VoiceStudio/engines/campplus-speaker-verifier`
+- CAM++ model: `~/VoiceStudio/models/campplus-speaker-verifier`
+
+The managed virtual environments use the stable UV Python installation under
+`~/.local/share/uv/python`; they must not point at a POC directory under `/tmp`.
+
 ## POC evidence
 
 Tested on 2026-07-18 with `vanch007/mlx-MOSS-Transcribe-Diarize-8bit` and `iic/speech_campplus_sv_zh-cn_16k-common`.
@@ -26,6 +36,16 @@ Tested on 2026-07-18 with `vanch007/mlx-MOSS-Transcribe-Diarize-8bit` and `iic/s
 - CAM++ centroid cosine for the two false-split intro clusters: `0.8146` in the POC and `0.7671` in the managed-runtime smoke test.
 - Different synthetic speakers (Samantha and Daniel) centroid cosine: `0.5207`.
 - Overlapping speech is not reliable: the added secondary voice was omitted entirely.
+
+Managed-runtime end-to-end checks:
+
+- Alternating two-speaker sample: 12 segments remained as 2 clusters. CAM++ cosine
+  `0.6119` was intentionally kept in the review band rather than auto-merged.
+- Single-speaker intro: MOSS split `S01/S02`; CAM++ cosine `0.7671` merged all
+  24 segments into 1 cluster.
+- The first run after rebuilding the MLX environment took `125.4s`; the following
+  75-second sample took `13.4s`. The task UI should expose diarization as a distinct
+  stage so model/Metal cold start does not look like a frozen ASR task.
 
 Initial project thresholds are deliberately conservative:
 
@@ -52,3 +72,11 @@ Mirror failure must be visible. Do not silently switch sources or report a parti
 - confirmed identity: a human-confirmed business fact; neither MOSS nor CAM++ can produce it.
 
 Knowledge enrichment remains non-blocking evidence. Search failure must not fail ASR or erase speaker timing.
+
+## Extension contract
+
+New primary ASR engines implement `AsrProvider`; new diarization engines implement
+`DiarizationProvider`. Provider outputs use milliseconds and anonymous
+`speaker_cluster` labels. Verification, project-level speaker binding, forced
+alignment, subtitle segmentation, and identity research stay outside provider
+adapters, so replacing a model does not replace the rest of the workflow.

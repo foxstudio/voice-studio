@@ -46,6 +46,60 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
         "sections": _sections(("识别样例", asr_samples)),
     }
 
+    speaker_clusters = transcription.speaker_clusters
+    review_clusters = [item for item in speaker_clusters if item.merge_status == "needs_review"]
+    auto_merged_clusters = [item for item in speaker_clusters if item.merge_status == "auto_merged"]
+    overlap_segments = [item for item in segments if item.has_speaker_overlap]
+    if transcription.diarization_status == "completed":
+        diarization_summary = f"区分出 {len(speaker_clusters)} 位匿名说话人，声纹簇检查已完成。"
+    elif transcription.diarization_status == "partial":
+        diarization_summary = (
+            f"区分出 {len(speaker_clusters)} 位匿名说话人，"
+            f"其中 {len(review_clusters)} 个声纹簇或 {len(overlap_segments)} 个重叠片段需要复核。"
+        )
+    elif transcription.diarization_status == "failed":
+        diarization_summary = "说话人区分失败；主转写已继续完成，请人工核对说话人。"
+    else:
+        diarization_summary = "本次没有启用说话人区分。"
+    cluster_items = [
+        {
+            "title": cluster.cluster_id,
+            "text": (
+                "、".join(cluster.merged_source_labels)
+                if cluster.merged_source_labels
+                else cluster.source_label
+            ),
+            "meta": _time_range(cluster.start_ms, cluster.end_ms),
+            "facts": [
+                {"label": "语音片段", "value": str(cluster.segment_count)},
+                {"label": "有效时长", "value": _duration_label(cluster.duration_ms)},
+                {
+                    "label": "合并判断",
+                    "value": {
+                        "auto_merged": "已自动合并同一人",
+                        "needs_review": "需要人工复核",
+                        "original": "保持原始分组",
+                    }[cluster.merge_status],
+                },
+            ],
+            "tone": "warning" if cluster.merge_status == "needs_review" else "neutral",
+        }
+        for cluster in speaker_clusters
+    ]
+    diarization_result = {
+        "status": _result_status(transcription.diarization_status),
+        "summary": diarization_summary,
+        "metrics": _metrics(
+            ("区分引擎", transcription.diarization_engine_id),
+            ("匿名说话人", len(speaker_clusters)),
+            ("自动合并", len(auto_merged_clusters)),
+            ("需要复核", len(review_clusters)),
+            ("重叠片段", len(overlap_segments)),
+        ),
+        "sections": _sections(("说话人声纹簇", cluster_items)),
+        "notes": _notes(transcription.diarization_error),
+    }
+
     research_source_by_id = {item.source_id: item for item in research.sources}
     review_operations = [(segment, operation) for segment in segments for operation in segment.review_operations]
     research_edits = [
@@ -254,6 +308,7 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
 
     return {
         "asr": asr_result,
+        "diarization": diarization_result,
         "web_research": research_result,
         "text_review": review_result,
         "alignment": alignment_result,

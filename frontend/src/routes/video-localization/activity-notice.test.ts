@@ -121,7 +121,7 @@ describe('activity notice tasks', () => {
 		expect(second).toMatchObject({ engineId: 'faster-whisper-turbo', sourceTrackId: 'vocals', resultCount: 9 });
 		expect(activityTaskSourceLabel(second.sourceTrackId)).toBe('人声音轨');
 		expect(activityTaskResultLabel(first)).toBe('12 条字幕');
-		expect(first.steps).toHaveLength(7);
+		expect(first.steps).toHaveLength(8);
 		expect(first.steps?.every((step) => step.status === 'success')).toBe(true);
 	});
 
@@ -134,7 +134,7 @@ describe('activity notice tasks', () => {
 			created_at: '2026-07-15T08:00:00Z', started_at: '2026-07-15T08:00:01Z', completed_at: null
 		});
 
-		expect(task.steps?.map((step) => step.status)).toEqual(['success', 'success', 'success', 'success', 'running', 'todo', 'todo']);
+		expect(task.steps?.map((step) => step.status)).toEqual(['success', 'success', 'success', 'success', 'success', 'running', 'todo', 'todo']);
 	});
 
 	it('shows web research as its own ASR step', () => {
@@ -147,6 +147,7 @@ describe('activity notice tasks', () => {
 
 		expect(task.steps?.map((step) => [step.id, step.status])).toEqual([
 			['recognize', 'success'],
+			['diarization', 'success'],
 			['research', 'running'],
 			['review', 'todo'],
 			['timestamps', 'todo'],
@@ -162,11 +163,12 @@ describe('activity notice tasks', () => {
 			label: '听写字幕', progress: 1, error_code: null, error_message: null, cancel_requested: false,
 			parameters: {},
 			result_summary: {
-				duration_ms: 86_345,
-				task_duration_ms: 86_345,
+				duration_ms: 88_345,
+				task_duration_ms: 88_345,
 				llm_model_id: 'deepseek-chat',
 				task_stage_timings: {
 					asr: { duration_ms: 12_345 },
+					diarization: { duration_ms: 2_000 },
 					web_research: { duration_ms: 1_000 },
 					text_review: { duration_ms: 60_000 },
 					alignment: { duration_ms: 2_500 },
@@ -176,6 +178,7 @@ describe('activity notice tasks', () => {
 				},
 				stage_timings: {
 					asr: { duration_ms: 12_345 },
+					diarization: { duration_ms: 2_000, status: 'partial', cluster_count: 2 },
 					web_research: { duration_ms: 1_000, status: 'completed', source_count: 3 },
 					text_review: { duration_ms: 60_000 },
 					alignment: { duration_ms: 2_500 },
@@ -197,6 +200,13 @@ describe('activity notice tasks', () => {
 							title: '识别样例',
 							items: [{ title: '片段 1', text: 'A sample result.', meta: '00:00.000 - 00:01.200' }]
 						}],
+						notes: []
+					},
+					diarization: {
+						status: 'warning',
+						summary: '区分出 2 位匿名说话人，其中 1 个声纹簇需要复核。',
+						metrics: [{ label: '匿名说话人', value: '2' }],
+						sections: [],
 						notes: []
 					},
 					web_research: {
@@ -222,6 +232,7 @@ describe('activity notice tasks', () => {
 
 		expect(task.steps?.map(({ id, durationMs }) => [id, durationMs])).toEqual([
 			['recognize', 12_345],
+			['diarization', 2_000],
 			['research', 1_000],
 			['review', 60_000],
 			['timestamps', 2_500],
@@ -229,7 +240,7 @@ describe('activity notice tasks', () => {
 			['boundary-review', 8_750],
 			['subtitles', 500]
 		]);
-		expect(task.steps?.[5]).toMatchObject({ roundCount: 2, batchCount: 3 });
+		expect(task.steps?.[6]).toMatchObject({ roundCount: 2, batchCount: 3 });
 		expect(task.steps?.[0].result).toMatchObject({
 			status: 'success',
 			summary: '识别到 185 个原始语音片段。',
@@ -237,19 +248,23 @@ describe('activity notice tasks', () => {
 		});
 		expect(task.steps?.[1].result).toMatchObject({
 			status: 'warning',
+			summary: '区分出 2 位匿名说话人，其中 1 个声纹簇需要复核。'
+		});
+		expect(task.steps?.[2].result).toMatchObject({
+			status: 'warning',
 			notes: ['一个查询未返回结果']
 		});
-		expect(task.steps?.[1].result?.sections[0].title).toBe('逐项查证结果');
-		expect(task.steps?.[1].result?.sections[0].items).toHaveLength(8);
-		expect(task.steps?.[1].result?.sections[0].items[0]).toMatchObject({
+		expect(task.steps?.[2].result?.sections[0].title).toBe('逐项查证结果');
+		expect(task.steps?.[2].result?.sections[0].items).toHaveLength(8);
+		expect(task.steps?.[2].result?.sections[0].items[0]).toMatchObject({
 			title: '问题 1',
 			tone: 'positive',
 			facts: [{ label: '产生的作用', value: '已用于修正识别文本' }],
 			links: [{ title: 'Source', url: 'https://example.com', meta: 'web-search' }]
 		});
-		expect(task.steps?.[2].result?.summary).toContain('旧任务仅保留了状态和统计');
+		expect(task.steps?.[3].result?.summary).toContain('旧任务仅保留了状态和统计');
 		expect(task.semanticModelId).toBe('deepseek-chat');
-		expect(activityTaskStepTimingLabel(task.steps![5], task)).toBe('8 秒 · 2 轮 · 3 批');
+		expect(activityTaskStepTimingLabel(task.steps![6], task)).toBe('8 秒 · 2 轮 · 3 批');
 	});
 
 	it('maps localization draft progress, scope, timings, results and output count', () => {
@@ -344,6 +359,7 @@ describe('activity notice tasks', () => {
 
 		expect(task.steps?.map(({ id, status }) => [id, status])).toEqual([
 			['recognize', 'success'],
+			['diarization', 'success'],
 			['research', 'success'],
 			['review', 'success'],
 			['timestamps', 'running'],
@@ -383,13 +399,13 @@ describe('activity notice tasks', () => {
 			created_at: '2026-07-15T08:00:00Z', started_at: '2026-07-15T08:00:01Z', completed_at: null
 		});
 
-		expect(task.steps?.[4].durationMs).toBe(1_000);
+		expect(task.steps?.[5].durationMs).toBe(1_000);
 		expect(activityTaskStepTimingLabel(
-			task.steps![4],
+			task.steps![5],
 			task,
 			Date.parse('2026-07-15T08:01:09Z')
 		)).toBe('32 秒');
-		expect(activityTaskStepTimingLabel(task.steps![5], task)).toBe('');
+		expect(activityTaskStepTimingLabel(task.steps![6], task)).toBe('');
 	});
 
 	it('formats running and completed task durations without inventing missing end times', () => {

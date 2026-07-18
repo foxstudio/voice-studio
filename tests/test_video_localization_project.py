@@ -264,6 +264,7 @@ def test_video_localization_asr_operation_summary_distinguishes_raw_segments_fro
     assert summary["stage_timings"]["boundary_review"]["rounds"][0]["batches"][0]["status"] == "success"
     assert set(summary["task_step_results"]) == {
         "asr",
+        "diarization",
         "web_research",
         "text_review",
         "alignment",

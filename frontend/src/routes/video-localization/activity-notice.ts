@@ -132,6 +132,7 @@ const AREAS = new Set<ActivityTaskScope['area']>(['project', 'timeline', 'voice'
 
 const ASR_STEP_DEFINITIONS = [
 	{ id: 'recognize', label: '识别人声内容', stages: ['asr', '准备处理', '识别人声'], timingStages: ['asr'] },
+	{ id: 'diarization', label: '区分说话人', stages: ['diarization', '区分说话人'], timingStages: ['diarization'] },
 	{ id: 'research', label: '查证名称与背景', stages: ['web_research', '判断是否需要联网核验', '联网核验'], timingStages: ['web_research'] },
 	{ id: 'review', label: '校对识别文本', stages: ['text_review', '校对识别', '文本校对'], timingStages: ['text_review'] },
 	{ id: 'timestamps', label: '给每个词定位', stages: ['alignment', '逐词时间码', '强制对齐'], timingStages: ['alignment'] },
@@ -273,6 +274,7 @@ function normalizeStepResult(value: unknown, fallbackStatus: ActivityTaskStepSta
 
 const TIMING_METRIC_LABELS: Record<string, string> = {
 	segment_count: '原始片段',
+	cluster_count: '说话人数',
 	query_count: '搜索查询',
 	source_count: '资料来源',
 	cache_hits: '缓存命中',

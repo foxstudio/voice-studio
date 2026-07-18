@@ -164,6 +164,7 @@ def generate_localization_draft(
         profile_id=profile.profile_id,
         is_cancelled=is_cancelled,
     )
+    step_results["prepare_context"] = _context_step_result(context, draft)
 
     _report(on_progress, 0.30, "正在通读全文并生成中文口语")
     semantic_bundles = _semantic_localization_bundles(processing_draft)
@@ -4284,18 +4285,40 @@ def _context_step_result(context: dict, draft: VideoLocalizationDraft) -> dict:
         }
         for index, item in enumerate(context.get("speakers") or [], start=1)
     ]
+    identity_candidates = [
+        {
+            "title": _text(item.get("name"), 200),
+            "text": _text(item.get("reason"), 500) or "公开资料提供了身份线索，仍需人工确认。",
+            "facts": [
+                {"label": "对应人物", "value": _text(item.get("speaker_id"), 120)},
+                {
+                    "label": "候选把握",
+                    "value": f"{round(_bounded_float(item.get('confidence'), minimum=0.0, maximum=0.95) * 100)}%",
+                },
+                {
+                    "label": "证据编号",
+                    "value": "、".join(_string_list(item.get("evidence_source_ids"), 12, 120)),
+                },
+            ],
+            "tone": "warning",
+        }
+        for item in ((context.get("knowledge") or {}).get("speaker_identity_candidates") or [])
+        if _text(item.get("name"), 200) and _text(item.get("speaker_id"), 120)
+    ]
     return _result(
         "success",
         context.get("overview") or "已完成原文、场景与人物口吻分析。",
         [
             ("原文字幕", len(draft.cues)),
             ("识别人物", len(context.get("speakers") or [])),
+            ("身份候选", len(identity_candidates)),
             ("内容主题", len(context.get("topics") or [])),
         ],
-        [("人物与表达方式", speakers)],
+        [("人物与表达方式", speakers), ("身份候选（待人工确认）", identity_candidates)],
         [
             f"时代背景：{context['era']}" if context.get("era") else None,
             f"场景：{context['setting']}" if context.get("setting") else None,
+            "身份候选只用于辅助查证，不会自动变成已确认人物。" if identity_candidates else None,
         ],
     )
 

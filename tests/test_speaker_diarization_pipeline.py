@@ -1,6 +1,21 @@
 from __future__ import annotations
 
-from app.domains.video_localization import localization, operation_queue, operation_state, speakers, subtitle_segmentation
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND = ROOT / "backend"
+if str(BACKEND) not in sys.path:
+    sys.path.insert(0, str(BACKEND))
+
+from app.domains.video_localization import (
+    asr_step_results,
+    localization,
+    operation_queue,
+    operation_state,
+    speakers,
+    subtitle_segmentation,
+)
 from app.models.schemas import (
     VideoLocalizationAlignedWord,
     VideoLocalizationCue,
@@ -8,6 +23,7 @@ from app.models.schemas import (
     VideoLocalizationSpeaker,
     VideoLocalizationSpeakerCluster,
     VideoLocalizationTranscriptionState,
+    VideoLocalizationTranscriptSegment,
 )
 from app.services import speaker_diarization_service
 
@@ -108,6 +124,47 @@ def test_asr_operation_defaults_to_auto_diarization_and_reports_review():
     assert summary["speaker_review_required"] is True
 
 
+def test_asr_task_detail_exposes_speaker_clusters_and_overlap_review():
+    cluster = VideoLocalizationSpeakerCluster(
+        cluster_id="cluster_01",
+        source_label="S01",
+        source_engine_id="moss-transcribe-diarize-mlx",
+        start_ms=0,
+        end_ms=1000,
+        duration_ms=1000,
+        segment_count=1,
+        merge_status="needs_review",
+    )
+    segment = VideoLocalizationTranscriptSegment(
+        segment_id="asr_0001",
+        start_ms=0,
+        end_ms=1000,
+        raw_text="Hello.",
+        speaker_cluster_id="cluster_01",
+        has_speaker_overlap=True,
+    )
+    draft = VideoLocalizationDraft(
+        transcription=VideoLocalizationTranscriptionState(
+            engine_id="qwen3-asr-mlx",
+            segments=[segment],
+            diarization_status="partial",
+            diarization_engine_id="moss-transcribe-diarize-mlx",
+            speaker_clusters=[cluster],
+            quality_flags=["speaker_overlap_review_required"],
+        )
+    )
+
+    result = asr_step_results.build_asr_step_results(
+        draft,
+        {"diarization": {"cluster_count": 1}},
+    )["diarization"]
+
+    assert result["status"] == "warning"
+    assert "1 位匿名说话人" in result["summary"]
+    assert {"label": "重叠片段", "value": "1"} in result["metrics"]
+    assert result["sections"][0]["items"][0]["facts"][2]["value"] == "需要人工复核"
+
+
 def test_knowledge_enrichment_requires_evidence_and_keeps_identity_as_candidate(monkeypatch):
     monkeypatch.setattr(
         localization.llm_runtime,
@@ -171,6 +228,7 @@ def test_knowledge_enrichment_requires_evidence_and_keeps_identity_as_candidate(
         localization_level="L1",
         worldview_permeability="W0",
     )
+    context_result = localization._context_step_result(enriched, next_draft)
 
     assert [item["name"] for item in enriched["knowledge"]["entities"]] == ["Seedance 2.0"]
     assert len(enriched["knowledge"]["speaker_identity_candidates"]) == 1
@@ -179,6 +237,9 @@ def test_knowledge_enrichment_requires_evidence_and_keeps_identity_as_candidate(
     assert candidate.confidence == 0.95
     assert candidate.status == "candidate"
     assert candidate.evidence_source_ids == ["source_01"]
+    assert {"label": "身份候选", "value": "1"} in context_result["metrics"]
+    assert context_result["sections"][1]["title"] == "身份候选（待人工确认）"
+    assert context_result["sections"][1]["items"][0]["facts"][1]["value"] == "95%"
 
 
 def test_knowledge_enrichment_failure_does_not_block_localization(monkeypatch):

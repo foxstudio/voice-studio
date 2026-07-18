@@ -31,6 +31,7 @@ _KIND_LABELS = operation_state.KIND_LABELS
 def _asr_stage_id(stage: str) -> str:
     normalized = str(stage or "")
     for stage_id, markers in (
+        ("diarization", ("区分说话人",)),
         ("web_research", ("联网核验",)),
         ("text_review", ("校对识别", "文本校对")),
         ("alignment", ("逐词时间码", "强制对齐")),
