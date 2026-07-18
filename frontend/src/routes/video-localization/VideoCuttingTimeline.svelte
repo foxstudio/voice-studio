@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Captions, ChevronsLeft, ChevronsRight, Eye, EyeOff, FileAudio, FileUp, GripVertical, LoaderCircle, Lock, Mic2, MousePointer2, Pause, Play, RectangleHorizontal, Redo2, RefreshCw, Save, SkipBack, SkipForward, Trash2, Undo2, Unlock, Wand2, ZoomIn, ZoomOut } from 'lucide-svelte';
+	import { Captions, ChevronsLeft, ChevronsRight, Eye, EyeOff, FileAudio, FileUp, GripVertical, Icon, LoaderCircle, Lock, Mic2, MousePointer2, Pause, Play, Redo2, RefreshCw, Save, SkipBack, SkipForward, Trash2, Undo2, Unlock, Wand2, ZoomIn, ZoomOut } from 'lucide-svelte';
+	import type { IconNode } from 'lucide-svelte';
 	import { tick } from 'svelte';
 	import { buildTimelineTicks, formatTimelineZoom } from '$lib/audio/waveform';
 	import ContextMenu from '$lib/components/shared/ContextMenu.svelte';
@@ -165,6 +166,15 @@
 
 	type DragMode = 'move' | 'trim-start' | 'trim-end';
 	type TimelineTool = 'select' | 'razor';
+	// Double-edge blade geometry follows Lucide Lab's ISC-licensed razor-blade icon.
+	const razorBladeIconNode: IconNode = [
+		['path', { d: 'M22 8h-2V6H4v2H2v8h2v2h16v-2h2Z' }],
+		['path', { d: 'M6 11v2' }],
+		['path', { d: 'M10 12H6' }],
+		['circle', { cx: '12', cy: '12', r: '2' }],
+		['path', { d: 'M18 12h-4' }],
+		['path', { d: 'M18 11v2' }]
+	];
 	type SubtitleTimelineItem = VideoLocalizationCue | VideoLocalizationSubtitleCue;
 	type CueDragState = {
 		itemId: string;
@@ -1053,6 +1063,11 @@
 			if (clip) cutAudioClipAtPointer(event, clip);
 			return;
 		}
+		if (activeTool === 'razor' && event.button === 0 && target.closest('[data-track-row]')) {
+			event.preventDefault();
+			event.stopPropagation();
+			return;
+		}
 		if (event.button === 0 && audioClipElement && (event.ctrlKey || event.metaKey)) {
 			event.preventDefault();
 			event.stopPropagation();
@@ -1839,7 +1854,7 @@
 			><span class="hover-preview-icon" aria-hidden="true"><MousePointer2 size={13} /><i></i></span></button>
 			<span class="toolbar-divider" aria-hidden="true"></span>
 			<div class="edit-tools" aria-label="字幕片段编辑">
-				<button class="tool-btn icon-tool" class:active={activeTool === 'razor'} type="button" onclick={() => activateTimelineTool(activeTool === 'razor' ? 'select' : 'razor')} aria-label="剃刀工具" aria-pressed={activeTool === 'razor'} data-tooltip={activeTool === 'razor' ? '剃刀工具已激活：再次点击或按 C 取消，按 V 返回默认选择。' : '剃刀工具：激活后点击片段，在鼠标所在帧的右边界裁开。快捷键：C'}><RectangleHorizontal class="razor-blade-icon" size={14} /></button>
+				<button class="tool-btn icon-tool" class:active={activeTool === 'razor'} type="button" onclick={() => activateTimelineTool(activeTool === 'razor' ? 'select' : 'razor')} aria-label="剃刀工具" aria-pressed={activeTool === 'razor'} data-tooltip={activeTool === 'razor' ? '剃刀工具已激活：再次点击或按 C 取消，按 V 返回默认选择。' : '剃刀工具：激活后点击片段，在鼠标所在帧的右边界裁开。快捷键：C'}><Icon name="razor-blade" class="razor-blade-icon" size={15} iconNode={razorBladeIconNode} /></button>
 				<button class="tool-btn icon-tool" type="button" onclick={onMergeCue} disabled={!canMergeSelectedCue} aria-label="合并下一字幕片段" data-tooltip="合并下一字幕片段：把当前字幕和后一段合并。快捷键：Shift+M">⇄</button>
 				<button class="tool-btn icon-tool danger" type="button" onclick={onDeleteCue} disabled={!canEditSelectedCue} aria-label="删除当前字幕片段" data-tooltip="删除当前字幕片段：从时间线移除当前字幕。快捷键：Delete"><Trash2 size={13} /></button>
 			</div>
@@ -2557,20 +2572,34 @@
 	}
 
 	.icon-btn:hover:not(:disabled),
-	.icon-btn:focus-visible,
 	.tool-btn:hover:not(:disabled),
-	.tool-btn:focus-visible,
 	.primary-tool:hover:not(:disabled),
-	.primary-tool:focus-visible,
 	.track-toggle:hover:not(:disabled),
+	.range-marker-tools button:hover:not(:disabled) {
+		border-color: rgba(145, 161, 171, 0.5);
+		background: #293137;
+		color: #f3f7f8;
+		box-shadow: none;
+	}
+
+	.icon-btn:focus-visible,
+	.tool-btn:focus-visible,
+	.primary-tool:focus-visible,
 	.track-toggle:focus-visible,
-	.range-marker-tools button:hover:not(:disabled),
 	.range-marker-tools button:focus-visible {
-		border-color: rgba(113, 224, 215, 0.72);
-		background: #26343a;
+		border-color: rgba(113, 224, 215, 0.66);
+		background: #293137;
 		color: #efffff;
-		box-shadow: 0 0 0 1px rgba(87, 208, 200, 0.12);
+		box-shadow: 0 0 0 2px rgba(87, 208, 200, 0.2);
 		outline: none;
+	}
+
+	.tool-btn.active,
+	.hover-scrub-toggle.active {
+		border-color: rgba(87, 208, 200, 0.86);
+		background: #173a37;
+		color: #d7fffb;
+		box-shadow: inset 0 0 0 1px rgba(118, 235, 226, 0.1);
 	}
 
 	.tool-btn,
@@ -2995,10 +3024,22 @@
 		cursor: crosshair;
 	}
 
-	.timeline-content.razor-tool,
-	.timeline-content.razor-tool .cue-chip,
-	.timeline-content.razor-tool :global(.audio-clip) {
-		cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 26 26'%3E%3Cg transform='rotate(-18 13 13)'%3E%3Crect x='3' y='7' width='20' height='12' rx='2' fill='%23eef7f8' stroke='%2312181d' stroke-width='1.5'/%3E%3Cpath d='M6 11h14M6 15h14' stroke='%2357d0c8' stroke-width='1.3'/%3E%3Ccircle cx='8' cy='13' r='1.2' fill='%2312181d'/%3E%3Ccircle cx='18' cy='13' r='1.2' fill='%2312181d'/%3E%3C/g%3E%3C/svg%3E") 4 4, crosshair;
+	.timeline-content.razor-tool .track-row,
+	.timeline-content.razor-tool .track-row *,
+	.timeline-content.razor-tool .track-row :global(.audio-clip),
+	.timeline-content.razor-tool .track-row :global(.audio-clip *) {
+		cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Cg transform='translate(2 2) rotate(-18 12 12)' fill='none' stroke='%2312181d' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.8'%3E%3Cpath d='M22 8h-2V6H4v2H2v8h2v2h16v-2h2Z' fill='%23eef7f8'/%3E%3Cpath d='M6 11v2m4-1H6m12 0h-4m4-1v2' stroke='%2357d0c8'/%3E%3Ccircle cx='12' cy='12' r='2' fill='%2312181d' stroke='%2357d0c8'/%3E%3C/g%3E%3C/svg%3E") 14 14, crosshair;
+	}
+
+	.timeline-content.razor-tool .timeline-ruler,
+	.timeline-content.razor-tool .timeline-ruler * {
+		cursor: default;
+	}
+
+	.timeline-content.razor-tool .cue-handle,
+	.timeline-content.razor-tool :global(.clip-handle),
+	.timeline-content.razor-tool :global(.clip-delete) {
+		pointer-events: none;
 	}
 
 	:global(.razor-blade-icon) {

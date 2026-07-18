@@ -48,10 +48,6 @@
 		outline: none;
 	}
 
-	.generate-page .btn:active:not(:disabled) {
-		transform: translateY(1px) scale(0.98);
-	}
-
 	.compose-panel {
 		min-width: 0;
 	}
@@ -1051,10 +1047,6 @@
 		color: #eef6ff;
 		box-shadow: var(--generate-control-hover-shadow);
 		outline: none;
-	}
-
-	.gen-icon-btn:active:not(:disabled) {
-		transform: translateY(1px) scale(0.97);
 	}
 
 	.gen-icon-btn.danger {
@@ -2971,9 +2963,6 @@
 		color: #eef5ff;
 		box-shadow: var(--generate-control-hover-shadow);
 		outline: none;
-	}
-	.param-action-btn:active:not(:disabled) {
-		transform: translateY(1px);
 	}
 	.param-action-btn svg {
 		flex: 0 0 auto;
