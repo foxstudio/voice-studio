@@ -72,6 +72,10 @@
 	onpointerdown={(event) => {
 		const target = event.target as HTMLElement;
 		if (target.closest('.clip-delete,.clip-handle')) return;
+		if (event.button === 0 && (event.currentTarget as HTMLElement).closest('.razor-tool')) {
+			event.preventDefault();
+			return;
+		}
 		if (event.button === 0 && (event.ctrlKey || event.metaKey)) {
 			event.preventDefault();
 			event.stopPropagation();

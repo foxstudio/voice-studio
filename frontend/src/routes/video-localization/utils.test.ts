@@ -63,4 +63,16 @@ describe('timeline clip media versions', () => {
 		expect(timelineClipWaveformUrl('project-1', replaced)).toContain('v=result-second');
 		expect(timelineClipWaveformUrl('project-1', replaced)).not.toBe(timelineClipWaveformUrl('project-1', clip));
 	});
+
+	it('uses the stable media source id for a split timeline piece', () => {
+		const clip: VideoLocalizationTimelineClip = {
+			clip_id: 'clip_localized_0001_part_2',
+			media_source_clip_id: 'clip_localized_0001',
+			track_id: 'dub',
+			audio_path: '/tmp/first.wav'
+		};
+
+		expect(timelineClipAudioUrl('project-1', clip)).toContain('/timeline-clips/clip_localized_0001/audio');
+		expect(timelineClipWaveformUrl('project-1', clip)).toContain('/timeline-clips/clip_localized_0001/waveform');
+	});
 });

@@ -45,7 +45,7 @@
 
 	let scope = $state<'current' | 'all'>('current');
 	function historySegmentId(item: HistoryItem) {
-		return item.localized_subtitle_id || item.segment_id || item.cue_id || '';
+		return item.segment_id || item.localized_subtitle_id || item.cue_id || '';
 	}
 
 	const currentItems = $derived(items.filter((item) => historySegmentId(item) === selectedSegmentId));

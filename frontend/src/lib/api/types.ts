@@ -597,6 +597,7 @@ export interface VideoLocalizationGeneratedCandidate {
 
 export interface VideoLocalizationTimelineClip {
 	clip_id: string;
+	media_source_clip_id?: string | null;
 	cue_id?: string | null;
 	subtitle_id?: string | null;
 	source_cue_ids?: string[];

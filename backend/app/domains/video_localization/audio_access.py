@@ -48,7 +48,14 @@ def timeline_clip_audio_path(draft: VideoLocalizationDraft, clip_id: str) -> Pat
         return stem_audio_path(draft, "vocals")
     if clip_id == "media_background":
         return stem_audio_path(draft, "background")
-    clip = next((dict(item) for item in draft.timeline_clips if dict(item).get("clip_id") == clip_id), None)
+    clip = next(
+        (
+            dict(item)
+            for item in draft.timeline_clips
+            if dict(item).get("clip_id") == clip_id or dict(item).get("media_source_clip_id") == clip_id
+        ),
+        None,
+    )
     if not clip or not clip.get("audio_path"):
         return None
     path = Path(str(clip["audio_path"]))

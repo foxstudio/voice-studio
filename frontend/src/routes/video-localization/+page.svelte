@@ -222,6 +222,7 @@
 	import type { TimelineSelectionItem } from './timeline-context-menu';
 	import { activityTaskAffectsTrack, activityTaskDisplayName, asrSubtitleActionLabel, operationActivityTask, pendingOperationActivityTask, type ActivityTask } from './activity-notice';
 	import { resolveAsrOperationPreview } from './asr-operation-preview';
+	import { splitTimelineAudioClip } from './timeline-clip-split';
 	import {
 		extendSubtitleCuesAcrossShortGaps,
 		resolveAudioTrackOrder,
@@ -1353,35 +1354,37 @@
 		}
 	}
 
-	function splitSelectedCue() {
-		if (!draft || !selectedCue || selectedCue.start_ms === null || selectedCue.end_ms === null) return;
-		const durationMs = selectedCue.end_ms - selectedCue.start_ms;
+	function splitSelectedCue(cueId = selectedCue?.cue_id ?? '', requestedSplitMs = previewTimeMs) {
+		if (!draft) return;
+		const cueToSplit = draft.cues.find((cue) => cue.cue_id === cueId);
+		if (!cueToSplit || cueToSplit.start_ms === null || cueToSplit.end_ms === null) return;
+		const durationMs = cueToSplit.end_ms - cueToSplit.start_ms;
 		if (durationMs < MIN_SUBTITLE_DURATION_MS * 2) {
 			message = '当前字幕片段太短，无法拆分';
 			setTimeout(() => (message = ''), 1600);
 			return;
 		}
 		rememberTimelineClips();
-		const splitAt = previewTimeMs > selectedCue.start_ms + MIN_SUBTITLE_DURATION_MS && previewTimeMs < selectedCue.end_ms - MIN_SUBTITLE_DURATION_MS
-			? previewTimeMs
-			: selectedCue.start_ms + Math.round(durationMs / 2);
-		const split = cueSplitPoint(selectedCue, Math.round(splitAt));
+		const splitAt = requestedSplitMs > cueToSplit.start_ms + MIN_SUBTITLE_DURATION_MS && requestedSplitMs < cueToSplit.end_ms - MIN_SUBTITLE_DURATION_MS
+			? requestedSplitMs
+			: cueToSplit.start_ms + Math.round(durationMs / 2);
+		const split = cueSplitPoint(cueToSplit, Math.round(splitAt));
 		const splitMs = split.splitMs;
-		const [firstEn, secondEn] = splitCueText(selectedCue.en_subtitle_text ?? '', split.ratio);
-		const [firstZh, secondZh] = splitCueText(selectedCue.zh_localized_subtitle_text ?? '', split.ratio);
-		const [firstTts, secondTts] = splitCueText(selectedCue.tts_recommended_text ?? '', split.ratio);
-		const [firstRaw, secondRaw] = splitCueText(selectedCue.source_text_raw ?? '', split.ratio);
+		const [firstEn, secondEn] = splitCueText(cueToSplit.en_subtitle_text ?? '', split.ratio);
+		const [firstZh, secondZh] = splitCueText(cueToSplit.zh_localized_subtitle_text ?? '', split.ratio);
+		const [firstTts, secondTts] = splitCueText(cueToSplit.tts_recommended_text ?? '', split.ratio);
+		const [firstRaw, secondRaw] = splitCueText(cueToSplit.source_text_raw ?? '', split.ratio);
 		const nextCue: VideoLocalizationCue = {
-			...selectedCue,
+			...cueToSplit,
 			cue_id: nextCueId(draft),
 			start_ms: splitMs,
-			end_ms: selectedCue.end_ms,
+			end_ms: cueToSplit.end_ms,
 			en_subtitle_text: secondEn,
 			zh_localized_subtitle_text: secondZh,
 			tts_recommended_text: secondTts,
 			source_word_ids: split.secondWordIds,
 			source_text_raw: secondRaw || null,
-			source_duration_ms: selectedCue.end_ms - splitMs,
+			source_duration_ms: cueToSplit.end_ms - splitMs,
 			tts_result_id: null,
 			tts_audio_path: null,
 			tts_batch_task_id: null,
@@ -1390,17 +1393,17 @@
 			tts_attempted_at: null,
 			generated_duration_ms: null,
 			review_status: 'needs_review',
-			quality_flags: [...new Set([...(selectedCue.quality_flags ?? []), 'timeline_split'])]
+			quality_flags: [...new Set([...(cueToSplit.quality_flags ?? []), 'timeline_split'])]
 		};
 		const currentCue: VideoLocalizationCue = {
-			...selectedCue,
+			...cueToSplit,
 			end_ms: splitMs,
 			en_subtitle_text: firstEn,
 			zh_localized_subtitle_text: firstZh,
 			tts_recommended_text: firstTts,
 			source_word_ids: split.firstWordIds,
 			source_text_raw: firstRaw || null,
-			source_duration_ms: splitMs - selectedCue.start_ms,
+			source_duration_ms: splitMs - cueToSplit.start_ms,
 			tts_result_id: null,
 			tts_audio_path: null,
 			tts_batch_task_id: null,
@@ -1409,9 +1412,9 @@
 			tts_attempted_at: null,
 			generated_duration_ms: null,
 			review_status: 'needs_review',
-			quality_flags: [...new Set([...(selectedCue.quality_flags ?? []), 'timeline_split'])]
+			quality_flags: [...new Set([...(cueToSplit.quality_flags ?? []), 'timeline_split'])]
 		};
-		const cues = draft.cues.flatMap((cue) => (cue.cue_id === selectedCue.cue_id ? [currentCue, nextCue] : [cue]));
+		const cues = draft.cues.flatMap((cue) => (cue.cue_id === cueToSplit.cue_id ? [currentCue, nextCue] : [cue]));
 		draft = { ...draft, cues };
 		draftOnlyCueIds = [...new Set([...draftOnlyCueIds, nextCue.cue_id])];
 		selectedCueId = nextCue.cue_id;
@@ -1426,17 +1429,6 @@
 		let index = currentDraft.localized_subtitles.length + 1;
 		while (used.has(`localized_${String(index).padStart(4, '0')}`)) index += 1;
 		return `localized_${String(index).padStart(4, '0')}`;
-	}
-
-	function nextTimelineClipId(currentDraft: VideoLocalizationDraft, baseId: string) {
-		const used = new Set(currentDraft.timeline_clips.map((clip) => clip.clip_id));
-		let index = 2;
-		let candidate = `${baseId}_part_${index}`;
-		while (used.has(candidate)) {
-			index += 1;
-			candidate = `${baseId}_part_${index}`;
-		}
-		return candidate;
 	}
 
 	function splitLocalizedSubtitleFromTimeline(subtitleId: string, requestedSplitMs: number) {
@@ -1483,27 +1475,10 @@
 			tts_text: secondTts || null,
 			quality_flags: [...new Set([...(subtitle.quality_flags ?? []), 'timeline_split'])]
 		};
-		const clips = currentDraft.timeline_clips.flatMap((clip) => {
-			if (clip.subtitle_id !== subtitleId) return [clip];
-			const startMs = Math.round(clip.start_ms ?? subtitle.start_ms);
-			const endMs = Math.max(startMs + 300, Math.round(clip.end_ms ?? subtitle.end_ms));
-			if (splitMs <= startMs + 300 || splitMs >= endMs - 300) return [clip];
-			const sourceStartMs = Math.max(0, Math.round(clip.source_start_ms ?? 0));
-			const sourceEndMs = Math.max(sourceStartMs + 300, Math.round(clip.source_end_ms ?? sourceStartMs + endMs - startMs));
-			const sourceSplitMs = sourceStartMs + (splitMs - startMs);
-			return [
-				{ ...clip, end_ms: splitMs, source_end_ms: sourceSplitMs },
-				{
-					...clip,
-					clip_id: nextTimelineClipId(currentDraft, clip.clip_id),
-					subtitle_id: nextSubtitleId,
-					start_ms: splitMs,
-					end_ms: endMs,
-					source_start_ms: sourceSplitMs,
-					source_end_ms: sourceEndMs
-				}
-			];
-		});
+		let clips = currentDraft.timeline_clips;
+		for (const clip of currentDraft.timeline_clips.filter((item) => item.subtitle_id === subtitleId)) {
+			clips = splitTimelineAudioClip(clips, clip.clip_id, splitMs, { nextSubtitleId })?.clips ?? clips;
+		}
 		rememberTimelineClips();
 		draft = {
 			...draft,
@@ -1528,27 +1503,12 @@
 		const frameRate = normalizeFrameRate(currentDraft.source_media.frame_rate);
 		const splitMs = snapTimeToFrame(requestedSplitMs, frameRate, 'nearest', startMs + 300, endMs - 300);
 		if (splitMs <= startMs || splitMs >= endMs) return;
-		const sourceStartMs = Math.max(0, Math.round(clip.source_start_ms ?? 0));
-		const sourceEndMs = Math.max(sourceStartMs + 300, Math.round(clip.source_end_ms ?? sourceStartMs + endMs - startMs));
-		const sourceSplitMs = sourceStartMs + (splitMs - startMs);
+		const split = splitTimelineAudioClip(currentDraft.timeline_clips, clipId, splitMs);
+		if (!split) return;
 		rememberTimelineClips();
 		draft = {
 			...draft,
-			timeline_clips: currentDraft.timeline_clips.flatMap((item) =>
-				item.clip_id !== clipId
-					? [item]
-					: [
-							{ ...item, end_ms: splitMs, source_end_ms: sourceSplitMs },
-							{
-								...item,
-								clip_id: nextTimelineClipId(currentDraft, item.clip_id),
-								start_ms: splitMs,
-								end_ms: endMs,
-								source_start_ms: sourceSplitMs,
-								source_end_ms: sourceEndMs
-							}
-						]
-			)
+			timeline_clips: split.clips
 		};
 		scheduleDraftAutosave();
 		message = '音频片段已按当前帧拆分';

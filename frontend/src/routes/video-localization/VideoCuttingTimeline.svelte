@@ -140,7 +140,7 @@
 		onOpenTaskCenter?: () => void;
 		asrPreview?: AsrOperationPreview | null;
 		localizationPreview?: VideoLocalizationSubtitleCue[];
-		onSplitCue: () => void;
+		onSplitCue: (cueId?: string, splitTimeMs?: number) => void;
 		onSplitLocalizedSubtitle?: (subtitleId: string, splitTimeMs: number) => void;
 		onSplitTimelineClip?: (clipId: string, splitTimeMs: number) => void;
 		onMergeCue: () => void;
@@ -164,6 +164,7 @@
 	} = $props();
 
 	type DragMode = 'move' | 'trim-start' | 'trim-end';
+	type TimelineTool = 'select' | 'razor';
 	type SubtitleTimelineItem = VideoLocalizationCue | VideoLocalizationSubtitleCue;
 	type CueDragState = {
 		itemId: string;
@@ -239,6 +240,7 @@
 	let selectedTimelineItem = $state<{ kind: 'subtitle' | 'audio'; trackId: VideoLocalizationTrackId; itemId: string } | null>(null);
 	let selectedTimelineItems = $state<TimelineSelectionItem[]>([]);
 	let hoverTimeMs = $state<number | null>(null);
+	let activeTool = $state<TimelineTool>('select');
 	let hoverScrubFrame = 0;
 	let snapGuideMs = $state<number | null>(null);
 	const DEFAULT_TRACK_HEIGHTS: Record<VideoLocalizationTrackId, number> = {
@@ -310,18 +312,8 @@
 	const playheadFrameWidthPercent = $derived(Math.max(0, ((playheadFrame.endMs - playheadFrame.startMs) / timelineDurationMs) * 100));
 	const hoverFrame = $derived(hoverTimeMs === null ? null : frameCoverage(hoverTimeMs, timelineFrameRate, timelineDurationMs));
 	const selectedCue = $derived(draft?.cues.find((cue) => cue.cue_id === selectedCueId) ?? null);
-	const selectedAudioClip = $derived(selectedTimelineItem?.kind === 'audio'
-		? draft?.timeline_clips.find((clip) => clip.clip_id === selectedTimelineItem?.itemId) ?? null
-		: null);
-	const selectedLocalizedSubtitle = $derived(selectedTimelineItem?.kind === 'subtitle' && selectedTimelineItem.trackId === 'localizedSubtitles'
-		? runtimeLocalizedSubtitles.find((cue) => cue.subtitle_id === selectedTimelineItem?.itemId) ?? null
-		: null);
 	const asrCueSelectionActive = $derived(!selectedTimelineItem || (selectedTimelineItem.kind === 'subtitle' && selectedTimelineItem.trackId === 'subtitles' && selectedTimelineItem.itemId === selectedCueId));
 	const canEditSelectedCue = $derived(Boolean(asrCueSelectionActive && selectedCue) && !trackInteractionLocked('subtitles'));
-	const canSplitSelectedCue = $derived(Boolean(asrCueSelectionActive && !trackInteractionLocked('subtitles') && selectedCue && selectedCue.start_ms !== null && selectedCue.end_ms !== null && selectedCue.end_ms - selectedCue.start_ms >= MIN_SUBTITLE_DURATION_MS * 2));
-	const canSplitSelectedLocalizedSubtitle = $derived(Boolean(onSplitLocalizedSubtitle && selectedLocalizedSubtitle && !trackInteractionLocked('localizedSubtitles', selectedLocalizedSubtitle.subtitle_id) && selectedLocalizedSubtitle.end_ms - selectedLocalizedSubtitle.start_ms >= MIN_SUBTITLE_DURATION_MS * 2));
-	const canSplitSelectedAudioClip = $derived(Boolean(onSplitTimelineClip && selectedAudioClip && !trackInteractionLocked(selectedAudioClip.track_id as VideoLocalizationTrackId, selectedAudioClip.clip_id) && currentTimeMs > timelineClipTime(selectedAudioClip).start_ms + 300 && currentTimeMs < timelineClipTime(selectedAudioClip).end_ms - 300));
-	const canSplitSelectedTimelineItem = $derived(canSplitSelectedCue || canSplitSelectedLocalizedSubtitle || canSplitSelectedAudioClip);
 	const canMergeSelectedCue = $derived(Boolean(asrCueSelectionActive && !trackInteractionLocked('subtitles') && selectedCue && nextCueAfter(selectedCue)));
 	const hasRangeSelection = $derived(rangeStartMs !== null && rangeEndMs !== null && Math.abs(rangeEndMs - rangeStartMs) >= MIN_RANGE_DURATION_MS);
 	const rangeStartValue = $derived(rangeStartMs ?? 0);
@@ -827,7 +819,7 @@
 			onHoverScrubChange?.(!hoverScrubEnabled);
 		} else if (event.key.toLowerCase() === 'c') {
 			event.preventDefault();
-			splitSelectedTimelineItem();
+			activeTool = 'razor';
 		} else if (event.shiftKey && event.key.toLowerCase() === 'm') {
 			event.preventDefault();
 			if (canMergeSelectedCue) onMergeCue();
@@ -847,6 +839,7 @@
 			event.preventDefault();
 			if (hasRecoverableVideo && !hasSourceAudio && !extractingAudio) onExtractAudio();
 		} else if (event.key === 'Escape') {
+			activeTool = 'select';
 			openVolumeTrack = null;
 			timelineContextMenu = null;
 		}
@@ -963,31 +956,45 @@
 		return Math.max(currentSourceEnd, analyzedDuration, ...declaredCandidates, 0);
 	}
 
-	function splitSelectedTimelineItem() {
-		if (selectedTimelineItem?.kind === 'audio') {
-			if (!selectedAudioClip || !canSplitSelectedAudioClip) return;
-			const time = timelineClipTime(selectedAudioClip);
-			const splitMs = snapTimeToFrame(currentTimeMs, timelineFrameRate, 'nearest', time.start_ms + 300, time.end_ms - 300);
-			onSplitTimelineClip?.(selectedAudioClip.clip_id, splitMs);
-			return;
+	function activateTimelineTool(tool: TimelineTool) {
+		activeTool = tool;
+		if (tool === 'razor') {
+			clearSelection();
+			endCueDrag();
+			endClipDrag();
 		}
-		if (selectedTimelineItem?.kind === 'subtitle' && selectedTimelineItem.trackId === 'localizedSubtitles') {
-			if (!selectedLocalizedSubtitle || !canSplitSelectedLocalizedSubtitle) return;
-			const splitMs = preferredSubtitleSplitMs(selectedLocalizedSubtitle.start_ms, selectedLocalizedSubtitle.end_ms);
-			onSplitLocalizedSubtitle?.(selectedLocalizedSubtitle.subtitle_id, splitMs);
-			return;
-		}
-		if (!selectedCue || selectedCue.start_ms === null || selectedCue.end_ms === null || !canSplitSelectedCue) return;
-		const splitMs = preferredSubtitleSplitMs(selectedCue.start_ms, selectedCue.end_ms);
-		onSeekTimeline(splitMs);
-		onSplitCue();
 	}
 
-	function preferredSubtitleSplitMs(startMs: number, endMs: number) {
-		const requested = currentTimeMs > startMs + MIN_SUBTITLE_DURATION_MS && currentTimeMs < endMs - MIN_SUBTITLE_DURATION_MS
-			? currentTimeMs
-			: startMs + (endMs - startMs) / 2;
-		return snapTimeToFrame(requested, timelineFrameRate, 'nearest', startMs + MIN_SUBTITLE_DURATION_MS, endMs - MIN_SUBTITLE_DURATION_MS);
+	function razorSplitMs(event: PointerEvent) {
+		const rawTimeMs = rawTimeFromPointer(event);
+		return frameCoverage(rawTimeMs, timelineFrameRate, timelineDurationMs).endMs;
+	}
+
+	function cutAudioClipAtPointer(event: PointerEvent, clip: VideoLocalizationTimelineClip) {
+		if (activeTool !== 'razor' || trackInteractionLocked(clip.track_id as VideoLocalizationTrackId, clip.clip_id)) return;
+		const splitMs = razorSplitMs(event);
+		const time = timelineClipTime(clip);
+		if (splitMs < time.start_ms + 300 || splitMs > time.end_ms - 300) return;
+		onSplitTimelineClip?.(clip.clip_id, splitMs);
+	}
+
+	function cutSubtitleAtPointer(event: PointerEvent, track: SubtitleTrackKind, itemId: string) {
+		if (activeTool !== 'razor') return false;
+		event.preventDefault();
+		event.stopPropagation();
+		const splitMs = razorSplitMs(event);
+		if (track === 'localized') {
+			const subtitle = runtimeLocalizedSubtitles.find((item) => item.subtitle_id === itemId);
+			if (!subtitle || trackInteractionLocked('localizedSubtitles', itemId)) return true;
+			if (splitMs < subtitle.start_ms + MIN_SUBTITLE_DURATION_MS || splitMs > subtitle.end_ms - MIN_SUBTITLE_DURATION_MS) return true;
+			onSplitLocalizedSubtitle?.(itemId, splitMs);
+			return true;
+		}
+		const cue = draft?.cues.find((item) => item.cue_id === itemId);
+		if (!cue || cue.start_ms === null || cue.end_ms === null || trackInteractionLocked('subtitles', itemId)) return true;
+		if (splitMs < cue.start_ms + MIN_SUBTITLE_DURATION_MS || splitMs > cue.end_ms - MIN_SUBTITLE_DURATION_MS) return true;
+		onSplitCue(itemId, splitMs);
+		return true;
 	}
 
 	function trackMeterPercent(trackId: VideoLocalizationTrackId) {
@@ -1038,6 +1045,13 @@
 	function handleTimelinePointerDown(event: PointerEvent) {
 		const target = event.target as HTMLElement;
 		const audioClipElement = target.closest<HTMLElement>('[data-audio-clip-id]');
+		if (activeTool === 'razor' && event.button === 0 && audioClipElement && !target.closest('.clip-handle,.clip-delete')) {
+			event.preventDefault();
+			event.stopPropagation();
+			const clip = draft?.timeline_clips.find((item) => item.clip_id === audioClipElement.dataset.audioClipId);
+			if (clip) cutAudioClipAtPointer(event, clip);
+			return;
+		}
 		if (event.button === 0 && audioClipElement && (event.ctrlKey || event.metaKey)) {
 			event.preventDefault();
 			event.stopPropagation();
@@ -1148,11 +1162,12 @@
 	}
 
 	function updateHoverScrub(event: PointerEvent) {
-		if (!hoverScrubEnabled || isPlaying || !(event.target as HTMLElement).closest('[data-track-row],.timeline-ruler')) {
+		if (isPlaying || !(event.target as HTMLElement).closest('[data-track-row],.timeline-ruler') || (!hoverScrubEnabled && activeTool !== 'razor')) {
 			endHoverScrub();
 			return;
 		}
-		hoverTimeMs = timeFromPointer(event);
+		hoverTimeMs = rawTimeFromPointer(event);
+		if (!hoverScrubEnabled) return;
 		if (hoverScrubFrame) cancelAnimationFrame(hoverScrubFrame);
 		hoverScrubFrame = requestAnimationFrame(() => {
 			hoverScrubFrame = 0;
@@ -1382,10 +1397,14 @@
 	}
 
 	function timeFromPointer(event: PointerEvent | MouseEvent) {
+		return snapTimeToFrame(rawTimeFromPointer(event), timelineFrameRate, 'nearest', 0, lastPlayableFrameMs);
+	}
+
+	function rawTimeFromPointer(event: PointerEvent | MouseEvent) {
 		if (!timelineContentEl) return 0;
 		const rect = timelineContentEl.getBoundingClientRect();
 		const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
-		return snapTimeToFrame(ratio * timelineDurationMs, timelineFrameRate, 'nearest', 0, lastPlayableFrameMs);
+		return Math.max(0, Math.min(lastPlayableFrameMs, ratio * timelineDurationMs));
 	}
 
 	function moveRangeCreation(event: PointerEvent) {
@@ -1819,7 +1838,8 @@
 			><span class="hover-preview-icon" aria-hidden="true"><MousePointer2 size={13} /><i></i></span></button>
 			<span class="toolbar-divider" aria-hidden="true"></span>
 			<div class="edit-tools" aria-label="字幕片段编辑">
-				<button class="tool-btn icon-tool" type="button" onclick={splitSelectedTimelineItem} disabled={!canSplitSelectedTimelineItem} aria-label="按当前帧拆分片段" data-tooltip={selectedTimelineItem?.kind === 'audio' && !onSplitTimelineClip ? '音频拆分需要父流程接入片段创建接口。快捷键：C' : '按当前帧拆分片段：切点会自动吸附到完整帧。快捷键：C'}><Scissors size={13} /></button>
+				<button class="tool-btn icon-tool" class:active={activeTool === 'select'} type="button" onclick={() => activateTimelineTool('select')} aria-label="选择工具" data-tooltip="选择工具：选择、框选或移动时间线片段。快捷键：Esc"><MousePointer2 size={13} /></button>
+				<button class="tool-btn icon-tool" class:active={activeTool === 'razor'} type="button" onclick={() => activateTimelineTool('razor')} aria-label="剃刀工具" aria-pressed={activeTool === 'razor'} data-tooltip="剃刀工具：激活后点击片段，在鼠标所在帧的右边界裁开。快捷键：C"><Scissors size={13} /></button>
 				<button class="tool-btn icon-tool" type="button" onclick={onMergeCue} disabled={!canMergeSelectedCue} aria-label="合并下一字幕片段" data-tooltip="合并下一字幕片段：把当前字幕和后一段合并。快捷键：Shift+M">⇄</button>
 				<button class="tool-btn icon-tool danger" type="button" onclick={onDeleteCue} disabled={!canEditSelectedCue} aria-label="删除当前字幕片段" data-tooltip="删除当前字幕片段：从时间线移除当前字幕。快捷键：Delete"><Trash2 size={13} /></button>
 			</div>
@@ -2032,6 +2052,7 @@
 				class="timeline-content"
 				class:dragging={Boolean(dragState)}
 				class:panning={Boolean(timelinePanState)}
+				class:razor-tool={activeTool === 'razor'}
 				style={`width:${timelineZoom * 100}%;--processing-left:${timelineScrollLeft}px;--processing-width:${Math.max(1, timelineViewportWidth)}px`}
 				bind:this={timelineContentEl}
 				role="application"
@@ -2075,8 +2096,11 @@
 					{/if}
 				</div>
 				<div class="playhead" style={`left:${playheadPercent}%`}></div>
-				{#if hoverTimeMs !== null && hoverScrubEnabled && !isPlaying}
+				{#if hoverTimeMs !== null && (hoverScrubEnabled || activeTool === 'razor') && !isPlaying}
 					<div class="hover-playhead" style={`left:${((hoverFrame?.startMs ?? hoverTimeMs) / timelineDurationMs) * 100}%`} aria-hidden="true"></div>
+				{/if}
+				{#if activeTool === 'razor' && hoverFrame && !isPlaying}
+					<div class="razor-cut-guide" style={`left:${(hoverFrame.endMs / timelineDurationMs) * 100}%`} aria-hidden="true"></div>
 				{/if}
 				{#if snapGuideMs !== null && showFramePrecision}
 					<div class="frame-snap-guide" style={`left:${(snapGuideMs / timelineDurationMs) * 100}%`} aria-hidden="true"><span>{frameIndexAtTime(snapGuideMs, timelineFrameRate)}f</span></div>
@@ -2112,7 +2136,7 @@
 								disabled={trackRuntimeBusy('subtitles')}
 								style={`left:${cueLeft(cue, 'asr')}%;width:${cueWidth(cue, 'asr')}%`}
 						onclick={(event) => !dragState && !(event.ctrlKey || event.metaKey) && selectSubtitleTimelineItem('asr', cue.cue_id)}
-								onpointerdown={(event) => startCueDrag(event, cue, 'move', 'asr')}
+								onpointerdown={(event) => { if (!cutSubtitleAtPointer(event, 'asr', cue.cue_id)) startCueDrag(event, cue, 'move', 'asr'); }}
 								aria-label={`选择字幕 ${cue.cue_id}`}
 							>
 								<span
@@ -2160,7 +2184,7 @@
 							type="button"
 							style={`left:${cueLeft(cue, 'localized')}%;width:${cueWidth(cue, 'localized')}%`}
 							onclick={(event) => !dragState && !(event.ctrlKey || event.metaKey) && selectSubtitleTimelineItem('localized', cue.subtitle_id)}
-							onpointerdown={(event) => startCueDrag(event, cue, 'move', 'localized')}
+							onpointerdown={(event) => { if (!cutSubtitleAtPointer(event, 'localized', cue.subtitle_id)) startCueDrag(event, cue, 'move', 'localized'); }}
 							aria-label={`本土化字幕 ${cue.subtitle_id}`}
 						>
 							<span class="cue-handle" role="slider" tabindex="-1" aria-label="调整本土化字幕入点" aria-valuemin="0" aria-valuemax={subtitleTimelineLimitMs} aria-valuenow={cueLiveTime(cue, 'localized').start_ms} onpointerdown={(event) => startCueDrag(event, cue, 'trim-start', 'localized')}></span>
@@ -2971,6 +2995,12 @@
 		cursor: crosshair;
 	}
 
+	.timeline-content.razor-tool,
+	.timeline-content.razor-tool .cue-chip,
+	.timeline-content.razor-tool :global(.audio-clip) {
+		cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%23eef7f8' stroke='%2312181d' stroke-width='1.4' d='M4 3h10l5 4-8 5H4z'/%3E%3Cpath fill='%2357d0c8' stroke='%2312181d' stroke-width='1.2' d='M7 12h11l-2 6H5z'/%3E%3C/svg%3E") 4 4, crosshair;
+	}
+
 	.playhead {
 		position: absolute;
 		top: 34px;
@@ -2990,6 +3020,17 @@
 		width: 1px;
 		border-left: 1px dashed rgba(133, 229, 222, 0.78);
 		filter: drop-shadow(0 0 3px rgba(87, 208, 200, 0.32));
+		pointer-events: none;
+	}
+
+	.razor-cut-guide {
+		position: absolute;
+		top: 28px;
+		bottom: 0;
+		z-index: 9;
+		width: 1px;
+		border-left: 1px solid rgba(244, 211, 107, 0.92);
+		filter: drop-shadow(0 0 3px rgba(244, 211, 107, 0.3));
 		pointer-events: none;
 	}
 

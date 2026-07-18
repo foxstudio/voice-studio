@@ -109,12 +109,14 @@ export function candidateAudioUrl(projectId: string, candidate: VideoLocalizatio
 
 export function timelineClipAudioUrl(projectId: string, clip: VideoLocalizationTimelineClip) {
 	if (!projectId || (clip.clip_id !== 'media_original' && !clip.audio_path)) return '';
-	return withClipMediaVersion(`/api/projects/${projectId}/video-localization/timeline-clips/${clip.clip_id}/audio`, clip);
+	const mediaClipId = clip.media_source_clip_id || clip.clip_id;
+	return withClipMediaVersion(`/api/projects/${projectId}/video-localization/timeline-clips/${mediaClipId}/audio`, clip);
 }
 
 export function timelineClipWaveformUrl(projectId: string, clip: VideoLocalizationTimelineClip) {
 	if (!projectId || (clip.clip_id !== 'media_original' && !clip.audio_path)) return '';
-	return withClipMediaVersion(`/api/projects/${projectId}/video-localization/timeline-clips/${clip.clip_id}/waveform`, clip);
+	const mediaClipId = clip.media_source_clip_id || clip.clip_id;
+	return withClipMediaVersion(`/api/projects/${projectId}/video-localization/timeline-clips/${mediaClipId}/waveform`, clip);
 }
 
 function withClipMediaVersion(url: string, clip: VideoLocalizationTimelineClip) {

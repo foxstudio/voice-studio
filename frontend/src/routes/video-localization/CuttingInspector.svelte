@@ -15,6 +15,7 @@
 	import TaskProgressPanel from './TaskProgressPanel.svelte';
 	import ScrubbableTimeField from './ScrubbableTimeField.svelte';
 	import SubtitleTtsHistory from './SubtitleTtsHistory.svelte';
+	import DubbingInspectorPanel from './DubbingInspectorPanel.svelte';
 	import type { ActivityTask } from './activity-notice';
 	import { candidateAudioUrl, durationLabel, msLabel, referenceAudioUrl, referenceCoverUrl } from './utils';
 	import { formatTimecode } from './subtitle-workbench';
@@ -160,6 +161,8 @@
 	let recipeSnapshotText = $state('');
 	let activeSection = $state<'tasks' | 'subtitle' | 'dubbing'>('tasks');
 	let dubbingView = $state<'prepare' | 'results'>('prepare');
+	const legacyDubbingEnabled = false;
+	let retainedDubbingTarget = $state<{ id: string; script: string; label: string; canGenerate: boolean } | null>(null);
 
 	const selectedVoice = $derived(
 		(draft?.reference_clips ?? []).find((clip) => clip.reference_clip_id === selectedVoiceId) ?? draft?.reference_clips[0] ?? null
@@ -206,6 +209,20 @@
 				(selectedLocalizedSubtitle?.tts_text?.trim() || selectedLocalizedSubtitle?.text?.trim() || selectedCue?.tts_recommended_text?.trim()) &&
 				(selectedLocalizedSubtitle ? selectedLocalizedSubtitle.end_ms > selectedLocalizedSubtitle.start_ms : selectedCue?.start_ms !== null && selectedCue?.end_ms !== null)
 		)
+	);
+	const activeDubbingScript = $derived(
+		selectedLocalizedSubtitles.length > 1
+			? selectedLocalizedSubtitles.map((subtitle) => subtitle.tts_text?.trim() || subtitle.text.trim()).filter(Boolean).join(' ')
+			: selectedLocalizedSubtitle?.tts_text?.trim() || selectedLocalizedSubtitle?.text?.trim() || selectedCue?.tts_recommended_text?.trim() || ''
+	);
+	const activeDubbingTargetLabel = $derived(
+		selectedLocalizedSubtitles.length > 1
+			? `${selectedLocalizedSubtitles.length} 条${selectedLocalizedSubtitlesContiguous ? '连续' : ''}字幕`
+			: selectedLocalizedSubtitle?.subtitle_id || selectedTimelineAudioClip?.subtitle_id || selectedCue?.cue_id || '未选择配音目标'
+	);
+	const resolvedDubbingTarget = $derived(activeTtsSegmentId
+		? { id: activeTtsSegmentId, script: activeDubbingScript, label: activeDubbingTargetLabel, canGenerate: canGenerateSubtitle }
+		: retainedDubbingTarget
 	);
 	const segmentLabels = $derived.by(() => {
 		const labels: Record<string, string> = {};
@@ -394,9 +411,19 @@
 	$effect(() => {
 		if (selectedTimelineAudioClip?.track_id === 'dub') dubbingView = 'results';
 	});
+
+	$effect(() => {
+		if (!activeTtsSegmentId) return;
+		retainedDubbingTarget = {
+			id: activeTtsSegmentId,
+			script: activeDubbingScript,
+			label: activeDubbingTargetLabel,
+			canGenerate: canGenerateSubtitle
+		};
+	});
 </script>
 
-<aside class="inspector" class:tasks-view={activeSection === 'tasks'} class:subtitle-view={activeSection === 'subtitle' || activeSection === 'dubbing'}>
+<aside class="inspector" class:tasks-view={activeSection === 'tasks'} class:subtitle-view={activeSection === 'subtitle'} class:dubbing-view={activeSection === 'dubbing'}>
 	<div class="inspector-mode-tabs" aria-label="右侧检查器">
 		<button class:active={activeSection === 'tasks'} type="button" data-tooltip="任务：查看后台处理进度、每一步状态和历史结果。" onclick={() => onSectionChange('tasks')}><ListTodo size={14} /><span>任务</span></button>
 		<button class:active={activeSection === 'subtitle'} type="button" data-tooltip="字幕：编辑文本、时间码、校对状态和上屏样式。" onclick={() => onSectionChange('subtitle')}><Captions size={14} /><span>字幕</span></button>
@@ -409,21 +436,42 @@
 		</div>
 	{/if}
 
-	{#if activeSection === 'dubbing'}
-		<div class="dubbing-view-tabs" aria-label="配音工作区">
-			<button class:active={dubbingView === 'prepare'} type="button" onclick={() => (dubbingView = 'prepare')}>生成设置</button>
-			<button class:active={dubbingView === 'results'} type="button" onclick={() => (dubbingView = 'results')}>配音结果</button>
-		</div>
+	{#if activeSection === 'dubbing' && resolvedDubbingTarget && onOpenSubtitleGenerate && onReuseSubtitleHistory}
+		<DubbingInspectorPanel
+			items={ttsHistory}
+			selectedSegmentId={resolvedDubbingTarget.id}
+			{segmentLabels}
+			script={resolvedDubbingTarget.script}
+			targetLabel={resolvedDubbingTarget.label}
+			canGenerate={resolvedDubbingTarget.canGenerate}
+			busy={generatingVoice}
+			appliedResultId={appliedTtsResultId}
+			timelineClipPresent={Boolean(activeTimelineDubClip)}
+			applyingResultId={historyApplyingResultId}
+			onOpenGenerate={onOpenSubtitleGenerate}
+			onReuse={onReuseSubtitleHistory}
+			onApply={onApplySubtitleHistory}
+			onDelete={onDeleteSubtitleHistory}
+			onDeleteCurrent={onDeleteCurrentSubtitleHistory}
+			onDeleteAll={onDeleteAllSubtitleHistory}
+			selectionCount={selectedLocalizedSubtitles.length || 1}
+			selectionContiguous={selectedLocalizedSubtitlesContiguous}
+			frameRate={draft?.source_media.frame_rate ?? 24}
+		/>
+	{:else if activeSection === 'dubbing'}
+		<section class="inspector-panel empty-dubbing-results">
+			<p class="empty-text">选择一条字幕或合成配音片段后，这里会显示对应的生成记录和时间线版本。</p>
+		</section>
 	{/if}
 
-	{#if activeSection === 'dubbing' && dubbingView === 'prepare'}
+	{#if legacyDubbingEnabled && activeSection === 'dubbing' && dubbingView === 'prepare'}
 		<div class="inspector-tabs">
 			<button class:active={activeTab === 'library'} type="button" data-tooltip="项目音色库：试听、检索和编辑本项目已保存的样音。" onclick={() => (activeTab = 'library')}>项目音色库</button>
 			<button class:active={activeTab === 'save-selection'} type="button" data-tooltip="保存当前选区：把时间线上的自由音频范围裁成项目样音。" onclick={() => (activeTab = 'save-selection')}>保存当前选区</button>
 		</div>
 	{/if}
 
-	{#if activeSection === 'dubbing' && dubbingView === 'prepare' && activeTab === 'library'}
+	{#if legacyDubbingEnabled && activeSection === 'dubbing' && dubbingView === 'prepare' && activeTab === 'library'}
 		<section class="inspector-panel">
 			<div class="panel-head">
 				<h2>已保存音色</h2>
@@ -501,7 +549,7 @@
 				</div>
 			{/if}
 		</section>
-	{:else if activeSection === 'dubbing' && dubbingView === 'prepare'}
+	{:else if legacyDubbingEnabled && activeSection === 'dubbing' && dubbingView === 'prepare'}
 		<section class="inspector-panel">
 			<div class="panel-head">
 				<h2>保存当前选区为音色</h2>
@@ -548,7 +596,7 @@
 		</section>
 	{/if}
 
-	{#if activeSection === 'dubbing' && dubbingView === 'prepare'}
+	{#if legacyDubbingEnabled && activeSection === 'dubbing' && dubbingView === 'prepare'}
 		<section class="inspector-panel voice-lab-panel">
 			<div class="panel-head">
 				<h2>配音生成</h2>
@@ -663,7 +711,7 @@
 	</section>
 	{/if}
 
-	{#if activeSection === 'dubbing' && dubbingView === 'results' && activeTtsSegmentId && onOpenSubtitleGenerate && onReuseSubtitleHistory}
+	{#if legacyDubbingEnabled && activeSection === 'dubbing' && dubbingView === 'results' && activeTtsSegmentId && onOpenSubtitleGenerate && onReuseSubtitleHistory}
 		<section class="inspector-panel dubbing-history-panel">
 			<SubtitleTtsHistory
 				items={ttsHistory}
@@ -686,7 +734,7 @@
 				frameRate={draft?.source_media.frame_rate ?? 24}
 			/>
 		</section>
-	{:else if activeSection === 'dubbing' && dubbingView === 'results'}
+	{:else if legacyDubbingEnabled && activeSection === 'dubbing' && dubbingView === 'results'}
 		<section class="inspector-panel empty-dubbing-results">
 			<p class="empty-text">选择一条字幕或合成配音片段后，这里会显示对应的生成记录和时间线版本。</p>
 		</section>
@@ -914,6 +962,16 @@
 		overflow: auto;
 	}
 
+	.inspector.dubbing-view {
+		height: 100%;
+		max-height: none;
+		min-height: 0;
+		box-sizing: border-box;
+		grid-template-rows: auto minmax(0, 1fr);
+		align-content: stretch;
+		overflow: hidden;
+	}
+
 	.task-view-content {
 		min-width: 0;
 		min-height: 0;
@@ -928,32 +986,6 @@
 		border: 1px solid var(--line);
 		border-radius: 8px;
 		background: #11161b;
-	}
-
-	.dubbing-view-tabs {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 3px;
-		padding: 3px;
-		border: 1px solid var(--line);
-		border-radius: 7px;
-		background: #11161b;
-	}
-
-	.dubbing-view-tabs button {
-		min-height: 28px;
-		border: 0;
-		border-radius: 5px;
-		background: transparent;
-		color: var(--muted);
-		font-size: 11px;
-		font-weight: 700;
-		cursor: pointer;
-	}
-
-	.dubbing-view-tabs button.active {
-		background: #273038;
-		color: var(--text);
 	}
 
 	.empty-dubbing-results {
