@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Captions, ChevronsLeft, ChevronsRight, Eye, EyeOff, FileAudio, FileUp, GripVertical, LoaderCircle, Lock, Mic2, MousePointer2, Pause, Play, Redo2, RefreshCw, Save, Scissors, SkipBack, SkipForward, Trash2, Undo2, Unlock, Wand2, ZoomIn, ZoomOut } from 'lucide-svelte';
+	import { Captions, ChevronsLeft, ChevronsRight, Eye, EyeOff, FileAudio, FileUp, GripVertical, LoaderCircle, Lock, Mic2, MousePointer2, Pause, Play, RectangleHorizontal, Redo2, RefreshCw, Save, SkipBack, SkipForward, Trash2, Undo2, Unlock, Wand2, ZoomIn, ZoomOut } from 'lucide-svelte';
 	import { tick } from 'svelte';
 	import { buildTimelineTicks, formatTimelineZoom } from '$lib/audio/waveform';
 	import ContextMenu from '$lib/components/shared/ContextMenu.svelte';
@@ -819,7 +819,7 @@
 			onHoverScrubChange?.(!hoverScrubEnabled);
 		} else if (event.key.toLowerCase() === 'c') {
 			event.preventDefault();
-			activeTool = 'razor';
+			activateTimelineTool(activeTool === 'razor' ? 'select' : 'razor');
 		} else if (event.shiftKey && event.key.toLowerCase() === 'm') {
 			event.preventDefault();
 			if (canMergeSelectedCue) onMergeCue();
@@ -831,7 +831,8 @@
 			if (canEditSelectedCue) setRangeFromSelectedCue();
 		} else if (event.key.toLowerCase() === 'v') {
 			event.preventDefault();
-			handleRangeAction(onSaveSelectionAsVoice);
+			if (event.shiftKey) handleRangeAction(onSaveSelectionAsVoice);
+			else activateTimelineTool('select');
 		} else if (event.key.toLowerCase() === 'g') {
 			event.preventDefault();
 			handleRangeAction(onGenerateToSelection);
@@ -1838,15 +1839,14 @@
 			><span class="hover-preview-icon" aria-hidden="true"><MousePointer2 size={13} /><i></i></span></button>
 			<span class="toolbar-divider" aria-hidden="true"></span>
 			<div class="edit-tools" aria-label="字幕片段编辑">
-				<button class="tool-btn icon-tool" class:active={activeTool === 'select'} type="button" onclick={() => activateTimelineTool('select')} aria-label="选择工具" data-tooltip="选择工具：选择、框选或移动时间线片段。快捷键：Esc"><MousePointer2 size={13} /></button>
-				<button class="tool-btn icon-tool" class:active={activeTool === 'razor'} type="button" onclick={() => activateTimelineTool('razor')} aria-label="剃刀工具" aria-pressed={activeTool === 'razor'} data-tooltip="剃刀工具：激活后点击片段，在鼠标所在帧的右边界裁开。快捷键：C"><Scissors size={13} /></button>
+				<button class="tool-btn icon-tool" class:active={activeTool === 'razor'} type="button" onclick={() => activateTimelineTool(activeTool === 'razor' ? 'select' : 'razor')} aria-label="剃刀工具" aria-pressed={activeTool === 'razor'} data-tooltip={activeTool === 'razor' ? '剃刀工具已激活：再次点击或按 C 取消，按 V 返回默认选择。' : '剃刀工具：激活后点击片段，在鼠标所在帧的右边界裁开。快捷键：C'}><RectangleHorizontal class="razor-blade-icon" size={14} /></button>
 				<button class="tool-btn icon-tool" type="button" onclick={onMergeCue} disabled={!canMergeSelectedCue} aria-label="合并下一字幕片段" data-tooltip="合并下一字幕片段：把当前字幕和后一段合并。快捷键：Shift+M">⇄</button>
 				<button class="tool-btn icon-tool danger" type="button" onclick={onDeleteCue} disabled={!canEditSelectedCue} aria-label="删除当前字幕片段" data-tooltip="删除当前字幕片段：从时间线移除当前字幕。快捷键：Delete"><Trash2 size={13} /></button>
 			</div>
 			<span class="toolbar-divider" aria-hidden="true"></span>
 			<div class="edit-tools" aria-label="选区工作流">
 				<button class="tool-btn icon-tool" type="button" onclick={setRangeFromSelectedCue} disabled={!canEditSelectedCue} aria-label="用当前字幕设置选区" data-tooltip="用当前字幕设置选区：把当前字幕的入点和出点作为样音范围。快捷键：R"><Captions size={13} /></button>
-				<button class="tool-btn icon-tool" type="button" onclick={() => handleRangeAction(onSaveSelectionAsVoice)} disabled={!hasRangeSelection} aria-label="保存选区为音色" data-tooltip={hasRangeSelection ? '保存选区为音色：把当前时间范围保存为项目音色样音。快捷键：V' : '先设置一个时间范围，才能保存样音。快捷键：V'}><Save size={13} /></button>
+				<button class="tool-btn icon-tool" type="button" onclick={() => handleRangeAction(onSaveSelectionAsVoice)} disabled={!hasRangeSelection} aria-label="保存选区为音色" data-tooltip={hasRangeSelection ? '保存选区为音色：把当前时间范围保存为项目音色样音。快捷键：Shift+V' : '先设置一个时间范围，才能保存样音。快捷键：Shift+V'}><Save size={13} /></button>
 				<button class="primary-tool icon-tool" type="button" onclick={() => handleRangeAction(onGenerateToSelection)} disabled={!hasRangeSelection} aria-label="生成到选区" data-tooltip={hasRangeSelection ? '生成到选区：把生成语音放入当前时间范围。快捷键：G' : '先设置一个时间范围，才能生成到选区。快捷键：G'}><Wand2 size={13} /></button>
 			</div>
 			<span class="toolbar-divider" aria-hidden="true"></span>
@@ -2998,7 +2998,11 @@
 	.timeline-content.razor-tool,
 	.timeline-content.razor-tool .cue-chip,
 	.timeline-content.razor-tool :global(.audio-clip) {
-		cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath fill='%23eef7f8' stroke='%2312181d' stroke-width='1.4' d='M4 3h10l5 4-8 5H4z'/%3E%3Cpath fill='%2357d0c8' stroke='%2312181d' stroke-width='1.2' d='M7 12h11l-2 6H5z'/%3E%3C/svg%3E") 4 4, crosshair;
+		cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 26 26'%3E%3Cg transform='rotate(-18 13 13)'%3E%3Crect x='3' y='7' width='20' height='12' rx='2' fill='%23eef7f8' stroke='%2312181d' stroke-width='1.5'/%3E%3Cpath d='M6 11h14M6 15h14' stroke='%2357d0c8' stroke-width='1.3'/%3E%3Ccircle cx='8' cy='13' r='1.2' fill='%2312181d'/%3E%3Ccircle cx='18' cy='13' r='1.2' fill='%2312181d'/%3E%3C/g%3E%3C/svg%3E") 4 4, crosshair;
+	}
+
+	:global(.razor-blade-icon) {
+		transform: rotate(-18deg);
 	}
 
 	.playhead {
