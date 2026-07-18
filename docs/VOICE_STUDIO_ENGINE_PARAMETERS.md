@@ -323,7 +323,10 @@ agent 规则：
 - `voice_id`：音色库里的本地参考音色。IndexTTS v2 生成必须有参考音频。
 - `reference_audio_path`：直接指定参考音频路径；通常由 `voice_id` 自动解析。调用方显式提供时优先于 `voice_id`。
 - `ref_text`：参考音频对应台词，目前用于音色库留档和 ASR 校对；当前 IndexTTS MLX 生成路线不会把它传给模型，因此不会改变这次合成效果。
-- `emotion_mode`：`follow_reference` 表示不额外叠加情绪；`emotion_vector` 表示使用 `emotion` 和 `emo_alpha`。
+- `emotion_mode`：`follow_reference` 表示音色和情绪都跟随主参考；`emotion_vector` 表示使用 `emotion` 和 `emo_alpha`；`emotion_reference` 表示从另一条音频提取情绪，并用 `emo_alpha` 与主参考的原始情绪插值。
+- `emotion_reference_voice_id`：从音色库选择独立情绪来源。若同时提供 `emotion_reference_audio_path`，显式片段路径优先。
+- `emotion_reference_audio_path`：最终送入模型的独立情绪音频或裁切片段路径。
+- `emotion_reference_source_audio_path`、`emotion_reference_source_duration_ms`、`emotion_reference_trim_start_ms`、`emotion_reference_trim_end_ms`：保存原始素材和时间线选区，供历史恢复与受管文件生命周期使用。
 - 当前 IndexTTS 接入不把自由文字（例如“压低声音、谨慎、喜悦”）当作情绪指令。请用页面提供的内置情绪，或选“跟随参考音色”；否则会明确提示不支持，避免看似设置了却悄悄回退。
 - `emotion`：8 种情绪之一：`happy`、`sad`、`angry`、`afraid`、`disgusted`、`melancholic`、`surprised`、`calm`。
 - `emo_alpha`：情绪强度，0 到 1。越高表演感越强，长文本通常不宜过高。
