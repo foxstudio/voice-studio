@@ -495,6 +495,24 @@ def test_symlinked_custom_file_is_never_deleted(isolated_store):
     assert external.exists()
 
 
+def test_reference_scan_skips_filesystem_resolution_for_unrelated_project_text(isolated_store, monkeypatch):
+    voice_file = _custom_file("scan-fast-path")
+
+    def fail_if_checked(_path):
+        raise AssertionError("unrelated project text must not trigger managed-path checks")
+
+    monkeypatch.setattr(custom_reference_store, "is_managed_custom_path", fail_if_checked)
+    payload = {
+        "title": "大型视频项目",
+        "timeline": [
+            {"text": f"普通字幕与描述 {index}", "metadata": {"speaker": "旁白", "status": "ready"}}
+            for index in range(500)
+        ],
+    }
+
+    assert custom_reference_store._value_references(payload, voice_file) is False
+
+
 def test_ttl_cleanup_only_removes_old_unreferenced_custom_uploads(isolated_store):
     now = datetime(2026, 7, 13, 12, 0, 0)
     old = (now - timedelta(hours=2)).isoformat(timespec="seconds")

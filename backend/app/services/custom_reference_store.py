@@ -33,6 +33,15 @@ def is_managed_custom_path(path: str | Path | None) -> bool:
     try:
         raw_candidate = Path(path).expanduser()
         raw_root = custom_reference_dir()
+        # Reference scans walk arbitrary task/project JSON. Reject ordinary
+        # text and unrelated paths lexically before touching the filesystem;
+        # resolving every string makes deletion scale with project text size.
+        try:
+            lexical_relative = raw_candidate.relative_to(raw_root)
+        except ValueError:
+            return False
+        if len(lexical_relative.parts) != 1:
+            return False
         if raw_candidate.is_symlink() or raw_root.is_symlink():
             return False
         candidate = _resolved(raw_candidate)
@@ -264,6 +273,12 @@ def _value_references(value: Any, voice_file: VoiceFile) -> bool:
         return False
     if value == voice_file.file_id:
         return True
+    # Managed custom files are named with their file id. Most strings in a
+    # project are transcript text, labels, or unrelated paths; skip all Path
+    # construction and filesystem checks unless the only possible target id
+    # is present.
+    if voice_file.file_id not in value:
+        return False
     return is_managed_custom_path(value) and _resolved(value) == _resolved(voice_file.path)
 
 
