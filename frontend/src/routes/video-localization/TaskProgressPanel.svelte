@@ -70,8 +70,9 @@
 	const selectedResultContext = $derived.by(() => {
 		if (!selectedResult) return null;
 		const task = uniqueTasks.find((item) => item.id === selectedResult?.taskId);
-		const step = task?.steps?.find((item) => item.id === selectedResult?.stepId);
-		return task && step?.result ? { task, step } : null;
+		const stepIndex = task?.steps?.findIndex((item) => item.id === selectedResult?.stepId) ?? -1;
+		const step = stepIndex >= 0 ? task?.steps?.[stepIndex] : undefined;
+		return task && step?.result ? { task, step, stepIndex, stepCount: task.steps?.length ?? 0 } : null;
 	});
 
 	$effect(() => {
@@ -144,6 +145,9 @@
 	}
 
 	function stepStateLabel(step: ActivityTaskStep) {
+		if (step.status === 'success' && step.result?.status === 'warning') return '需复核';
+		if (step.status === 'success' && step.result?.status === 'failed') return '结果异常';
+		if (step.status === 'success' && step.result?.status === 'skipped') return '已跳过';
 		return {
 			todo: '待处理',
 			running: '处理中',
@@ -151,6 +155,10 @@
 			failed: '失败',
 			cancelled: '已取消'
 		}[step.status];
+	}
+
+	function stepNeedsAttention(step: ActivityTaskStep) {
+		return step.status === 'success' && (step.result?.status === 'warning' || step.result?.status === 'failed');
 	}
 
 	function stepTiming(step: ActivityTaskStep, task: ActivityTask) {
@@ -215,13 +223,15 @@
 									{#if progress !== null}
 										<div class="task-meter" aria-label={`进度 ${progress}%`}><i style={`width:${progress}%`}></i></div>
 									{/if}
-									{#if task.steps?.length}
-										<ul class="task-steps" aria-label={`${displayLabel(task)}处理步骤`}>
+								{#if task.steps?.length}
+									<div class="task-flow-head"><span>处理流程</span><b>共 {task.steps.length} 步</b></div>
+									<ul class="task-steps" aria-label={`${displayLabel(task)}处理步骤`}>
 											{#each task.steps as step (step.id)}
 												{@const timing = stepTiming(step, task)}
-												<li class:current={step.status === 'running'} class:step-failed={step.status === 'failed'}>
+												<li class:current={step.status === 'running'} class:step-failed={step.status === 'failed'} class:step-warning={stepNeedsAttention(step)}>
 													<span class="task-step-state" class:step-spinning={step.status === 'running'} aria-hidden="true">
-														{#if step.status === 'success'}<Check size={10} />
+														{#if stepNeedsAttention(step)}<AlertTriangle size={10} />
+														{:else if step.status === 'success'}<Check size={10} />
 														{:else if step.status === 'running'}<LoaderCircle size={10} />
 														{:else if step.status === 'failed'}<AlertTriangle size={10} />
 														{:else if step.status === 'cancelled'}<CircleOff size={10} />
@@ -300,13 +310,15 @@
 											</div>
 										{/if}
 										<div class="task-stage"><span>{task.stage || activityTaskStatusLabel(task.status)}</span></div>
-										{#if task.steps?.length}
-											<ul class="task-steps" aria-label={`${displayLabel(task)}处理步骤`}>
+							{#if task.steps?.length}
+								<div class="task-flow-head"><span>处理流程</span><b>共 {task.steps.length} 步</b></div>
+								<ul class="task-steps" aria-label={`${displayLabel(task)}处理步骤`}>
 												{#each task.steps as step (step.id)}
 													{@const timing = stepTiming(step, task)}
-													<li class:step-failed={step.status === 'failed'}>
+													<li class:step-failed={step.status === 'failed'} class:step-warning={stepNeedsAttention(step)}>
 														<span class="task-step-state" aria-hidden="true">
-															{#if step.status === 'success'}<Check size={10} />
+															{#if stepNeedsAttention(step)}<AlertTriangle size={10} />
+															{:else if step.status === 'success'}<Check size={10} />
 															{:else if step.status === 'failed'}<AlertTriangle size={10} />
 															{:else if step.status === 'cancelled'}<CircleOff size={10} />
 															{:else}<Circle size={8} />{/if}
@@ -353,9 +365,11 @@
 </section>
 
 {#if selectedResultContext?.step.result}
-	<TaskStepResultDialog
-		stepLabel={selectedResultContext.step.label}
-		result={selectedResultContext.step.result}
+		<TaskStepResultDialog
+			taskLabel={displayLabel(selectedResultContext.task)}
+			stepLabel={selectedResultContext.step.label}
+			stepPositionLabel={`第 ${selectedResultContext.stepIndex + 1} / ${selectedResultContext.stepCount} 步`}
+			result={selectedResultContext.step.result}
 		durationLabel={stepTiming(selectedResultContext.step, selectedResultContext.task)}
 		onClose={() => (selectedResult = null)}
 	/>
@@ -378,6 +392,8 @@
 	}
 
 	.task-center.pulsing { animation: task-center-pulse 900ms ease-out; }
+	.task-flow-head { display: flex; align-items: center; justify-content: space-between; margin: 8px 0 4px; color: #65747b; font-size: 8.5px; }
+	.task-flow-head b { color: #84939a; font-weight: 600; }
 
 	.task-center-head {
 		min-width: 0;
@@ -475,6 +491,9 @@
 	.task-steps li { position: relative; min-width: 0; display: grid; grid-template-columns: 15px minmax(0, 1fr) auto; align-items: center; gap: 6px; min-height: 22px; color: #78878e; font-size: 9.5px; }
 	.task-steps li.current { color: #a9ccd6; }
 	.task-steps li.step-failed { color: #d89496; }
+	.task-steps li.step-warning { color: #c7a66f; }
+	.task-steps li.step-warning .task-step-state,
+	.task-steps li.step-warning .task-step-summary em { color: #b99761; }
 	.task-step-name { min-width: 0; display: flex; align-items: center; gap: 3px; }
 	.task-step-label { min-width: 0; overflow: hidden; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 	.task-step-summary { min-width: 0; display: flex; align-items: baseline; justify-content: flex-end; gap: 6px; white-space: nowrap; }

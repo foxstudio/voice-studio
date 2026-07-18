@@ -5,8 +5,19 @@ import re
 from app.domains.video_localization.schemas import VideoLocalizationDraft
 
 
-ASR_SAMPLE_LIMIT = 15
-DETAIL_LIMIT = 50
+HUMAN_DETAIL_LIMIT = 250
+FOCUSED_DETAIL_LIMIT = 120
+
+STEP_PURPOSES = {
+    "asr": "把音轨中的讲话转成原始文字，先保留模型实际听到的内容，不在这一步改写。",
+    "diarization": "根据声音特征区分匿名说话人，并用声纹相似度合并可能被误拆的同一人。",
+    "web_research": "结合全文判断哪些名称、人物或背景需要查证，并记录资料是否真的影响了文本。",
+    "text_review": "对照全文、项目术语和查证资料校对转写，只采纳有充分依据且不改变原意的修改。",
+    "alignment": "用校对后的完整文本重新贴合音频，为每个词确定出现时间，供后续字幕切分使用。",
+    "audio_boundaries": "检查相邻词之间的静音和能量变化，找出自然停顿，而不是只按字数切字幕。",
+    "boundary_review": "把声音停顿与上下文语义放在一起判断，决定字幕应该断开、可断或保持连读。",
+    "subtitle_track": "按最终文字、说话人边界和断句结论生成字幕条，并检查空文本和时间重叠。",
+}
 
 
 def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[str, dict]:
@@ -24,32 +35,40 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
 
     word_by_id = {word.word_id: word for word in words}
 
-    sampled_segments = _sample_evenly(segments, ASR_SAMPLE_LIMIT)
-    asr_samples = [
+    visible_segments = _bounded_evenly(segments, HUMAN_DETAIL_LIMIT)
+    asr_items = [
         {
-            "title": f"片段 {index}",
+            "title": f"片段 {index} · {segment.segment_id}",
             "text": _compact_text(segment.raw_text),
             "meta": _time_range(segment.start_ms, segment.end_ms),
         }
-        for index, segment in enumerate(sampled_segments, start=1)
+        for index, segment in enumerate(visible_segments, start=1)
         if segment.raw_text.strip()
     ]
     asr_result = {
         "status": "success" if segments else "failed",
+        "purpose": STEP_PURPOSES["asr"],
         "summary": f"识别到 {len(segments)} 个原始语音片段。" if segments else "没有识别到有效语音文本。",
         "metrics": _metrics(
             ("识别引擎", transcription.engine_id),
             ("语言", _language_label(transcription.language)),
             ("原始片段", len(segments)),
-            ("抽查样例", len(asr_samples)),
+            ("详情已展示", f"{len(asr_items)} / {len(segments)} 条"),
         ),
-        "sections": _sections(("识别样例", asr_samples)),
+        "coverage": _coverage(len(asr_items), len(segments), "个原始片段"),
+        "sections": _sections(("完整识别片段" if len(asr_items) == len(segments) else "识别片段重点展示", asr_items)),
+        "notes": ["这里的片段时间是 ASR 的粗略定位；最终字幕时间以第 5 步“对齐逐词时间”的结果为准。"],
     }
 
     speaker_clusters = transcription.speaker_clusters
     review_clusters = [item for item in speaker_clusters if item.merge_status == "needs_review"]
     auto_merged_clusters = [item for item in speaker_clusters if item.merge_status == "auto_merged"]
     overlap_segments = [item for item in segments if item.has_speaker_overlap]
+    unassigned_words = [
+        word
+        for word in words
+        if not word.speaker_cluster_id and transcription.diarization_status in {"completed", "partial"}
+    ]
     if transcription.diarization_status == "completed":
         diarization_summary = f"区分出 {len(speaker_clusters)} 位匿名说话人，声纹簇检查已完成。"
     elif transcription.diarization_status == "partial":
@@ -86,8 +105,22 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
         }
         for cluster in speaker_clusters
     ]
+    overlap_items = [
+        {
+            "title": f"重叠讲话 · {segment.segment_id}",
+            "text": _compact_text(segment.corrected_text or segment.raw_text),
+            "meta": _time_range(segment.start_ms, segment.end_ms),
+            "facts": [
+                {"label": "当前说话人", "value": segment.speaker_cluster_id or "尚未确定"},
+                {"label": "处理建议", "value": "人工试听确认是否漏掉副声部"},
+            ],
+            "tone": "warning",
+        }
+        for segment in overlap_segments[:HUMAN_DETAIL_LIMIT]
+    ]
     diarization_result = {
-        "status": _result_status(transcription.diarization_status),
+        "status": "warning" if unassigned_words else _result_status(transcription.diarization_status),
+        "purpose": STEP_PURPOSES["diarization"],
         "summary": diarization_summary,
         "metrics": _metrics(
             ("区分引擎", transcription.diarization_engine_id),
@@ -95,9 +128,16 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
             ("自动合并", len(auto_merged_clusters)),
             ("需要复核", len(review_clusters)),
             ("重叠片段", len(overlap_segments)),
+            ("未匹配词语", len(unassigned_words)),
         ),
-        "sections": _sections(("说话人声纹簇", cluster_items)),
-        "notes": _notes(transcription.diarization_error),
+        "coverage": _coverage(len(cluster_items), len(speaker_clusters), "个说话人声纹簇"),
+        "sections": _sections(("说话人声纹簇", cluster_items), ("需要人工试听的重叠片段", overlap_items)),
+        "notes": _notes(
+            transcription.diarization_error,
+            f"有 {len(unassigned_words)} 个已经对齐的词没有匹配到说话人，需要人工试听确认。"
+            if unassigned_words
+            else None,
+        ),
     }
 
     research_source_by_id = {item.source_id: item for item in research.sources}
@@ -113,6 +153,7 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
         research_summary = f"{research_summary} 其中 {len(research_edits)} 项文本修正引用了联网资料。"
     research_result = {
         "status": _result_status(research.status),
+        "purpose": STEP_PURPOSES["web_research"],
         "summary": research_summary,
         "metrics": _metrics(
             ("判断结果", _status_label(research.status)),
@@ -123,6 +164,7 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
         "sections": _sections(
             ("逐项查证结果", research_questions),
         ),
+        "coverage": _coverage(len(research_questions), len(research.queries), "个查证问题"),
         "notes": _notes(research.error),
     }
 
@@ -136,12 +178,13 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
     correction_items = _correction_items(segments, review_operations, research_source_by_id)
     title_resolution = stage("text_review").get("research_title_resolution") or {}
     correction_notes = [transcription.review_error]
-    if len(review_operations) > DETAIL_LIMIT:
+    if len(review_operations) > HUMAN_DETAIL_LIMIT:
         correction_notes.append(
-            f"修改记录共 {len(review_operations)} 项，当前展示前 {DETAIL_LIMIT} 项；完整结果仍保留在项目转录数据中。"
+            f"修改记录共 {len(review_operations)} 项，详情按时间均匀展示 {HUMAN_DETAIL_LIMIT} 项；完整机器记录仍保留在项目转录数据中。"
         )
     review_result = {
         "status": _result_status(transcription.review_status),
+        "purpose": STEP_PURPOSES["text_review"],
         "summary": _review_summary(transcription.review_status, len(changed_segments), len(segments)),
         "metrics": _metrics(
             ("语义模型", transcription.review_model_id),
@@ -153,6 +196,11 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
             ("标题专名修正", title_resolution.get("applied_count")),
             ("专名复核耗时", _duration_label(title_resolution.get("duration_ms")) if title_resolution else None),
         ),
+        "coverage": _coverage(
+            len(correction_items),
+            len(review_operations) if review_operations else len(changed_segments),
+            "项校对记录",
+        ),
         "sections": _sections(("逐项校对记录", correction_items)),
         "notes": _notes(*correction_notes),
     }
@@ -161,6 +209,10 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
         level: sum(word.timing_confidence == level for word in words) for level in ("high", "medium", "low")
     }
     confidence_order = {"low": 0, "medium": 1, "high": 2}
+    review_words = [word for word in words if word.timing_confidence in {"low", "medium"}]
+    if not review_words:
+        review_words = _sample_evenly(words, min(12, len(words)))
+    visible_alignment_words = _bounded_evenly(review_words, FOCUSED_DETAIL_LIMIT)
     alignment_samples = [
         {
             "title": f"“{_compact_text(word.text, 80)}”的出现位置",
@@ -172,12 +224,14 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
             ],
             "tone": "warning" if word.timing_confidence == "low" else "neutral",
         }
-        for word in sorted(words, key=lambda item: (confidence_order.get(item.timing_confidence, 3), item.start_ms))[
-            :12
-        ]
+        for word in sorted(
+            visible_alignment_words,
+            key=lambda item: (confidence_order.get(item.timing_confidence, 3), item.start_ms),
+        )
     ]
     alignment_result = {
         "status": _result_status(transcription.alignment_status),
+        "purpose": STEP_PURPOSES["alignment"],
         "summary": (
             f"为 {len(words)} 个词生成时间码，整体可信度为{_confidence_label(transcription.timing_confidence)}。"
             if words
@@ -191,6 +245,12 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
             ("建议抽查", confidence_counts["medium"]),
             ("需要复核", confidence_counts["low"]),
         ),
+        "coverage": _coverage(
+            len(alignment_samples),
+            len(words),
+            "个逐词时间码",
+            focused_reason="逐词时间码数量较大，不适合逐条人工阅读；这里优先展示全部低、中可信度词，若没有异常则展示代表样例。",
+        ),
         "sections": _sections(("需要重点看的词", alignment_samples)),
         "notes": _notes(transcription.alignment_error),
     }
@@ -199,6 +259,16 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
         level: sum(item.confidence == level for item in transcription.audio_boundary_features)
         for level in ("high", "medium", "low", "none")
     }
+    meaningful_boundaries = [
+        item for item in transcription.audio_boundary_features if item.confidence in {"high", "medium"}
+    ]
+    if not meaningful_boundaries:
+        meaningful_boundaries = sorted(
+            transcription.audio_boundary_features,
+            key=lambda value: value.gap_ms,
+            reverse=True,
+        )[:12]
+    visible_boundaries = _bounded_evenly(meaningful_boundaries, FOCUSED_DETAIL_LIMIT)
     boundary_samples = [
         {
             "title": f"“{word_by_id.get(item.left_word_id).text if word_by_id.get(item.left_word_id) else item.left_word_id}”与“"
@@ -217,10 +287,11 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
             },
             "tone": "positive" if item.confidence == "high" else "neutral",
         }
-        for item in sorted(transcription.audio_boundary_features, key=lambda value: value.gap_ms, reverse=True)[:12]
+        for item in sorted(visible_boundaries, key=lambda value: value.start_ms)
     ]
     audio_boundary_result = {
         "status": _result_status(transcription.audio_boundary_status),
+        "purpose": STEP_PURPOSES["audio_boundaries"],
         "summary": f"检查了 {len(transcription.audio_boundary_features)} 个相邻词之间的声音变化，找出可用于断句的停顿。",
         "metrics": _metrics(
             ("检查位置", len(transcription.audio_boundary_features)),
@@ -229,7 +300,13 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
             ("可能停顿", boundary_counts["medium"]),
             ("较弱停顿", boundary_counts["low"]),
         ),
-        "sections": _sections(("显著停顿样例", boundary_samples)),
+        "coverage": _coverage(
+            len(boundary_samples),
+            len(transcription.audio_boundary_features),
+            "个相邻词边界",
+            focused_reason="完整声学表包含大量没有明显停顿的位置；这里优先完整展示明显和可能停顿，其余数据继续参与字幕算法。",
+        ),
+        "sections": _sections(("可用于断句的声音停顿", boundary_samples)),
         "notes": _notes(transcription.audio_boundary_error),
     }
 
@@ -239,14 +316,15 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
     }
     review_samples = []
     word_index = {word.word_id: index for index, word in enumerate(words)}
-    for item in transcription.boundary_reviews[:30]:
+    visible_reviews = _bounded_evenly(transcription.boundary_reviews, HUMAN_DETAIL_LIMIT)
+    for item in visible_reviews:
         left = word_by_id.get(item.left_word_id)
         right = word_by_id.get(item.right_word_id)
         continuous, split = _boundary_context(item.left_word_id, item.right_word_id, words, word_index)
         review_samples.append(
             {
                 "title": f"在“{left.text if left else item.left_word_id} / {right.text if right else item.right_word_id}”之间",
-                "text": _compact_text(item.reason),
+                "text": _plain_boundary_reason(item.reason),
                 "before": continuous,
                 "after": split,
                 "before_label": "连续阅读",
@@ -258,6 +336,7 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
     review_timing = stage("boundary_review")
     boundary_review_result = {
         "status": _result_status(transcription.boundary_review_status),
+        "purpose": STEP_PURPOSES["boundary_review"],
         "summary": _boundary_review_summary(
             transcription.boundary_review_status,
             len(transcription.boundary_reviews),
@@ -265,15 +344,17 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
         ),
         "metrics": _metrics(
             ("语义模型", transcription.boundary_review_model_id),
-            ("待判断位置", review_timing.get("candidate_count")),
-            ("已完成判断", len(transcription.boundary_reviews)),
+            ("本轮模型候选", review_timing.get("candidate_count")),
+            ("复用既有判断", review_timing.get("reused_review_count")),
+            ("全部可用判断", len(transcription.boundary_reviews)),
             ("建议断开", decision_counts["prefer"]),
             ("可断可不断", decision_counts["allow"]),
             ("建议连着", decision_counts["avoid"]),
             ("复核轮数", review_timing.get("round_count")),
             ("请求批次", review_timing.get("batch_count")),
         ),
-        "sections": _sections(("断句判断样例", review_samples)),
+        "coverage": _coverage(len(review_samples), len(transcription.boundary_reviews), "个语义断句判断"),
+        "sections": _sections(("逐项断句判断", review_samples)),
         "notes": _notes(transcription.boundary_review_error),
     }
 
@@ -288,22 +369,54 @@ def build_asr_step_results(draft: VideoLocalizationDraft, stages: dict) -> dict[
         for previous, current in zip(ordered_cues, ordered_cues[1:])
     )
     empty_cues = sum(not (cue.en_subtitle_text or "").strip() for cue in ordered_cues)
+    speaker_review_needed = bool(review_clusters or unassigned_words or overlap_segments)
+    boundary_review_needed = transcription.boundary_review_status in {"partial", "failed"}
+    upstream_review_needed = speaker_review_needed or boundary_review_needed
+    visible_cues = _bounded_evenly(ordered_cues, HUMAN_DETAIL_LIMIT)
+    cue_items = [
+        {
+            "title": f"字幕 {index} · {cue.cue_id}",
+            "text": _compact_text(cue.en_subtitle_text),
+            "meta": _time_range(cue.start_ms, cue.end_ms),
+            "facts": [
+                {"label": "时长", "value": _duration_label((cue.end_ms or 0) - (cue.start_ms or 0))},
+                {"label": "说话人", "value": cue.speaker_id or cue.speaker_cluster_id or "尚未指定"},
+                {"label": "时间可信度", "value": _confidence_label(cue.timing_confidence or "none")},
+            ],
+            "tone": "warning" if not (cue.en_subtitle_text or "").strip() else "neutral",
+        }
+        for index, cue in enumerate(visible_cues, start=1)
+    ]
     subtitle_result = {
-        "status": "failed" if not ordered_cues else "warning" if overlaps or empty_cues else "success",
+        "status": "failed" if not ordered_cues else "warning" if overlaps or empty_cues or upstream_review_needed else "success",
+        "purpose": STEP_PURPOSES["subtitle_track"],
         "summary": (
             "没有找到本次生成的 ASR 字幕。"
             if not ordered_cues
             else f"已写入 {len(ordered_cues)} 条 ASR 字幕，发现 {overlaps} 处时间重叠、{empty_cues} 条空文本。"
             if overlaps or empty_cues
+            else f"已写入 {len(ordered_cues)} 条 ASR 字幕；字幕结构完整，但仍有上游判断需要人工复核。"
+            if upstream_review_needed
             else f"已写入 {len(ordered_cues)} 条 ASR 字幕，基础完整性检查通过。"
         ),
         "metrics": _metrics(
             ("字幕数量", len(ordered_cues)),
             ("时间重叠", overlaps),
             ("空文本", empty_cues),
+            ("说话人复核", "需要" if speaker_review_needed else "不需要"),
+            ("断句复核", _status_label(transcription.boundary_review_status)),
             ("覆盖时段", _cue_time_range(ordered_cues)),
         ),
-        "sections": [],
+        "coverage": _coverage(len(cue_items), len(ordered_cues), "条最终字幕"),
+        "sections": _sections(("最终写入的 ASR 字幕", cue_items)),
+        "notes": _notes(
+            "断句语义复核没有全部完成，最终字幕已使用声音停顿和安全规则补齐；发布前建议人工快速通读。"
+            if boundary_review_needed
+            else None,
+            "说话人结果仍有待确认项，涉及人物归属的字幕需要人工试听。"
+            if speaker_review_needed
+            else None,
+        ),
     }
 
     return {
@@ -331,6 +444,23 @@ def _sections(*items: tuple[str, list[dict]]) -> list[dict]:
     return [{"title": title, "items": values} for title, values in items if values]
 
 
+def _coverage(
+    shown_count: int,
+    total_count: int,
+    unit: str,
+    *,
+    focused_reason: str | None = None,
+) -> dict[str, object]:
+    is_complete = shown_count >= total_count and not focused_reason
+    return {
+        "mode": "complete" if is_complete else "focused",
+        "shown_count": shown_count,
+        "total_count": total_count,
+        "unit": unit,
+        **({"reason": focused_reason} if focused_reason else {}),
+    }
+
+
 def _notes(*items: object) -> list[str]:
     notes = []
     for item in items:
@@ -351,6 +481,10 @@ def _sample_evenly(items: list, limit: int) -> list:
     last_index = len(items) - 1
     indexes = [round(index * last_index / (limit - 1)) for index in range(limit)]
     return [items[index] for index in indexes]
+
+
+def _bounded_evenly(items: list, limit: int) -> list:
+    return list(items) if len(items) <= limit else _sample_evenly(items, limit)
 
 
 def _research_question_items(research, review_operations: list[tuple[object, object]]) -> list[dict]:
@@ -397,7 +531,7 @@ def _research_question_items(research, review_operations: list[tuple[object, obj
                 "meta": _compact_text(source.provider, 80),
                 "text": _compact_text(source.snippet, 320),
             }
-            for source in sources[:12]
+            for source in sources
         ]
         items.append(
             {
@@ -405,7 +539,7 @@ def _research_question_items(research, review_operations: list[tuple[object, obj
                 "text": conclusion,
                 "meta": _research_category_label(query.category),
                 "facts": [
-                    {"label": "为什么要查", "value": _compact_text(query.reason, 320) or "需要确认相关名称或背景"},
+                    {"label": "为什么要查", "value": _plain_research_reason(query.reason, query.category)},
                     {"label": "重点查什么", "value": terms},
                     {"label": "产生的作用", "value": impact},
                 ],
@@ -418,7 +552,8 @@ def _research_question_items(research, review_operations: list[tuple[object, obj
 
 def _correction_items(segments, review_operations, research_source_by_id: dict[str, object]) -> list[dict]:
     items = []
-    for index, (segment, operation) in enumerate(review_operations[:DETAIL_LIMIT], start=1):
+    visible_operations = _bounded_evenly(review_operations, HUMAN_DETAIL_LIMIT)
+    for index, (segment, operation) in enumerate(visible_operations, start=1):
         accepted = operation.status == "accepted"
         cited_sources = [
             research_source_by_id[source_id]
@@ -431,7 +566,10 @@ def _correction_items(segments, review_operations, research_source_by_id: dict[s
             reason = f"建议理由：{reason} 未采用原因：{rejection}。"
         items.append(
             {
-                "title": f"{_compact_text(operation.source_text, 80)} → {_compact_text(operation.replacement_text, 80)}",
+                "title": (
+                    f"{_compact_text(operation.source_text, 80)} → "
+                    f"{_compact_text(operation.replacement_text, 80) or '删除重复内容'}"
+                ),
                 "before": _compact_text(operation.source_text, 240),
                 "after": _compact_text(operation.replacement_text, 240),
                 "before_label": "识别原词",
@@ -449,7 +587,7 @@ def _correction_items(segments, review_operations, research_source_by_id: dict[s
                         "url": _compact_text(source.url, 600),
                         "meta": _compact_text(source.provider, 80),
                     }
-                    for source in cited_sources[:6]
+                    for source in cited_sources
                 ],
                 "tone": "positive" if accepted else "muted",
             }
@@ -473,7 +611,7 @@ def _correction_items(segments, review_operations, research_source_by_id: dict[s
             "meta": _time_range(segment.start_ms, segment.end_ms),
             "tone": "positive",
         }
-        for index, segment in enumerate(changed_segments[:DETAIL_LIMIT], start=1)
+        for index, segment in enumerate(_bounded_evenly(changed_segments, HUMAN_DETAIL_LIMIT), start=1)
     ]
 
 
@@ -530,7 +668,62 @@ def _plain_review_reason(value: object) -> str:
         return "结合上下文和术语表修正近音误识别。"
     if "number correction" in normalized:
         return "结合上下文核对数字或型号写法。"
+    if "asr misrecognized brand name" in normalized or (
+        "asr misrecognition" in normalized and ("proper noun" in normalized or "brand" in normalized)
+    ):
+        return "结合场景上下文、视频标题和查证资料，确认 ASR 把专有名称听错了。"
+    if "incorrectly split version number" in normalized or (
+        "version number" in normalized and "split" in normalized
+    ):
+        return "版本号被分段识别，需要合并为上下文中的完整写法。"
+    if ("redundant word" in normalized and "asr split" in normalized) or (
+        "redundant" in normalized and "version number" in normalized
+    ):
+        return "相邻片段已经包含完整版本号，这里是分段识别产生的重复内容，因此删除。"
+    if _mostly_ascii_text(reason):
+        return "模型结合全文上下文、标题和查证资料提出了这项校对建议。"
     return reason
+
+
+def _plain_research_reason(value: object, category: str) -> str:
+    reason = _compact_text(value, 320)
+    if not reason:
+        return "需要确认相关名称或背景。"
+    normalized = reason.lower()
+    if "verify correct product name" in normalized or "verify product name" in normalized:
+        return "核对产品名称和版本写法是否准确。"
+    if "source file" in normalized and "title" in normalized and "misheard" in normalized:
+        return "源文件标题出现了与疑似误听专名相近的词，需要独立核对完整名称和版本。"
+    if _mostly_ascii_text(reason):
+        return {
+            "proper_noun": "核对专有名称、产品名称或版本写法是否准确。",
+            "persona": "核对人物身份、称呼或表达背景是否准确。",
+            "background": "补充理解当前话题所需的背景资料。",
+            "culture": "核对文化语境，避免按字面误解原意。",
+        }.get(category, "核对相关名称或背景是否准确。")
+    return reason
+
+
+def _plain_boundary_reason(value: object) -> str:
+    reason = _compact_text(value, 320)
+    normalized = reason.lower()
+    if "incomplete_syntax" in normalized:
+        prefix = "这个位置已被安全规则保护：" if normalized.startswith("protected:") else ""
+        return f"{prefix}从这里断开会破坏完整语法或把紧密相连的词组拆开。"
+    if "clause_end" in normalized:
+        return "前后已经形成相对完整的分句，可以在这里停顿或换一条字幕。"
+    if "sentence_end" in normalized:
+        return "这里是完整句子的结尾，适合作为字幕边界。"
+    if "speaker_change" in normalized:
+        return "这里发生说话人变化，字幕应随人物切换断开。"
+    if _mostly_ascii_text(reason):
+        return "模型结合上下文判断了这个位置是否适合断句。"
+    return reason or "模型结合上下文判断了这个位置是否适合断句。"
+
+
+def _mostly_ascii_text(value: str) -> bool:
+    letters = [char for char in value if char.isalpha()]
+    return bool(letters) and sum(ord(char) < 128 for char in letters) / len(letters) >= 0.9
 
 
 def _rejection_reason_label(value: object) -> str:
@@ -630,6 +823,8 @@ def _review_summary(status: str, changed_count: int, segment_count: int) -> str:
 
 def _boundary_review_summary(status: str, review_count: int, candidate_count: int) -> str:
     if status == "completed":
+        if candidate_count == 0 and review_count:
+            return f"复用了 {review_count} 个已有断句判断，本轮不需要再次请求模型。"
         return f"从 {candidate_count} 个候选边界中完成 {review_count} 个语义断句判断。"
     if status == "partial":
         return f"断句复核部分完成，获得 {review_count} 个可用判断。"

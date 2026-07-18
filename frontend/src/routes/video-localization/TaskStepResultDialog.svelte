@@ -4,12 +4,16 @@
 	import type { ActivityTaskStepResult } from './activity-notice';
 
 	let {
+		taskLabel = '任务流程',
 		stepLabel,
+		stepPositionLabel = '',
 		result,
 		durationLabel = '',
 		onClose
 	}: {
+		taskLabel?: string;
 		stepLabel: string;
+		stepPositionLabel?: string;
 		result: ActivityTaskStepResult;
 		durationLabel?: string;
 		onClose: () => void;
@@ -24,6 +28,11 @@
 		failed: '处理失败',
 		skipped: '未执行'
 	}[result.status]);
+	const coverageLabel = $derived.by(() => {
+		if (!result.coverage) return '';
+		const prefix = result.coverage.mode === 'complete' ? '完整展示' : result.coverage.mode === 'focused' ? '重点展示' : '结果摘要';
+		return `${prefix} ${result.coverage.shownCount} / ${result.coverage.totalCount} ${result.coverage.unit}`;
+	});
 
 	function portal(node: HTMLElement) {
 		document.body.appendChild(node);
@@ -115,7 +124,7 @@
 			<div class="result-heading">
 				<span class="heading-icon" aria-hidden="true"><Info size={15} /></span>
 				<div>
-					<small>步骤结果</small>
+					<small>{taskLabel}{#if stepPositionLabel} · {stepPositionLabel}{/if}</small>
 					<h2 id="task-step-result-title">{stepLabel}</h2>
 				</div>
 			</div>
@@ -135,10 +144,24 @@
 		</header>
 
 		<div class="result-body">
+			{#if result.purpose}
+				<section class="result-purpose" aria-label="步骤说明">
+					<strong>这一步做什么</strong>
+					<p>{result.purpose}</p>
+				</section>
+			{/if}
+
 			<section class="result-summary" aria-label="结果结论">
 				<strong>结论</strong>
 				<p>{result.summary}</p>
 			</section>
+
+			{#if result.coverage}
+				<section class="result-coverage" class:focused={result.coverage.mode !== 'complete'} aria-label="详情展示范围">
+					<div><strong>{coverageLabel}</strong><span>{result.coverage.mode === 'complete' ? '本步骤适合人工阅读的信息已全部列出。' : '保留重点结果，未把大体量机器明细直接铺满界面。'}</span></div>
+					{#if result.coverage.reason}<p>{result.coverage.reason}</p>{/if}
+				</section>
+			{/if}
 
 			{#if result.metrics.length}
 				<dl class="result-metrics" aria-label="关键指标">
@@ -149,8 +172,8 @@
 			{/if}
 
 			{#each result.sections as section}
-				<section class="result-section">
-					<h3>{section.title}</h3>
+				<details class="result-section" open={section.items.length <= 30}>
+					<summary><h3>{section.title}</h3><span>{section.items.length} 项</span></summary>
 					<div class="result-items">
 						{#each section.items as item, index}
 							<article
@@ -206,7 +229,7 @@
 							</article>
 						{/each}
 					</div>
-				</section>
+				</details>
 			{/each}
 
 			{#if result.notes.length}
@@ -270,16 +293,30 @@
 	.head-actions button { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; color: #85949b; cursor: pointer; }
 	.head-actions button:hover { background: #283137; color: #e5ecef; }
 	.result-body { min-height: 0; padding: 0 18px 22px; overflow: auto; overscroll-behavior: contain; }
-	.result-summary { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; padding: 18px 0; }
-	.result-summary strong, .result-section h3, .result-notes h3 { color: #8e9ba1; font-size: 10px; font-weight: 650; }
-	.result-summary p { margin: 0; color: #d6dfe2; font-size: 12px; line-height: 1.65; }
+	.result-purpose, .result-summary { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; padding: 16px 0; }
+	.result-purpose { border-bottom: 1px solid #293238; }
+	.result-purpose strong, .result-summary strong, .result-section h3, .result-notes h3 { color: #8e9ba1; font-size: 10px; font-weight: 650; }
+	.result-purpose p, .result-summary p { margin: 0; color: #d6dfe2; font-size: 11.5px; line-height: 1.65; }
+	.result-purpose p { color: #aebbc0; }
+	.result-coverage { display: grid; gap: 6px; margin-top: 14px; padding: 10px 12px; border-left: 2px solid #4f8c71; background: rgba(66, 122, 92, 0.09); }
+	.result-coverage.focused { border-left-color: #8e774c; background: rgba(130, 99, 52, 0.09); }
+	.result-coverage div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+	.result-coverage strong { color: #a9c9b8; font-size: 9.5px; }
+	.result-coverage.focused strong { color: #c8b486; }
+	.result-coverage span, .result-coverage p { margin: 0; color: #75858c; font-size: 9px; line-height: 1.5; }
 	.result-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; border-top: 1px solid #303a40; border-bottom: 1px solid #303a40; }
 	.result-metrics div { min-width: 0; padding: 12px 10px 12px 0; }
 	.result-metrics div:not(:nth-child(3n + 1)) { padding-left: 12px; border-left: 1px solid #2b3439; }
 	.result-metrics dt { margin-bottom: 4px; color: #6f7f86; font-size: 9px; }
 	.result-metrics dd { margin: 0; overflow-wrap: anywhere; color: #cfd9dd; font-size: 11.5px; font-weight: 600; line-height: 1.4; }
 	.result-section, .result-notes { padding-top: 18px; }
-	.result-section h3, .result-notes h3 { margin: 0 0 8px; }
+	.result-section summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; color: #728189; cursor: pointer; list-style: none; }
+	.result-section summary::-webkit-details-marker { display: none; }
+	.result-section summary::before { content: '›'; width: 12px; flex: 0 0 auto; color: #66757c; transform: rotate(0deg); transition: transform 120ms ease; }
+	.result-section[open] summary::before { transform: rotate(90deg); }
+	.result-section h3, .result-notes h3 { margin: 0; }
+	.result-section summary h3 { flex: 1 1 auto; }
+	.result-section summary span { font-size: 8.5px; }
 	.result-items { border-top: 1px solid #2d373c; }
 	.result-item { padding: 11px 0 12px; border-bottom: 1px solid #293238; }
 	.item-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
@@ -328,7 +365,8 @@
 		.result-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 		.result-metrics div:not(:nth-child(3n + 1)) { padding-left: 0; border-left: 0; }
 		.result-metrics div:nth-child(even) { padding-left: 10px; border-left: 1px solid #2b3439; }
-		.result-summary { grid-template-columns: 1fr; gap: 5px; }
+		.result-purpose, .result-summary { grid-template-columns: 1fr; gap: 5px; }
+		.result-coverage div { align-items: flex-start; flex-direction: column; gap: 3px; }
 		.item-facts { grid-template-columns: 1fr; }
 		.item-visual { grid-template-columns: 1fr; gap: 5px; }
 		.result-item .item-links a { grid-template-columns: minmax(0, 1fr) auto; }

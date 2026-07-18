@@ -30,6 +30,7 @@ from app.schemas.voice_studio import (  # noqa: E402
     HistoryItem,
     TaskStatus,
     VideoLocalizationAlignedWord,
+    VideoLocalizationBoundaryReview,
     VideoLocalizationCue,
     VideoLocalizationDraft,
     VideoLocalizationOperation,
@@ -295,13 +296,20 @@ def test_video_localization_asr_operation_summary_distinguishes_raw_segments_fro
     assert "结合上下文和术语表修正近音误识别" in rejected_item["text"]
     assert "建议会改变数字或型号" in rejected_item["text"]
     assert summary["task_step_results"]["subtitle_track"]["status"] == "success"
-    assert summary["task_step_results"]["subtitle_track"]["sections"] == []
+    subtitle_items = summary["task_step_results"]["subtitle_track"]["sections"][0]["items"]
+    assert [item["text"] for item in subtitle_items] == ["Subtitle 1", "Subtitle 2", "Subtitle 3"]
+    assert summary["task_step_results"]["subtitle_track"]["coverage"] == {
+        "mode": "complete",
+        "shown_count": 3,
+        "total_count": 3,
+        "unit": "条最终字幕",
+    }
     assert {item["label"]: item["value"] for item in summary["task_step_results"]["subtitle_track"]["metrics"]}[
         "字幕数量"
     ] == "3"
 
 
-def test_video_localization_asr_step_results_keep_evenly_spaced_recognition_samples():
+def test_video_localization_asr_step_results_show_all_human_readable_recognition_segments():
     draft = _completed_asr_result(VideoLocalizationDraft())
     base_segment = draft.transcription.segments[0]
     segments = [
@@ -322,10 +330,157 @@ def test_video_localization_asr_step_results_keep_evenly_spaced_recognition_samp
     asr_result = summary["task_step_results"]["asr"]
     samples = asr_result["sections"][0]["items"]
 
-    assert len(samples) == 15
+    assert len(samples) == 20
     assert samples[0]["text"] == "Sample 0"
     assert samples[-1]["text"] == "Sample 19"
+    assert asr_result["coverage"] == {
+        "mode": "complete",
+        "shown_count": 20,
+        "total_count": 20,
+        "unit": "个原始片段",
+    }
+    assert asr_result["purpose"].startswith("把音轨中的讲话转成原始文字")
     assert {item["label"]: item["value"] for item in asr_result["metrics"]}["语言"] == "英语"
+
+
+def test_video_localization_asr_step_results_plain_language_and_upstream_warning():
+    draft = _completed_asr_result(VideoLocalizationDraft())
+    reviewed_segment = draft.transcription.segments[0].model_copy(
+        update={
+            "corrected_text": "Concurrent result.",
+            "review_operations": [
+                VideoLocalizationTranscriptEditOperation(
+                    start_word_id="word_0002",
+                    end_word_id="word_0002",
+                    source_text="Cinebench",
+                    replacement_text="Seedance",
+                    reason="ASR misrecognition of proper noun; context and title indicate 'Seedance'",
+                    confidence=0.93,
+                    status="accepted",
+                ),
+                VideoLocalizationTranscriptEditOperation(
+                    start_word_id="word_0002",
+                    end_word_id="word_0002",
+                    source_text="2.",
+                    replacement_text="2.0",
+                    reason="Version number segment incorrectly split; ASR split '2.0' into '2.' and '0'",
+                    confidence=0.93,
+                    status="accepted",
+                ),
+                VideoLocalizationTranscriptEditOperation(
+                    start_word_id="word_0002",
+                    end_word_id="word_0002",
+                    source_text="ASR",
+                    replacement_text="",
+                    reason="Redundant '0' from version number; merged to previous segment",
+                    confidence=0.93,
+                    status="accepted",
+                )
+            ],
+        }
+    )
+    research = VideoLocalizationResearchState(
+        status="completed",
+        queries=[
+            VideoLocalizationResearchQuery(
+                query_id="query_01",
+                query="Seedance official product name",
+                category="proper_noun",
+                reason="Verify correct product name and version.",
+                target_terms=["Seedance 2.0"],
+            )
+        ],
+    )
+    transcription = draft.transcription.model_copy(
+        update={
+            "segments": [reviewed_segment],
+            "review_status": "completed",
+            "research": research,
+            "boundary_review_status": "partial",
+            "boundary_reviews": [
+                VideoLocalizationBoundaryReview(
+                    boundary_id="word_0001:word_0002",
+                    left_word_id="word_0001",
+                    right_word_id="word_0002",
+                    decision="avoid",
+                    confidence=0.9,
+                    reason="protected:incomplete_syntax",
+                ),
+                VideoLocalizationBoundaryReview(
+                    boundary_id="word_0002:word_0003",
+                    left_word_id="word_0002",
+                    right_word_id="word_0003",
+                    decision="prefer",
+                    confidence=0.9,
+                    reason="clause_end",
+                ),
+            ],
+        }
+    )
+    draft = draft.model_copy(
+        update={
+            "transcription": transcription,
+            "cues": [
+                VideoLocalizationCue(
+                    cue_id="cue_0001",
+                    start_ms=0,
+                    end_ms=1_200,
+                    en_subtitle_text="Concurrent result.",
+                    quality_flags=["generated_by_asr"],
+                )
+            ],
+        }
+    )
+
+    results = video_localization_operation_state.english_asr_summary(draft)["task_step_results"]
+
+    assert "粗略定位" in results["asr"]["notes"][0]
+    research_facts = results["web_research"]["sections"][0]["items"][0]["facts"]
+    assert research_facts[0]["value"] == "核对产品名称和版本写法是否准确。"
+    corrections = results["text_review"]["sections"][0]["items"]
+    assert corrections[0]["text"] == "结合场景上下文、视频标题和查证资料，确认 ASR 把专有名称听错了。"
+    assert corrections[1]["text"] == "版本号被分段识别，需要合并为上下文中的完整写法。"
+    assert corrections[2]["title"] == "ASR → 删除重复内容"
+    assert corrections[2]["text"] == "相邻片段已经包含完整版本号，这里是分段识别产生的重复内容，因此删除。"
+    boundary_items = results["boundary_review"]["sections"][0]["items"]
+    assert "完整语法" in boundary_items[0]["text"]
+    assert "完整的分句" in boundary_items[1]["text"]
+    assert results["subtitle_track"]["status"] == "warning"
+    assert any("发布前建议人工快速通读" in note for note in results["subtitle_track"]["notes"])
+
+
+def test_video_localization_asr_step_results_explain_reused_boundary_reviews():
+    draft = _completed_asr_result(VideoLocalizationDraft())
+    transcription = draft.transcription.model_copy(
+        update={
+            "boundary_review_status": "completed",
+            "boundary_reviews": [
+                VideoLocalizationBoundaryReview(
+                    boundary_id="word_0001:word_0002",
+                    left_word_id="word_0001",
+                    right_word_id="word_0002",
+                    decision="avoid",
+                    confidence=0.9,
+                    reason="incomplete_syntax",
+                )
+            ],
+            "pipeline_timing": {
+                "stages": {
+                    "boundary_review": {
+                        "candidate_count": 0,
+                        "reused_review_count": 1,
+                        "round_count": 0,
+                        "batch_count": 0,
+                    }
+                }
+            },
+        }
+    )
+    draft = draft.model_copy(update={"transcription": transcription})
+
+    result = video_localization_operation_state.english_asr_summary(draft)["task_step_results"]["boundary_review"]
+
+    assert result["summary"] == "复用了 1 个已有断句判断，本轮不需要再次请求模型。"
 
 
 def test_video_localization_asr_rerun_reuses_replaceable_cue_ids():

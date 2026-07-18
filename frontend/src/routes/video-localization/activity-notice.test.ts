@@ -135,6 +135,7 @@ describe('activity notice tasks', () => {
 		});
 
 		expect(task.steps?.map((step) => step.status)).toEqual(['success', 'success', 'success', 'success', 'success', 'running', 'todo', 'todo']);
+		expect(task.steps?.[0].result?.summary).toBe('转写原始讲话已经完成。完整结果会在整项任务结束并保存后自动补充。');
 	});
 
 	it('shows web research as its own ASR step', () => {
@@ -194,7 +195,9 @@ describe('activity notice tasks', () => {
 				task_step_results: {
 					asr: {
 						status: 'success',
+						purpose: '把音轨中的讲话转成原始文字。',
 						summary: '识别到 185 个原始语音片段。',
+						coverage: { mode: 'complete', shown_count: 185, total_count: 185, unit: '个原始片段' },
 						metrics: [{ label: '原始片段', value: '185' }],
 						sections: [{
 							title: '识别样例',
@@ -243,8 +246,10 @@ describe('activity notice tasks', () => {
 		expect(task.steps?.[6]).toMatchObject({ roundCount: 2, batchCount: 3 });
 		expect(task.steps?.[0].result).toMatchObject({
 			status: 'success',
+			purpose: '把音轨中的讲话转成原始文字。',
 			summary: '识别到 185 个原始语音片段。',
-			metrics: [{ label: '原始片段', value: '185' }]
+			metrics: [{ label: '原始片段', value: '185' }],
+			coverage: { mode: 'complete', shownCount: 185, totalCount: 185, unit: '个原始片段' }
 		});
 		expect(task.steps?.[1].result).toMatchObject({
 			status: 'warning',

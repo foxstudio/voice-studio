@@ -36,12 +36,22 @@ export type ActivityTaskStepResultSection = {
 	items: ActivityTaskStepResultItem[];
 };
 
+export type ActivityTaskStepResultCoverage = {
+	mode: 'complete' | 'focused' | 'summary';
+	shownCount: number;
+	totalCount: number;
+	unit: string;
+	reason?: string;
+};
+
 export type ActivityTaskStepResult = {
 	status: ActivityTaskStepResultStatus;
+	purpose?: string;
 	summary: string;
 	metrics: ActivityTaskStepResultMetric[];
 	sections: ActivityTaskStepResultSection[];
 	notes: string[];
+	coverage?: ActivityTaskStepResultCoverage;
 };
 
 export type ActivityTaskStep = {
@@ -131,14 +141,14 @@ const TRACK_IDS = new Set<VideoLocalizationTrackId>(['original', 'vocals', 'back
 const AREAS = new Set<ActivityTaskScope['area']>(['project', 'timeline', 'voice', 'generate', 'subtitle']);
 
 const ASR_STEP_DEFINITIONS = [
-	{ id: 'recognize', label: '识别人声内容', stages: ['asr', '准备处理', '识别人声'], timingStages: ['asr'] },
+	{ id: 'recognize', label: '转写原始讲话', stages: ['asr', '准备处理', '识别人声'], timingStages: ['asr'] },
 	{ id: 'diarization', label: '区分说话人', stages: ['diarization', '区分说话人'], timingStages: ['diarization'] },
-	{ id: 'research', label: '查证名称与背景', stages: ['web_research', '判断是否需要联网核验', '联网核验'], timingStages: ['web_research'] },
-	{ id: 'review', label: '校对识别文本', stages: ['text_review', '校对识别', '文本校对'], timingStages: ['text_review'] },
-	{ id: 'timestamps', label: '给每个词定位', stages: ['alignment', '逐词时间码', '强制对齐'], timingStages: ['alignment'] },
-	{ id: 'boundaries', label: '找出声音停顿', stages: ['audio_boundaries', '声学边界'], timingStages: ['audio_boundaries'] },
-	{ id: 'boundary-review', label: '检查字幕断句', stages: ['boundary_review', '字幕断句', '复核断句'], timingStages: ['boundary_review'] },
-	{ id: 'subtitles', label: '写入 ASR 字幕轨', stages: ['subtitle_track', '生成字幕轨'], timingStages: ['subtitle_track'] }
+	{ id: 'research', label: '理解全文并查证专名', stages: ['web_research', '判断是否需要联网核验', '联网核验'], timingStages: ['web_research'] },
+	{ id: 'review', label: '校对转写文本', stages: ['text_review', '校对识别', '文本校对'], timingStages: ['text_review'] },
+	{ id: 'timestamps', label: '对齐逐词时间', stages: ['alignment', '逐词时间码', '强制对齐'], timingStages: ['alignment'] },
+	{ id: 'boundaries', label: '分析声音停顿', stages: ['audio_boundaries', '声学边界'], timingStages: ['audio_boundaries'] },
+	{ id: 'boundary-review', label: '结合语义设计断句', stages: ['boundary_review', '字幕断句', '复核断句'], timingStages: ['boundary_review'] },
+	{ id: 'subtitles', label: '生成并检查字幕轨', stages: ['subtitle_track', '生成字幕轨'], timingStages: ['subtitle_track'] }
 ] as const;
 
 const LOCALIZATION_STEP_DEFINITIONS = [
@@ -178,7 +188,7 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 		: null;
 }
 
-function stringList(value: unknown, limit = 8) {
+function stringList(value: unknown, limit = 50) {
 	return Array.isArray(value)
 		? value.map(stringValue).filter((item): item is string => item !== null).slice(0, limit)
 		: [];
@@ -196,20 +206,25 @@ function normalizeStepResult(value: unknown, fallbackStatus: ActivityTaskStepSta
 	if (!result) return null;
 	const summary = stringValue(result.summary);
 	if (!summary) return null;
+	const purpose = stringValue(result.purpose);
 	const metrics = Array.isArray(result.metrics)
 		? result.metrics.flatMap((entry) => {
 			const metric = recordValue(entry);
 			const label = stringValue(metric?.label);
 			const metricValue = stringValue(metric?.value) ?? numberValue(metric?.value)?.toString() ?? null;
 			return label && metricValue !== null ? [{ label, value: metricValue }] : [];
-		}).slice(0, 12)
+		})
 		: [];
+	let omittedItemCount = 0;
 	const sections = Array.isArray(result.sections)
 		? result.sections.flatMap((entry) => {
 			const section = recordValue(entry);
 			const title = stringValue(section?.title);
 			if (!title || !Array.isArray(section?.items)) return [];
-			const items = section.items.flatMap((rawItem) => {
+			const rawItems = section.items;
+			const visibleRawItems = rawItems.slice(0, 500);
+			omittedItemCount += Math.max(0, rawItems.length - visibleRawItems.length);
+			const items = visibleRawItems.flatMap((rawItem) => {
 				const item = recordValue(rawItem);
 				if (!item) return [];
 				const facts = Array.isArray(item.facts)
@@ -218,7 +233,7 @@ function normalizeStepResult(value: unknown, fallbackStatus: ActivityTaskStepSta
 						const label = stringValue(fact?.label);
 						const value = stringValue(fact?.value) ?? numberValue(fact?.value)?.toString() ?? null;
 						return label && value !== null ? [{ label, value }] : [];
-					}).slice(0, 12)
+					})
 					: [];
 				const links = Array.isArray(item.links)
 					? item.links.flatMap((rawLink) => {
@@ -231,7 +246,7 @@ function normalizeStepResult(value: unknown, fallbackStatus: ActivityTaskStepSta
 							meta: stringValue(link?.meta) ?? undefined,
 							text: stringValue(link?.text) ?? undefined
 						}] : [];
-					}).slice(0, 12)
+					})
 					: [];
 				const rawVisual = recordValue(item.visual);
 				const visualLabel = stringValue(rawVisual?.label);
@@ -259,16 +274,37 @@ function normalizeStepResult(value: unknown, fallbackStatus: ActivityTaskStepSta
 					visual
 				};
 				return Object.values(normalized).some((entry) => Array.isArray(entry) ? entry.length > 0 : Boolean(entry)) ? [normalized] : [];
-			}).slice(0, 50);
+			});
 			return items.length ? [{ title, items }] : [];
-		}).slice(0, 8)
+		})
 		: [];
+	const rawCoverage = recordValue(result.coverage);
+	const coverageMode = stringValue(rawCoverage?.mode);
+	const shownCount = numberValue(rawCoverage?.shown_count ?? rawCoverage?.shownCount);
+	const totalCount = numberValue(rawCoverage?.total_count ?? rawCoverage?.totalCount);
+	const coverageUnit = stringValue(rawCoverage?.unit);
+	const coverage = (
+		(coverageMode === 'complete' || coverageMode === 'focused' || coverageMode === 'summary')
+		&& shownCount !== null
+		&& totalCount !== null
+		&& coverageUnit
+	) ? {
+		mode: coverageMode,
+		shownCount,
+		totalCount,
+		unit: coverageUnit,
+		reason: stringValue(rawCoverage?.reason) ?? undefined
+	} satisfies ActivityTaskStepResultCoverage : undefined;
+	const notes = stringList(result.notes);
+	if (omittedItemCount) notes.push(`这份结果超过界面安全展示上限，另有 ${omittedItemCount} 项机器记录未在弹窗中展开。`);
 	return {
 		status: stepResultStatus(result.status, fallbackStatus),
+		...(purpose ? { purpose } : {}),
 		summary,
 		metrics,
 		sections,
-		notes: stringList(result.notes, 6)
+		notes,
+		...(coverage ? { coverage } : {})
 	};
 }
 
@@ -292,7 +328,8 @@ const TIMING_METRIC_LABELS: Record<string, string> = {
 function fallbackStepResult(
 	stepLabel: string,
 	status: ActivityTaskStepStatus,
-	timing: Record<string, unknown> | null
+	timing: Record<string, unknown> | null,
+	taskStatus?: VideoLocalizationOperation['status']
 ): ActivityTaskStepResult | undefined {
 	if (status === 'todo') return undefined;
 	const metrics = Object.entries(TIMING_METRIC_LABELS).flatMap(([key, label]) => {
@@ -304,6 +341,8 @@ function fallbackStepResult(
 		status: stepResultStatus(null, status),
 		summary: running
 			? `${stepLabel}正在处理，步骤完成后会补充可核验的结果。`
+			: taskStatus === 'running' && status === 'success'
+				? `${stepLabel}已经完成。完整结果会在整项任务结束并保存后自动补充。`
 			: `该步骤已${status === 'success' ? '完成' : '结束'}。这条旧任务仅保留了状态和统计，没有保存详细产物。`,
 		metrics,
 		sections: [],
@@ -369,7 +408,7 @@ function localizationOperationSteps(operation: VideoLocalizationOperation, stage
 		const timing = recordValue(taskStageTimings?.[step.id]);
 		const durationMs = numberValue(timing?.duration_ms);
 		const result = normalizeStepResult(rawStepResults?.[step.id], status)
-			?? fallbackStepResult(step.label, status, timing);
+			?? fallbackStepResult(step.label, status, timing, operation.status);
 		return {
 			id: step.id,
 			label: step.label,
@@ -406,7 +445,7 @@ function operationSteps(operation: VideoLocalizationOperation, stage: string): A
 			: recordedDurationMs;
 		const timing = step.timingStages.length === 1 ? recordValue(diagnosticStageTimings?.[step.timingStages[0]]) : null;
 		const result = normalizeStepResult(rawStepResults?.[step.timingStages[0]], status)
-			?? fallbackStepResult(step.label, status, timing);
+			?? fallbackStepResult(step.label, status, timing, operation.status);
 		return {
 			id: step.id,
 			label: step.label,
