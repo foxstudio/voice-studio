@@ -171,7 +171,24 @@
 			{/if}
 			{#if activeDraft}
 				<div class="combination" aria-live="polite"><b>声音：{mainVoiceName}</b><span>+</span><b>情绪：{activeSlot.displayName || '参考片段'} · {formatRange()}</b></div>
-				<ReferenceAudioRangeEditor ariaLabel="情绪参考片段时间线" purposeLabel="情绪片段" sourceUrl={sourceUrl} durationMs={durationMs} startMs={activeDraft.trim.startMs ?? 0} endMs={activeDraft.trim.endMs ?? durationMs} {busy} dirty={!activeDraft.confirmed || activeDraft.selectionDirty} onRangeChange={updateRange} onApply={applyRange} />
+				<ReferenceAudioRangeEditor
+					ariaLabel="情绪参考裁切选区，空格播放选区，I 设置入点，O 设置出点"
+					purposeLabel="情绪参考"
+					sourceUrl={sourceUrl}
+					durationMs={durationMs}
+					startMs={activeDraft.trim.startMs ?? 0}
+					endMs={activeDraft.trim.endMs ?? durationMs}
+					{busy}
+					dirty={!activeDraft.confirmed || activeDraft.selectionDirty}
+					matched={activeDraft.confirmed && !activeDraft.selectionDirty}
+					statusDirtyLabel="待重新应用"
+					statusReadyLabel="已生效"
+					statusIdleLabel="待应用"
+					applyAriaLabel="使用这个情绪片段"
+					applyTooltip="裁切当前选区作为独立情绪参考，不运行 ASR"
+					onRangeChange={updateRange}
+					onApply={applyRange}
+				/>
 			{/if}
 			{#if localError}<p class="message error" role="alert">{localError}</p>{:else if validation.errors.length}<p class="message error">{validation.errors[0]}</p>{:else if validation.warnings.length}<p class="message warning">{validation.warnings[0]}</p>{:else if activeDraft?.qualityWarnings[0]}<p class="message warning">{activeDraft.qualityWarnings[0]}</p>{/if}
 		</div>

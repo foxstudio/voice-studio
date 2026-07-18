@@ -25,3 +25,25 @@ describe('Seed Audio asset API', () => {
 		expect(fetchMock).toHaveBeenCalledOnce();
 	});
 });
+
+describe('Reference audio clip API', () => {
+	it('creates an emotion reference clip without calling the ASR endpoint', async () => {
+		const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+			expect(url).toBe('/api/voices/files/source%2F1/clip');
+			expect(url).not.toContain('clip-transcribe');
+			expect(init?.method).toBe('POST');
+			expect(JSON.parse(String(init?.body))).toEqual({ start_ms: 1_000, end_ms: 7_000 });
+			return new Response(JSON.stringify({
+				file_id: 'clip-1', filename: 'clip-1.wav', path: '/voices/clip-1.wav',
+				voice_file: { file_id: 'clip-1', duration_ms: 6_000, size_bytes: 12, mime_type: 'audio/wav' },
+				quality: { warnings: [] }
+			}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+		});
+		vi.stubGlobal('fetch', fetchMock);
+
+		const result = await Api.clipVoice('source/1', { start_ms: 1_000, end_ms: 7_000 });
+
+		expect(result.file_id).toBe('clip-1');
+		expect(fetchMock).toHaveBeenCalledOnce();
+	});
+});

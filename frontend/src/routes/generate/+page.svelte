@@ -1460,13 +1460,31 @@
 						</div>
 					</div>
 					{#if customVoiceOriginalFile}
-						<div class="custom-voice-trimmer shared-reference-editor">
-							<ReferenceAudioRangeEditor ariaLabel="自定义音色参考片段时间线" purposeLabel="音色片段" applyLabel="使用并识别" sourceUrl={customVoiceSourcePreviewUrl} durationMs={customVoiceSourceDurationMs ?? 0} startMs={Math.round(customVoiceTrimStart * 1000)} endMs={Math.round(customVoiceTrimEnd * 1000)} busy={$store.customVoiceBusy} dirty={customVoiceSelectionDirty} onRangeChange={updateCustomVoiceTrimRange} onApply={applyActiveReferenceTrim} />
-							<div class="row wrap custom-reference-actions">
-								{#if !isSeedAudio}<button class="btn compact" type="button" onclick={openVoiceRegisterDialog} disabled={$store.customVoiceBusy || !$store.customVoiceFileId || !$store.customVoiceTranscript.trim()}><Plus size={13} />注册为音色</button>{/if}
-								<button class="btn compact" type="button" onclick={isSeedAudio ? closeActiveReferenceEditor : resetCustomVoice} disabled={!$store.customVoiceFileName}><X size={13} />{isSeedAudio ? '关闭编辑器' : '清除参考音频'}</button>
-							</div>
-						</div>
+						<ReferenceAudioRangeEditor
+							ariaLabel="裁切选区，空格播放选区，I 设置入点，O 设置出点"
+							purposeLabel="自定义音色"
+							sourceUrl={customVoiceSourcePreviewUrl}
+							durationMs={customVoiceSourceDurationMs ?? 0}
+							startMs={Math.round(customVoiceTrimStart * 1000)}
+							endMs={Math.round(customVoiceTrimEnd * 1000)}
+							busy={$store.customVoiceBusy}
+							dirty={customVoiceSelectionDirty}
+							matched={customVoiceMatched}
+							statusDirtyLabel="待重新识别"
+							statusReadyLabel="已生效"
+							statusIdleLabel="待识别"
+							applyAriaLabel="使用选区并识别台词"
+							applyTooltip="使用当前选区作为样音，并用 ASR 识别台词"
+							showRegister={!isSeedAudio}
+							registerDisabled={!$store.customVoiceFileId || !$store.customVoiceTranscript.trim()}
+							onRegister={openVoiceRegisterDialog}
+							clearLabel={isSeedAudio ? '关闭参考声音编辑器' : '清除参考音频'}
+							clearTooltip={isSeedAudio ? '关闭编辑器并保留当前参考声音' : '清除当前参考音频、裁切选区和识别文本'}
+							clearDisabled={!$store.customVoiceFileName}
+							onClear={isSeedAudio ? closeActiveReferenceEditor : resetCustomVoice}
+							onRangeChange={updateCustomVoiceTrimRange}
+							onApply={applyActiveReferenceTrim}
+						/>
 					{:else}
 						<div class="custom-voice-empty-editor">
 							<FileAudio size={22} />
