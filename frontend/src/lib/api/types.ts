@@ -406,6 +406,14 @@ export interface VoiceClipTranscribeResponse extends UploadResult {
 	transcription: TranscriptionRecord;
 }
 
+export interface VoiceClipResponse {
+	file_id: string;
+	filename: string;
+	path: string;
+	quality: { passed?: boolean; warnings?: string[] };
+	voice_file: VoiceFile;
+}
+
 export interface TranscriptionTask {
 	task_id: string;
 	engine_id: string;
@@ -925,10 +933,16 @@ export interface GenerateRequest {
 	custom_reference_trim_start_ms?: number | null;
 	custom_reference_trim_end_ms?: number | null;
 	language: string;
-	emotion_mode: 'follow_reference' | 'emotion_vector' | 'emotion_text';
+	emotion_mode: 'follow_reference' | 'emotion_vector' | 'emotion_text' | 'emotion_reference';
 	emotion?: string | null;
 	emotion_values?: Record<string, number> | null;
 	emotion_text?: string | null;
+	emotion_reference_voice_id?: string | null;
+	emotion_reference_audio_path?: string | null;
+	emotion_reference_source_audio_path?: string | null;
+	emotion_reference_source_duration_ms?: number | null;
+	emotion_reference_trim_start_ms?: number | null;
+	emotion_reference_trim_end_ms?: number | null;
 	style_instruction?: string | null;
 	voice_design_prompt?: string | null;
 	optimize_text_preview?: boolean;

@@ -11,6 +11,15 @@ import type {
 	VoiceAsset,
 	AppSettings
 } from '$lib/api/types';
+import {
+	INDEX_TTS_ENGINE_ID,
+	createDefaultIndexTtsEmotionState,
+	type IndexTtsEmotionState
+} from '../../routes/generate/engine-ui/indextts-v2/state';
+import {
+	indexTtsEmotionStateFromRequest,
+	indexTtsEmotionStateToRequest
+} from '../../routes/generate/engine-ui/indextts-v2/request';
 
 export type TaskStatusTab = 'all' | 'active' | 'success' | 'failed';
 export type TaskSourceFilter = 'all' | 'local' | 'cloud';
@@ -307,7 +316,7 @@ function createInitialState(): GenerateStoreState {
 		requestReferenceTags: [],
 		engineId: 'indextts-v2',
 		engineParameters: {},
-		engineUiStateById: {},
+		engineUiStateById: { [INDEX_TTS_ENGINE_ID]: createDefaultIndexTtsEmotionState() },
 		voiceSource: 'voice_library',
 		voiceId: '',
 		customVoiceFileName: '',
@@ -503,6 +512,27 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 	const qwen3VoiceDesignRoute =
 		isQwen3TTS && !qwen3ReferenceRoute && Boolean(state.voiceDesignPrompt.trim());
 	const qwen3PresetRoute = isQwen3TTS && !qwen3ReferenceRoute && !qwen3VoiceDesignRoute;
+	const fallbackEmotionMode: GenerateRequest['emotion_mode'] =
+		supportsEmotion && Boolean(state.emotion) ? 'emotion_vector' : 'follow_reference';
+	const indexEmotionState =
+		(state.engineUiStateById[INDEX_TTS_ENGINE_ID] as IndexTtsEmotionState | undefined) ??
+		createDefaultIndexTtsEmotionState(state.emoAlpha);
+	const indexEmotionRequest = indexTtsEmotionStateToRequest(
+		indexEmotionState,
+		fallbackEmotionMode,
+		state.emoAlpha
+	);
+	const indexEmotionReferenceParameters =
+		state.engineId === INDEX_TTS_ENGINE_ID && indexEmotionState.enabled
+			? {
+					emotion_reference_voice_id: indexEmotionRequest.emotion_reference_voice_id,
+					emotion_reference_audio_path: indexEmotionRequest.emotion_reference_audio_path,
+					emotion_reference_source_audio_path: indexEmotionRequest.emotion_reference_source_audio_path,
+					emotion_reference_source_duration_ms: indexEmotionRequest.emotion_reference_source_duration_ms,
+					emotion_reference_trim_start_ms: indexEmotionRequest.emotion_reference_trim_start_ms,
+					emotion_reference_trim_end_ms: indexEmotionRequest.emotion_reference_trim_end_ms
+				}
+			: {};
 
 	return {
 		text: state.text,
@@ -531,9 +561,10 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 		custom_reference_trim_start_ms: useCustomReference ? state.customVoiceTrimStartMs : null,
 		custom_reference_trim_end_ms: useCustomReference ? state.customVoiceTrimEndMs : null,
 		language: state.language,
-		emotion_mode: supportsEmotion && Boolean(state.emotion) ? 'emotion_vector' : 'follow_reference',
-		emotion: supportsEmotion && Boolean(state.emotion) ? state.emotion : null,
+		emotion_mode: state.engineId === INDEX_TTS_ENGINE_ID ? indexEmotionRequest.emotion_mode : fallbackEmotionMode,
+		emotion: state.engineId === INDEX_TTS_ENGINE_ID && indexEmotionRequest.emotion_mode === 'emotion_reference' ? null : (supportsEmotion && Boolean(state.emotion) ? state.emotion : null),
 		emotion_text: isOmniVoice && !state.voiceId && !useCustomReference ? state.voiceDesign : null,
+		...indexEmotionReferenceParameters,
 		style_instruction:
 			activeParamKeys.has('style_instruction') && !(isQwen3TTS && !qwen3PresetRoute)
 				? state.styleInstruction || null
@@ -556,7 +587,7 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 		sway_sampling_coef: state.swaySamplingCoef,
 		fix_duration: state.fixDuration,
 		remove_silence: state.removeSilence,
-		emo_alpha: state.emoAlpha,
+		emo_alpha: state.engineId === INDEX_TTS_ENGINE_ID ? indexEmotionRequest.emo_alpha : state.emoAlpha,
 		speed: state.speed,
 		pitch_rate: activeParamKeys.has('pitch_rate') ? state.pitchRate : undefined,
 		sample_rate: activeParamKeys.has('sample_rate') ? state.doubaoSampleRate : undefined,
@@ -594,12 +625,16 @@ function applyRequest(
 ): Partial<GenerateStoreState> {
 	const engineDefaults = getEngineDefaults(state, req.engine_id);
 	const isMimoEngineRequest = isMimoEngine(req.engine_id);
+	const restoredIndexEmotion = indexTtsEmotionStateFromRequest(req);
 
 	return {
 		...engineDefaults,
 		// Old tasks and hand-written presets often omit controls added later.
 		// Preserve the current engine default instead of showing an incomplete UI.
 		engineParameters: { ...engineDefaults.engineParameters, ...(req.engine_parameters ?? {}) },
+		engineUiStateById: req.engine_id === INDEX_TTS_ENGINE_ID
+			? { ...state.engineUiStateById, [INDEX_TTS_ENGINE_ID]: restoredIndexEmotion }
+			: state.engineUiStateById,
 		text: req.text,
 		requestSource: req.source ?? '',
 		requestProjectId: req.project_id ?? '',
@@ -678,7 +713,8 @@ function applyRequest(
 		repetitionPenalty: req.repetition_penalty ?? engineDefaults.repetitionPenalty,
 		seed: req.seed ?? engineDefaults.seed ?? null,
 		outputFormat: req.output_format ?? INDEX_TTS_DEFAULTS.outputFormat,
-		showAdvanced: req.engine_id === 'f5-tts'
+		showAdvanced: req.engine_id === 'f5-tts',
+		showMoreParams: req.emotion_mode === 'emotion_reference' ? true : state.showMoreParams
 	};
 }
 

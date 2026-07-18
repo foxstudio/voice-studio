@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createGenerateStore, pickEngineSpecificParameters, REFERENCE_VOICE_ENGINE_IDS } from './generate';
-import type { EngineDetail, ParameterSchema, VoiceAsset } from '$lib/api/types';
+import type { EngineDetail, GenerateRequest, ParameterSchema, VoiceAsset } from '$lib/api/types';
 
 function parameter(partial: Partial<ParameterSchema> & Pick<ParameterSchema, 'key' | 'label' | 'type'>): ParameterSchema {
 	return {
@@ -82,6 +82,17 @@ function qwen3Schema(): ParameterSchema[] {
 }
 
 describe('generate store custom reference voice requests', () => {
+	it('round-trips the existing IndexTTS built-in emotion without enabling an independent reference', () => {
+		const store = createGenerateStore();
+		store.update((state) => ({ ...state, engines: [engineDetail('indextts-v2', [parameter({ key: 'emotion', label: '情绪', type: 'select', default: '' })])] }));
+		store.fromRequest({ text: '情绪往返', engine_id: 'indextts-v2', language: 'zh', emotion_mode: 'emotion_vector', emotion: 'happy', emo_alpha: 0.8, output_format: 'wav' } as GenerateRequest);
+		const request = store.toRequest();
+		expect(request.emotion_mode).toBe('emotion_vector');
+		expect(request.emotion).toBe('happy');
+		expect(request.emo_alpha).toBe(0.8);
+		expect(request).not.toHaveProperty('emotion_reference_audio_path');
+		expect(request).not.toHaveProperty('emotion_reference_voice_id');
+	});
 	it('keeps model UI drafts isolated and intact while switching engines', () => {
 		const store = createGenerateStore();
 		const seedDraft = { mode: 'audio', prompt: '@音频1 测试' };

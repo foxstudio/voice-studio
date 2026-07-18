@@ -2,8 +2,6 @@
 	import { Api } from '$lib/api';
 	import type { AppSettings, EngineDetail, EngineSpeaker, GenerationTask, GeneratePlanResponse, GenerateRequest, LongformTask, PlannedTextSegment, PresetTemplate, TaskPageParams, TaskSummary, TranscriptionRecord, TranscriptionSegment, TTSVerificationResponse, UploadResult, VoiceAsset, VoiceAssetCreate, VoiceClipTranscribeResponse } from '$lib/api/types';
 	import { taskStatusLabel } from '$lib/labels';
-	import { buildVisibleWaveformBars } from '$lib/audio/waveform';
-	import { resolveSelectionPlayback, resolveSelectionReleasePlayback } from '$lib/audio/selection-playback';
 	import { Captions, CheckSquare, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleCheck, CloudUpload, FileAudio, FileText, Info, Mic, Cpu, Pencil, Play, Plus, Repeat, RotateCcw, Save, Search, Settings, SlidersHorizontal, Square, Trash2, X } from 'lucide-svelte';
 	import { onMount, tick, untrack } from 'svelte';
 	import { get } from 'svelte/store';
@@ -43,6 +41,14 @@
 		legacyCustomVoicePatchFromDraft,
 		referenceAudioDraftFromLegacyState
 	} from './engine-ui/reference-audio/draft';
+	import EmotionReferencePanel from './engine-ui/indextts-v2/EmotionReferencePanel.svelte';
+	import {
+		INDEX_TTS_ENGINE_ID,
+		createDefaultIndexTtsEmotionState,
+		type IndexTtsEmotionState
+	} from './engine-ui/indextts-v2/state';
+	import { validateIndexTtsEmotionState } from './engine-ui/indextts-v2/validation';
+	import ReferenceAudioRangeEditor from './engine-ui/reference-audio/ReferenceAudioRangeEditor.svelte';
 
 	if (!engineUiRegistry.has(SEED_AUDIO_ENGINE_ID)) engineUiRegistry.register(seedAudioProfile);
 
@@ -83,7 +89,6 @@
 	let resultAudioPendingTaskId = $state('');
 	let resultAudioCurrentTime = $state(0);
 	let resultAudioFrame: number | null = null;
-	let customVoicePreviewFrame: number | null = null;
 	let customVoiceDragActive = $state(false);
 	let customVoiceBusyMode: 'source' | 'clip' | '' = $state('');
 	let voiceRegisterOpen = $state(false);
@@ -103,20 +108,6 @@
 	let customVoiceTrimStart = $state(0);
 	let customVoiceTrimEnd = $state(0);
 	let customVoiceSelectionDirty = $state(false);
-	let customVoiceLoopPreview = $state(false);
-	let customVoiceLoopEnabled = $state(true);
-	let customVoicePlaybackPosition = $state(0);
-	let customVoiceWaveformBars: number[] = $state([]);
-	let customVoiceWaveformLoading = $state(false);
-	let customVoiceWaveformProgress = $state(0);
-	let customVoiceTimelineScrollLeft = $state(0);
-	let customVoiceTimelineViewportWidth = $state(0);
-	let customVoiceTimelineZoom = $state(1);
-	let customVoiceTimelinePanning = $state(false);
-	let customVoiceTrimEditing = $state(false);
-	let customVoiceResumePreviewAfterTrimEdit = $state(false);
-	let customVoiceTrimHover = $state(false);
-	let customVoiceTrimFocusWithin = $state(false);
 	let videoLocalizationHandoff = $state<VideoLocalizationHandoffMeta | null>(null);
 	let seedVoicePickerSlot: 1 | 2 | 3 | null = $state(null);
 	let seedSpeakerPickerSlot: 1 | 2 | 3 | null = $state(null);
@@ -140,14 +131,7 @@
 	const customVoiceMatched = $derived(customVoiceReady && $store.customVoiceConfirmed);
 	const customVoiceSelectedDurationMs = $derived(Math.max(0, Math.round((customVoiceTrimEnd - customVoiceTrimStart) * 1000)));
 	const customVoiceDisplayDurationMs = $derived($store.customVoiceDurationMs ?? (customVoiceSourceDurationMs ? customVoiceSelectedDurationMs : null));
-	const customVoiceDurationSeconds = $derived(Math.max(0, (customVoiceSourceDurationMs ?? 0) / 1000));
 	const customVoiceActiveClipLabel = $derived($store.customVoiceFileId ? `${$store.customVoiceFileId.slice(0, 8)} · ${formatDuration($store.customVoiceDurationMs)}` : (customVoiceSelectionDirty ? '选区待识别' : '未生成'));
-	const customVoiceTrimStartPercent = $derived(customVoiceDurationSeconds ? Math.max(0, Math.min(100, (customVoiceTrimStart / customVoiceDurationSeconds) * 100)) : 0);
-	const customVoiceTrimEndPercent = $derived(customVoiceDurationSeconds ? Math.max(0, Math.min(100, (customVoiceTrimEnd / customVoiceDurationSeconds) * 100)) : 0);
-	const customVoicePlayheadPercent = $derived(customVoiceDurationSeconds ? Math.max(0, Math.min(100, (customVoicePlaybackPosition / customVoiceDurationSeconds) * 100)) : customVoiceTrimStartPercent);
-	const customVoiceTimelineTicks = $derived.by(() => buildTimelineTicks(customVoiceDurationSeconds, customVoiceTimelineZoom));
-	const customVoiceVisibleWaveformBars = $derived.by(() => buildVisibleWaveformBars(customVoiceWaveformBars, customVoiceTimelineZoom, customVoiceTimelineScrollLeft, customVoiceTimelineViewportWidth));
-	const customVoiceTrimHotkeysActive = $derived(customVoiceTrimHover || customVoiceTrimFocusWithin);
 	const voiceMap = $derived(new Map($store.voices.map(v => [v.voice_id, v])));
 	const engineMap = $derived(new Map($store.engines.map(e => [e.manifest.engine_id, e])));
 	const supportsEmotion = $derived(activeParamKeys.has('emotion'));
@@ -167,6 +151,16 @@
 	const qwen3PresetRoute = $derived(isQwen3TTS && !qwen3ReferenceRoute && !qwen3VoiceDesignRoute);
 	const qwen3PresetDisabledText = $derived($store.voiceSource === 'reference_audio' ? '自定义音色已接管，预置音色不参与本次生成。' : '本地音色库已接管，预置音色不参与本次生成。');
 	const followsReferenceEmotion = $derived(isIndexTTS && !$store.emotion);
+	const indexTtsEmotionState = $derived(
+		($store.engineUiStateById[INDEX_TTS_ENGINE_ID] as IndexTtsEmotionState | undefined) ??
+		createDefaultIndexTtsEmotionState($store.emoAlpha)
+	);
+	const indexTtsEmotionValidation = $derived(validateIndexTtsEmotionState(indexTtsEmotionState));
+	const mainVoiceName = $derived(
+		$store.voiceSource === 'reference_audio'
+			? ($store.customVoiceFileName || '未选择音色')
+			: (selectedVoice?.name || '未选择音色')
+	);
 	const enginePresets = $derived.by((): ComposerPreset[] => {
 		if (!isSeedAudio) return $store.presets.filter((preset) => preset.engine_id === $store.engineId);
 		const builtins = seedAudioPresetsForMode(seedAudioState.mode).map((preset): ComposerPreset => ({
@@ -472,7 +466,8 @@
 	function currentComposerText() { return isSeedAudio ? activeSeedAudioDraft(seedAudioState).prompt : $store.text; }
 	function activeParameterTooltip(key: string, fallback = '') { return selected?.manifest.parameter_schema.find((parameter) => parameter.key === key)?.description || fallback; }
 	function currentPresetParameters() { if (isSeedAudio) return seedAudioStateToRequest(seedAudioState).engine_parameters; const req = store.toRequest(); const params: Record<string, unknown> = { language: req.language, output_format: req.output_format, ...(req.engine_parameters ?? {}) }; for (const k of selected?.manifest.parameter_schema.map(p => p.key) ?? []) { const v = (req as unknown as Record<string, unknown>)[k]; if (v !== undefined && v !== null && v !== '') params[k] = v; } return params; }
-	function resetCurrentEngineParams() { const keepText = $store.text; const keepVoiceId = $store.voiceId; const keepShowMore = $store.showMoreParams; store.setEngine($store.engineId); $store.text = keepText; $store.showMoreParams = keepShowMore; if (usesReferenceVoice) $store.voiceId = keepVoiceId; }
+	function updateIndexTtsEmotionState(next: IndexTtsEmotionState) { $store.engineUiStateById = { ...$store.engineUiStateById, [INDEX_TTS_ENGINE_ID]: next }; $store.error = ''; }
+	function resetCurrentEngineParams() { const keepText = $store.text; const keepVoiceId = $store.voiceId; const keepShowMore = $store.showMoreParams; store.setEngine($store.engineId); if ($store.engineId === INDEX_TTS_ENGINE_ID) updateIndexTtsEmotionState(createDefaultIndexTtsEmotionState()); $store.text = keepText; $store.showMoreParams = keepShowMore; if (usesReferenceVoice) $store.voiceId = keepVoiceId; }
 	function setSpeedValue(value: string | number) { const n = Number(value); if (!Number.isFinite(n)) return; $store.speed = Math.min(2, Math.max(0.5, Math.round(n * 100) / 100)); }
 	function setTaskDateFilter(value: TaskDateFilter) { $store.taskDateFilter = value; $store.currentPage = 1; }
 	function resetPresetDraft() { $store.presetDraft = { name: '', scene: '', description: '', tags: '', sample_text: currentComposerText() }; $store.editingPresetId = ''; }
@@ -493,37 +488,6 @@
 	function formatSrtTime(valueMs: number) { const total = Math.max(0, Math.round(valueMs)); const h = Math.floor(total / 3600000); const m = Math.floor((total % 3600000) / 60000); const s = Math.floor((total % 60000) / 1000); const ms = total % 1000; return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`; }
 	function segmentsToSrt(segments: TranscriptionSegment[], fallbackText: string, durationMs: number | null) { const usable = segments.filter(s => s.text.trim()); if (usable.length) return usable.map((s, i) => `${i + 1}\n${formatSrtTime(s.start_ms)} --> ${formatSrtTime(s.end_ms)}\n${s.text.trim()}`).join('\n\n') + '\n'; const text = fallbackText.trim(); if (!text) return ''; return `1\n00:00:00,000 --> ${formatSrtTime(durationMs ?? 2000)}\n${text}\n`; }
 	function formatDuration(valueMs: number | null) { if (!valueMs) return '未识别'; const seconds = Math.max(0, valueMs / 1000); if (seconds < 60) { const rounded = Math.round(seconds * 10) / 10; return Number.isInteger(rounded) ? `${rounded}s` : `${rounded.toFixed(1)}s`; } const total = Math.round(seconds); const m = Math.floor(total / 60); const s = total % 60; return `${m}:${String(s).padStart(2, '0')}`; }
-	function formatTimecode(valueSeconds: number, fps = 30) { const safeSeconds = Math.max(0, Number.isFinite(valueSeconds) ? valueSeconds : 0); const totalFrames = Math.round(safeSeconds * fps); const frames = totalFrames % fps; const totalWholeSeconds = Math.floor(totalFrames / fps); const s = totalWholeSeconds % 60; const m = Math.floor(totalWholeSeconds / 60) % 60; const h = Math.floor(totalWholeSeconds / 3600); return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}:${String(frames).padStart(2, '0')}`; }
-	function formatTimelineTick(valueSeconds: number, fps = 30) { if (valueSeconds < 1) return `${Math.round(valueSeconds * fps)}f`; const safe = Math.max(0, Math.round(valueSeconds * 10) / 10); const h = Math.floor(safe / 3600); const m = Math.floor((safe % 3600) / 60); const s = safe % 60; if (h) return `${h}:${String(m).padStart(2, '0')}:${String(Math.floor(s)).padStart(2, '0')}`; if (safe < 10 && !Number.isInteger(safe)) return `${safe.toFixed(1)}s`; return `${m}:${String(Math.floor(s)).padStart(2, '0')}`; }
-	function formatTimelineZoom(value: number) { return value < 10 ? value.toFixed(1) : value.toFixed(0); }
-	function buildTimelineTicks(durationSeconds: number, zoom: number) { if (!durationSeconds) return []; const normalizedZoom = Math.max(1, zoom); const target = Math.max(8, Math.min(36000, Math.round(28 * normalizedZoom))); const rawStep = durationSeconds / target; const frameStep = 1 / 30; const steps = [frameStep, frameStep * 2, frameStep * 5, frameStep * 10, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1200]; const step = steps.find(v => v >= rawStep) ?? steps[steps.length - 1]; const ticks: Array<{ time: number; percent: number; label: string; major: boolean }> = []; const labelEvery = step < 1 ? Math.max(1, Math.round(1 / step)) : step < 5 ? 2 : 1; for (let t = 0; t <= durationSeconds + 0.001; t += step) { const index = Math.round(t / step); ticks.push({ time: t, percent: durationSeconds ? (t / durationSeconds) * 100 : 0, label: index % labelEvery === 0 ? formatTimelineTick(t) : '', major: index % labelEvery === 0 }); } if (ticks[ticks.length - 1]?.time !== durationSeconds) ticks.push({ time: durationSeconds, percent: 100, label: formatTimelineTick(durationSeconds), major: true }); return ticks; }
-	function centerCustomVoiceTimelineOnSelection() {
-		requestAnimationFrame(() => {
-			const windowEl = document.querySelector<HTMLElement>('.custom-voice-timebar-window');
-			const timebarEl = document.querySelector<HTMLElement>('.custom-voice-timebar');
-			if (!windowEl || !timebarEl || !customVoiceDurationSeconds) return;
-			const centerRatio = ((customVoiceTrimStart + customVoiceTrimEnd) / 2) / customVoiceDurationSeconds;
-			const target = timebarEl.offsetWidth * centerRatio - windowEl.clientWidth / 2;
-			windowEl.scrollLeft = Math.max(0, Math.min(windowEl.scrollWidth - windowEl.clientWidth, target));
-		});
-	}
-	function zoomCustomVoiceTimeline(nextZoom: number, anchorRatio?: number, anchorOffset?: number) {
-		if (!Number.isFinite(nextZoom)) return;
-		const windowEl = document.querySelector<HTMLElement>('.custom-voice-timebar-window');
-		const ratio = anchorRatio ?? (customVoiceDurationSeconds ? ((customVoiceTrimStart + customVoiceTrimEnd) / 2) / customVoiceDurationSeconds : 0.5);
-		const offset = anchorOffset ?? ((windowEl?.clientWidth ?? 0) / 2);
-		customVoiceTimelineZoom = Math.max(1, Math.min(1200, Math.round(nextZoom * 10) / 10));
-		requestAnimationFrame(() => {
-			const updatedWindow = document.querySelector<HTMLElement>('.custom-voice-timebar-window');
-			if (!updatedWindow) return;
-			const target = updatedWindow.scrollWidth * Math.max(0, Math.min(1, ratio)) - offset;
-			updatedWindow.scrollLeft = Math.max(0, Math.min(updatedWindow.scrollWidth - updatedWindow.clientWidth, target));
-			updateCustomVoiceTimelineViewport(updatedWindow);
-		});
-	}
-	function setCustomVoiceTimelineZoom(value: string | number) { const n = Number(value); if (!Number.isFinite(n)) return; zoomCustomVoiceTimeline(n); }
-	function updateCustomVoiceTimelineViewport(element?: HTMLElement | null) { const el = element ?? document.querySelector<HTMLElement>('.custom-voice-timebar-window'); if (!el) return; customVoiceTimelineScrollLeft = el.scrollLeft; customVoiceTimelineViewportWidth = el.clientWidth; }
-	function nextAnimationFrame() { return new Promise<void>(resolve => requestAnimationFrame(() => resolve())); }
 	function splitTags(value: string) { return value.split(/[，,]/).map(t => t.trim()).filter(Boolean); }
 	function trimFileName(file: File, start: number, end: number) { const stem = file.name.replace(/\.[^.]+$/, '') || 'custom-voice'; return `${stem}_clip_${start.toFixed(1)}-${end.toFixed(1)}s.wav`; }
 	function selectedTrimRange() { const duration = customVoiceSourceDurationMs ? customVoiceSourceDurationMs / 1000 : 0; const start = Math.min(customVoiceTrimStart, Math.max(0, customVoiceTrimEnd - 0.1)); const end = Math.max(start + 0.1, Math.min(duration || customVoiceTrimEnd, customVoiceTrimEnd)); return { start, end }; }
@@ -535,76 +499,22 @@
 		if ($store.customVoiceReferenceAudioPath || $store.customVoiceTranscriptionId) customVoiceSelectionDirty = true;
 		clearCustomVoiceProcessedState();
 		setCustomVoicePreviewUrl(customVoiceSourcePreviewUrl);
-		// 拖动入/出点时，试听和选区是两件事：不能因为选区暂时变化而
-		// 打断正在播放的原始音频，或把播放头跳回新的入点。
-		if (customVoiceTrimEditing) return;
-		if (!customVoiceLoopPreview) stopVoicePreview();
-		if (!$store.voicePreviewPlaying) customVoicePlaybackPosition = customVoiceTrimStart;
+		stopVoicePreview();
 	}
-	function clampCustomVoicePlaybackTime(value: number) { const duration = (customVoiceSourceDurationMs ?? 0) / 1000; return Math.max(0, Math.min(duration || value, value)); }
-	function setCustomVoicePlaybackPosition(value: string | number) { const n = Number(value); if (!Number.isFinite(n)) return; customVoicePlaybackPosition = clampCustomVoicePlaybackTime(n); if (customVoiceLoopPreview && $store.voicePreviewAudio) $store.voicePreviewAudio.currentTime = customVoicePlaybackPosition; }
-	function beginCustomVoiceTrimEdit() {
-		const audio = $store.voicePreviewAudio;
-		customVoiceTrimEditing = true;
-		// Keep the user's original playback intention.  Native audio reaches its
-		// source end while a handle is held, but that is not the same as the user
-		// pressing Stop or Space.
-		customVoiceResumePreviewAfterTrimEdit = Boolean(customVoiceLoopPreview && $store.voicePreviewPlaying && audio && !audio.paused);
-	}
-	function resumeCustomVoicePreviewAfterTrimEdit(shouldResume = customVoiceResumePreviewAfterTrimEdit) {
-		const audio = $store.voicePreviewAudio;
-		const { start, end } = selectedTrimRange();
-		const currentTime = audio?.currentTime ?? customVoicePlaybackPosition;
-		const { nextPosition, shouldRestartAtStart } = resolveSelectionReleasePlayback(currentTime, start, end, Boolean(audio?.ended), customVoiceLoopEnabled);
-		// A playhead retained by the edited range is intentionally left alone.
-		// Only a playhead outside the new range returns to IN.
-		if (audio && Math.abs(audio.currentTime - nextPosition) > 0.001) audio.currentTime = nextPosition;
-		customVoicePlaybackPosition = nextPosition;
-		customVoiceResumePreviewAfterTrimEdit = false;
-		if (!shouldResume || !audio) return;
-		// A non-looping preview that already finished at its final OUT stays
-		// finished.  The shared release rule turns a finished loop into IN here.
-		if (audio.ended && !shouldRestartAtStart) return;
-		customVoiceLoopPreview = true;
-		$store.voicePreviewPlaying = true;
-		void audio.play().then(() => {
-			startCustomVoicePreviewFrameLoop();
-		}).catch(() => {
-			stopCustomVoicePreviewFrameLoop();
-			customVoiceLoopPreview = false;
-			$store.voicePreviewPlaying = false;
-		});
-	}
-	function setCustomVoiceTrimStart(value: string | number) {
-		const max = customVoiceTrimEnd || (customVoiceSourceDurationMs ?? 0) / 1000;
-		const n = Number(value);
-		if (!Number.isFinite(n)) return;
-		customVoiceTrimStart = Math.max(0, Math.min(n, Math.max(0, max - 0.1)));
+	function updateCustomVoiceTrimRange(startMs: number, endMs: number) {
+		customVoiceTrimStart = Math.max(0, startMs / 1000);
+		customVoiceTrimEnd = Math.max(customVoiceTrimStart + 0.1, endMs / 1000);
 		syncCustomVoiceTrimMetadata();
 		invalidateCustomVoiceTrim();
-		if (!customVoiceTrimEditing) resumeCustomVoicePreviewAfterTrimEdit();
 	}
-	function setCustomVoiceTrimEnd(value: string | number) {
-		const duration = (customVoiceSourceDurationMs ?? 0) / 1000;
-		const n = Number(value);
-		if (!Number.isFinite(n)) return;
-		customVoiceTrimEnd = Math.max(customVoiceTrimStart + 0.1, Math.min(duration || n, n));
-		syncCustomVoiceTrimMetadata();
-		invalidateCustomVoiceTrim();
-		if (!customVoiceTrimEditing) resumeCustomVoicePreviewAfterTrimEdit();
-	}
-	function setCustomVoiceTrimStartAtPlayhead() { setCustomVoiceTrimStart(customVoicePlaybackPosition); }
-	function setCustomVoiceTrimEndAtPlayhead() { setCustomVoiceTrimEnd(customVoicePlaybackPosition); }
-	function resetCustomVoiceTrimRange() { const duration = customVoiceDurationSeconds; if (!duration) return; customVoiceTrimStart = 0; customVoiceTrimEnd = Math.max(0.1, duration); customVoicePlaybackPosition = 0; if (customVoiceLoopPreview && $store.voicePreviewAudio) $store.voicePreviewAudio.currentTime = 0; syncCustomVoiceTrimMetadata(); invalidateCustomVoiceTrim(); centerCustomVoiceTimelineOnSelection(); }
 	function customVoiceBusyText() { return customVoiceBusyMode === 'source' ? '正在读取参考音频' : '正在处理选区并识别台词'; }
 	function customVoiceStatusText() { if ($store.customVoiceBusy) return customVoiceBusyText(); if ($store.customVoiceConfirmed) return '参考音色与台词已匹配'; if (customVoiceSelectionDirty) return '选区已调整，请重新识别'; if ($store.customVoiceTranscript.trim()) return '可编辑台词，已可使用'; if ($store.customVoiceFileName) return '选择范围后使用选区'; return '拖入音频或视频，视频会自动抽取音频'; }
 	function setVoiceSource(source: 'voice_library' | 'reference_audio') { $store.voiceSource = source; $store.error = ''; stopVoicePreview(); if (source === 'reference_audio') $store.voiceId = ''; }
 	function updateCustomVoiceTranscript(value: string) { $store.customVoiceTranscript = value; $store.customVoiceConfirmed = Boolean($store.customVoiceReferenceAudioPath && value.trim()); }
 	function resetVoiceRegisterDialog() { voiceRegisterOpen = false; voiceRegisterBusy = false; voiceRegisterSerBusy = false; voiceRegisterError = ''; }
-	function resetCustomVoice() { if ($store.customVoicePreviewUrl) revokeObjectUrlIfNeeded($store.customVoicePreviewUrl); if (customVoiceSourcePreviewUrl && customVoiceSourcePreviewUrl !== $store.customVoicePreviewUrl) revokeObjectUrlIfNeeded(customVoiceSourcePreviewUrl); customVoiceOriginalFile = null; customVoiceSourcePreviewUrl = ''; customVoiceSourceDurationMs = null; customVoiceTrimStart = 0; customVoiceTrimEnd = 0; customVoicePlaybackPosition = 0; customVoiceWaveformBars = []; customVoiceWaveformLoading = false; customVoiceWaveformProgress = 0; customVoiceTimelineScrollLeft = 0; customVoiceTimelineViewportWidth = 0; customVoiceTimelineZoom = 1; customVoiceTrimEditing = false; customVoiceResumePreviewAfterTrimEdit = false; customVoiceSelectionDirty = false; customVoiceBusyMode = ''; $store.customVoiceFileName = ''; $store.customVoiceFileId = ''; $store.customVoicePreviewUrl = ''; $store.customVoiceReferenceAudioPath = ''; $store.customVoiceSourceFileId = ''; $store.customVoiceSourceAudioPath = ''; $store.customVoiceSourceDurationMs = null; $store.customVoiceTrimStartMs = null; $store.customVoiceTrimEndMs = null; $store.customVoiceTranscript = ''; $store.customVoiceSrt = ''; $store.customVoiceDurationMs = null; $store.customVoiceSrtSegmentCount = 0; $store.customVoiceTranscriptionId = ''; $store.customVoiceConfirmed = false; $store.customVoiceBusy = false; $store.customVoiceError = ''; $store.customVoiceQualityWarnings = []; resetVoiceRegisterDialog(); stopVoicePreview(); }
+	function resetCustomVoice() { if ($store.customVoicePreviewUrl) revokeObjectUrlIfNeeded($store.customVoicePreviewUrl); if (customVoiceSourcePreviewUrl && customVoiceSourcePreviewUrl !== $store.customVoicePreviewUrl) revokeObjectUrlIfNeeded(customVoiceSourcePreviewUrl); customVoiceOriginalFile = null; customVoiceSourcePreviewUrl = ''; customVoiceSourceDurationMs = null; customVoiceTrimStart = 0; customVoiceTrimEnd = 0; customVoiceSelectionDirty = false; customVoiceBusyMode = ''; $store.customVoiceFileName = ''; $store.customVoiceFileId = ''; $store.customVoicePreviewUrl = ''; $store.customVoiceReferenceAudioPath = ''; $store.customVoiceSourceFileId = ''; $store.customVoiceSourceAudioPath = ''; $store.customVoiceSourceDurationMs = null; $store.customVoiceTrimStartMs = null; $store.customVoiceTrimEndMs = null; $store.customVoiceTranscript = ''; $store.customVoiceSrt = ''; $store.customVoiceDurationMs = null; $store.customVoiceSrtSegmentCount = 0; $store.customVoiceTranscriptionId = ''; $store.customVoiceConfirmed = false; $store.customVoiceBusy = false; $store.customVoiceError = ''; $store.customVoiceQualityWarnings = []; resetVoiceRegisterDialog(); stopVoicePreview(); }
 	function loadAudioDuration(url: string): Promise<number> { return new Promise((resolve, reject) => { const audio = new Audio(); audio.preload = 'metadata'; audio.onloadedmetadata = () => { resolve(Number.isFinite(audio.duration) ? audio.duration : 0); audio.src = ''; }; audio.onerror = () => reject(new Error('无法读取音频时长')); audio.src = url; }); }
 	function encodeWav(buffer: AudioBuffer) { const channelCount = buffer.numberOfChannels; const sampleRate = buffer.sampleRate; const frameCount = buffer.length; const bytesPerSample = 2; const blockAlign = channelCount * bytesPerSample; const dataSize = frameCount * blockAlign; const arrayBuffer = new ArrayBuffer(44 + dataSize); const view = new DataView(arrayBuffer); const writeString = (offset: number, value: string) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); }; writeString(0, 'RIFF'); view.setUint32(4, 36 + dataSize, true); writeString(8, 'WAVE'); writeString(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, channelCount, true); view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * blockAlign, true); view.setUint16(32, blockAlign, true); view.setUint16(34, 16, true); writeString(36, 'data'); view.setUint32(40, dataSize, true); let offset = 44; for (let i = 0; i < frameCount; i++) { for (let channel = 0; channel < channelCount; channel++) { const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i] ?? 0)); view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true); offset += 2; } } return new Blob([arrayBuffer], { type: 'audio/wav' }); }
-	async function buildWaveformBars(file: File, onProgress?: (bars: number[], progress: number) => void, count = 2400) { const audioContext = new AudioContext(); try { onProgress?.([], 0.04); const decoded = await audioContext.decodeAudioData(await file.arrayBuffer()); const channel = decoded.getChannelData(0); const dynamicCount = Math.max(count, Math.min(180000, Math.ceil(decoded.duration * 60), Math.round(decoded.length / 2048))); const bucketSize = Math.max(1, Math.floor(channel.length / dynamicCount)); const rawBars = new Array<number>(dynamicCount).fill(0); let maxPeak = 0.01; const chunkSize = Math.max(360, Math.min(1800, Math.ceil(dynamicCount / 80))); for (let i = 0; i < dynamicCount; i++) { const start = i * bucketSize; const end = Math.min(channel.length, start + bucketSize); let peak = 0; for (let j = start; j < end; j++) peak = Math.max(peak, Math.abs(channel[j] ?? 0)); rawBars[i] = peak; maxPeak = Math.max(maxPeak, peak); if (i % chunkSize === 0 || i === dynamicCount - 1) { const upto = i + 1; const normalized = rawBars.slice(0, upto).map(v => Math.max(0, Math.min(1, Math.pow(v / maxPeak, 0.72)))); onProgress?.(normalized, Math.max(0.08, Math.min(0.98, upto / dynamicCount))); await nextAnimationFrame(); } } const finalMax = Math.max(...rawBars, 0.01); const finalBars = rawBars.map(v => Math.max(0, Math.min(1, Math.pow(v / finalMax, 0.72)))); onProgress?.(finalBars, 1); return finalBars; } finally { void audioContext.close(); } }
 	async function cropAudioFile(file: File, start: number, end: number) { const audioContext = new AudioContext(); try { const decoded = await audioContext.decodeAudioData(await file.arrayBuffer()); const sampleRate = decoded.sampleRate; const startFrame = Math.max(0, Math.floor(start * sampleRate)); const endFrame = Math.min(decoded.length, Math.ceil(end * sampleRate)); const frameCount = Math.max(1, endFrame - startFrame); const clip = audioContext.createBuffer(decoded.numberOfChannels, frameCount, sampleRate); for (let channel = 0; channel < decoded.numberOfChannels; channel++) clip.copyToChannel(decoded.getChannelData(channel).slice(startFrame, endFrame), channel); return encodeWav(clip); } finally { void audioContext.close(); } }
 	function applyCustomVoiceClipResult(uploaded: Pick<UploadResult, 'file_id' | 'filename' | 'path' | 'quality'>, transcript: TranscriptionRecord, durationMs: number, previewUrl: string) {
 		setCustomVoicePreviewUrl(previewUrl);
@@ -704,8 +614,6 @@
 		$store.customVoiceError = '';
 		$store.customVoiceBusy = true;
 		customVoiceBusyMode = 'source';
-		customVoiceWaveformLoading = true;
-		customVoiceWaveformProgress = 0;
 		try {
 			const uploaded = await Api.uploadVoice(file);
 			const wasVideo = uploaded.source_kind === 'video';
@@ -715,32 +623,18 @@
 			customVoiceSourcePreviewUrl = previewUrl;
 			setCustomVoicePreviewUrl(previewUrl);
 			$store.customVoiceFileName = referenceMediaLabel(uploaded);
-			const waveformTarget = audioFile;
-			const waveformPromise = buildWaveformBars(audioFile, (bars, progress) => {
-				if (customVoiceOriginalFile !== waveformTarget) return;
-				customVoiceWaveformBars = bars;
-				customVoiceWaveformProgress = progress;
-			}).catch(() => [] as number[]);
 			const duration = (uploaded.duration_ms ?? Math.round((await loadAudioDuration(previewUrl)) * 1000)) / 1000;
 			customVoiceSourceDurationMs = Math.round(duration * 1000);
 			customVoiceTrimStart = 0;
-			customVoicePlaybackPosition = 0;
 			customVoiceTrimEnd = Math.max(0.1, duration);
 			$store.customVoiceSourceFileId = uploaded.file_id;
 			$store.customVoiceSourceAudioPath = uploaded.path;
 			syncCustomVoiceTrimMetadata();
-			centerCustomVoiceTimelineOnSelection();
-			const bars = await waveformPromise;
-			if (customVoiceOriginalFile === waveformTarget) {
-				customVoiceWaveformBars = bars;
-				customVoiceWaveformProgress = bars.length ? 1 : 0;
-			}
 		} catch (e) {
 			customVoiceOriginalFile = null;
 			customVoiceSourceDurationMs = null;
 			customVoiceTrimStart = 0;
 			customVoiceTrimEnd = 0;
-			customVoicePlaybackPosition = 0;
 			$store.customVoiceSourceFileId = '';
 			$store.customVoiceSourceAudioPath = '';
 			$store.customVoiceSourceDurationMs = null;
@@ -748,7 +642,6 @@
 			$store.customVoiceTrimEndMs = null;
 			$store.customVoiceError = (e as Error).message || '无法读取或保存参考音频';
 		} finally {
-			customVoiceWaveformLoading = false;
 			$store.customVoiceBusy = false;
 			customVoiceBusyMode = '';
 		}
@@ -783,12 +676,6 @@
 		$store.customVoiceQualityWarnings = [];
 		$store.customVoiceError = '';
 		customVoiceSelectionDirty = false;
-		customVoiceTimelineZoom = 1;
-		customVoiceTimelineScrollLeft = 0;
-		customVoiceTimelineViewportWidth = 0;
-		customVoiceWaveformBars = [];
-		customVoiceWaveformLoading = true;
-		customVoiceWaveformProgress = 0;
 		try {
 			const referenceCheck = sourcePath === referencePath ? null : fetch(referenceAudioUrl);
 			const response = await fetch(sourceAudioUrl);
@@ -803,317 +690,50 @@
 			const blob = await response.blob();
 			const file = new File([blob], sourceFileName, { type: blob.type || 'audio/wav' });
 			customVoiceOriginalFile = file;
-			const waveformPromise = buildWaveformBars(file, (bars, progress) => {
-				if (customVoiceOriginalFile !== file) return;
-				customVoiceWaveformBars = bars;
-				customVoiceWaveformProgress = progress;
-			}).catch(() => [] as number[]);
 			const duration = await loadAudioDuration(sourceAudioUrl);
 			customVoiceSourceDurationMs = Math.round(duration * 1000);
 			const requestedStart = (req.custom_reference_trim_start_ms ?? 0) / 1000;
 			const requestedEnd = (req.custom_reference_trim_end_ms ?? Math.round(duration * 1000)) / 1000;
 			customVoiceTrimStart = Math.max(0, Math.min(duration, requestedStart));
 			customVoiceTrimEnd = Math.max(customVoiceTrimStart + 0.1, Math.min(duration, requestedEnd || duration));
-			customVoicePlaybackPosition = customVoiceTrimStart;
 			$store.customVoiceSourceDurationMs = customVoiceSourceDurationMs;
 			$store.customVoiceDurationMs = Math.max(100, Math.round((customVoiceTrimEnd - customVoiceTrimStart) * 1000));
 			syncCustomVoiceTrimMetadata();
-			centerCustomVoiceTimelineOnSelection();
-			const bars = await waveformPromise;
-			if (customVoiceOriginalFile === file) {
-				customVoiceWaveformBars = bars;
-				customVoiceWaveformProgress = bars.length ? 1 : 0;
-			}
 		} catch (e) {
 			customVoiceOriginalFile = null;
 			customVoiceSourcePreviewUrl = '';
 			customVoiceSourceDurationMs = null;
 			customVoiceTrimStart = 0;
 			customVoiceTrimEnd = 0;
-			customVoicePlaybackPosition = 0;
-			customVoiceWaveformBars = [];
-			customVoiceWaveformProgress = 0;
 			$store.customVoicePreviewUrl = '';
 			$store.customVoiceDurationMs = null;
 			$store.customVoiceSourceDurationMs = null;
 			$store.customVoiceConfirmed = false;
 			$store.customVoiceError = `历史参考音频无法恢复，请确认文件仍存在：${(e as Error).message || '读取失败'}`;
-		} finally {
-			customVoiceWaveformLoading = false;
 		}
 	}
 	function emotionTagsFromScores(top: string | null, scores: Record<string, number>) { const tags = top ? [top] : []; for (const [emotion, score] of Object.entries(scores)) { if (emotion !== top && score > 0.15) tags.push(emotion); } return tags.slice(0, 3); }
 	async function openVoiceRegisterDialog() { if (!$store.customVoiceFileId || !$store.customVoiceTranscript.trim()) { $store.customVoiceError = '请先完成自定义音色上传和台词识别。'; return; } voiceRegisterName = ($store.customVoiceFileName || '自定义音色').replace(/\.[^.]+$/, ''); voiceRegisterDescription = `由生成页自定义音色注册，参考音频：${$store.customVoiceFileName || '未命名音频'}`; voiceRegisterTags = '自定义音色, ASR已生成'; voiceRegisterEmotionTags = $store.emotion ? $store.emotion : ''; voiceRegisterReferenceText = $store.customVoiceTranscript.trim(); voiceRegisterLicense = 'self_voice'; voiceRegisterEngine = $store.engineId; voiceRegisterError = ''; voiceRegisterOpen = true; voiceRegisterSerBusy = true; try { const result = await Api.predictEmotionForFile($store.customVoiceFileId); const emotionTags = emotionTagsFromScores(result.top_emotion, result.emotion_scores); if (emotionTags.length) voiceRegisterEmotionTags = emotionTags.join(', '); } catch (e) { voiceRegisterError = `情绪识别未完成，可先保存后在音色库重试：${(e as Error).message || 'SER 失败'}`; } finally { voiceRegisterSerBusy = false; } }
 	async function saveRegisteredVoice() { if (!$store.customVoiceFileId || !voiceRegisterName.trim()) return; voiceRegisterBusy = true; voiceRegisterError = ''; try { const payload: VoiceAssetCreate = { name: voiceRegisterName.trim(), description: voiceRegisterDescription.trim(), tags: splitTags(voiceRegisterTags), reference_text: voiceRegisterReferenceText.trim(), reference_audio_ids: [$store.customVoiceFileId], license_status: voiceRegisterLicense, recommended_engine_id: voiceRegisterEngine || null, default_language: $store.language === 'en' ? 'en' : 'zh', voice_type: 'test_sample' }; let created = await Api.createVoice(payload); const emotionTags = splitTags(voiceRegisterEmotionTags); if (emotionTags.length) created = await Api.updateVoice(created.voice_id, { emotion_tags: emotionTags }); $store.voices = [created, ...$store.voices.filter(v => v.voice_id !== created.voice_id)]; $store.voiceSource = 'voice_library'; $store.voiceId = created.voice_id; voiceRegisterOpen = false; } catch (e) { voiceRegisterError = (e as Error).message || '注册音色失败'; } finally { voiceRegisterBusy = false; } }
 	function onCustomVoiceDrop(event: DragEvent) { event.preventDefault(); customVoiceDragActive = false; const file = event.dataTransfer?.files?.[0]; if (file) void handleCustomVoiceFile(file); }
-	function customVoiceTimeFromPointer(event: PointerEvent, timebar: HTMLElement) { const rect = timebar.getBoundingClientRect(); const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)); return Math.round(ratio * customVoiceDurationSeconds * 10) / 10; }
-	function previewCustomVoiceTrimRange(anchorTime: number, currentTime: number) {
-		const duration = customVoiceDurationSeconds;
-		if (!duration) return;
-		let start = Math.max(0, Math.min(anchorTime, currentTime));
-		let end = Math.min(duration, Math.max(anchorTime, currentTime));
-		if (end - start < 0.1) {
-			if (currentTime < anchorTime) start = Math.max(0, end - 0.1);
-			else end = Math.min(duration, start + 0.1);
-		}
-		customVoiceTrimStart = start;
-		customVoiceTrimEnd = end;
-		if (!customVoiceTrimEditing) setCustomVoicePlaybackPosition(currentTime);
-	}
-	function finishCustomVoiceTrimEdit() {
-		if (!customVoiceTrimEditing) return;
-		const shouldResume = customVoiceResumePreviewAfterTrimEdit;
-		customVoiceTrimEditing = false;
-		resumeCustomVoicePreviewAfterTrimEdit(shouldResume);
-	}
-	function handleCustomVoiceTimebarPointer(event: PointerEvent) {
-		if (!customVoiceDurationSeconds || (event.target as HTMLElement).closest('button,input')) return;
-		const timebar = event.currentTarget as HTMLElement;
-		if (event.button === 1) {
-			beginCustomVoiceTimelinePan(event);
-			return;
-		}
-		if (event.button !== 0) return;
-		event.preventDefault();
-		const anchorTime = customVoiceTimeFromPointer(event, timebar);
-		const originX = event.clientX;
-		const originY = event.clientY;
-		let dragged = false;
-		const apply = (moveEvent: PointerEvent) => {
-			if (!dragged && Math.max(Math.abs(moveEvent.clientX - originX), Math.abs(moveEvent.clientY - originY)) < 3) return;
-			if (!dragged) beginCustomVoiceTrimEdit();
-			dragged = true;
-			previewCustomVoiceTrimRange(anchorTime, customVoiceTimeFromPointer(moveEvent, timebar));
-		};
-		const cleanup = (commitSelection: boolean) => {
-			window.removeEventListener('pointermove', apply);
-			window.removeEventListener('pointerup', finish);
-			window.removeEventListener('pointercancel', cancel);
-			if (dragged && commitSelection) {
-				syncCustomVoiceTrimMetadata();
-				invalidateCustomVoiceTrim();
-				finishCustomVoiceTrimEdit();
-			} else if (dragged) {
-				finishCustomVoiceTrimEdit();
-			} else if (!dragged) {
-				setCustomVoicePlaybackPosition(anchorTime);
-			}
-		};
-		const finish = () => cleanup(true);
-		const cancel = () => cleanup(false);
-		window.addEventListener('pointermove', apply);
-		window.addEventListener('pointerup', finish, { once: true });
-		window.addEventListener('pointercancel', cancel, { once: true });
-	}
-	function beginCustomVoiceTimelinePan(event: PointerEvent) {
-		const windowEl = (event.currentTarget as HTMLElement).closest('.custom-voice-timebar-window') as HTMLElement | null;
-		if (!windowEl) return;
-		event.preventDefault();
-		event.stopPropagation();
-		const startX = event.clientX;
-		const startScrollLeft = windowEl.scrollLeft;
-		customVoiceTimelinePanning = true;
-		const apply = (moveEvent: PointerEvent) => {
-			windowEl.scrollLeft = startScrollLeft - (moveEvent.clientX - startX);
-			updateCustomVoiceTimelineViewport(windowEl);
-		};
-		const cleanup = () => {
-			customVoiceTimelinePanning = false;
-			window.removeEventListener('pointermove', apply);
-			window.removeEventListener('pointerup', cleanup);
-			window.removeEventListener('pointercancel', cleanup);
-		};
-		window.addEventListener('pointermove', apply);
-		window.addEventListener('pointerup', cleanup, { once: true });
-		window.addEventListener('pointercancel', cleanup, { once: true });
-	}
-	function handleCustomVoiceTimelineWheel(event: WheelEvent) {
-		if (!customVoiceDurationSeconds) return;
-		event.preventDefault();
-		const windowEl = event.currentTarget as HTMLElement;
-		// Two-finger left/right swipes on a trackpad arrive as deltaX. Keep the
-		// familiar timeline behavior: pan horizontally instead of changing zoom.
-		if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
-			windowEl.scrollLeft += Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
-			updateCustomVoiceTimelineViewport(windowEl);
-			return;
-		}
-		if (Math.abs(event.deltaY) < 0.5) return;
-		const rect = windowEl.getBoundingClientRect();
-		const anchorOffset = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
-		const anchorRatio = (windowEl.scrollLeft + anchorOffset) / Math.max(1, windowEl.scrollWidth);
-		const factor = event.deltaY < 0 ? 1.16 : 1 / 1.16;
-		zoomCustomVoiceTimeline(customVoiceTimelineZoom * factor, anchorRatio, anchorOffset);
-	}
-	function beginCustomVoiceTrimDrag(event: PointerEvent, boundary: 'start' | 'end') {
-		if (!customVoiceDurationSeconds) return;
-		const timebar = (event.currentTarget as HTMLElement).closest('.custom-voice-timebar') as HTMLElement | null;
-		if (!timebar) return;
-		event.preventDefault();
-		event.stopPropagation();
-		beginCustomVoiceTrimEdit();
-		const apply = (e: PointerEvent) => {
-			const time = customVoiceTimeFromPointer(e, timebar);
-			if (boundary === 'start') setCustomVoiceTrimStart(time);
-			else setCustomVoiceTrimEnd(time);
-		};
-		const cleanup = () => {
-			window.removeEventListener('pointermove', apply);
-			window.removeEventListener('pointerup', cleanup);
-			window.removeEventListener('pointercancel', cleanup);
-			finishCustomVoiceTrimEdit();
-		};
-		apply(event);
-		window.addEventListener('pointermove', apply);
-		window.addEventListener('pointerup', cleanup, { once: true });
-		window.addEventListener('pointercancel', cleanup, { once: true });
-	}
-	function beginCustomVoicePlayheadDrag(event: PointerEvent) {
-		if (!customVoiceDurationSeconds) return;
-		const timebar = (event.currentTarget as HTMLElement).closest('.custom-voice-timebar') as HTMLElement | null;
-		if (!timebar) return;
-		event.preventDefault();
-		event.stopPropagation();
-		const apply = (e: PointerEvent) => setCustomVoicePlaybackPosition(customVoiceTimeFromPointer(e, timebar));
-		const cleanup = () => {
-			window.removeEventListener('pointermove', apply);
-			window.removeEventListener('pointerup', cleanup);
-			window.removeEventListener('pointercancel', cleanup);
-		};
-		apply(event);
-		window.addEventListener('pointermove', apply);
-		window.addEventListener('pointerup', cleanup, { once: true });
-		window.addEventListener('pointercancel', cleanup, { once: true });
-	}
-	function isTypingTarget(target: EventTarget | null) {
-		const el = target instanceof HTMLElement ? target : null;
-		if (!el) return false;
-		const tag = el.tagName.toLowerCase();
-		return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
-	}
-	function handleCustomVoiceTrimFocusOut(event: FocusEvent) {
-		const current = event.currentTarget as HTMLElement;
-		customVoiceTrimFocusWithin = Boolean(event.relatedTarget && current.contains(event.relatedTarget as Node));
-	}
-	function handleCustomVoiceTrimKeydown(event: KeyboardEvent) {
-		if (!customVoiceTrimHotkeysActive || !customVoiceOriginalFile || !customVoiceSourceDurationMs) return;
-		if (isTypingTarget(event.target)) return;
-		const key = event.key.toLowerCase();
-		const isSpace = event.code === 'Space' || event.key === ' ';
-		const isZoomInKey = !event.metaKey && !event.ctrlKey && !event.altKey && (event.key === '+' || event.key === '=' || event.code === 'Equal');
-		const isZoomOutKey = !event.metaKey && !event.ctrlKey && !event.altKey && (event.key === '-' || event.code === 'Minus');
-		if (isSpace) {
-			if ((event.target as HTMLElement | null)?.closest('button,a')) return;
-			event.preventDefault();
-			if (!event.repeat && customVoiceSelectedDurationMs >= 100) void toggleCustomVoiceSelectionPreview();
-			return;
-		}
-		if (isZoomInKey) {
-			event.preventDefault();
-			zoomCustomVoiceTimeline(customVoiceTimelineZoom * 1.35);
-			return;
-		}
-		if (isZoomOutKey) {
-			event.preventDefault();
-			zoomCustomVoiceTimeline(customVoiceTimelineZoom / 1.35);
-			return;
-		}
-		if (event.repeat) return;
-		if (key === 'i') {
-			event.preventDefault();
-			setCustomVoiceTrimStartAtPlayhead();
-		} else if (key === 'o') {
-			event.preventDefault();
-			setCustomVoiceTrimEndAtPlayhead();
-		}
-	}
-	async function toggleCustomVoiceSelectionPreview() {
-		if (!$store.voicePreviewAudio || !customVoiceSourcePreviewUrl || !customVoiceSourceDurationMs) return;
+	async function previewSelectedVoice() {
 		const audio = $store.voicePreviewAudio;
-		if (customVoiceLoopPreview && $store.voicePreviewPlaying) {
-			stopCustomVoiceSelectionPreview();
-			return;
-		}
-		const { start } = selectedTrimRange();
-		const absoluteUrl = new URL(customVoiceSourcePreviewUrl, window.location.href).href;
-		if (audio.src !== absoluteUrl) audio.src = customVoiceSourcePreviewUrl;
-		audio.currentTime = start;
-		customVoicePlaybackPosition = start;
-		customVoiceLoopPreview = true;
-		$store.voicePreviewPlaying = true;
-		try {
-			await audio.play();
-			startCustomVoicePreviewFrameLoop();
-		} catch (e) {
-			stopCustomVoicePreviewFrameLoop();
-			customVoiceLoopPreview = false;
-			$store.voicePreviewPlaying = false;
-			$store.error = `选区试听失败：${(e as Error).message || '请确认音频文件可播放'}`;
-		}
-	}
-	function stopCustomVoiceSelectionPreview() {
-		stopCustomVoicePreviewFrameLoop();
-		const audio = $store.voicePreviewAudio;
-		const { start } = selectedTrimRange();
-		if (audio) {
+		if (!audio || !activeVoicePreviewUrl) return;
+		if ($store.voicePreviewPlaying && !audio.paused) {
 			audio.pause();
-			audio.currentTime = start;
-		}
-		customVoicePlaybackPosition = start;
-		customVoiceLoopPreview = false;
-		customVoiceResumePreviewAfterTrimEdit = false;
-		$store.voicePreviewPlaying = false;
-	}
-	async function previewSelectedVoice() { if (!$store.voicePreviewAudio || !activeVoicePreviewUrl) return; const audio = $store.voicePreviewAudio; if ($store.voicePreviewPlaying && !audio.paused) { stopCustomVoicePreviewFrameLoop(); audio.pause(); customVoiceLoopPreview = false; customVoiceResumePreviewAfterTrimEdit = false; $store.voicePreviewPlaying = false; return; } stopCustomVoicePreviewFrameLoop(); customVoiceLoopPreview = false; customVoiceResumePreviewAfterTrimEdit = false; const absoluteUrl = new URL(activeVoicePreviewUrl, window.location.href).href; if (audio.src !== absoluteUrl) { audio.src = activeVoicePreviewUrl; audio.currentTime = 0; } $store.error = ''; $store.voicePreviewPlaying = true; try { await audio.play(); } catch (e) { $store.voicePreviewPlaying = false; $store.error = `音色预览播放失败：${(e as Error).message || '请确认参考音频文件可访问'}`; } }
-	function syncCustomVoicePreviewPlayback() {
-		const audio = $store.voicePreviewAudio;
-		if (!audio || !customVoiceLoopPreview) return;
-		const { start, end } = selectedTrimRange();
-		const playback = resolveSelectionPlayback(audio.currentTime, start, end, customVoiceTrimEditing);
-		if (!playback.enforceSelection) {
-			customVoicePlaybackPosition = clampCustomVoicePlaybackTime(playback.nextPosition);
-			return;
-		}
-		customVoicePlaybackPosition = Math.max(start, Math.min(end, audio.currentTime));
-		if (audio.currentTime >= end || audio.currentTime < start) {
-			if (customVoiceLoopEnabled) {
-				audio.currentTime = start;
-				customVoicePlaybackPosition = start;
-				void audio.play().catch(() => {
-					stopCustomVoicePreviewFrameLoop();
-					customVoiceLoopPreview = false;
-					$store.voicePreviewPlaying = false;
-				});
-			} else stopCustomVoiceSelectionPreview();
-		}
-	}
-	function stopCustomVoicePreviewFrameLoop() { if (customVoicePreviewFrame !== null) cancelAnimationFrame(customVoicePreviewFrame); customVoicePreviewFrame = null; }
-	function startCustomVoicePreviewFrameLoop() {
-		if (customVoicePreviewFrame !== null) return;
-		const step = () => {
-			customVoicePreviewFrame = null;
-			const audio = $store.voicePreviewAudio;
-			if (!audio || !customVoiceLoopPreview || !$store.voicePreviewPlaying) return;
-			syncCustomVoicePreviewPlayback();
-			if (customVoiceLoopPreview && $store.voicePreviewPlaying && !audio.paused) customVoicePreviewFrame = requestAnimationFrame(step);
-		};
-		customVoicePreviewFrame = requestAnimationFrame(step);
-	}
-	function handleVoicePreviewTimeUpdate() { syncCustomVoicePreviewPlayback(); }
-	function handleCustomVoicePreviewEnded() {
-		// Natural completion during a trim drag is not a user-requested Stop.  Keep
-		// the saved resume intent so release can apply the final IN/OUT range.
-		if (customVoiceTrimEditing && customVoiceResumePreviewAfterTrimEdit) {
-			stopCustomVoicePreviewFrameLoop();
-			customVoicePlaybackPosition = clampCustomVoicePlaybackTime($store.voicePreviewAudio?.currentTime ?? customVoicePlaybackPosition);
-			customVoiceLoopPreview = false;
 			$store.voicePreviewPlaying = false;
 			return;
 		}
-		stopVoicePreview();
+		const absoluteUrl = new URL(activeVoicePreviewUrl, window.location.href).href;
+		if (audio.src !== absoluteUrl) { audio.src = activeVoicePreviewUrl; audio.currentTime = 0; }
+		$store.error = '';
+		$store.voicePreviewPlaying = true;
+		try { await audio.play(); }
+		catch (e) { $store.voicePreviewPlaying = false; $store.error = `音色预览播放失败：${(e as Error).message || '请确认参考音频文件可访问'}`; }
 	}
-	function handleVoicePreviewPause() { stopCustomVoicePreviewFrameLoop(); if (customVoiceTrimEditing && customVoiceResumePreviewAfterTrimEdit) return; if ($store.voicePreviewAudio?.ended || !$store.voicePreviewAudio?.currentTime) { customVoiceLoopPreview = false; $store.voicePreviewPlaying = false; } }
-	function stopVoicePreview() { stopCustomVoicePreviewFrameLoop(); if ($store.voicePreviewAudio && $store.voicePreviewPlaying) { $store.voicePreviewAudio.pause(); } customVoiceLoopPreview = false; customVoiceResumePreviewAfterTrimEdit = false; $store.voicePreviewPlaying = false; }
+	function handleCustomVoicePreviewEnded() { $store.voicePreviewPlaying = false; }
+	function handleVoicePreviewPause() { if ($store.voicePreviewAudio?.paused) $store.voicePreviewPlaying = false; }
+	function stopVoicePreview() { if ($store.voicePreviewAudio && !$store.voicePreviewAudio.paused) $store.voicePreviewAudio.pause(); $store.voicePreviewPlaying = false; }
 	function upsertTask(t: GenerationTask) { $store.tasks = [t, ...$store.tasks.filter(i => i.task_id !== t.task_id)]; }
 	async function revealSubmittedTask(taskId: string) {
 		locallySubmittedTaskIds.add(taskId);
@@ -1258,6 +878,11 @@
 		$store.busy = true;
 		try {
 			const usingCustomVoice = usesReferenceVoice && $store.voiceSource === 'reference_audio';
+			if (isIndexTTS && indexTtsEmotionState.enabled && !indexTtsEmotionValidation.valid) {
+				$store.error = indexTtsEmotionValidation.errors[0] || '请先完成独立情绪参考设置。';
+				$store.showMoreParams = true;
+				return;
+			}
 			if (isDoubaoClone && usingCustomVoice) {
 				$store.error = '豆包声音复刻合成只使用已训练成功的云端音色，请切回“音色库”。';
 				return;
@@ -1682,7 +1307,6 @@
 		}, 60000);
 		const or = () => recalcAutoPageSize();
 		window.addEventListener('resize', or);
-		window.addEventListener('keydown', handleCustomVoiceTrimKeydown);
 		window.addEventListener('keydown', handleDialogEscape);
 		_autoResizeRO = new ResizeObserver(or);
 		return () => {
@@ -1691,12 +1315,10 @@
 			taskSocket = null;
 			if (taskSocketReconnectTimer) clearTimeout(taskSocketReconnectTimer);
 			if (taskPageTimer) clearTimeout(taskPageTimer);
-			stopCustomVoicePreviewFrameLoop();
 			stopResultAudioFrameLoop();
 			clearInterval(longformId);
 			clearInterval(fallbackId);
 			window.removeEventListener('resize', or);
-			window.removeEventListener('keydown', handleCustomVoiceTrimKeydown);
 			window.removeEventListener('keydown', handleDialogEscape);
 			_autoResizeRO?.disconnect();
 			if (_speakerCatalogTimer) clearTimeout(_speakerCatalogTimer);
@@ -1784,7 +1406,7 @@
 					onToggleAdvanced={() => (seedShowAdvanced = !seedShowAdvanced)}
 				/>
 			{:else}
-			{#if usesReferenceVoice}<div class="param-inline voice-param-inline" class:library-source={$store.voiceSource === 'voice_library'} class:custom-source={$store.voiceSource === 'reference_audio'}><span class="label-with-tooltip">声音<Tooltip content="选择本次朗读使用的声音来源。音色库使用已保存的参考音色；自定义可临时上传一段参考音频。" /></span><div class="voice-source-control"><div class="gen-segmented voice-source-tabs" role="tablist" aria-label="声音来源"><button class:active={$store.voiceSource === 'voice_library'} type="button" onclick={() => setVoiceSource('voice_library')}>{isDoubaoClone ? '云端音色' : '音色库'}</button>{#if !isDoubaoClone}<button class:active={$store.voiceSource === 'reference_audio'} type="button" onclick={() => setVoiceSource('reference_audio')}>自定义</button>{/if}</div>{#if $store.voiceSource === 'voice_library'}<div class="voice-inline"><VoiceSelector voices={visibleVoiceOptions} bind:value={$store.voiceId} /><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听音色' : '试听当前音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停当前音色试听' : '试听当前选择的音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{:else}<div class="custom-voice-inline"><span class="custom-voice-chip" class:ok={customVoiceMatched}>{#if customVoiceMatched}<CircleCheck size={13} />{:else}<FileAudio size={13} />{/if}{$store.customVoiceFileName || '未上传'}</span><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听自定义音色' : '试听当前自定义音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停自定义音色试听' : '试听当前自定义音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{/if}</div></div>{#if activeVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={activeVoicePreviewUrl} preload="none" ontimeupdate={handleVoicePreviewTimeUpdate} onended={handleCustomVoicePreviewEnded} onpause={handleVoicePreviewPause}></audio>{/if}{/if}
+			{#if usesReferenceVoice}<div class="param-inline voice-param-inline" class:library-source={$store.voiceSource === 'voice_library'} class:custom-source={$store.voiceSource === 'reference_audio'}><span class="label-with-tooltip">声音<Tooltip content="选择本次朗读使用的声音来源。音色库使用已保存的参考音色；自定义可临时上传一段参考音频。" /></span><div class="voice-source-control"><div class="gen-segmented voice-source-tabs" role="tablist" aria-label="声音来源"><button class:active={$store.voiceSource === 'voice_library'} type="button" onclick={() => setVoiceSource('voice_library')}>{isDoubaoClone ? '云端音色' : '音色库'}</button>{#if !isDoubaoClone}<button class:active={$store.voiceSource === 'reference_audio'} type="button" onclick={() => setVoiceSource('reference_audio')}>自定义</button>{/if}</div>{#if $store.voiceSource === 'voice_library'}<div class="voice-inline"><VoiceSelector voices={visibleVoiceOptions} bind:value={$store.voiceId} /><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听音色' : '试听当前音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停当前音色试听' : '试听当前选择的音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{:else}<div class="custom-voice-inline"><span class="custom-voice-chip" class:ok={customVoiceMatched}>{#if customVoiceMatched}<CircleCheck size={13} />{:else}<FileAudio size={13} />{/if}{$store.customVoiceFileName || '未上传'}</span><button class="gen-icon-btn mini" type="button" aria-label={$store.voicePreviewPlaying ? '暂停试听自定义音色' : '试听当前自定义音色'} data-tooltip={$store.voicePreviewPlaying ? '暂停自定义音色试听' : '试听当前自定义音色'} onclick={(e) => { e.preventDefault(); e.stopPropagation(); previewSelectedVoice(); }} disabled={!activeVoicePreviewUrl}>{#if $store.voicePreviewPlaying}<Square size={13} />{:else}<Play size={13} />{/if}</button></div>{/if}</div></div>{#if activeVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={activeVoicePreviewUrl} preload="none" onended={handleCustomVoicePreviewEnded} onpause={handleVoicePreviewPause}></audio>{/if}{/if}
 			{#if activeParamKeys.has('speed')}<label class="param-inline-range"><span class="label-with-tooltip">语速{#if activeParameterTooltip('speed')}<Tooltip content={activeParameterTooltip('speed')} />{/if}</span><input class="speed-number" type="number" min="0.5" max="2" step="0.05" value={$store.speed.toFixed(2)} oninput={(e) => setSpeedValue((e.currentTarget as HTMLInputElement).value)} onblur={(e) => ((e.currentTarget as HTMLInputElement).value = $store.speed.toFixed(2))} /><input type="range" min="0.5" max="2" step="0.05" value={$store.speed} oninput={(e) => setSpeedValue((e.currentTarget as HTMLInputElement).value)} /></label>{/if}
 			<label class="param-inline param-inline-format"><span class="label-with-tooltip">格式<Tooltip content={outputFormatTooltip} /></span><select bind:value={$store.outputFormat}>{#each outputFormatOptions as format}<option value={format}>{format === 'ogg_opus' ? 'OGG Opus' : format === 'pcm' ? 'PCM · 原始数据（仅下载）' : format.toUpperCase()}</option>{/each}</select></label>
 			<div class="param-actions-inline">
@@ -1812,7 +1434,7 @@
 			/>
 			{#if seedAssetError}<div class="badge fail seed-asset-error">{seedAssetError}</div>{/if}
 		{/if}
-			{#if isSeedAudio && seedEditingSlot && $store.customVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={$store.customVoicePreviewUrl} preload="none" ontimeupdate={handleVoicePreviewTimeUpdate} onended={handleCustomVoicePreviewEnded} onpause={handleVoicePreviewPause}></audio>{/if}
+			{#if isSeedAudio && seedEditingSlot && $store.customVoicePreviewUrl}<audio bind:this={$store.voicePreviewAudio} src={$store.customVoicePreviewUrl} preload="none" onended={handleCustomVoicePreviewEnded} onpause={handleVoicePreviewPause}></audio>{/if}
 			{#if (usesReferenceVoice && $store.voiceSource === 'reference_audio') || (isSeedAudio && seedEditingSlot !== null)}
 				<section class="custom-voice-panel">
 					<div class="custom-voice-source-row">
@@ -1838,69 +1460,11 @@
 						</div>
 					</div>
 					{#if customVoiceOriginalFile}
-						<div
-							class="custom-voice-trimmer"
-							class:hotkeys-active={customVoiceTrimHotkeysActive}
-							role="group"
-							aria-label="裁切选区，空格播放选区，I 设置入点，O 设置出点"
-							onmouseenter={() => (customVoiceTrimHover = true)}
-							onmouseleave={() => (customVoiceTrimHover = false)}
-							onfocusin={() => (customVoiceTrimFocusWithin = true)}
-							onfocusout={handleCustomVoiceTrimFocusOut}
-						>
-							<div class="custom-voice-trimmer-head">
-								<div class="custom-voice-trim-readout" aria-live="polite">
-									<span class="readout-chip readout-selection"><b>选区</b>{formatDuration(customVoiceSelectedDurationMs)}</span>
-									<span class="readout-chip readout-in"><b>IN</b>{formatTimecode(customVoiceTrimStart)}</span>
-									<span class="readout-chip readout-out"><b>OUT</b>{formatTimecode(customVoiceTrimEnd)}</span>
-									<span class="readout-chip readout-current"><b>当前</b>{formatTimecode(customVoicePlaybackPosition)}</span>
-									<span class="readout-chip readout-status" class:ok={customVoiceMatched && !customVoiceSelectionDirty} class:warn={customVoiceSelectionDirty}><b>处理</b>{customVoiceSelectionDirty ? '待重新识别' : (customVoiceMatched ? '已生效' : '待识别')}</span>
-								</div>
-								<div class="trim-transport-buttons">
-									<button class="trim-icon-btn play" type="button" aria-label={customVoiceLoopPreview && $store.voicePreviewPlaying ? '停止选区播放' : '播放选区'} data-tooltip={customVoiceLoopPreview && $store.voicePreviewPlaying ? '停止并回到入点，快捷键 Space' : '从入点播放到出点，快捷键 Space'} onclick={toggleCustomVoiceSelectionPreview} disabled={!customVoiceSourcePreviewUrl || !customVoiceSourceDurationMs || customVoiceSelectedDurationMs < 100}>{#if customVoiceLoopPreview && $store.voicePreviewPlaying}<Square size={16} />{:else}<Play size={16} />{/if}</button>
-										<button class="trim-loop-btn trim-icon-only" class:active={customVoiceLoopEnabled} type="button" aria-label={customVoiceLoopEnabled ? '关闭循环播放' : '开启循环播放'} data-tooltip={customVoiceLoopEnabled ? '循环播放已开启，点击关闭' : '循环播放已关闭，点击开启'} onclick={() => (customVoiceLoopEnabled = !customVoiceLoopEnabled)} disabled={!customVoiceSourcePreviewUrl || !customVoiceSourceDurationMs}><Repeat size={14} /></button>
-											<div class="trim-zoom-buttons" aria-label="时间轴缩放">
-												<button class="trim-tool-btn" type="button" aria-label="缩小时间轴" data-tooltip="缩小时间轴，快捷键 -" onclick={() => zoomCustomVoiceTimeline(customVoiceTimelineZoom / 1.35)} disabled={!customVoiceSourceDurationMs}>−</button>
-												<span>{formatTimelineZoom(customVoiceTimelineZoom)}x</span>
-												<button class="trim-tool-btn" type="button" aria-label="放大时间轴" data-tooltip="放大时间轴，快捷键 + / =" onclick={() => zoomCustomVoiceTimeline(customVoiceTimelineZoom * 1.35)} disabled={!customVoiceSourceDurationMs}>+</button>
-											</div>
-											<button class="trim-marker-btn trim-marker-in-btn trim-icon-only" type="button" aria-label="将当前指针设为入点" data-tooltip="将当前指针设为入点，快捷键 I" onclick={setCustomVoiceTrimStartAtPlayhead} disabled={!customVoiceSourceDurationMs}><ChevronsLeft size={13} /></button>
-											<button class="trim-marker-btn trim-marker-out-btn trim-icon-only" type="button" aria-label="将当前指针设为出点" data-tooltip="将当前指针设为出点，快捷键 O" onclick={setCustomVoiceTrimEndAtPlayhead} disabled={!customVoiceSourceDurationMs}><ChevronsRight size={13} /></button>
-											<button class="trim-marker-btn trim-icon-only" type="button" aria-label="重置为完整选区" data-tooltip="重置为完整选区" onclick={resetCustomVoiceTrimRange} disabled={!customVoiceSourceDurationMs}><RotateCcw size={13} /></button>
-											<button class="btn compact primary trim-apply-btn trim-icon-only" type="button" aria-label="使用选区并识别台词" data-tooltip="使用当前选区作为样音，并用 ASR 识别台词" onclick={applyActiveReferenceTrim} disabled={$store.customVoiceBusy || !customVoiceSourceDurationMs || customVoiceSelectedDurationMs < 100}><CircleCheck size={13} /></button>
-											{#if !isSeedAudio}<button class="btn compact trim-inline-action trim-icon-only" type="button" aria-label="注册为音色" data-tooltip="把当前选区和台词保存到音色库" onclick={openVoiceRegisterDialog} disabled={$store.customVoiceBusy || !$store.customVoiceFileId || !$store.customVoiceTranscript.trim()}><Plus size={13} /></button>{/if}
-											<button class="btn compact trim-inline-action trim-icon-only" type="button" aria-label={isSeedAudio ? '关闭参考声音编辑器' : '清除参考音频'} data-tooltip={isSeedAudio ? '关闭编辑器并保留当前参考声音' : '清除当前参考音频、裁切选区和识别文本'} onclick={isSeedAudio ? closeActiveReferenceEditor : resetCustomVoice} disabled={!$store.customVoiceFileName}><X size={13} /></button>
-										</div>
-									</div>
-								<div class="custom-voice-editor-strip">
-								<div class="custom-voice-timebar-window" role="region" aria-label="裁剪时间轴滚动窗口" onwheel={handleCustomVoiceTimelineWheel} onscroll={(e) => updateCustomVoiceTimelineViewport(e.currentTarget as HTMLElement)} onpointerenter={(e) => updateCustomVoiceTimelineViewport(e.currentTarget as HTMLElement)}>
-									<div class="custom-voice-timebar" class:panning={customVoiceTimelinePanning} role="group" aria-label="自定义音色裁切时间轴" style={`--trim-start:${customVoiceTrimStartPercent}%;--trim-end:${customVoiceTrimEndPercent}%;--playhead:${customVoicePlayheadPercent}%;width:${customVoiceTimelineZoom * 100}%`} onpointerdown={handleCustomVoiceTimebarPointer}>
-										<div class="custom-voice-timebar-ruler" aria-hidden="true">
-											{#each customVoiceTimelineTicks as tick}
-												<span class:major={tick.major} style={`left:${tick.percent}%`}><i></i><b>{tick.label}</b></span>
-											{/each}
-										</div>
-										<div class="custom-voice-timebar-track" aria-hidden="true"></div>
-										<div class="custom-voice-waveform" class:loading={customVoiceWaveformLoading} style={`--waveform-progress:${Math.round(customVoiceWaveformProgress * 100)}%`} aria-hidden="true">
-											{#if customVoiceWaveformBars.length}
-												<svg class="custom-voice-waveform-svg" viewBox={`0 0 ${customVoiceWaveformBars.length} 100`} preserveAspectRatio="none">
-													<line class="waveform-midline" x1="0" y1="50" x2={customVoiceWaveformBars.length} y2="50" />
-													{#each customVoiceVisibleWaveformBars as bar}
-																<rect x={bar.x + 0.1} y={50 - bar.level * 38} width={bar.width} height={Math.max(2, bar.level * 76)} rx="0.12" />
-													{/each}
-												</svg>
-											{:else}
-												<span class="waveform-empty"></span>
-											{/if}
-										</div>
-										<div class="custom-voice-play-progress" aria-hidden="true"></div>
-										<button type="button" class="trim-playhead-handle" aria-label="拖动当前播放指针" onpointerdown={beginCustomVoicePlayheadDrag}><span>当前</span></button>
-										<button type="button" class="trim-handle-label trim-in-label" aria-label="拖动裁切入点" onpointerdown={(e) => beginCustomVoiceTrimDrag(e, 'start')}><span>IN</span></button>
-										<button type="button" class="trim-handle-label trim-out-label" aria-label="拖动裁切出点" onpointerdown={(e) => beginCustomVoiceTrimDrag(e, 'end')}><span>OUT</span></button>
-										<input aria-label="裁切入点" class="trim-range trim-start" type="range" min="0" max={customVoiceDurationSeconds} step="0.1" value={customVoiceTrimStart} onpointerdown={beginCustomVoiceTrimEdit} onpointerup={finishCustomVoiceTrimEdit} onpointercancel={finishCustomVoiceTrimEdit} onchange={finishCustomVoiceTrimEdit} oninput={(e) => setCustomVoiceTrimStart((e.currentTarget as HTMLInputElement).value)} disabled={!customVoiceSourceDurationMs} />
-										<input aria-label="裁切出点" class="trim-range trim-end" type="range" min="0.1" max={customVoiceDurationSeconds} step="0.1" value={customVoiceTrimEnd} onpointerdown={beginCustomVoiceTrimEdit} onpointerup={finishCustomVoiceTrimEdit} onpointercancel={finishCustomVoiceTrimEdit} onchange={finishCustomVoiceTrimEdit} oninput={(e) => setCustomVoiceTrimEnd((e.currentTarget as HTMLInputElement).value)} disabled={!customVoiceSourceDurationMs} />
-									</div>
-								</div>
+						<div class="custom-voice-trimmer shared-reference-editor">
+							<ReferenceAudioRangeEditor ariaLabel="自定义音色参考片段时间线" purposeLabel="音色片段" applyLabel="使用并识别" sourceUrl={customVoiceSourcePreviewUrl} durationMs={customVoiceSourceDurationMs ?? 0} startMs={Math.round(customVoiceTrimStart * 1000)} endMs={Math.round(customVoiceTrimEnd * 1000)} busy={$store.customVoiceBusy} dirty={customVoiceSelectionDirty} onRangeChange={updateCustomVoiceTrimRange} onApply={applyActiveReferenceTrim} />
+							<div class="row wrap custom-reference-actions">
+								{#if !isSeedAudio}<button class="btn compact" type="button" onclick={openVoiceRegisterDialog} disabled={$store.customVoiceBusy || !$store.customVoiceFileId || !$store.customVoiceTranscript.trim()}><Plus size={13} />注册为音色</button>{/if}
+								<button class="btn compact" type="button" onclick={isSeedAudio ? closeActiveReferenceEditor : resetCustomVoice} disabled={!$store.customVoiceFileName}><X size={13} />{isSeedAudio ? '关闭编辑器' : '清除参考音频'}</button>
 							</div>
 						</div>
 					{:else}
@@ -1954,7 +1518,10 @@
 			{#if isDoubao && activeParamKeys.has('silence_duration')}<div class="field param-field doubao-silence-field"><label class="param-label label-with-tooltip" for="doubao-silence">结尾静音 ms<Tooltip content={activeParameterTooltip('silence_duration')} /></label><div class="param-control"><input id="doubao-silence" type="number" min="0" max="30000" step="100" bind:value={$store.doubaoSilenceDuration} /></div></div>{/if}
 			{#if isDoubao}<div class="advanced-subhead doubao-delivery-subhead">交付标记</div>{/if}
 			{#if isDoubao && (activeParamKeys.has('enable_subtitle') || activeParamKeys.has('aigc_watermark'))}<div class="field param-field doubao-output-switches"><span class="param-label label-with-tooltip">输出附加<Tooltip content="字级时间戳：随音频返回文字位置，用于字幕或画面对齐。AIGC 声音标识：在音频结尾加入可识别的 AI 生成节奏标识。" /></span><div class="doubao-switch-row">{#if activeParamKeys.has('enable_subtitle')}<Toggle compact checked={$store.doubaoEnableSubtitle} label="字级时间戳" onChange={(checked) => ($store.doubaoEnableSubtitle = checked)} />{/if}{#if activeParamKeys.has('aigc_watermark')}<Toggle compact checked={$store.doubaoAigcWatermark} label="AIGC 声音标识" onChange={(checked) => ($store.doubaoAigcWatermark = checked)} />{/if}</div></div>{/if}
-			{#if supportsEmotion}<div class="field param-field"><label class="param-label label-with-tooltip" for="emo">情绪{#if activeParameterTooltip('emotion')}<Tooltip content={activeParameterTooltip('emotion')} />{/if}</label><div class="param-control"><select id="emo" bind:value={$store.emotion}><option value="">跟随参考音色</option><option value="calm">自然</option><option value="happy">高兴</option><option value="sad">悲伤</option><option value="angry">愤怒</option><option value="afraid">恐惧</option><option value="disgusted">反感</option><option value="melancholic">低落</option><option value="surprised">惊讶</option></select></div></div>{#if isIndexTTS && !followsReferenceEmotion}<div class="field param-field param-slider emotion-intensity-field"><label class="param-label label-with-tooltip">情绪强度<Tooltip content="情绪越强，读法越有表演感；调得太高可能显得夸张。0 是最轻，1 是最强。" /></label><div class="param-control emotion-intensity-control"><Slider value={$store.emoAlpha} min={0} max={1} step={0.05} onChange={(v: number) => $store.emoAlpha = v} /></div></div>{/if}{/if}
+			{#if isIndexTTS}
+				<EmotionReferencePanel state={indexTtsEmotionState} voices={$store.voices} {mainVoiceName} onChange={updateIndexTtsEmotionState} />
+			{/if}
+			{#if supportsEmotion && !(isIndexTTS && indexTtsEmotionState.enabled)}<div class="field param-field"><label class="param-label label-with-tooltip" for="emo">情绪{#if activeParameterTooltip('emotion')}<Tooltip content={activeParameterTooltip('emotion')} />{/if}</label><div class="param-control"><select id="emo" bind:value={$store.emotion}><option value="">跟随参考音色</option><option value="calm">自然</option><option value="happy">高兴</option><option value="sad">悲伤</option><option value="angry">愤怒</option><option value="afraid">恐惧</option><option value="disgusted">反感</option><option value="melancholic">低落</option><option value="surprised">惊讶</option></select></div></div>{#if isIndexTTS && !followsReferenceEmotion}<div class="field param-field param-slider emotion-intensity-field"><label class="param-label label-with-tooltip">情绪强度<Tooltip content="情绪越强，读法越有表演感；调得太高可能显得夸张。0 是最轻，1 是最强。" /></label><div class="param-control emotion-intensity-control"><Slider value={$store.emoAlpha} min={0} max={1} step={0.05} onChange={(v: number) => $store.emoAlpha = v} /></div></div>{/if}{/if}
 			{#if isOmniVoice && $store.voiceSource === 'voice_library' && !$store.voiceId}<div class="field param-field"><label class="param-label label-with-tooltip" for="vd">设计标签<Tooltip content="没有选参考音色时，用它决定大致的人声类型，例如性别、年龄、音调或耳语感。它不是自由聊天提示词，保持给出的格式组合效果更稳定。" /></label><div class="param-control"><select id="vd" bind:value={$store.voiceDesign}><option value="女，青年，中音调">女，青年，中音调</option><option value="男，青年，中音调">男，青年，中音调</option><option value="女，中年，高音调">女，中年，高音调</option><option value="男，中年，低音调">男，中年，低音调</option><option value="女，青年，耳语">女，青年，耳语</option></select></div></div>{/if}
 			{#if genericAdvancedParameterSchema.length > 0}<ParameterPanel autoExpand={true} parameterSchema={genericAdvancedParameterSchema} values={{ ...$store.engineParameters, temperature: $store.temperature, top_p: $store.topP, top_k: $store.topK, seed: $store.seed, max_text_tokens_per_segment: $store.maxTextTokensPerSegment, interval_silence: $store.intervalSilence, diffusion_steps: $store.diffusionSteps, cfg_rate: $store.cfgRate, guidance_scale: $store.guidanceScale, duration: $store.duration, audio_chunk_duration: $store.audioChunkDuration, audio_chunk_threshold: $store.audioChunkThreshold, max_tokens: $store.maxTokens, cfg_scale: $store.cfgScale, ddpm_steps: $store.ddpmSteps, max_mel_tokens: $store.maxMelTokens, repetition_penalty: $store.repetitionPenalty, nfe_step: $store.nfeStep, cfg_strength: $store.cfgStrength, target_rms: $store.targetRms, cross_fade_duration: $store.crossFadeDuration, sway_sampling_coef: $store.swaySamplingCoef, fix_duration: $store.fixDuration, remove_silence: $store.removeSilence, optimize_text_preview: $store.optimizeTextPreview }} onChange={(k, v) => { const st: Record<string, (x: unknown) => void> = { temperature: (x: unknown) => $store.temperature = x as number, top_p: (x: unknown) => $store.topP = x as number, top_k: (x: unknown) => $store.topK = x as number, seed: (x: unknown) => $store.seed = x === '' || x === null || x === undefined ? null : Number(x), max_text_tokens_per_segment: (x: unknown) => $store.maxTextTokensPerSegment = x as number, interval_silence: (x: unknown) => $store.intervalSilence = x as number, diffusion_steps: (x: unknown) => $store.diffusionSteps = x as number, cfg_rate: (x: unknown) => $store.cfgRate = x as number, guidance_scale: (x: unknown) => $store.guidanceScale = x as number, duration: (x: unknown) => $store.duration = x as number, audio_chunk_duration: (x: unknown) => $store.audioChunkDuration = x as number, audio_chunk_threshold: (x: unknown) => $store.audioChunkThreshold = x as number, max_tokens: (x: unknown) => $store.maxTokens = x as number, cfg_scale: (x: unknown) => $store.cfgScale = x === '' || x === null || x === undefined ? null : Number(x), ddpm_steps: (x: unknown) => $store.ddpmSteps = x === '' || x === null || x === undefined ? null : Number(x), max_mel_tokens: (x: unknown) => $store.maxMelTokens = x as number, repetition_penalty: (x: unknown) => $store.repetitionPenalty = x as number, nfe_step: (x: unknown) => $store.nfeStep = x as number, cfg_strength: (x: unknown) => $store.cfgStrength = x as number, target_rms: (x: unknown) => $store.targetRms = x as number, cross_fade_duration: (x: unknown) => $store.crossFadeDuration = x as number, sway_sampling_coef: (x: unknown) => $store.swaySamplingCoef = x as number, fix_duration: (x: unknown) => $store.fixDuration = x as number, remove_silence: (x: unknown) => $store.removeSilence = x as boolean, optimize_text_preview: (x: unknown) => $store.optimizeTextPreview = x as boolean }; if (st[k]) st[k](v); else $store.engineParameters = { ...$store.engineParameters, [k]: v }; }} />{/if}
 		</div>{/if}

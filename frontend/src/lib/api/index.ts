@@ -60,6 +60,7 @@ import type {
 	VideoLocalizationSubtitleCueUpdate,
 	VoiceAsset,
 	VoiceAssetCreate,
+	VoiceClipResponse,
 	VoiceClipTranscribeResponse,
 	SEREmotionResult,
 	SeedAudioImageUploadResult,
@@ -139,6 +140,8 @@ export const Api = {
 		api.upload<SeedAudioImageUploadResult>('/seed-audio/assets/image', file, { license_status: licenseStatus }),
 	clipTranscribeVoice: (fileId: string, body: { start_ms: number; end_ms: number; language?: 'auto' | 'zh' | 'en'; engine_id?: string }) =>
 		api.post<VoiceClipTranscribeResponse>(`/voices/files/${encodeURIComponent(fileId)}/clip-transcribe`, body),
+	clipVoice: (fileId: string, body: { start_ms: number; end_ms: number }) =>
+		api.post<VoiceClipResponse>(`/voices/files/${encodeURIComponent(fileId)}/clip`, body),
 	generatePlan: (body: GeneratePlanRequest) => api.post<GeneratePlanResponse>('/generate/plan', body),
 	generate: (body: GenerateRequest | EngineGenerateRequest) => api.post<GenerateResponse>('/generate', body),
 	generateLongform: (body: LongformGenerateRequest) => api.post<LongformTask>('/longform/generate', body),
