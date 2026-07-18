@@ -183,6 +183,7 @@ class IndexTTSv2:
 
         # Cache
         self.cache = {}
+        self.emotion_cache = {}
 
         print("IndexTTS 2.0 ready!")
 
@@ -635,6 +636,39 @@ class IndexTTSv2:
         }
         return self.cache
 
+    @torch.no_grad()
+    def _process_emotion_audio(self, audio_path: str) -> torch.Tensor:
+        """Extract only the semantic embedding needed for emotion transfer.
+
+        Independent emotion references do not contribute speaker mel, style,
+        semantic-code, or S2Mel prompt conditioning.  Keep their cache separate
+        so switching emotion references cannot evict the speaker reference.
+        """
+        if self.emotion_cache.get('audio_path') == audio_path:
+            return self.emotion_cache['spk_cond_emb']
+
+        self._ensure_pytorch_modules()
+        audio, sr = librosa.load(audio_path, sr=None)
+        audio = torch.tensor(audio).unsqueeze(0)
+        audio_16k = torchaudio.transforms.Resample(sr, 16000)(audio)
+        emotion_cond_emb = self._get_semantic_embedding(audio_16k)
+        self.emotion_cache = {
+            'audio_path': audio_path,
+            'spk_cond_emb': emotion_cond_emb,
+        }
+        return emotion_cond_emb
+
+    def _emotion_embedding_for_reference(
+        self,
+        emotion_audio_path: str,
+        speaker_audio_path: str,
+        speaker_data: dict,
+    ) -> torch.Tensor:
+        """Reuse speaker features when both reference paths are identical."""
+        if emotion_audio_path == speaker_audio_path:
+            return speaker_data['spk_cond_emb']
+        return self._process_emotion_audio(emotion_audio_path)
+
     def _compute_emotion_vector(
         self,
         emotion_weights: Dict[str, float],
@@ -706,6 +740,7 @@ class IndexTTSv2:
         verbose: bool = False,
         segment_overlap_ms: int = 50,
         speed: float = 1.0,
+        emotion_reference_audio: Optional[str] = None,
     ) -> np.ndarray:
         """Generate speech from text.
 
@@ -727,6 +762,9 @@ class IndexTTSv2:
                 - str: "happy", "happy:0.8,sad:0.2", or JSON
                 - dict: {"happy": 0.8, "sad": 0.2}
             emo_alpha: Emotion intensity (0.0=reference audio, 1.0=full specified emotion, default: 0.6)
+            emotion_reference_audio: Optional independent audio whose emotion
+                is blended with the speaker reference using ``emo_alpha``.
+                Mutually exclusive with ``emotion``.
             seed: Random seed for reproducible generation
             verbose: Whether to print progress
             segment_overlap_ms: Overlap duration in ms for crossfade between segments (default: 50, 0 to disable)
@@ -736,6 +774,8 @@ class IndexTTSv2:
         """
         if not 0.5 <= speed <= 2.0:
             raise ValueError(f"speed must be between 0.5 and 2.0, got {speed}")
+        if emotion is not None and emotion_reference_audio is not None:
+            raise ValueError("emotion and emotion_reference_audio are mutually exclusive")
 
         # Set random seed if specified
         if seed is not None:
@@ -779,10 +819,9 @@ class IndexTTSv2:
         speech_cond = self.gpt.get_conditioning(spk_cond_emb_ncl, cond_lengths)
 
         # Emotion conditioning
-        # Base emotion vector from reference audio
-        base_emo_vec = self.gpt.get_emovec(spk_cond_emb_ncl, cond_lengths)
-
         if emotion is not None:
+            # Base emotion vector from reference audio
+            base_emo_vec = self.gpt.get_emovec(spk_cond_emb_ncl, cond_lengths)
             # Parse emotion specification
             if isinstance(emotion, str):
                 emotion_weights = parse_emotion(emotion)
@@ -811,10 +850,26 @@ class IndexTTSv2:
                 emo_vec = emovec_mat
             else:
                 emo_vec = emovec_mat + (1.0 - weight_sum) * base_emo_vec
+        elif emotion_reference_audio is not None:
+            emotion_cond_emb_pt = self._emotion_embedding_for_reference(
+                emotion_reference_audio,
+                reference_audio,
+                ref_data,
+            )
+            emotion_cond_emb = mx.array(emotion_cond_emb_pt.detach().cpu())
+            emotion_cond_emb_ncl = emotion_cond_emb.transpose(0, 2, 1)
+            emotion_cond_lengths = mx.array([emotion_cond_emb.shape[1]])
+            emo_vec = self.gpt.merge_emovec(
+                spk_cond_emb_ncl,
+                emotion_cond_emb_ncl,
+                cond_lengths,
+                emotion_cond_lengths,
+                alpha=emo_alpha,
+            )
         else:
             # No custom emotion specified, use reference audio emotion as-is.
             # PyTorch sets emo_alpha=1.0 when no separate emotion audio (infer_v2.py:424-425).
-            emo_vec = base_emo_vec
+            emo_vec = self.gpt.get_emovec(spk_cond_emb_ncl, cond_lengths)
         # Prepare full conditioning (speaker + emotion + speed)
         conditioning = self.gpt.prepare_conditioning_latents(speech_cond, emo_vec, batch_size=1)
 

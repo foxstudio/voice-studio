@@ -258,6 +258,25 @@ class UnifiedVoiceV2(nn.Module):
         emo_vec = self.emo_layer(emo_vec)
         return emo_vec
 
+    def merge_emovec(
+        self,
+        speech_conditioning_input: mx.array,
+        emotion_conditioning_input: mx.array,
+        cond_lengths: Optional[mx.array] = None,
+        emotion_cond_lengths: Optional[mx.array] = None,
+        alpha: float = 1.0,
+    ) -> mx.array:
+        """Blend the speaker's emotion with an independent emotion reference.
+
+        This mirrors the official IndexTTS2 interpolation:
+        ``base + alpha * (target - base)``.  Clamping here keeps direct model
+        callers safe even when they bypass the API-level validation.
+        """
+        blend = max(0.0, min(1.0, float(alpha)))
+        base_vec = self.get_emovec(speech_conditioning_input, cond_lengths)
+        target_vec = self.get_emovec(emotion_conditioning_input, emotion_cond_lengths)
+        return base_vec + blend * (target_vec - base_vec)
+
     def prepare_conditioning_latents(
         self,
         speech_conditioning: mx.array,
