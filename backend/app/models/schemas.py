@@ -90,6 +90,7 @@ class LicenseStatus(str, Enum):
 class EmotionMode(str, Enum):
     follow_reference = "follow_reference"
     emotion_vector = "emotion_vector"
+    emotion_reference = "emotion_reference"
     emotion_text = "emotion_text"
 
 
@@ -530,6 +531,19 @@ class VoiceClipTranscribeRequest(BaseModel):
     engine_id: str = "qwen3-asr-mlx"
 
 
+class VoiceClipRequest(BaseModel):
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(gt=0)
+
+
+class VoiceClipResponse(BaseModel):
+    file_id: str
+    filename: str
+    path: str
+    quality: dict[str, Any] = Field(default_factory=dict)
+    voice_file: VoiceFile
+
+
 class VoiceClipTranscribeResponse(BaseModel):
     file_id: str
     filename: str
@@ -638,6 +652,12 @@ class GenerateRequest(BaseModel):
     emotion_mode: EmotionMode = EmotionMode.follow_reference
     emotion: str | None = None
     emotion_values: dict[str, float] | None = None
+    emotion_reference_voice_id: str | None = None
+    emotion_reference_audio_path: str | None = None
+    emotion_reference_source_audio_path: str | None = None
+    emotion_reference_source_duration_ms: int | None = Field(default=None, ge=0)
+    emotion_reference_trim_start_ms: int | None = Field(default=None, ge=0)
+    emotion_reference_trim_end_ms: int | None = Field(default=None, gt=0)
     emotion_text: str | None = None
     style_instruction: str | None = None
     voice_design_prompt: str | None = None

@@ -54,6 +54,7 @@ def run_indextts_v2(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
     allowed_keys = {
         "reference_audio",
+        "emotion_reference_audio",
         "max_mel_tokens",
         "max_text_tokens_per_segment",
         "interval_silence",
@@ -80,7 +81,13 @@ def run_indextts_v2(payload: dict[str, Any]) -> list[dict[str, Any]]:
         out = _target_path(segment["output_path"])
         wav_out = out if out.suffix.lower() == ".wav" else out.with_suffix(".batch-tmp.wav")
         kwargs = dict(common)
-        kwargs.update({k: v for k, v in segment.get("parameters", {}).items() if k in allowed_keys and v is not None})
+        for key, value in segment.get("parameters", {}).items():
+            if key not in allowed_keys:
+                continue
+            if value is None:
+                kwargs.pop(key, None)
+            else:
+                kwargs[key] = value
         kwargs["text"] = segment["text"]
         try:
             model.generate(output_path=str(wav_out), **kwargs)

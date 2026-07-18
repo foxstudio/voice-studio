@@ -21,7 +21,7 @@ from app.schemas.voice_studio import (
     TranscriptionRecord,
     now_iso,
 )
-from app.services import asr_service, custom_reference_store, database as db, export_store, history_store, task_queue, text_planner, text_verifier
+from app.services import asr_service, custom_reference_store, database as db, emotion_reference, export_store, history_store, task_queue, text_planner, text_verifier
 
 _queue: asyncio.Queue[str] | None = None
 _worker_task: asyncio.Task[None] | None = None
@@ -94,6 +94,10 @@ async def shutdown() -> None:
 
 
 async def submit(req: LongformGenerateRequest) -> LongformTask:
+    try:
+        emotion_reference.resolve_generate_request(req.generate_request)
+    except emotion_reference.EmotionReferenceError as exc:
+        raise AppException(400, exc.code, exc.message) from exc
     start_worker()
     planned = _segments_from_request(req)
     task = LongformTask(

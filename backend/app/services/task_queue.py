@@ -33,7 +33,7 @@ from app.schemas.voice_studio import (
     TTSVerificationResponse,
     now_iso,
 )
-from app.services import asr_service, audio_tools, cosyvoice_constraints, custom_reference_store, database as db, engine_policy, engine_registry, engine_request_builder, history_store, project_store, settings_store, text_verifier, voice_store
+from app.services import asr_service, audio_tools, cosyvoice_constraints, custom_reference_store, database as db, emotion_reference, engine_policy, engine_registry, engine_request_builder, history_store, project_store, settings_store, text_verifier, voice_store
 
 _queue: asyncio.Queue[str] | None = None
 _worker_task: asyncio.Task[None] | None = None
@@ -617,6 +617,10 @@ async def submit(
     longform_segment_index: int | None = None,
     longform_segment_count: int | None = None,
 ) -> str:
+    try:
+        emotion_reference.resolve_generate_request(req)
+    except emotion_reference.EmotionReferenceError as exc:
+        raise AppException(400, exc.code, exc.message) from exc
     if engine_policy.is_single_generation_only(req.engine_id) and task_type != "single":
         raise AppException(400, "SINGLE_GENERATION_ONLY", "Seed Audio 1.0 暂只支持单次生成")
     if req.engine_id == "cosyvoice-zero-shot":
@@ -931,6 +935,10 @@ def _resolve_reference(req: GenerateRequest) -> str | None:
 
 
 def _kwargs(req: GenerateRequest, output_path: str) -> dict:
+    try:
+        emotion_reference.validate_generate_request(req)
+    except emotion_reference.EmotionReferenceError as exc:
+        raise AppException(400, exc.code, exc.message) from exc
     voice = voice_store.get_voice(req.voice_id) if req.voice_id else None
     if engine_request_builder.is_doubao_tts_request(req.engine_id):
         return engine_request_builder.build_doubao_tts_single_kwargs(req, output_path, voice=voice)
@@ -1000,10 +1008,15 @@ def _kwargs(req: GenerateRequest, output_path: str) -> dict:
             ref_text=ref_text,
         )
     if req.engine_id == "indextts-v2":
+        try:
+            emotion_reference_audio = emotion_reference.resolve_generate_request(req)
+        except emotion_reference.EmotionReferenceError as exc:
+            raise AppException(400, exc.code, exc.message) from exc
         return engine_request_builder.build_indextts_v2_single_kwargs(
             req,
             output_path,
             reference_audio=ref,
+            emotion_reference_audio=emotion_reference_audio,
             model_dir=model_dir,
         )
     if req.engine_id == "omnivoice":

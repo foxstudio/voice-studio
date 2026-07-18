@@ -24,6 +24,8 @@ async def generate_batch(payload: Any = Body(...)):
         code, separator, message = str(exc).partition(": ")
         if code.startswith("COSYVOICE_"):
             raise AppException(400, code, message if separator else "CosyVoice Zero-Shot 参考音频不符合官方要求") from exc
+        if code.startswith("EMOTION_REFERENCE_"):
+            raise AppException(400, code, message if separator else "独立情绪参考参数无效") from exc
         raise AppException(400, "BATCH_PAYLOAD_INVALID", str(exc)) from exc
 
 

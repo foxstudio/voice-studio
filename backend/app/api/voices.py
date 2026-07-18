@@ -16,6 +16,8 @@ from app.schemas.voice_studio import (
     VoiceAsset,
     VoiceAssetCreate,
     VoiceAssetUpdate,
+    VoiceClipRequest,
+    VoiceClipResponse,
     VoiceClipTranscribeRequest,
     VoiceClipTranscribeResponse,
     VoiceType,
@@ -222,6 +224,13 @@ async def get_voice_file_audio(file_id: str):
     if not vf or not vf.path or not Path(vf.path).exists():
         raise AppException(404, "AUDIO_NOT_FOUND", "Audio not found")
     return FileResponse(vf.path)
+
+
+@router.post("/files/{file_id}/clip", response_model=VoiceClipResponse)
+async def clip_voice_file(file_id: str, data: VoiceClipRequest):
+    """Create a managed audio clip without starting transcription."""
+
+    return voice_store.create_audio_clip(file_id, data.start_ms, data.end_ms)
 
 
 @router.post("/files/{file_id}/clip-transcribe", response_model=VoiceClipTranscribeResponse)

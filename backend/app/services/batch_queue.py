@@ -19,7 +19,7 @@ from app.schemas.voice_studio import (
     TaskStatus,
     now_iso,
 )
-from app.services import cosyvoice_constraints, database as db, engine_registry, engine_request_builder, settings_store, voice_store
+from app.services import cosyvoice_constraints, database as db, emotion_reference, engine_registry, engine_request_builder, settings_store, voice_store
 from app.services.paths import PROJECT_ROOT, expand_path
 
 _queue: asyncio.Queue[str] | None = None
@@ -175,6 +175,7 @@ def _result_segments(req: BatchGenerateRequest) -> list[BatchSegmentResult]:
 async def submit(payload: Any) -> BatchTask:
     global _queue
     req = normalize_payload(payload)
+    emotion_reference.validate_batch_request(req)
     _validate_cosyvoice_zero_shot_references(req)
     start_worker()
     batch = BatchTask(
@@ -299,10 +300,15 @@ def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
             ref_text=ref_text,
         )
     if req.engine_id == "indextts-v2":
+        emotion_reference_audio = emotion_reference.resolve_batch_common(
+            engine_id=req.engine_id,
+            parameters=req.parameters,
+        )
         return engine_request_builder.build_indextts_v2_batch_common_kwargs(
             values,
             parameters=req.parameters,
             reference_audio=ref,
+            emotion_reference_audio=emotion_reference_audio,
             language=req.language,
             model_dir=str(settings_store.model_path(req.engine_id)),
         )
@@ -333,6 +339,10 @@ def _common_kwargs(req: BatchGenerateRequest) -> dict[str, Any]:
 
 def _runner_segments(req: BatchGenerateRequest, batch: BatchTask, output_dir: Path) -> list[dict[str, Any]]:
     runner_segments = []
+    common_emotion_reference = emotion_reference.resolve_batch_common(
+        engine_id=req.engine_id,
+        parameters=req.parameters,
+    )
     for index, segment in enumerate(req.segments):
         result = batch.segments[index]
         output_path = output_dir / (result.audio or f"{result.segment_id}.{req.output_format}")
@@ -371,6 +381,16 @@ def _runner_segments(req: BatchGenerateRequest, batch: BatchTask, output_dir: Pa
             "ddpm_steps": None if req.engine_id == "qwen3-tts-mlx-0.6b" else segment.parameters.get("ddpm_steps"),
         }
         params.update({key: value for key, value in explicit_params.items() if value is not None})
+        segment_emotion_reference = emotion_reference.resolve_batch_segment(
+            engine_id=req.engine_id,
+            common_parameters=req.parameters,
+            common_audio_path=common_emotion_reference,
+            segment_parameters=segment.parameters,
+        )
+        if segment_emotion_reference.overrides_common:
+            params["emotion_reference_audio"] = segment_emotion_reference.audio_path
+            if segment_emotion_reference.clears_emotion:
+                params["emotion"] = None
         runner_segments.append(
             {
                 "segment_id": result.segment_id,

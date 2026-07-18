@@ -354,11 +354,13 @@ def build_indextts_v2_single_kwargs(
     output_path: str,
     *,
     reference_audio: str | None,
+    emotion_reference_audio: str | None,
     model_dir: str,
 ) -> dict[str, Any]:
     return {
         "text": req.text,
         "reference_audio": reference_audio,
+        "emotion_reference_audio": emotion_reference_audio,
         "output_path": output_path,
         "model_dir": model_dir,
         "temperature": req.temperature,
@@ -383,11 +385,13 @@ def build_indextts_v2_batch_common_kwargs(
     *,
     parameters: dict[str, Any],
     reference_audio: str | None,
+    emotion_reference_audio: str | None,
     language: str,
     model_dir: str,
 ) -> dict[str, Any]:
     common = {
         "reference_audio": reference_audio,
+        "emotion_reference_audio": emotion_reference_audio,
         "language": language,
         "model_dir": model_dir,
     }
@@ -566,6 +570,6 @@ def _indextts_batch_emotion(parameters: dict[str, Any], values: dict[str, Any]) 
     mode = parameters.get("emotion_mode")
     if mode == "emotion_vector":
         return parameters.get("emotion_values") or values.get("emotion")
-    if mode == "follow_reference":
+    if mode in {"follow_reference", "emotion_reference"}:
         return None
     return values.get("emotion")
