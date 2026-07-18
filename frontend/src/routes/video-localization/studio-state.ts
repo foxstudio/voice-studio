@@ -196,7 +196,7 @@ export function resolveTrackStates(value: unknown): VideoLocalizationTrackStates
 		defaults[key] = {
 			muted: solo ? false : track.muted === true,
 			solo,
-			volume: clampNumber(track.volume, 0, 2, 1),
+			volume: clampNumber(track.volume, 0, 4, 1),
 			label: typeof track.label === 'string' ? track.label : undefined,
 			locked: track.locked === true
 		};

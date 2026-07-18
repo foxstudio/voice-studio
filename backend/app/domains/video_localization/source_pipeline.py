@@ -12,7 +12,7 @@ from fastapi import UploadFile
 
 from app.domains.video_localization import cues as cue_tools
 from app.domains.video_localization import media_assets
-from app.domains.video_localization import project_manifest, subtitle_segmentation, transcription
+from app.domains.video_localization import project_manifest, speakers, subtitle_segmentation, transcription
 from app.errors import AppException
 from app.domains.video_localization.schemas import VideoLocalizationCue, VideoLocalizationDraft, now_iso
 from app.services import asr_service, audio_tools
@@ -44,6 +44,9 @@ _ENGLISH_ASR_METADATA_KEYS = {
     "english_asr_pipeline_version",
     "english_asr_segmentation_profile_id",
     "english_asr_completed_at",
+    "english_asr_diarization_status",
+    "english_asr_diarization_engine_id",
+    "english_asr_speaker_count",
 }
 
 
@@ -283,6 +286,7 @@ def with_english_asr(
     progress_callback: Callable[[float, str], None] | None = None,
     is_cancelled: Callable[[], bool] | None = None,
     preview_callback: Callable[[str, list[dict]], None] | None = None,
+    diarization_engine_id: str | None = None,
 ) -> VideoLocalizationDraft:
     resolved_track_id = validate_english_asr_source(draft, source_track_id)
     if resolved_track_id == "dub":
@@ -336,6 +340,7 @@ def with_english_asr(
             progress_callback=progress_callback,
             is_cancelled=is_cancelled,
             preview_callback=preview_callback,
+            diarization_engine_id=diarization_engine_id,
         )
     finally:
         if resolved_track_id == "dub":
@@ -347,6 +352,13 @@ def with_english_asr(
         existing_cue_ids={cue.cue_id for cue in preserved_cues},
         profile_id=transcript.segmentation_profile_id,
     )
+    next_speakers, generated_cues, bound_clusters = speakers.bind_diarization_clusters(
+        draft,
+        generated_cues,
+        transcript.speaker_clusters,
+    )
+    if bound_clusters != transcript.speaker_clusters:
+        transcript = transcript.model_copy(update={"speaker_clusters": bound_clusters})
     if not generated_cues:
         raise AppException(
             400, "VIDEO_LOCALIZATION_ASR_EMPTY", "语音识别没有返回有效的字幕文本，请检查音轨内容或更换识别引擎后重试。"
@@ -390,6 +402,9 @@ def with_english_asr(
                 "english_asr_segment_count": len(generated_cues),
                 "english_asr_raw_segment_count": len(transcript.segments),
                 "english_asr_word_count": len(transcript.words),
+                "english_asr_diarization_status": transcript.diarization_status,
+                "english_asr_diarization_engine_id": transcript.diarization_engine_id,
+                "english_asr_speaker_count": len(transcript.speaker_clusters),
                 "english_asr_review_status": transcript.review_status,
                 "english_asr_alignment_status": transcript.alignment_status,
                 "english_asr_timing_confidence": transcript.timing_confidence,
@@ -412,6 +427,7 @@ def with_english_asr(
                 update={"detected_source_language": transcript.language}
             ),
             "transcription": transcript,
+            "speakers": next_speakers,
             "cues": _ordered_cues([*preserved_cues, *generated_cues]),
         }
     )
@@ -436,6 +452,13 @@ def merge_english_asr_result(
         raise AppException(
             400, "VIDEO_LOCALIZATION_ASR_EMPTY", "语音识别没有返回有效的字幕文本，请检查音轨内容或更换识别引擎后重试。"
         )
+    next_speakers, generated_cues, bound_clusters = speakers.bind_diarization_clusters(
+        latest,
+        generated_cues,
+        transcript.speaker_clusters,
+    )
+    if bound_clusters != transcript.speaker_clusters:
+        transcript = transcript.model_copy(update={"speaker_clusters": bound_clusters})
 
     result_metadata = result.source_media.metadata
     metadata = {
@@ -451,6 +474,7 @@ def merge_english_asr_result(
                 update={"detected_source_language": transcript.language}
             ),
             "transcription": transcript,
+            "speakers": next_speakers,
             "cues": _ordered_cues([*preserved_cues, *generated_cues]),
         }
     )

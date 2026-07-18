@@ -197,6 +197,10 @@ def cues_from_transcription(
         cue_id = _next_cue_id(existing_cue_ids, cue_index)
         text = _join_words(selected)
         raw_segment_ids = {word.segment_id for word in selected}
+        speaker_cluster_ids = {
+            word.speaker_cluster_id for word in selected if word.speaker_cluster_id
+        }
+        speaker_cluster_id = next(iter(speaker_cluster_ids)) if len(speaker_cluster_ids) == 1 else None
         raw_text = " ".join(
             segment.raw_text for segment in transcription.segments if segment.segment_id in raw_segment_ids
         ).strip()
@@ -205,9 +209,14 @@ def cues_from_transcription(
             f"engine:{transcription.engine_id}",
             f"timing:{_cue_timing_confidence(selected)}",
             f"segmentation:{profile.profile_id}",
-            "needs_speaker_assignment",
             "needs_zh_localization",
         ]
+        if speaker_cluster_id:
+            flags.append(f"speaker-cluster:{speaker_cluster_id}")
+        else:
+            flags.append("needs_speaker_assignment")
+        if any(word.has_speaker_overlap for word in selected):
+            flags.extend(["speaker_overlap_detected", "speaker_review_required"])
         if transcription.review_status in {"completed", "partial"}:
             flags.append("llm_transcript_reviewed")
         if audio_analysis_available:
@@ -230,6 +239,7 @@ def cues_from_transcription(
         cues.append(
             VideoLocalizationCue(
                 cue_id=cue_id,
+                speaker_cluster_id=speaker_cluster_id,
                 start_ms=selected[0].start_ms,
                 end_ms=selected[-1].end_ms,
                 en_subtitle_text=text,
@@ -407,14 +417,17 @@ def _optimal_boundaries(
     costs[0] = 0.0
 
     for end in range(1, count + 1):
-        if end < count and _boundary_splits_atomic_token(words, end):
+        speaker_change = end < count and _speaker_changes_at(words, end)
+        if end < count and not speaker_change and _boundary_splits_atomic_token(words, end):
             continue
-        if end < count and _boundary_forbidden_by_review(words, end, boundary_reviews):
+        if end < count and not speaker_change and _boundary_forbidden_by_review(words, end, boundary_reviews):
             continue
         for start in range(max(0, end - search_max_words), end):
             if not math.isfinite(costs[start]):
                 continue
             segment = words[start:end]
+            if _segment_crosses_speakers(segment):
+                continue
             duration_ms = segment[-1].end_ms - segment[0].start_ms
             if duration_ms > search_max_duration_ms and len(segment) > 1:
                 continue
@@ -451,8 +464,13 @@ def _fallback_boundaries(
     valid = [
         end
         for end in range(1, count)
-        if not _boundary_splits_atomic_token(words, end)
-        and not _boundary_forbidden_by_review(words, end, boundary_reviews)
+        if (
+            _speaker_changes_at(words, end)
+            or (
+                not _boundary_splits_atomic_token(words, end)
+                and not _boundary_forbidden_by_review(words, end, boundary_reviews)
+            )
+        )
     ]
     boundaries: list[int] = []
     start = 0
@@ -470,6 +488,18 @@ def _fallback_boundaries(
         start = selected
     boundaries.append(count)
     return boundaries
+
+
+def _speaker_changes_at(words: list[VideoLocalizationAlignedWord], end: int) -> bool:
+    if end <= 0 or end >= len(words):
+        return False
+    left = words[end - 1].speaker_cluster_id
+    right = words[end].speaker_cluster_id
+    return bool(left and right and left != right)
+
+
+def _segment_crosses_speakers(words: list[VideoLocalizationAlignedWord]) -> bool:
+    return len({word.speaker_cluster_id for word in words if word.speaker_cluster_id}) > 1
 
 
 def _segment_cost(

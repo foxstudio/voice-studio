@@ -50,6 +50,11 @@ export type GenerateStoreState = {
 	requestSource: string;
 	requestProjectId: string;
 	requestSegmentId: string;
+	requestLocalizedSubtitleId: string;
+	requestCueId: string;
+	requestBindToVideoLocalization: boolean;
+	requestReferenceLicenseStatus: string | null;
+	requestReferenceTags: string[];
 	engineId: string;
 	/** Model-specific settings that are not shared legacy TTS fields. */
 	engineParameters: Record<string, unknown>;
@@ -295,6 +300,11 @@ function createInitialState(): GenerateStoreState {
 		requestSource: '',
 		requestProjectId: '',
 		requestSegmentId: '',
+		requestLocalizedSubtitleId: '',
+		requestCueId: '',
+		requestBindToVideoLocalization: false,
+		requestReferenceLicenseStatus: null,
+		requestReferenceTags: [],
 		engineId: 'indextts-v2',
 		engineParameters: {},
 		engineUiStateById: {},
@@ -501,11 +511,15 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 		source: state.requestSource || null,
 		project_id: state.requestProjectId || null,
 		segment_id: state.requestSegmentId || null,
+		localized_subtitle_id: state.requestLocalizedSubtitleId || null,
+		cue_id: state.requestCueId || null,
+		bind_to_video_localization:
+			state.requestSource === 'video_localization' && state.requestBindToVideoLocalization,
 		voice_id: useLibraryReference ? state.voiceId || null : null,
 		voice_source: usesReferenceVoice ? (useCustomReference ? 'reference_audio' : 'voice_library') : undefined,
 		reference_audio_path: useCustomReference ? state.customVoiceReferenceAudioPath || null : null,
-		reference_audio_license_status: useCustomReference ? 'self_voice' : null,
-		reference_audio_tags: useCustomReference ? ['custom-reference'] : [],
+		reference_audio_license_status: useCustomReference ? state.requestReferenceLicenseStatus ?? 'self_voice' : null,
+		reference_audio_tags: useCustomReference ? (state.requestReferenceTags.length ? state.requestReferenceTags : ['custom-reference']) : [],
 		ref_text:
 			useCustomReference && state.customVoiceTranscript.trim()
 				? state.customVoiceTranscript.trim()
@@ -573,7 +587,11 @@ function createRequest(state: GenerateStoreState): GenerateRequest {
 	};
 }
 
-function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<GenerateStoreState> {
+function applyRequest(
+	state: GenerateStoreState,
+	req: GenerateRequest,
+	options: { preserveVideoLocalizationBinding?: boolean } = {}
+): Partial<GenerateStoreState> {
 	const engineDefaults = getEngineDefaults(state, req.engine_id);
 	const isMimoEngineRequest = isMimoEngine(req.engine_id);
 
@@ -586,6 +604,12 @@ function applyRequest(state: GenerateStoreState, req: GenerateRequest): Partial<
 		requestSource: req.source ?? '',
 		requestProjectId: req.project_id ?? '',
 		requestSegmentId: req.segment_id ?? '',
+		requestLocalizedSubtitleId: req.localized_subtitle_id ?? '',
+		requestCueId: req.cue_id ?? '',
+		requestBindToVideoLocalization:
+			options.preserveVideoLocalizationBinding !== false && Boolean(req.bind_to_video_localization),
+		requestReferenceLicenseStatus: req.reference_audio_license_status ?? null,
+		requestReferenceTags: [...(req.reference_audio_tags ?? [])],
 		voiceSource: req.reference_audio_path ? 'reference_audio' : 'voice_library',
 		voiceId: req.voice_id ?? '',
 		customVoiceFileName: req.reference_audio_path ? req.reference_audio_path.split('/').pop() ?? '自定义参考音频' : '',
@@ -674,10 +698,10 @@ export function createGenerateStore() {
 		toRequest() {
 			return createRequest(get(store));
 		},
-		fromRequest(req: GenerateRequest) {
+		fromRequest(req: GenerateRequest, options: { preserveVideoLocalizationBinding?: boolean } = {}) {
 			store.update((state) => ({
 				...state,
-				...applyRequest(state, req)
+				...applyRequest(state, req, options)
 			}));
 		},
 		reset() {

@@ -386,6 +386,7 @@ describe('generate store custom reference voice requests', () => {
 
 	it('preserves video localization context across request restore', () => {
 		const store = createGenerateStore();
+		store.update((state) => ({ ...state, engines: [engineDetail('indextts-v2')] }));
 
 		store.fromRequest({
 			text: '一九九二年，这件事，改变了一切。',
@@ -393,7 +394,12 @@ describe('generate store custom reference voice requests', () => {
 			source: 'video_localization',
 			project_id: 'project-1',
 			segment_id: 'cue_0001',
+			localized_subtitle_id: 'localized_0001',
+			cue_id: 'cue_0001',
+			bind_to_video_localization: true,
 			reference_audio_path: '/tmp/reference.wav',
+			reference_audio_license_status: 'project_source_audio',
+			reference_audio_tags: ['video-localization', 'managed-reference'],
 			ref_text: 'In 1992, this changed everything.',
 			language: 'zh',
 			emotion_mode: 'follow_reference',
@@ -426,5 +432,13 @@ describe('generate store custom reference voice requests', () => {
 		expect(request.source).toBe('video_localization');
 		expect(request.project_id).toBe('project-1');
 		expect(request.segment_id).toBe('cue_0001');
+		expect(request.localized_subtitle_id).toBe('localized_0001');
+		expect(request.cue_id).toBe('cue_0001');
+		expect(request.bind_to_video_localization).toBe(true);
+		expect(request.reference_audio_license_status).toBe('project_source_audio');
+		expect(request.reference_audio_tags).toEqual(['video-localization', 'managed-reference']);
+
+		store.fromRequest(request, { preserveVideoLocalizationBinding: false });
+		expect(store.toRequest().bind_to_video_localization).toBe(false);
 	});
 });

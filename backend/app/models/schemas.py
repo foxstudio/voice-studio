@@ -617,6 +617,10 @@ class GenerateRequest(BaseModel):
     source: str | None = None
     project_id: str | None = None
     segment_id: str | None = None
+    localized_subtitle_id: str | None = None
+    cue_id: str | None = None
+    generation_id: str | None = None
+    bind_to_video_localization: bool = False
     input_mode: Literal["text", "audio", "image"] | None = None
     input_assets: list[EngineInputAsset] = Field(default_factory=list)
     engine_parameters: dict[str, Any] = Field(default_factory=dict)
@@ -929,11 +933,15 @@ class BatchTask(BaseModel):
 
 class GenerationTask(BaseModel):
     task_id: str = Field(default_factory=new_id)
+    generation_id: str | None = None
     task_type: Literal["single", "segment", "batch", "export"] = "single"
     engine_id: str
     voice_id: str | None = None
     project_id: str | None = None
     segment_id: str | None = None
+    localized_subtitle_id: str | None = None
+    cue_id: str | None = None
+    bind_to_video_localization: bool = False
     longform_task_id: str | None = None
     longform_segment_index: int | None = None
     longform_segment_count: int | None = None
@@ -964,11 +972,15 @@ class GenerationTask(BaseModel):
 class HistoryItem(BaseModel):
     result_id: str = Field(default_factory=new_id)
     task_id: str
+    generation_id: str | None = None
     engine_id: str
     voice_id: str | None = None
     voice_name: str | None = None
     project_id: str | None = None
     segment_id: str | None = None
+    localized_subtitle_id: str | None = None
+    cue_id: str | None = None
+    bind_to_video_localization: bool = False
     longform_task_id: str | None = None
     longform_segment_index: int | None = None
     longform_segment_count: int | None = None
@@ -1116,11 +1128,44 @@ class VideoLocalizationTimeRange(VideoLocalizationExtensibleModel):
 class VideoLocalizationSpeaker(VideoLocalizationExtensibleModel):
     speaker_id: str
     display_name: str | None = None
+    acoustic_cluster_ids: list[str] = Field(default_factory=list)
+    identity_candidates: list["VideoLocalizationSpeakerIdentityCandidate"] = Field(default_factory=list)
     route: Literal["clone_from_source", "preset_tts", "preserve_original_audio", "manual_review"] = "manual_review"
     reference_clip_ids: list[str] = Field(default_factory=list)
     time_ranges: list[VideoLocalizationTimeRange] = Field(default_factory=list)
     review_status: Literal["needs_review", "ready", "blocked", "locked"] = "needs_review"
     notes: str | None = None
+
+
+class VideoLocalizationSpeakerIdentityCandidate(VideoLocalizationExtensibleModel):
+    name: str
+    confidence: float = Field(ge=0, le=1)
+    status: Literal["candidate", "confirmed", "rejected"] = "candidate"
+    reason: str = ""
+    evidence_source_ids: list[str] = Field(default_factory=list)
+
+
+class VideoLocalizationSpeakerCluster(VideoLocalizationExtensibleModel):
+    cluster_id: str
+    source_label: str
+    source_engine_id: str
+    business_speaker_id: str | None = None
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(ge=0)
+    duration_ms: int = Field(ge=0)
+    segment_count: int = Field(ge=1)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    merge_status: Literal["original", "auto_merged", "needs_review"] = "original"
+    merged_source_labels: list[str] = Field(default_factory=list)
+    time_ranges: list[VideoLocalizationTimeRange] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_time_range(self):
+        if self.end_ms < self.start_ms:
+            raise PydanticCustomError("invalid_time_range", "end_ms must be greater than or equal to start_ms")
+        if self.duration_ms != self.end_ms - self.start_ms:
+            raise PydanticCustomError("invalid_duration", "duration_ms must match end_ms - start_ms")
+        return self
 
 
 class VideoLocalizationSpeakerCreate(BaseModel):
@@ -1205,6 +1250,9 @@ class VideoLocalizationTranscriptSegment(VideoLocalizationExtensibleModel):
     start_ms: int = Field(ge=0)
     end_ms: int = Field(ge=0)
     raw_text: str
+    speaker_cluster_id: str | None = None
+    speaker_confidence: float | None = Field(default=None, ge=0, le=1)
+    has_speaker_overlap: bool = False
     corrected_text: str | None = None
     review_candidate_text: str | None = None
     review_rejection_reason: str | None = None
@@ -1267,6 +1315,9 @@ class VideoLocalizationAlignedWord(VideoLocalizationExtensibleModel):
     word_id: str
     segment_id: str
     text: str
+    speaker_cluster_id: str | None = None
+    speaker_confidence: float | None = Field(default=None, ge=0, le=1)
+    has_speaker_overlap: bool = False
     start_ms: int = Field(ge=0)
     end_ms: int = Field(ge=0)
     timing_confidence: Literal["high", "medium", "low"] = "low"
@@ -1345,6 +1396,11 @@ class VideoLocalizationTranscriptionState(VideoLocalizationExtensibleModel):
     corrected_text: str = ""
     segments: list[VideoLocalizationTranscriptSegment] = Field(default_factory=list)
     words: list[VideoLocalizationAlignedWord] = Field(default_factory=list)
+    diarization_status: Literal["not_run", "completed", "partial", "failed", "skipped"] = "not_run"
+    diarization_engine_id: str | None = None
+    diarization_model_id: str | None = None
+    diarization_error: str | None = None
+    speaker_clusters: list[VideoLocalizationSpeakerCluster] = Field(default_factory=list)
     review_status: Literal["not_configured", "skipped", "completed", "partial", "failed"] = "not_configured"
     review_profile_id: str | None = None
     review_model_id: str | None = None
@@ -1374,6 +1430,7 @@ class VideoLocalizationTranscriptionState(VideoLocalizationExtensibleModel):
 class VideoLocalizationCue(VideoLocalizationExtensibleModel):
     cue_id: str
     speaker_id: str | None = None
+    speaker_cluster_id: str | None = None
     start_ms: int | None = Field(default=None, ge=0)
     end_ms: int | None = Field(default=None, ge=0)
     audio_route: Literal["clone_from_source", "preset_tts", "preserve_original_audio", "manual_review"] = "manual_review"
@@ -1382,6 +1439,7 @@ class VideoLocalizationCue(VideoLocalizationExtensibleModel):
     tts_recommended_text: str | None = None
     reference_clip_id: str | None = None
     tts_result_id: str | None = None
+    tts_generation_id: str | None = None
     tts_audio_path: str | None = None
     tts_batch_task_id: str | None = None
     tts_batch_status: str | None = None
@@ -1433,6 +1491,7 @@ class VideoLocalizationSubtitleCue(VideoLocalizationExtensibleModel):
     text: str = Field(min_length=1)
     tts_text: str | None = None
     tts_result_id: str | None = None
+    tts_generation_id: str | None = None
     tts_audio_path: str | None = None
     tts_batch_task_id: str | None = None
     tts_batch_status: str | None = None

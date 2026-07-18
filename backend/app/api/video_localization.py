@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 from typing import Literal
 
-from fastapi import APIRouter, Body, File, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, File, Query, UploadFile
 from pydantic import BaseModel
 
-from app.api.video_localization_responses import audio_file_response, download_file_response, json_attachment, require_resource, srt_attachment
+from app.api.video_localization_responses import audio_file_response, download_file_response, json_attachment, media_file_response, require_resource, srt_attachment
 from app.domains.video_localization import operation_queue
 from app.domains.video_localization import service as video_localization_service
 from app.errors import AppException
@@ -24,7 +24,7 @@ from app.domains.video_localization.schemas import (
     VideoLocalizationSubtitleCueUpdate,
     VideoLocalizationSubtitleImportRequest,
 )
-from app.schemas.voice_studio import Project
+from app.schemas.voice_studio import GenerateRequest, Project
 from app.services import batch_queue, waveform_cache
 
 router = APIRouter()
@@ -34,6 +34,11 @@ class WaveformPeaksResponse(BaseModel):
     peaks: list[float]
     duration: float
     bins: int
+
+
+class TtsHistoryTimelineApplyRequest(BaseModel):
+    segment_id: str
+    clip_id: str | None = None
 
 
 @router.post("/video-localization/sync-projects", response_model=list[Project])
@@ -72,8 +77,14 @@ async def open_video_localization_project_directory(project_id: str):
 
 
 @router.post("/{project_id}/video-localization/source-media", response_model=VideoLocalizationDraft)
-async def import_video_localization_source_media(project_id: str, file: UploadFile = File(...)):
+async def import_video_localization_source_media(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+):
     updated = await video_localization_service.import_source_media(project_id, file)
+    if updated is not None:
+        background_tasks.add_task(video_localization_service.prepare_source_preview_video, project_id)
     return require_resource(updated)
 
 
@@ -81,6 +92,22 @@ async def import_video_localization_source_media(project_id: str, file: UploadFi
 async def get_video_localization_source_video(project_id: str):
     video_path = video_localization_service.source_video_file(project_id)
     return audio_file_response(video_path, code="VIDEO_LOCALIZATION_SOURCE_VIDEO_NOT_FOUND", message="Source video file not found")
+
+
+@router.get("/{project_id}/video-localization/source-media/preview-video")
+async def get_video_localization_source_preview_video(project_id: str):
+    video_path = video_localization_service.source_preview_video_file(project_id)
+    return media_file_response(video_path, code="VIDEO_LOCALIZATION_SOURCE_VIDEO_NOT_FOUND", message="Source video file not found")
+
+
+@router.post("/{project_id}/video-localization/source-media/preview-video")
+async def prepare_video_localization_source_preview_video(project_id: str):
+    video_path = await asyncio.to_thread(video_localization_service.ensure_source_preview_video, project_id)
+    return require_resource(
+        {"status": "ready", "profile": video_localization_service.source_preview_profile(video_path)},
+        code="VIDEO_LOCALIZATION_SOURCE_VIDEO_NOT_FOUND",
+        message="Source video file not found",
+    )
 
 
 @router.get("/{project_id}/video-localization/source-media/audio")
@@ -246,6 +273,12 @@ async def submit_video_localization_tts_batch(project_id: str):
         raise AppException(400, "VIDEO_LOCALIZATION_TTS_BATCH_INVALID", str(exc)) from exc
 
 
+@router.post("/{project_id}/video-localization/tts/handoff/{segment_id}", response_model=GenerateRequest)
+async def prepare_video_localization_tts_handoff(project_id: str, segment_id: str):
+    request = await asyncio.to_thread(video_localization_service.build_single_tts_handoff, project_id, segment_id)
+    return require_resource(request)
+
+
 @router.post("/{project_id}/video-localization/tts/batch/{batch_task_id}/sync", response_model=VideoLocalizationDraft)
 async def sync_video_localization_tts_batch(project_id: str, batch_task_id: str):
     updated = video_localization_service.sync_tts_batch_results(project_id, batch_task_id)
@@ -274,6 +307,27 @@ async def apply_video_localization_candidate(project_id: str, candidate_id: str)
 async def get_video_localization_timeline_clip_audio(project_id: str, clip_id: str):
     audio_path = video_localization_service.timeline_clip_audio_file(project_id, clip_id)
     return audio_file_response(audio_path, code="VIDEO_LOCALIZATION_TIMELINE_CLIP_AUDIO_NOT_FOUND", message="Timeline clip audio not found")
+
+
+@router.post("/{project_id}/video-localization/timeline-clips/{clip_id}/history/{result_id}/apply", response_model=VideoLocalizationDraft)
+async def apply_video_localization_history_to_timeline_clip(project_id: str, clip_id: str, result_id: str):
+    updated = video_localization_service.apply_tts_history_to_timeline_clip(project_id, clip_id, result_id)
+    return require_resource(updated)
+
+
+@router.post("/{project_id}/video-localization/timeline-clips/history/{result_id}/apply", response_model=VideoLocalizationDraft)
+async def apply_video_localization_history_to_timeline(
+    project_id: str,
+    result_id: str,
+    payload: TtsHistoryTimelineApplyRequest,
+):
+    updated = video_localization_service.apply_tts_history_to_timeline(
+        project_id,
+        result_id,
+        segment_id=payload.segment_id,
+        clip_id=payload.clip_id,
+    )
+    return require_resource(updated)
 
 
 @router.get("/{project_id}/video-localization/timeline-clips/{clip_id}/waveform", response_model=WaveformPeaksResponse)

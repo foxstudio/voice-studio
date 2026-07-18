@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -9,7 +10,7 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-from app.domains.video_localization import exporting, subtitles, tts_pipeline
+from app.domains.video_localization import exporting, subtitles, tts_orchestration, tts_pipeline
 from app.domains.video_localization.schemas import (
     BatchSegmentResult,
     BatchTask,
@@ -20,6 +21,7 @@ from app.domains.video_localization.schemas import (
     VideoLocalizationSubtitleCue,
 )
 from app.errors import AppException
+from app.services import audio_tools, voice_store
 
 
 def _reference(tmp_path: Path) -> VideoLocalizationReferenceClip:
@@ -82,6 +84,92 @@ def test_merged_localized_subtitle_enters_tts_as_one_authoritative_segment(tmp_p
     assert segment.parameters["source_end_ms"] == 2150
     assert segment.parameters["source_duration_ms"] == 2000
     assert segment.reference_audio_path == draft.reference_clips[0].audio_path
+
+
+def test_single_handoff_uses_managed_trimmed_vocals_and_localized_segment_id(tmp_path: Path, monkeypatch):
+    vocals = tmp_path / "vocals.wav"
+    vocals.write_bytes(b"vocals")
+    managed_source = tmp_path / "managed-source.wav"
+    managed_clip = tmp_path / "managed-clip.wav"
+    draft = VideoLocalizationDraft(
+        source_media={"duration_ms": 8_000},
+        stems={"separation_status": "completed", "vocals_clean_path": str(vocals)},
+        cues=[_cue("cue_0001", "speaker_a", 1_000, 2_800)],
+        localized_subtitles=[
+            VideoLocalizationSubtitleCue(
+                subtitle_id="localized_0001",
+                start_ms=1_000,
+                end_ms=2_800,
+                text="上屏字幕",
+                tts_text="配音台词",
+                source_cue_ids=["cue_0001"],
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        voice_store,
+        "ensure_managed_audio_file",
+        lambda *args, **kwargs: SimpleNamespace(file_id="source-file", path=str(managed_source), duration_ms=8_000),
+    )
+    monkeypatch.setattr(
+        voice_store,
+        "create_audio_clip",
+        lambda *args, **kwargs: {"path": str(managed_clip)},
+    )
+
+    request = tts_orchestration.build_single_handoff("project_001", draft, "localized_0001")
+
+    assert request.segment_id == "localized_0001"
+    assert request.localized_subtitle_id == "localized_0001"
+    assert request.cue_id == "cue_0001"
+    assert request.bind_to_video_localization is True
+    assert request.text == "配音台词"
+    assert request.reference_audio_path == str(managed_clip)
+    assert request.custom_reference_source_audio_path == str(managed_source)
+    assert request.custom_reference_trim_start_ms == 1_000
+    assert request.custom_reference_trim_end_ms == 2_800
+    assert request.ref_text == "Source cue_0001"
+    assert request.reference_audio_license_status == "本土化"
+
+
+def test_single_tts_result_aligns_first_effective_waveform_to_subtitle_in_point(tmp_path: Path):
+    audio_path = tmp_path / "leading-silence.wav"
+    audio = np.concatenate(
+        [
+            np.zeros(300, dtype=np.float32),
+            np.full(700, 0.4, dtype=np.float32),
+        ]
+    )
+    audio_tools.write_audio(audio_path, audio, 1000)
+    draft = VideoLocalizationDraft(
+        cues=[_cue("cue_0001", "speaker_a", 1000, 2000)],
+        localized_subtitles=[
+            VideoLocalizationSubtitleCue(
+                subtitle_id="localized_0001",
+                start_ms=1000,
+                end_ms=2000,
+                text="上屏字幕",
+                tts_text="配音台词",
+                source_cue_ids=["cue_0001"],
+            )
+        ],
+    )
+
+    synced = tts_pipeline.with_single_tts_result(
+        draft,
+        "localized_0001",
+        result_id="result-onset",
+        output_path=str(audio_path),
+        duration_ms=1000,
+        task_id="generation-onset",
+    )
+
+    clip = synced.timeline_clips[0]
+    assert clip["speech_onset_ms"] == pytest.approx(300, abs=20)
+    assert clip["source_start_ms"] == pytest.approx(220, abs=20)
+    assert clip["start_ms"] == pytest.approx(920, abs=20)
+    assert clip["start_ms"] + clip["speech_onset_ms"] - clip["source_start_ms"] == pytest.approx(1000, abs=1)
+    assert clip["source_end_ms"] == 1000
 
 
 def test_localized_subtitle_crossing_speakers_is_rejected(tmp_path: Path):

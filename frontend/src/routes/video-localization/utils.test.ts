@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { VideoLocalizationOperation } from '$lib/api/types';
-import { localizeVideoLocalizationError, operationStatusLabel, summarizeVideoLocalizationError } from './utils';
+import type { VideoLocalizationOperation, VideoLocalizationTimelineClip } from '$lib/api/types';
+import { localizeVideoLocalizationError, operationStatusLabel, summarizeVideoLocalizationError, timelineClipAudioUrl, timelineClipWaveformUrl } from './utils';
 
 describe('video localization error messages', () => {
 	it('localizes persisted English ASR errors', () => {
@@ -45,5 +45,22 @@ describe('video localization operation status', () => {
 		};
 
 		expect(operationStatusLabel(operation)).toBe('正在生成逐词时间码 · 58%');
+	});
+});
+
+describe('timeline clip media versions', () => {
+	it('changes audio and waveform URLs when a clip adopts another history result', () => {
+		const clip: VideoLocalizationTimelineClip = {
+			clip_id: 'clip_localized_0001',
+			track_id: 'dub',
+			audio_path: '/tmp/first.wav',
+			result_id: 'result-first'
+		};
+		const replaced = { ...clip, audio_path: '/tmp/second.wav', result_id: 'result-second' };
+
+		expect(timelineClipAudioUrl('project-1', clip)).toContain('v=result-first');
+		expect(timelineClipWaveformUrl('project-1', clip)).toContain('v=result-first');
+		expect(timelineClipWaveformUrl('project-1', replaced)).toContain('v=result-second');
+		expect(timelineClipWaveformUrl('project-1', replaced)).not.toBe(timelineClipWaveformUrl('project-1', clip));
 	});
 });

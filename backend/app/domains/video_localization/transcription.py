@@ -26,7 +26,7 @@ from app.domains.video_localization.schemas import (
     VideoLocalizationTranscriptionState,
 )
 from app.errors import AppException
-from app.services import asr_service, audio_tools, qwen_forced_aligner, settings_store
+from app.services import asr_service, audio_tools, qwen_forced_aligner, settings_store, speaker_diarization_service
 
 
 TRANSCRIPT_REVIEW_PROMPT_VERSION = "transcript-review-v2"
@@ -141,6 +141,7 @@ def transcribe_and_process(
     progress_callback: Callable[[float, str], None] | None = None,
     is_cancelled: Callable[[], bool] | None = None,
     preview_callback: Callable[[str, list[dict[str, Any]]], None] | None = None,
+    diarization_engine_id: str | None = None,
 ) -> VideoLocalizationTranscriptionState:
     pipeline_started_at = time.perf_counter()
     stage_timings: dict[str, dict[str, Any]] = {}
@@ -163,6 +164,37 @@ def transcribe_and_process(
         "duration_ms": _elapsed_ms(stage_started_at),
         "segment_count": len(segments),
     }
+    diarization: dict[str, Any] = {
+        "status": "not_run",
+        "engine_id": None,
+        "model_id": None,
+        "segments": [],
+        "clusters": [],
+        "quality_flags": [],
+        "error": None,
+    }
+    if diarization_engine_id:
+        _report_progress(progress_callback, 0.24, "正在区分说话人")
+        stage_started_at = time.perf_counter()
+        try:
+            if diarization_engine_id not in {"auto", speaker_diarization_service.ENGINE_ID}:
+                raise ValueError(f"Unsupported diarization engine: {diarization_engine_id}")
+            diarization = speaker_diarization_service.diarize(audio_path, is_cancelled=is_cancelled)
+            segments = speaker_diarization_service.assign_segments(segments, diarization["segments"])
+        except Exception as exc:
+            diarization = {
+                **diarization,
+                "status": "failed",
+                "engine_id": speaker_diarization_service.ENGINE_ID,
+                "model_id": speaker_diarization_service.MODEL_ID,
+                "error": str(exc),
+                "quality_flags": ["speaker_diarization_failed"],
+            }
+        stage_timings["diarization"] = {
+            "duration_ms": _elapsed_ms(stage_started_at),
+            "status": diarization["status"],
+            "cluster_count": len(diarization["clusters"]),
+        }
     _report_preview(preview_callback, "asr_draft", segments, corrected=False)
 
     _report_progress(progress_callback, 0.30, "正在判断是否需要联网核验")
@@ -212,6 +244,8 @@ def transcribe_and_process(
         reviewed_segments,
         language=resolved_language,
     )
+    if diarization["segments"]:
+        words = speaker_diarization_service.assign_words(words, diarization["segments"])
     stage_timings["alignment"] = {
         "duration_ms": _elapsed_ms(stage_started_at),
         "word_count": len(words),
@@ -266,6 +300,7 @@ def transcribe_and_process(
                 *alignment_meta["quality_flags"],
                 *boundary_meta["quality_flags"],
                 *boundary_review_meta["quality_flags"],
+                *diarization["quality_flags"],
             ]
         )
     )
@@ -285,6 +320,11 @@ def transcribe_and_process(
         corrected_text=corrected_text,
         segments=reviewed_segments,
         words=words,
+        diarization_status=diarization["status"],
+        diarization_engine_id=diarization["engine_id"],
+        diarization_model_id=diarization["model_id"],
+        diarization_error=diarization["error"],
+        speaker_clusters=diarization["clusters"],
         review_status=review_meta["status"],
         review_profile_id=review_meta.get("profile_id"),
         review_model_id=review_meta.get("model_id"),

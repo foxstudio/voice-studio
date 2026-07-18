@@ -234,6 +234,15 @@ def english_asr_summary(draft: VideoLocalizationDraft | None) -> dict:
         stages.get("boundary_review") if isinstance(stages.get("boundary_review"), dict) else {}
     )
     text_review_timing = stages.get("text_review") if isinstance(stages.get("text_review"), dict) else {}
+    transcription = draft.transcription
+    speaker_review_required = bool(
+        transcription
+        and (
+            any(cluster.merge_status == "needs_review" for cluster in transcription.speaker_clusters)
+            or "speaker_overlap_review_required" in transcription.quality_flags
+            or "speaker_cluster_review_required" in transcription.quality_flags
+        )
+    )
     summary = {
         "engine_id": draft.source_media.metadata.get("english_asr_engine_id"),
         "source_track_id": draft.source_media.metadata.get("english_asr_source_track_id"),
@@ -241,6 +250,14 @@ def english_asr_summary(draft: VideoLocalizationDraft | None) -> dict:
         or (draft.transcription.language if draft.transcription else None),
         "segment_count": draft.source_media.metadata.get("english_asr_raw_segment_count"),
         "cue_count": len(draft.cues),
+        "diarization_status": draft.source_media.metadata.get("english_asr_diarization_status")
+        or (transcription.diarization_status if transcription else "not_run"),
+        "diarization_engine_id": draft.source_media.metadata.get("english_asr_diarization_engine_id")
+        or (transcription.diarization_engine_id if transcription else None),
+        "speaker_count": draft.source_media.metadata.get("english_asr_speaker_count")
+        if draft.source_media.metadata.get("english_asr_speaker_count") is not None
+        else len(transcription.speaker_clusters) if transcription else 0,
+        "speaker_review_required": speaker_review_required,
         "audio_boundary_status": draft.source_media.metadata.get("english_asr_audio_boundary_status"),
         "audio_boundary_count": draft.source_media.metadata.get("english_asr_audio_boundary_count"),
         "audio_boundary_analysis_version": draft.source_media.metadata.get("english_asr_audio_boundary_analysis_version"),

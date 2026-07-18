@@ -175,7 +175,15 @@ export const Api = {
 	dismissLongform: (id: string) => api.delete<{ longform_task_id: string; status: string }>(`/longform/${id}`),
 	retryTask: (id: string) => api.post<{ task_id: string; status: string }>(`/tasks/${id}/retry`),
 	deleteTask: (id: string) => api.delete<{ task_id: string; status: string }>(`/tasks/${id}`),
-	history: () => api.get<HistoryItem[]>('/history'),
+	history: (params?: { limit?: number; offset?: number; project_id?: string; segment_id?: string; source?: string }) => {
+		const query = new URLSearchParams();
+		if (params?.limit !== undefined) query.set('limit', String(params.limit));
+		if (params?.offset !== undefined) query.set('offset', String(params.offset));
+		if (params?.project_id) query.set('project_id', params.project_id);
+		if (params?.segment_id) query.set('segment_id', params.segment_id);
+		if (params?.source) query.set('source', params.source);
+		return api.get<HistoryItem[]>(`/history${query.size ? `?${query.toString()}` : ''}`);
+	},
 	deleteHistory: (id: string) => api.delete<{ status: string }>(`/history/${id}`),
 	presets: () => api.get<PresetTemplate[]>('/presets'),
 	createPreset: (preset: PresetTemplateInput) => api.post<PresetTemplate>('/presets', preset),
@@ -219,8 +227,14 @@ export const Api = {
 		api.patch<VideoLocalizationDraft>(`/projects/${id}/video-localization/reference-clips/${referenceClipId}`, body),
 	deleteVideoLocalizationReference: (id: string, referenceClipId: string) => api.delete<VideoLocalizationDraft>(`/projects/${id}/video-localization/reference-clips/${referenceClipId}`),
 	applyVideoLocalizationCandidate: (id: string, candidateId: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/candidates/${candidateId}/apply`),
+	applyVideoLocalizationHistoryToTimelineClip: (id: string, clipId: string, resultId: string) =>
+		api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/timeline-clips/${encodeURIComponent(clipId)}/history/${encodeURIComponent(resultId)}/apply`),
+	applyVideoLocalizationHistoryToTimeline: (id: string, resultId: string, body: { segment_id: string; clip_id?: string | null }) =>
+		api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/timeline-clips/history/${encodeURIComponent(resultId)}/apply`, body),
 	generateVideoLocalizationChineseDraft: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/localize/zh`),
 	submitVideoLocalizationBatchTts: (id: string) => api.post<BatchTask>(`/projects/${id}/video-localization/tts/batch`),
+	prepareVideoLocalizationTtsHandoff: (id: string, segmentId: string) =>
+		api.post<GenerateRequest>(`/projects/${id}/video-localization/tts/handoff/${encodeURIComponent(segmentId)}`),
 	syncVideoLocalizationBatchTts: (id: string, batchId: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/tts/batch/${batchId}/sync`),
 	importVideoLocalizationSubtitles: (id: string, kind: 'en' | 'zh' | 'tts', body: VideoLocalizationSubtitleImportRequest) =>
 		api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/subtitles/${kind}/import`, body),

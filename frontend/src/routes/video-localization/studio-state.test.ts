@@ -9,13 +9,13 @@ describe('video localization track state', () => {
 		expect(states.localizedSubtitles).not.toHaveProperty('collapsed');
 	});
 
-	it('preserves positive track gain up to +6 dB', () => {
+	it('preserves positive track gain up to +12 dB', () => {
 		const states = resolveTrackStates({
 			original: { volume: 2 },
 			vocals: { volume: 8 }
 		});
 		expect(states.original.volume).toBe(2);
-		expect(states.vocals.volume).toBe(2);
+		expect(states.vocals.volume).toBe(4);
 	});
 
 	it('keeps mute and solo mutually exclusive while restoring all-track playback when solo is absent', () => {

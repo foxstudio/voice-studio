@@ -6,10 +6,13 @@ from typing import Any
 
 from app.errors import AppException
 from app.schemas.voice_studio import TimestampMode, TranscriptionRecord, TranscriptionSegment
-from app.services import engine_registry, faster_whisper_asr, mimo_client, qwen_forced_aligner, qwen_mlx_asr, settings_store
+from app.services import engine_registry, qwen_forced_aligner, settings_store
+from app.services.asr_providers.providers.builtins import providers as builtin_providers
+from app.services.asr_providers.registry import ProviderRegistry
 
 
-SUPPORTED_ENGINES = {"mimo-v2.5-asr", "qwen3-asr-mlx", "faster-whisper-turbo"}
+PROVIDERS = ProviderRegistry(builtin_providers())
+SUPPORTED_ENGINES = set(PROVIDERS.list_provider_ids())
 SUPPORTED_LANGUAGES = {"auto", "zh", "en"}
 SUPPORTED_SUFFIXES = {".wav", ".mp3"}
 
@@ -37,27 +40,26 @@ def ensure_engine_ready(engine_id: str) -> dict[str, Any]:
 
 def transcribe(*, engine_id: str, audio_path: str, language: str) -> dict[str, Any]:
     ensure_engine_ready(engine_id)
-    if engine_id == "mimo-v2.5-asr":
-        settings = settings_store.get()
-        return mimo_client.transcribe_audio(
-            base_url=settings.mimo_base_url,
-            api_key=settings_store.mimo_api_key() or "",
-            audio_path=audio_path,
-            language=language,
-        )
-    if engine_id == "qwen3-asr-mlx":
-        return qwen_mlx_asr.transcribe_audio(
-            audio_path=audio_path,
-            language=language,
-            model_path=str(settings_store.model_path(engine_id)),
-        )
-    if engine_id == "faster-whisper-turbo":
-        return faster_whisper_asr.transcribe_audio(
-            audio_path=audio_path,
-            language=language,
-            model_path=str(settings_store.model_path(engine_id)),
-        )
-    raise AppException(400, "ASR_ENGINE_UNSUPPORTED", f"Unsupported ASR engine: {engine_id}")
+    provider = PROVIDERS.get(engine_id)
+    if provider is None:
+        raise AppException(400, "ASR_ENGINE_UNSUPPORTED", f"Unsupported ASR engine: {engine_id}")
+    result = provider.transcribe(audio_path, language=language)
+    return {
+        "text": result.text,
+        "segments": [
+            {
+                "start_ms": item.start_ms,
+                "end_ms": item.end_ms,
+                "text": item.text,
+                "language": item.language,
+                **({"speaker_id": item.speaker_cluster} if item.speaker_cluster else {}),
+                **({"confidence": item.confidence} if item.confidence is not None else {}),
+            }
+            for item in result.segments
+        ],
+        "usage_seconds": result.metadata.get("usage_seconds"),
+        "provider_response_id": result.metadata.get("provider_response_id"),
+    }
 
 
 def _unavailable_codes_for(engine_id: str) -> dict[str, str]:

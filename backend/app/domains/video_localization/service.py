@@ -38,7 +38,7 @@ from app.domains.video_localization.schemas import (
     VideoLocalizationSubtitleCueUpdate,
     VideoLocalizationSubtitleImportRequest,
 )
-from app.services import llm_runtime, project_store
+from app.services import history_store, llm_runtime, project_store
 
 VIDEO_LOCALIZATION_KEY = draft_store.VIDEO_LOCALIZATION_KEY
 _DRAFT_WRITE_LOCK = threading.RLock()
@@ -368,6 +368,7 @@ def transcribe_english_source_audio(
     on_progress: Callable[[float, str], None] | None = None,
     on_preview: Callable[[str, list[dict]], None] | None = None,
     segmentation_profile_id: str = "generic_zh",
+    diarization_engine_id: str | None = None,
     commit_guard: Callable[
         [Callable[[], VideoLocalizationDraft | None]],
         tuple[bool, VideoLocalizationDraft | None],
@@ -389,6 +390,7 @@ def transcribe_english_source_audio(
         progress_callback=on_progress,
         is_cancelled=is_cancelled,
         preview_callback=on_preview,
+        diarization_engine_id=diarization_engine_id,
     )
 
     def commit_asr_result() -> VideoLocalizationDraft | None:
@@ -673,6 +675,14 @@ def build_tts_batch_request(project_id: str, engine_id: str = "indextts-v2") -> 
     )
 
 
+def build_single_tts_handoff(project_id: str, segment_id: str):
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id) or VideoLocalizationDraft()
+    return tts_orchestration.build_single_handoff(project_id, draft, segment_id)
+
+
 def mark_tts_batch_submitted(project_id: str, batch_task_id: str, cue_ids: list[str]) -> VideoLocalizationDraft | None:
     project = project_store.get_project(project_id)
     if not project:
@@ -716,6 +726,7 @@ def sync_single_tts_result(
     output_path: str,
     duration_ms: int | None,
     task_id: str | None = None,
+    generation_id: str | None = None,
 ) -> VideoLocalizationDraft | None:
     project = project_store.get_project(project_id)
     if not project:
@@ -734,6 +745,120 @@ def sync_single_tts_result(
             output_path=output_path,
             duration_ms=duration_ms,
             task_id=task_id,
+            generation_id=generation_id,
+        ),
+    )
+
+
+def apply_tts_history_to_timeline_clip(
+    project_id: str,
+    clip_id: str,
+    result_id: str,
+) -> VideoLocalizationDraft | None:
+    return apply_tts_history_to_timeline(
+        project_id,
+        result_id,
+        segment_id="",
+        clip_id=clip_id,
+    )
+
+
+def apply_tts_history_to_timeline(
+    project_id: str,
+    result_id: str,
+    *,
+    segment_id: str,
+    clip_id: str | None = None,
+) -> VideoLocalizationDraft | None:
+    project = project_store.get_project(project_id)
+    if not project:
+        return None
+    draft = get_video_localization(project_id)
+    if not draft:
+        return None
+
+    history = history_store.get(result_id)
+    if not history or not history_store.audio_path(result_id):
+        raise AppException(404, "VIDEO_LOCALIZATION_TTS_HISTORY_NOT_FOUND", "TTS history audio is not available")
+    if history.project_id != project_id or history.parameter_snapshot.get("source") != "video_localization":
+        raise AppException(400, "VIDEO_LOCALIZATION_TTS_HISTORY_PROJECT_MISMATCH", "该历史记录不属于当前视频本土化项目")
+
+    clip = next((dict(item) for item in draft.timeline_clips if item.get("clip_id") == clip_id), None) if clip_id else None
+    if clip_id and not clip:
+        raise AppException(404, "VIDEO_LOCALIZATION_TIMELINE_CLIP_NOT_FOUND", "Timeline clip not found")
+    if clip and clip.get("track_id", "dub") != "dub":
+        raise AppException(400, "VIDEO_LOCALIZATION_TIMELINE_CLIP_NOT_DUB", "Only dub clips can use TTS history")
+
+    target_segment_id = str(
+        segment_id
+        or (clip or {}).get("subtitle_id")
+        or (clip or {}).get("cue_id")
+        or ""
+    )
+    subtitle = next((item for item in draft.localized_subtitles if item.subtitle_id == target_segment_id), None)
+    cue = next((item for item in draft.cues if item.cue_id == target_segment_id), None)
+    if not subtitle and not cue and not clip:
+        raise AppException(404, "VIDEO_LOCALIZATION_TTS_SEGMENT_NOT_FOUND", "找不到要采用配音的字幕片段")
+
+    if not clip:
+        clip = next(
+            (
+                dict(item)
+                for item in draft.timeline_clips
+                if item.get("track_id", "dub") == "dub"
+                and (
+                    (subtitle and item.get("subtitle_id") == subtitle.subtitle_id)
+                    or (cue and not item.get("subtitle_id") and item.get("cue_id") == cue.cue_id)
+                )
+            ),
+            None,
+        )
+
+    subtitle_id = str((clip or {}).get("subtitle_id") or (subtitle.subtitle_id if subtitle else ""))
+    cue_id = str((clip or {}).get("cue_id") or (cue.cue_id if cue else ""))
+    if subtitle_id:
+        matches_clip = history.localized_subtitle_id == subtitle_id or history.segment_id == subtitle_id
+    else:
+        matches_clip = history.cue_id == cue_id or history.segment_id == cue_id
+    if not matches_clip:
+        raise AppException(400, "VIDEO_LOCALIZATION_TTS_HISTORY_SEGMENT_MISMATCH", "该历史声音与当前字幕片段不匹配，不能直接替换")
+
+    source_path = history_store.audio_path(result_id)
+    assert source_path is not None
+    adopted_path = media_assets.adopt_tts_audio(project_id, source_path, subtitle_id or cue_id, history.task_id or result_id)
+
+    working_draft = draft
+    if not clip:
+        used_ids = {str(item.get("clip_id") or "") for item in draft.timeline_clips}
+        base_clip_id = f"clip_{subtitle_id or cue_id}"
+        next_clip_id = base_clip_id
+        suffix = 2
+        while next_clip_id in used_ids:
+            next_clip_id = f"{base_clip_id}_{suffix}"
+            suffix += 1
+        source_cue_ids = list(dict.fromkeys(subtitle.source_cue_ids)) if subtitle else []
+        primary_cue_id = next(iter(source_cue_ids), subtitle.linked_cue_id if subtitle else cue_id)
+        clip = {
+            "clip_id": next_clip_id,
+            "track_id": "dub",
+            "subtitle_id": subtitle_id or None,
+            "cue_id": primary_cue_id,
+            "source_cue_ids": source_cue_ids,
+            "start_ms": subtitle.start_ms if subtitle else cue.start_ms,
+            "end_ms": subtitle.end_ms if subtitle else cue.end_ms,
+            "status": "ready",
+        }
+        working_draft = draft.model_copy(update={"timeline_clips": [*draft.timeline_clips, clip]})
+
+    return save_video_localization(
+        project_id,
+        tts_pipeline.with_applied_history_result(
+            working_draft,
+            str(clip["clip_id"]),
+            result_id=result_id,
+            output_path=str(adopted_path),
+            duration_ms=history.duration_ms,
+            generation_id=history.generation_id or history.task_id,
         ),
     )
 
@@ -784,6 +909,33 @@ def source_video_file(project_id: str) -> Path | None:
     if not draft:
         return None
     return audio_access.source_video_path(draft)
+
+
+def source_preview_video_file(project_id: str) -> Path | None:
+    source_path = source_video_file(project_id)
+    if not source_path:
+        return None
+    return media_assets.existing_editing_proxy(project_id, source_path) or source_path
+
+
+def ensure_source_preview_video(project_id: str) -> Path | None:
+    source_path = source_video_file(project_id)
+    if not source_path:
+        return None
+    return media_assets.ensure_editing_proxy(project_id, source_path)
+
+
+def prepare_source_preview_video(project_id: str) -> Path | None:
+    try:
+        return ensure_source_preview_video(project_id)
+    except AppException:
+        return None
+
+
+def source_preview_profile(video_path: Path | None) -> str:
+    if not video_path:
+        return "missing"
+    return media_assets.EDITING_PROXY_PROFILE if video_path.parent.name == "preview" else "source"
 
 
 def source_audio_file(project_id: str) -> Path | None:

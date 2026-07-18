@@ -3,7 +3,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import numpy as np
+
 from app.errors import AppException
+from app.services import audio_tools
 from app.domains.video_localization.schemas import (
     BatchGenerateRequest,
     BatchSegmentInput,
@@ -296,6 +299,7 @@ def with_synced_batch_results(draft: VideoLocalizationDraft, batch: BatchTask) -
             subtitle,
             output_path=str(segment.output_path),
             duration_ms=segment.duration_ms,
+            generation_id=batch.batch_task_id,
         )
     return draft.model_copy(
         update={
@@ -314,6 +318,7 @@ def with_single_tts_result(
     output_path: str,
     duration_ms: int | None,
     task_id: str | None = None,
+    generation_id: str | None = None,
 ) -> VideoLocalizationDraft:
     path = Path(output_path)
     if not path.exists():
@@ -322,7 +327,13 @@ def with_single_tts_result(
     subtitle = next((item for item in draft.localized_subtitles if item.subtitle_id == cue_id), None)
     if subtitle:
         next_subtitles = [
-            _subtitle_with_tts_audio(item, result_id=result_id, output_path=str(path), duration_ms=duration_ms)
+            _subtitle_with_tts_audio(
+                item,
+                result_id=result_id,
+                generation_id=generation_id or task_id,
+                output_path=str(path),
+                duration_ms=duration_ms,
+            )
             if item.subtitle_id == cue_id
             else item
             for item in draft.localized_subtitles
@@ -335,6 +346,7 @@ def with_single_tts_result(
                 subtitle,
                 output_path=str(path),
                 duration_ms=duration_ms,
+                generation_id=generation_id or task_id,
             ),
         }
         if task_id:
@@ -355,7 +367,15 @@ def with_single_tts_result(
         if cue.cue_id != cue_id:
             next_cues.append(cue)
             continue
-        next_cues.append(_cue_with_tts_audio(cue, result_id=result_id, output_path=str(path), duration_ms=duration_ms))
+        next_cues.append(
+            _cue_with_tts_audio(
+                cue,
+                result_id=result_id,
+                generation_id=generation_id or task_id,
+                output_path=str(path),
+                duration_ms=duration_ms,
+            )
+        )
         updated = True
 
     if not updated:
@@ -376,6 +396,11 @@ def with_single_tts_result(
             task_id=task_id,
             output_path=str(path),
             duration_ms=duration_ms,
+            generation_id=generation_id or task_id,
+            target_start_ms=next(
+                (item.start_ms for item in draft.cues if item.cue_id == cue_id),
+                None,
+            ),
         )
     return draft.model_copy(update=update)
 
@@ -413,8 +438,17 @@ def with_applied_generated_candidate(draft: VideoLocalizationDraft, candidate_id
         raise AppException(400, "VIDEO_LOCALIZATION_CANDIDATE_CUE_MISSING", "Generated candidate is not linked to a cue")
     duration_ms = _int_or_none(candidate.get("duration_ms"))
     result_id = str(candidate.get("result_id") or candidate_id)
+    generation_id = str(candidate.get("generation_id") or candidate.get("task_id") or "") or None
     next_cues = [
-        _cue_with_tts_audio(item, result_id=result_id, output_path=str(audio_path), duration_ms=duration_ms) if item.cue_id == cue_id else item
+        _cue_with_tts_audio(
+            item,
+            result_id=result_id,
+            generation_id=generation_id,
+            output_path=str(audio_path),
+            duration_ms=duration_ms,
+        )
+        if item.cue_id == cue_id
+        else item
         for item in draft.cues
     ]
     next_candidates = []
@@ -423,19 +457,16 @@ def with_applied_generated_candidate(draft: VideoLocalizationDraft, candidate_id
         if next_item.get("cue_id") == cue_id:
             next_item["selected"] = next_item.get("candidate_id") == candidate_id
         next_candidates.append(next_item)
-    clip_start = cue.start_ms or 0
-    clip_end = cue.end_ms or clip_start + (duration_ms or cue.source_duration_ms or 1800)
+    alignment = _speech_onset_alignment(str(audio_path), duration_ms, cue.start_ms)
     next_clip = {
         "clip_id": f"clip_{cue_id}",
         "cue_id": cue_id,
         "candidate_id": candidate_id,
         "track_id": "dub",
-        "start_ms": clip_start,
-        "end_ms": clip_end,
-        "source_start_ms": 0,
-        "source_end_ms": duration_ms,
+        "generation_id": generation_id,
         "audio_path": str(audio_path),
         "status": "ready",
+        **alignment,
     }
     replaced = False
     next_clips = []
@@ -451,6 +482,108 @@ def with_applied_generated_candidate(draft: VideoLocalizationDraft, candidate_id
     return draft.model_copy(update={"cues": next_cues, "generated_candidates": next_candidates, "timeline_clips": next_clips})
 
 
+def with_applied_history_result(
+    draft: VideoLocalizationDraft,
+    clip_id: str,
+    *,
+    result_id: str,
+    output_path: str,
+    duration_ms: int | None,
+    generation_id: str | None = None,
+) -> VideoLocalizationDraft:
+    """Apply an explicitly chosen historical render to one dub clip only."""
+    clip = next((dict(item) for item in draft.timeline_clips if item.get("clip_id") == clip_id), None)
+    if not clip:
+        raise AppException(404, "VIDEO_LOCALIZATION_TIMELINE_CLIP_NOT_FOUND", "Timeline clip not found")
+    if clip.get("track_id", "dub") != "dub":
+        raise AppException(400, "VIDEO_LOCALIZATION_TIMELINE_CLIP_NOT_DUB", "Only dub clips can use TTS history")
+    if not Path(output_path).exists():
+        raise AppException(400, "VIDEO_LOCALIZATION_TTS_AUDIO_NOT_FOUND", "TTS audio file not found")
+
+    subtitle_id = str(clip.get("subtitle_id") or "")
+    cue_id = str(clip.get("cue_id") or "")
+    subtitle = next((item for item in draft.localized_subtitles if item.subtitle_id == subtitle_id), None)
+    cue = next((item for item in draft.cues if item.cue_id == cue_id), None)
+    if not subtitle and not cue:
+        raise AppException(400, "VIDEO_LOCALIZATION_TIMELINE_CLIP_UNBOUND", "Dub clip is not linked to a subtitle")
+
+    target_start_ms = subtitle.start_ms if subtitle else cue.start_ms
+    alignment = _speech_onset_alignment(output_path, duration_ms, target_start_ms)
+    candidate = next(
+        (
+            dict(item)
+            for item in draft.generated_candidates
+            if str(item.get("result_id") or "") == result_id
+            and (not subtitle_id or str(item.get("subtitle_id") or "") == subtitle_id)
+        ),
+        None,
+    )
+    candidate_id = str(candidate.get("candidate_id") or "") if candidate else None
+    source_cue_ids = list(dict.fromkeys(subtitle.source_cue_ids)) if subtitle else []
+    primary_cue_id = next(iter(source_cue_ids), subtitle.linked_cue_id if subtitle else cue_id)
+
+    next_subtitles = [
+        _subtitle_with_tts_audio(
+            item,
+            result_id=result_id,
+            generation_id=generation_id,
+            output_path=output_path,
+            duration_ms=duration_ms,
+        )
+        if subtitle and item.subtitle_id == subtitle.subtitle_id
+        else item
+        for item in draft.localized_subtitles
+    ]
+    next_cues = [
+        _cue_with_tts_audio(
+            item,
+            result_id=result_id,
+            generation_id=generation_id,
+            output_path=output_path,
+            duration_ms=duration_ms,
+        )
+        if not subtitle and item.cue_id == cue_id
+        else item
+        for item in draft.cues
+    ]
+    next_candidates = []
+    for item in draft.generated_candidates:
+        next_item = dict(item)
+        if subtitle_id and next_item.get("subtitle_id") == subtitle_id:
+            next_item["selected"] = str(next_item.get("result_id") or "") == result_id
+        elif not subtitle_id and next_item.get("cue_id") == cue_id:
+            next_item["selected"] = str(next_item.get("result_id") or "") == result_id
+        next_candidates.append(next_item)
+
+    next_clips = []
+    for item in draft.timeline_clips:
+        next_item = dict(item)
+        if next_item.get("clip_id") == clip_id:
+            next_item.update(
+                {
+                    "track_id": "dub",
+                    "cue_id": next_item.get("cue_id") or primary_cue_id,
+                    "subtitle_id": subtitle_id or next_item.get("subtitle_id"),
+                    "source_cue_ids": source_cue_ids or next_item.get("source_cue_ids") or [],
+                    "candidate_id": candidate_id,
+                    "result_id": result_id,
+                    "generation_id": generation_id,
+                    "audio_path": output_path,
+                    "status": "ready",
+                    **alignment,
+                }
+            )
+        next_clips.append(next_item)
+    return draft.model_copy(
+        update={
+            "cues": next_cues,
+            "localized_subtitles": next_subtitles,
+            "generated_candidates": next_candidates,
+            "timeline_clips": next_clips,
+        }
+    )
+
+
 def _int_or_none(value: object) -> int | None:
     try:
         return int(value) if value is not None else None
@@ -462,6 +595,7 @@ def _cue_with_tts_result(cue: VideoLocalizationCue, batch_task_id: str, segment:
     updated = _cue_with_tts_audio(
         cue,
         result_id=f"{batch_task_id}:{segment.segment_id}",
+        generation_id=batch_task_id,
         output_path=segment.output_path,
         duration_ms=segment.duration_ms,
     )
@@ -476,17 +610,26 @@ def _subtitle_with_tts_result(
     updated = _subtitle_with_tts_audio(
         subtitle,
         result_id=f"{batch_task_id}:{segment.segment_id}",
+        generation_id=batch_task_id,
         output_path=segment.output_path,
         duration_ms=segment.duration_ms,
     )
     return _subtitle_with_tts_batch_status(updated, batch_task_id, TaskStatus.success, None)
 
 
-def _cue_with_tts_audio(cue: VideoLocalizationCue, *, result_id: str, output_path: str | None, duration_ms: int | None) -> VideoLocalizationCue:
+def _cue_with_tts_audio(
+    cue: VideoLocalizationCue,
+    *,
+    result_id: str,
+    generation_id: str | None = None,
+    output_path: str | None,
+    duration_ms: int | None,
+) -> VideoLocalizationCue:
     flags = [flag for flag in cue.quality_flags if flag != "tts_generated"]
     flags.append("tts_generated")
     update = {
         "tts_result_id": result_id,
+        "tts_generation_id": generation_id,
         "tts_audio_path": output_path,
         "generated_duration_ms": duration_ms,
         "quality_flags": flags,
@@ -502,6 +645,7 @@ def _subtitle_with_tts_audio(
     subtitle: VideoLocalizationSubtitleCue,
     *,
     result_id: str,
+    generation_id: str | None = None,
     output_path: str | None,
     duration_ms: int | None,
 ) -> VideoLocalizationSubtitleCue:
@@ -510,6 +654,7 @@ def _subtitle_with_tts_audio(
     return subtitle.model_copy(
         update={
             "tts_result_id": result_id,
+            "tts_generation_id": generation_id,
             "tts_audio_path": output_path,
             "generated_duration_ms": duration_ms,
             "quality_flags": flags,
@@ -523,10 +668,12 @@ def _with_localized_timeline_clip(
     *,
     output_path: str,
     duration_ms: int | None,
+    generation_id: str | None = None,
 ) -> list[dict]:
     source_cue_ids = list(dict.fromkeys(subtitle.source_cue_ids))
     primary_cue_id = next(iter(source_cue_ids), subtitle.linked_cue_id)
     clip_id = f"clip_{subtitle.subtitle_id}"
+    alignment = _speech_onset_alignment(output_path, duration_ms, subtitle.start_ms)
     next_clips: list[dict] = []
     replaced = False
     for clip in clips:
@@ -540,16 +687,10 @@ def _with_localized_timeline_clip(
                     "track_id": "dub",
                     "audio_path": output_path,
                     "status": "ready",
+                    "generation_id": generation_id,
+                    **alignment,
                 }
             )
-            if item.get("start_ms") in (None, ""):
-                item["start_ms"] = subtitle.start_ms
-            if item.get("end_ms") in (None, ""):
-                item["end_ms"] = subtitle.end_ms
-            if item.get("source_start_ms") in (None, ""):
-                item["source_start_ms"] = 0
-            if duration_ms is not None and item.get("source_end_ms") in (None, ""):
-                item["source_end_ms"] = duration_ms
             next_clips.append(item)
             replaced = True
         else:
@@ -568,6 +709,8 @@ def _with_localized_timeline_clip(
                 "source_end_ms": duration_ms,
                 "audio_path": output_path,
                 "status": "ready",
+                "generation_id": generation_id,
+                **alignment,
             }
         )
     return next_clips
@@ -626,7 +769,10 @@ def _with_synced_timeline_clips(
     task_id: str,
     output_path: str,
     duration_ms: int | None,
+    generation_id: str | None = None,
+    target_start_ms: int | None = None,
 ) -> list[dict]:
+    alignment = _speech_onset_alignment(output_path, duration_ms, target_start_ms)
     next_clips = []
     for clip in clips:
         item = dict(clip)
@@ -636,12 +782,71 @@ def _with_synced_timeline_clips(
                 {
                     "audio_path": output_path,
                     "status": "ready",
+                    "generation_id": generation_id,
+                    **alignment,
                 }
             )
-            if duration_ms is not None and item.get("source_end_ms") in (None, ""):
-                item["source_end_ms"] = duration_ms
         next_clips.append(item)
     return next_clips
+
+
+def detect_first_effective_speech_ms(audio_path: str | Path) -> int:
+    """Locate sustained speech energy while ignoring isolated codec/noise spikes."""
+    try:
+        audio, sample_rate = audio_tools.read_audio(audio_path)
+    except Exception:
+        return 0
+    if sample_rate <= 0 or audio.size == 0:
+        return 0
+    frame_size = max(1, round(sample_rate * 0.01))
+    frame_count = int(np.ceil(audio.size / frame_size))
+    padded = np.pad(audio, (0, frame_count * frame_size - audio.size))
+    frames = padded.reshape(frame_count, frame_size)
+    rms = np.sqrt(np.mean(np.square(frames, dtype=np.float64), axis=1))
+    peak = float(np.percentile(rms, 95)) if rms.size else 0.0
+    if peak < 1e-5:
+        return 0
+    leading_count = max(1, min(len(rms), round(0.3 / 0.01)))
+    noise_floor = float(np.percentile(rms[:leading_count], 20))
+    threshold = max(0.0015, peak * 0.08, noise_floor * 3.0)
+    active = rms >= threshold
+    for index in range(len(active)):
+        window = active[index : index + 3]
+        if len(window) >= 2 and int(np.count_nonzero(window)) >= 2:
+            return round(index * frame_size / sample_rate * 1000)
+    return 0
+
+
+def _speech_onset_alignment(
+    output_path: str | Path,
+    duration_ms: int | None,
+    target_start_ms: int | None,
+    *,
+    leading_silence_ms: int = 80,
+) -> dict[str, int]:
+    effective_duration = duration_ms
+    if effective_duration is None:
+        try:
+            effective_duration = int(audio_tools.probe_audio(output_path)["duration_ms"])
+        except Exception:
+            effective_duration = 0
+    onset_ms = min(max(0, detect_first_effective_speech_ms(output_path)), max(0, effective_duration))
+    target_ms = max(0, int(target_start_ms or 0))
+    source_start_ms = max(0, onset_ms - leading_silence_ms)
+    clip_start_ms = target_ms - (onset_ms - source_start_ms)
+    if clip_start_ms < 0:
+        source_start_ms = min(onset_ms, source_start_ms - clip_start_ms)
+        clip_start_ms = 0
+    source_end_ms = max(source_start_ms, int(effective_duration or 0))
+    clip_end_ms = clip_start_ms + max(0, source_end_ms - source_start_ms)
+    return {
+        "start_ms": clip_start_ms,
+        "end_ms": clip_end_ms,
+        "source_start_ms": source_start_ms,
+        "source_end_ms": source_end_ms,
+        "speech_onset_ms": onset_ms,
+        "alignment_lead_ms": onset_ms - source_start_ms,
+    }
 
 
 def _cue_with_tts_batch_status(

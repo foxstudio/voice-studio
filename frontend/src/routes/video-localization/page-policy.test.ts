@@ -99,6 +99,25 @@ describe('draft conflict merge policy', () => {
 		expect(merged.cues.map((item) => item.cue_id)).toEqual(['kept']);
 	});
 
+	it('preserves an explicit timeline audio delete during a draft conflict merge', () => {
+		const latest = draft('revision_1', []);
+		latest.timeline_clips = [{
+			clip_id: 'clip_localized_0002',
+			track_id: 'dub',
+			start_ms: 1000,
+			end_ms: 2000,
+			source_start_ms: 0,
+			source_end_ms: 1000,
+			audio_path: '/tmp/clip.wav',
+			status: 'ready'
+		}];
+		const local = draft('revision_1', []);
+
+		const merged = mergeDraftAfterConflict(latest, local, { deletedTimelineClipIds: ['clip_localized_0002'] });
+
+		expect(merged.timeline_clips).toEqual([]);
+	});
+
 	it('does not restore a localized track after the server clears its revision', () => {
 		const latest = draft('revision_1', [cue()]);
 		latest.localization_state = {};

@@ -633,19 +633,25 @@ async def submit(
             code, _, message = str(exc).partition(": ")
             raise AppException(400, code, message or "CosyVoice Zero-Shot 参考音频不符合官方要求") from exc
     start_worker()
+    request_parameters = _parameters_with_idempotency_marker(req)
     task = GenerationTask(
         task_type=task_type,
         engine_id=req.engine_id,
         voice_id=req.voice_id,
-        project_id=project_id,
-        segment_id=segment_id,
+        project_id=project_id or req.project_id,
+        segment_id=segment_id or req.localized_subtitle_id or req.cue_id or req.segment_id,
+        localized_subtitle_id=req.localized_subtitle_id,
+        cue_id=req.cue_id,
+        bind_to_video_localization=req.bind_to_video_localization,
         longform_task_id=longform_task_id,
         longform_segment_index=longform_segment_index,
         longform_segment_count=longform_segment_count,
         input_text=req.text,
         status=TaskStatus.queued,
-        parameters=_parameters_with_idempotency_marker(req),
+        parameters=request_parameters,
     )
+    task.generation_id = task.task_id
+    task.parameters["generation_id"] = task.generation_id
     _save(task)
     _enqueue_task_id(task.task_id)
     await _broadcast(task)
@@ -1038,11 +1044,15 @@ def _save_history(task: GenerationTask, req: GenerateRequest, final_path: Path, 
     voice = voice_store.get_voice(req.voice_id) if req.voice_id else None
     hist = history_store.add(HistoryItem(
         task_id=task.task_id,
+        generation_id=task.generation_id or task.task_id,
         engine_id=req.engine_id,
         voice_id=req.voice_id,
         voice_name=voice.name if voice else None,
         project_id=task.project_id,
         segment_id=task.segment_id,
+        localized_subtitle_id=task.localized_subtitle_id,
+        cue_id=task.cue_id,
+        bind_to_video_localization=task.bind_to_video_localization,
         longform_task_id=task.longform_task_id,
         longform_segment_index=task.longform_segment_index,
         longform_segment_count=task.longform_segment_count,
@@ -1068,7 +1078,21 @@ def _update_project_segment(task: GenerationTask, audio_id: str | None, hist_res
 
 
 def _sync_video_localization_tts_result(task: GenerationTask, hist: HistoryItem) -> None:
-    if task.parameters.get("source") != "video_localization" or not task.project_id or not task.segment_id:
+    generation_id = str(task.generation_id or task.parameters.get("generation_id") or "")
+    target_id = task.localized_subtitle_id or task.cue_id
+    if (
+        task.parameters.get("source") != "video_localization"
+        or not task.bind_to_video_localization
+        or not task.project_id
+        or not target_id
+        or not generation_id
+        or generation_id != task.task_id
+        or hist.generation_id != generation_id
+        or hist.project_id != task.project_id
+        or hist.localized_subtitle_id != task.localized_subtitle_id
+        or hist.cue_id != task.cue_id
+        or not hist.bind_to_video_localization
+    ):
         return
     if not hist.output_path or not hist.result_id:
         return
@@ -1076,11 +1100,12 @@ def _sync_video_localization_tts_result(task: GenerationTask, hist: HistoryItem)
 
     video_localization_service.sync_single_tts_result(
         task.project_id,
-        task.segment_id,
+        target_id,
         result_id=hist.result_id,
         output_path=hist.output_path,
         duration_ms=hist.duration_ms,
         task_id=task.task_id,
+        generation_id=generation_id,
     )
 
 

@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,9 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mkv"}
 PROJECT_DIR_NAME_KEY = "video_localization_dir_name"
 LEGACY_DIR_NAME = "video_localization"
 MIGRATION_CONFLICT_DIR = "migration-conflicts"
+EDITING_PROXY_PROFILE = "720p-h264-v1"
+_EDITING_PROXY_LOCKS: dict[str, threading.Lock] = {}
+_EDITING_PROXY_LOCKS_GUARD = threading.Lock()
 
 
 async def save_uploaded_video(project_id: str, file: UploadFile) -> tuple[Path, int, str]:
@@ -289,6 +293,133 @@ def extract_audio_file(video_path: Path, audio_path: Path) -> dict:
     return audio_tools.probe_audio(audio_path)
 
 
+def editing_proxy_path(project_id: str, source_path: Path) -> Path:
+    stat = source_path.stat()
+    signature = hashlib.sha256(
+        f"{source_path.name}:{stat.st_size}:{stat.st_mtime_ns}:{EDITING_PROXY_PROFILE}".encode()
+    ).hexdigest()[:16]
+    return project_video_localization_dir(project_id) / "preview" / f"{source_path.stem}-{signature}.mp4"
+
+
+def existing_editing_proxy(project_id: str, source_path: Path) -> Path | None:
+    try:
+        candidate = editing_proxy_path(project_id, source_path)
+    except OSError:
+        return None
+    return candidate if candidate.is_file() and candidate.stat().st_size > 0 else None
+
+
+def ensure_editing_proxy(project_id: str, source_path: Path) -> Path:
+    if not source_path.is_file():
+        raise AppException(404, "VIDEO_LOCALIZATION_SOURCE_VIDEO_NOT_FOUND", "Source video file not found")
+
+    video_meta = probe_video(source_path)
+    if _source_is_preview_friendly(video_meta):
+        return source_path
+
+    destination = editing_proxy_path(project_id, source_path)
+    existing = existing_editing_proxy(project_id, source_path)
+    if existing:
+        return existing
+
+    lock = _editing_proxy_lock(destination.parent)
+    with lock:
+        existing = existing_editing_proxy(project_id, source_path)
+        if existing:
+            return existing
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise AppException(500, "VIDEO_LOCALIZATION_FFMPEG_MISSING", "ffmpeg is required to create the editing proxy")
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_name(
+            f".{destination.stem}.{os.getpid()}.{threading.get_ident()}.part.mp4"
+        )
+        temporary.unlink(missing_ok=True)
+        try:
+            errors: list[str] = []
+            for encoder in ("h264_videotoolbox", "libx264"):
+                temporary.unlink(missing_ok=True)
+                result = subprocess.run(
+                    _editing_proxy_command(ffmpeg, source_path, temporary, encoder),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if result.returncode == 0 and temporary.is_file() and temporary.stat().st_size > 0:
+                    temporary.replace(destination)
+                    _remove_stale_editing_proxies(destination)
+                    return destination
+                errors.append((result.stderr or result.stdout or encoder)[-1200:])
+            raise AppException(
+                500,
+                "VIDEO_LOCALIZATION_EDITING_PROXY_FAILED",
+                "Failed to create the editing proxy",
+                detail={"ffmpeg": "\n".join(errors)},
+            )
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def _editing_proxy_command(ffmpeg: str, source_path: Path, destination: Path, encoder: str) -> list[str]:
+    command = [
+        ffmpeg,
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-threads",
+        "4",
+        "-i",
+        str(source_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-vf",
+        "scale=w='min(1280,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+        "-c:v",
+        encoder,
+        "-pix_fmt",
+        "yuv420p",
+        "-g",
+        "48",
+        "-tag:v",
+        "avc1",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+    ]
+    if encoder == "h264_videotoolbox":
+        command.extend(["-b:v", "2500k", "-maxrate", "4M", "-bufsize", "6M", "-realtime", "true"])
+    else:
+        command.extend(["-preset", "veryfast", "-crf", "23"])
+    command.extend(["-movflags", "+faststart", str(destination)])
+    return command
+
+
+def _source_is_preview_friendly(video_meta: dict) -> bool:
+    return (
+        video_meta.get("codec_name") == "h264"
+        and int(video_meta.get("width") or 0) <= 1920
+        and int(video_meta.get("height") or 0) <= 1080
+    )
+
+
+def _editing_proxy_lock(path: Path) -> threading.Lock:
+    key = str(path)
+    with _EDITING_PROXY_LOCKS_GUARD:
+        return _EDITING_PROXY_LOCKS.setdefault(key, threading.Lock())
+
+
+def _remove_stale_editing_proxies(current: Path) -> None:
+    for candidate in current.parent.glob("*.mp4"):
+        if candidate != current:
+            candidate.unlink(missing_ok=True)
+
+
 def probe_video(path: Path) -> dict:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
@@ -300,7 +431,7 @@ def probe_video(path: Path) -> dict:
         "-select_streams",
         "v:0",
         "-show_entries",
-        "stream=width,height,avg_frame_rate,duration",
+        "stream=codec_name,width,height,avg_frame_rate,duration",
         "-show_entries",
         "format=duration",
         "-of",
@@ -321,6 +452,7 @@ def probe_video(path: Path) -> dict:
         "width": _int_or_none(stream.get("width")),
         "height": _int_or_none(stream.get("height")),
         "frame_rate": _frame_rate(stream.get("avg_frame_rate")),
+        "codec_name": str(stream.get("codec_name") or "") or None,
     }
 
 

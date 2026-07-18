@@ -1,3 +1,15 @@
+<script module lang="ts">
+	export const DEFAULT_VISIBLE_HISTORY_TASKS = 10;
+
+	export function defaultHistoryTaskLimit(full: boolean, visibleActiveTaskCount: number) {
+		return full ? DEFAULT_VISIBLE_HISTORY_TASKS : Math.max(0, DEFAULT_VISIBLE_HISTORY_TASKS - visibleActiveTaskCount);
+	}
+
+	export function hiddenHistoryTaskCount(totalHistoryTaskCount: number, visibleHistoryTaskCount: number) {
+		return Math.max(0, totalHistoryTaskCount - visibleHistoryTaskCount);
+	}
+</script>
+
 <script lang="ts">
 	import { AlertTriangle, Check, ChevronDown, ChevronRight, Circle, CircleOff, CircleStop, Clock3, Info, LoaderCircle, RotateCcw } from 'lucide-svelte';
 	import { untrack } from 'svelte';
@@ -51,10 +63,10 @@
 	const activeTasks = $derived(uniqueTasks.filter(isActiveActivityTask));
 	const historyTasks = $derived(uniqueTasks.filter((task) => !isActiveActivityTask(task)));
 	const visibleActiveTasks = $derived(full ? activeTasks : activeTasks.slice(0, 5));
-	const availableHistorySlots = $derived(full ? 5 : Math.max(0, 5 - visibleActiveTasks.length));
+	const availableHistorySlots = $derived(defaultHistoryTaskLimit(full, visibleActiveTasks.length));
 	const visibleHistoryTasks = $derived(showAllHistory ? historyTasks : historyTasks.slice(0, availableHistorySlots));
 	const visibleTasks = $derived([...visibleActiveTasks, ...visibleHistoryTasks]);
-	const hiddenHistoryCount = $derived(Math.max(0, historyTasks.length - visibleHistoryTasks.length));
+	const hiddenHistoryCount = $derived(hiddenHistoryTaskCount(historyTasks.length, visibleHistoryTasks.length));
 	const selectedResultContext = $derived.by(() => {
 		if (!selectedResult) return null;
 		const task = uniqueTasks.find((item) => item.id === selectedResult?.taskId);

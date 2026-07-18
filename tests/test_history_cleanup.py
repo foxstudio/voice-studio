@@ -50,3 +50,51 @@ def test_history_delete_removes_audio_and_waveform_cache(tmp_path, monkeypatch):
         assert history_store.get("result") is None
     finally:
         db.set_db_path(original_db)
+
+
+def test_history_list_filters_video_localization_records(tmp_path):
+    original_db = db.DB_PATH
+    db.set_db_path(tmp_path / "voice_studio.db")
+    try:
+        history_store.add(
+            HistoryItem(
+                result_id="localized-a",
+                task_id="task-a",
+                engine_id="indextts-v2",
+                project_id="project-a",
+                segment_id="localized-1",
+                input_text="第一条",
+                parameter_snapshot={"source": "video_localization"},
+            )
+        )
+        history_store.add(
+            HistoryItem(
+                result_id="localized-b",
+                task_id="task-b",
+                engine_id="indextts-v2",
+                project_id="project-b",
+                segment_id="localized-1",
+                input_text="第二条",
+                parameter_snapshot={"source": "video_localization"},
+            )
+        )
+        history_store.add(
+            HistoryItem(
+                result_id="regular-a",
+                task_id="task-c",
+                engine_id="indextts-v2",
+                project_id="project-a",
+                segment_id="localized-1",
+                input_text="普通生成",
+            )
+        )
+
+        items = history_store.list_history(
+            project_id="project-a",
+            segment_id="localized-1",
+            source="video_localization",
+        )
+
+        assert [item.result_id for item in items] == ["localized-a"]
+    finally:
+        db.set_db_path(original_db)

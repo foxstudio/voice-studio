@@ -464,9 +464,36 @@ export interface VideoLocalizationTimeRange {
 	[key: string]: unknown;
 }
 
+export interface VideoLocalizationSpeakerIdentityCandidate {
+	name: string;
+	confidence: number;
+	status: 'candidate' | 'confirmed' | 'rejected';
+	reason: string;
+	evidence_source_ids: string[];
+	[key: string]: unknown;
+}
+
+export interface VideoLocalizationSpeakerCluster {
+	cluster_id: string;
+	source_label: string;
+	source_engine_id: string;
+	business_speaker_id: string | null;
+	start_ms: number;
+	end_ms: number;
+	duration_ms: number;
+	segment_count: number;
+	confidence: number | null;
+	merge_status: 'original' | 'auto_merged' | 'needs_review';
+	merged_source_labels: string[];
+	time_ranges: VideoLocalizationTimeRange[];
+	[key: string]: unknown;
+}
+
 export interface VideoLocalizationSpeaker {
 	speaker_id: string;
 	display_name: string | null;
+	acoustic_cluster_ids?: string[];
+	identity_candidates?: VideoLocalizationSpeakerIdentityCandidate[];
 	route: 'clone_from_source' | 'preset_tts' | 'preserve_original_audio' | 'manual_review';
 	reference_clip_ids: string[];
 	time_ranges: VideoLocalizationTimeRange[];
@@ -589,6 +616,9 @@ export interface VideoLocalizationTranscriptSegment {
 	start_ms: number;
 	end_ms: number;
 	raw_text: string;
+	speaker_cluster_id?: string | null;
+	speaker_confidence?: number | null;
+	has_speaker_overlap?: boolean;
 	corrected_text: string | null;
 	review_candidate_text?: string | null;
 	review_rejection_reason?: string | null;
@@ -623,6 +653,9 @@ export interface VideoLocalizationAlignedWord {
 	word_id: string;
 	segment_id: string;
 	text: string;
+	speaker_cluster_id?: string | null;
+	speaker_confidence?: number | null;
+	has_speaker_overlap?: boolean;
 	start_ms: number;
 	end_ms: number;
 	timing_confidence: 'high' | 'medium' | 'low';
@@ -672,6 +705,11 @@ export interface VideoLocalizationTranscriptionState {
 	corrected_text: string;
 	segments: VideoLocalizationTranscriptSegment[];
 	words: VideoLocalizationAlignedWord[];
+	diarization_status?: 'not_run' | 'completed' | 'partial' | 'failed' | 'skipped';
+	diarization_engine_id?: string | null;
+	diarization_model_id?: string | null;
+	diarization_error?: string | null;
+	speaker_clusters?: VideoLocalizationSpeakerCluster[];
 	review_status: 'not_configured' | 'skipped' | 'completed' | 'partial' | 'failed';
 	review_profile_id: string | null;
 	review_model_id: string | null;
@@ -700,6 +738,7 @@ export interface VideoLocalizationTranscriptionState {
 export interface VideoLocalizationCue {
 	cue_id: string;
 	speaker_id: string | null;
+	speaker_cluster_id?: string | null;
 	start_ms: number | null;
 	end_ms: number | null;
 	audio_route: 'clone_from_source' | 'preset_tts' | 'preserve_original_audio' | 'manual_review';
@@ -870,6 +909,10 @@ export interface GenerateRequest {
 	source?: string | null;
 	project_id?: string | null;
 	segment_id?: string | null;
+	localized_subtitle_id?: string | null;
+	cue_id?: string | null;
+	generation_id?: string | null;
+	bind_to_video_localization?: boolean;
 	voice_id?: string | null;
 	voice_source?: 'voice_library' | 'reference_audio' | 'model_preset' | 'voice_design' | null;
 	reference_audio_path?: string | null;
@@ -1135,11 +1178,15 @@ export interface BatchTask {
 
 export interface GenerationTask {
 	task_id: string;
+	generation_id?: string | null;
 	task_type: 'single' | 'segment' | 'batch' | 'export';
 	engine_id: string;
 	voice_id: string | null;
 	project_id: string | null;
 	segment_id: string | null;
+	localized_subtitle_id?: string | null;
+	cue_id?: string | null;
+	bind_to_video_localization?: boolean;
 	longform_task_id: string | null;
 	longform_segment_index: number | null;
 	longform_segment_count: number | null;
@@ -1193,11 +1240,15 @@ export interface TaskPageParams {
 export interface HistoryItem {
 	result_id: string;
 	task_id: string;
+	generation_id?: string | null;
 	engine_id: string;
 	voice_id: string | null;
 	voice_name: string | null;
 	project_id: string | null;
 	segment_id: string | null;
+	localized_subtitle_id?: string | null;
+	cue_id?: string | null;
+	bind_to_video_localization?: boolean;
 	longform_task_id: string | null;
 	longform_segment_index: number | null;
 	longform_segment_count: number | null;

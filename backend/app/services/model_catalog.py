@@ -3,7 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from app.services import confucius4_paths, cosyvoice_worker, engine_health, engine_runtime_paths, qwen3_tts_paths, settings_store
+from app.services import (
+    confucius4_paths,
+    cosyvoice_worker,
+    engine_health,
+    engine_runtime_paths,
+    qwen3_tts_paths,
+    settings_store,
+    speaker_diarization_service,
+    speaker_verification_service,
+)
 
 
 SOURCES: dict[str, dict[str, Any]] = {
@@ -107,6 +116,46 @@ SOURCES: dict[str, dict[str, Any]] = {
         "install_kind": "python_package_and_cache",
         "license_note": "模型通常下载到共享缓存，不复制进代码仓库。",
     },
+    "moss-transcribe-diarize-mlx": {
+        "source_url": "https://github.com/OpenMOSS/MOSS-Transcribe-Diarize",
+        "source_label": "OpenMOSS 官方仓库与社区 MLX 移植",
+        "install_kind": "external_runtime",
+        "license_note": "MOSS 仅作为说话人分离旁路，不替换主 ASR；运行时与模型独立安装。",
+        "download_sources": [
+            {
+                "provider": "hf-mirror",
+                "label": "Hugging Face 国内镜像",
+                "url": "https://hf-mirror.com/vanch007/mlx-MOSS-Transcribe-Diarize-8bit",
+                "region": "cn",
+                "preferred": True,
+                "compatibility_note": "优先尝试；本机 POC 主权重成功但元数据请求失败，必须校验完整性，不能静默视为成功。",
+            },
+            {
+                "provider": "huggingface",
+                "label": "MLX 8bit 社区模型官方页",
+                "url": "https://huggingface.co/vanch007/mlx-MOSS-Transcribe-Diarize-8bit",
+                "region": "global",
+                "preferred": False,
+                "compatibility_note": "仅在镜像失败后显式回退；可复用镜像已下载的大权重 blob。",
+            },
+        ],
+    },
+    "campplus-modelscope": {
+        "source_url": "https://modelscope.cn/models/iic/speech_campplus_sv_zh-cn_16k-common",
+        "source_label": "ModelScope iic CAM++",
+        "install_kind": "external_runtime",
+        "license_note": "仅用于核验 MOSS 匿名声纹簇是否应合并，不负责识别真实人物。",
+        "download_sources": [
+            {
+                "provider": "modelscope",
+                "label": "CAM++ 国内模型",
+                "url": "https://modelscope.cn/models/iic/speech_campplus_sv_zh-cn_16k-common",
+                "region": "cn",
+                "preferred": True,
+                "compatibility_note": "本机 POC 已验证，模型约 27 MB。",
+            }
+        ],
+    },
 }
 
 
@@ -128,7 +177,12 @@ def _entry(engine_id: str, source: dict[str, Any]) -> dict[str, Any]:
             }
         )
     preferred = candidates[0] if candidates else None
-    health = engine_health.health_check(engine_id)
+    if engine_id == speaker_diarization_service.ENGINE_ID:
+        health = speaker_diarization_service.health_check()
+    elif engine_id == speaker_verification_service.ENGINE_ID:
+        health = speaker_verification_service.health_check()
+    else:
+        health = engine_health.health_check(engine_id)
     return {
         "engine_id": engine_id,
         **source,
@@ -144,6 +198,10 @@ def _entry(engine_id: str, source: dict[str, Any]) -> dict[str, Any]:
 
 
 def _candidates(engine_id: str) -> list[Path]:
+    if engine_id == speaker_diarization_service.ENGINE_ID:
+        return [speaker_diarization_service.DEFAULT_RUNTIME_PYTHON.parent.parent, speaker_diarization_service.DEFAULT_MODEL_PATH]
+    if engine_id == speaker_verification_service.ENGINE_ID:
+        return [speaker_verification_service.DEFAULT_RUNTIME_ROOT, speaker_verification_service.DEFAULT_MODEL_PATH]
     if engine_id == "indextts-v2":
         return settings_store.model_candidates(engine_id)
     if engine_id == confucius4_paths.ENGINE_ID:

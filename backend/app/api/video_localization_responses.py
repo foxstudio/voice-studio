@@ -24,6 +24,12 @@ def audio_file_response(path: Path | None, *, code: str, message: str) -> FileRe
     return FileResponse(path, filename=path.name)
 
 
+def media_file_response(path: Path | None, *, code: str, message: str) -> FileResponse:
+    if not path:
+        raise AppException(404, code, message)
+    return FileResponse(path)
+
+
 def download_file_response(path: Path | None, *, filename: str | None = None, code: str, message: str) -> FileResponse:
     if not path or not path.exists():
         raise AppException(404, code, message)

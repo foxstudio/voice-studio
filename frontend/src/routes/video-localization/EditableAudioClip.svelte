@@ -49,7 +49,7 @@
 		timelineScrollLeft?: number;
 		timelineViewportWidth?: number;
 		onMove: (event: PointerEvent) => void;
-		onSelect: () => void;
+		onSelect: (event: PointerEvent) => void;
 		onTrimStart: (event: PointerEvent) => void;
 		onTrimEnd: (event: PointerEvent) => void;
 		onDelete: () => void;
@@ -70,7 +70,15 @@
 	tabindex="0"
 	style={`left:${left}%;width:${width}%`}
 	onpointerdown={(event) => {
-		if (event.button === 0 && !(event.target as HTMLElement).closest('.clip-delete')) onSelect();
+		const target = event.target as HTMLElement;
+		if (target.closest('.clip-delete,.clip-handle')) return;
+		if (event.button === 0 && (event.ctrlKey || event.metaKey)) {
+			event.preventDefault();
+			event.stopPropagation();
+			onSelect(event);
+			return;
+		}
+		if (event.button === 0) onSelect(event);
 		if (!(event.target as HTMLElement).closest('.clip-label')) return;
 		if (locked) { event.preventDefault(); event.stopPropagation(); return; }
 		onMove(event);
@@ -120,6 +128,7 @@
 <style>
 	.audio-clip {
 		position: absolute;
+		box-sizing: border-box;
 		top: 6px;
 		bottom: 6px;
 		min-width: 12px;
@@ -190,12 +199,14 @@
 
 	.clip-handle {
 		position: absolute;
-		top: 0;
-		bottom: 0;
+		top: 50%;
+		bottom: auto;
 		z-index: 4;
+		height: min(100%, 46px);
 		width: 8px;
 		background: transparent;
 		cursor: ew-resize;
+		transform: translateY(-50%);
 	}
 
 	.clip-handle::after {

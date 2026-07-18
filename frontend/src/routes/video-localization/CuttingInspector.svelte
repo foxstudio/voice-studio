@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type {
+		HistoryItem,
 		VideoLocalizationCue,
 		VideoLocalizationDraft,
 		VideoLocalizationGeneratedCandidate,
@@ -7,16 +8,22 @@
 		VideoLocalizationReferenceClipCreate,
 		VideoLocalizationReferenceClipUpdate,
 		VideoLocalizationSubtitleCue,
+		VideoLocalizationTimelineClip,
 		VideoLocalizationVoiceRecipe
 	} from '$lib/api/types';
 	import { AudioLines, Captions, CheckCircle2, ListTodo, Palette, WandSparkles } from 'lucide-svelte';
 	import TaskProgressPanel from './TaskProgressPanel.svelte';
+	import ScrubbableTimeField from './ScrubbableTimeField.svelte';
+	import SubtitleTtsHistory from './SubtitleTtsHistory.svelte';
 	import type { ActivityTask } from './activity-notice';
-	import { candidateAudioUrl, durationLabel, msLabel, referenceAudioUrl, referenceCoverUrl, timeLabel } from './utils';
+	import { candidateAudioUrl, durationLabel, msLabel, referenceAudioUrl, referenceCoverUrl } from './utils';
+	import { formatTimecode } from './subtitle-workbench';
 	import {
 		SUBTITLE_SOURCE_LABELS,
 		SUBTITLE_STYLE_LABELS,
+		MIN_SUBTITLE_DURATION_MS,
 		defaultSubtitlePreviewState,
+		subtitleCueDragBounds,
 		type SubtitlePreviewState,
 		type SubtitleStylePreset
 	} from './studio-state';
@@ -26,6 +33,9 @@
 		projectId,
 		selectedCue,
 		selectedLocalizedSubtitle = null,
+		selectedLocalizedSubtitles = [],
+		selectedLocalizedSubtitlesContiguous = false,
+		selectedTimelineAudioClip = null,
 		selectionRange,
 		selectedVoiceId,
 		selectedRecipeId,
@@ -35,6 +45,7 @@
 		onSelectedVoiceIdChange,
 		onSectionChange,
 		onUpdateCue,
+		onPreviewLocalizedSubtitle = undefined,
 		onUpdateLocalizedSubtitle = undefined,
 		onDeleteLocalizedSubtitle = undefined,
 		onSaveCue,
@@ -60,6 +71,14 @@
 		candidateApplyingId,
 		generatingVoice,
 		taskHistory = [],
+		ttsHistory = [],
+		onOpenSubtitleGenerate = undefined,
+		onReuseSubtitleHistory = undefined,
+		onApplySubtitleHistory = undefined,
+		onDeleteSubtitleHistory = undefined,
+		onDeleteCurrentSubtitleHistory = undefined,
+		onDeleteAllSubtitleHistory = undefined,
+		historyApplyingResultId = '',
 		onCancelTask = undefined,
 		onRetryTask = undefined,
 		subtitleRuntimeBusy = false,
@@ -70,6 +89,9 @@
 		projectId: string;
 		selectedCue: VideoLocalizationCue | null;
 		selectedLocalizedSubtitle?: VideoLocalizationSubtitleCue | null;
+		selectedLocalizedSubtitles?: VideoLocalizationSubtitleCue[];
+		selectedLocalizedSubtitlesContiguous?: boolean;
+		selectedTimelineAudioClip?: VideoLocalizationTimelineClip | null;
 		selectionRange: { start_ms: number; end_ms: number } | null;
 		selectedVoiceId: string;
 		selectedRecipeId: string;
@@ -79,6 +101,7 @@
 		onSelectedVoiceIdChange: (voiceId: string) => void;
 		onSectionChange: (section: 'tasks' | 'voice' | 'generate' | 'subtitle' | 'style') => void;
 		onUpdateCue: (patch: Partial<VideoLocalizationCue>) => void;
+		onPreviewLocalizedSubtitle?: (patch: Partial<VideoLocalizationSubtitleCue>) => void;
 		onUpdateLocalizedSubtitle?: (patch: Partial<VideoLocalizationSubtitleCue>) => void | Promise<void>;
 		onDeleteLocalizedSubtitle?: (subtitleId: string) => void | Promise<void>;
 		onSaveCue: () => void;
@@ -104,6 +127,14 @@
 		candidateApplyingId: string;
 		generatingVoice: boolean;
 		taskHistory?: ActivityTask[];
+		ttsHistory?: HistoryItem[];
+		onOpenSubtitleGenerate?: () => void | Promise<void>;
+		onReuseSubtitleHistory?: (item: HistoryItem) => void | Promise<void>;
+		onApplySubtitleHistory?: (item: HistoryItem) => void | Promise<void>;
+		onDeleteSubtitleHistory?: (item: HistoryItem) => void | Promise<void>;
+		onDeleteCurrentSubtitleHistory?: () => void | Promise<void>;
+		onDeleteAllSubtitleHistory?: () => void | Promise<void>;
+		historyApplyingResultId?: string;
 		onCancelTask?: (task: ActivityTask) => void | Promise<void>;
 		onRetryTask?: (task: ActivityTask) => void | Promise<void>;
 		subtitleRuntimeBusy?: boolean;
@@ -147,6 +178,40 @@
 		(draft?.generated_candidates ?? []).filter((candidate) => candidate.recipe_id === selectedRecipe?.recipe_id)
 	);
 	const canGenerateVoice = $derived(Boolean(selectedVoice?.audio_path && selectedCue?.tts_recommended_text?.trim()));
+	const activeTtsSegmentId = $derived(
+		selectedTimelineAudioClip?.subtitle_id
+			?? (selectedTimelineAudioClip?.clip_id.startsWith('clip_group_') ? selectedTimelineAudioClip.clip_id.slice('clip_'.length) : null)
+			?? selectedLocalizedSubtitle?.subtitle_id
+			?? selectedTimelineAudioClip?.cue_id
+			?? selectedCue?.cue_id
+			?? ''
+	);
+	const activeTimelineDubClip = $derived.by(() => {
+		if (!activeTtsSegmentId) return null;
+		if (
+			selectedTimelineAudioClip?.track_id === 'dub' &&
+			(selectedTimelineAudioClip.subtitle_id === activeTtsSegmentId || selectedTimelineAudioClip.cue_id === activeTtsSegmentId)
+		) return selectedTimelineAudioClip;
+		return draft?.timeline_clips.find((clip) =>
+			clip.track_id === 'dub' && (clip.subtitle_id === activeTtsSegmentId || (!selectedLocalizedSubtitle && clip.cue_id === activeTtsSegmentId))
+		) ?? null;
+	});
+	const appliedTtsResultId = $derived(String(
+		activeTimelineDubClip?.result_id ?? ''
+	));
+	const canGenerateSubtitle = $derived(
+		Boolean(
+			draft?.stems.vocals_clean_path &&
+				(selectedLocalizedSubtitle?.tts_text?.trim() || selectedLocalizedSubtitle?.text?.trim() || selectedCue?.tts_recommended_text?.trim()) &&
+				(selectedLocalizedSubtitle ? selectedLocalizedSubtitle.end_ms > selectedLocalizedSubtitle.start_ms : selectedCue?.start_ms !== null && selectedCue?.end_ms !== null)
+		)
+	);
+	const segmentLabels = $derived.by(() => {
+		const labels: Record<string, string> = {};
+		for (const subtitle of draft?.localized_subtitles ?? []) labels[subtitle.subtitle_id] = `${subtitle.subtitle_id.replace('localized_', '#')} · ${subtitle.text}`;
+		for (const cue of draft?.cues ?? []) labels[cue.cue_id] = `${cue.cue_id.replace('cue_', '#')} · ${cue.tts_recommended_text || cue.zh_localized_subtitle_text || cue.en_subtitle_text || '无台词'}`;
+		return labels;
+	});
 	const selectedReviewSegments = $derived(reviewSegmentsForCue(draft, selectedCue));
 	const canSaveSelection = $derived(
 		Boolean(
@@ -295,6 +360,16 @@
 
 	const stylePresets: SubtitleStylePreset[] = ['yellow-outline', 'boxed', 'clean-shadow', 'strong-outline'];
 
+	function timingBounds(track: 'asr' | 'localized') {
+		const selected = track === 'localized' ? selectedLocalizedSubtitle : selectedCue;
+		if (!selected) return { minStartMs: 0, maxEndMs: Math.max(0, draft?.source_media.duration_ms ?? 0) };
+		const itemId = track === 'localized' ? selectedLocalizedSubtitle?.subtitle_id ?? '' : selectedCue?.cue_id ?? '';
+		const items = track === 'localized'
+			? (draft?.localized_subtitles ?? []).map((item) => ({ cue_id: item.subtitle_id, start_ms: item.start_ms, end_ms: item.end_ms }))
+			: (draft?.cues ?? []);
+		return subtitleCueDragBounds(items, itemId, Math.max(draft?.source_media.duration_ms ?? 0, selected.end_ms ?? 0));
+	}
+
 	$effect(() => {
 		selectedVoice?.reference_clip_id;
 		syncEditFields(selectedVoice);
@@ -316,10 +391,10 @@
 	});
 </script>
 
-<aside class="inspector" class:tasks-view={activeSection === 'tasks'}>
+<aside class="inspector" class:tasks-view={activeSection === 'tasks'} class:subtitle-view={activeSection === 'subtitle'}>
 	<div class="inspector-mode-tabs" aria-label="右侧检查器">
 		<button class:active={activeSection === 'tasks'} type="button" data-tooltip="任务：查看后台处理进度、每一步状态和历史结果。" onclick={() => onSectionChange('tasks')}><ListTodo size={14} /><span>任务</span></button>
-		<button class:active={activeSection === 'subtitle'} type="button" data-tooltip="字幕：编辑时间线中当前选中的字幕片段。" onclick={() => onSectionChange('subtitle')}><Captions size={14} /><span>字幕</span></button>
+		<button class:active={activeSection === 'subtitle'} type="button" data-tooltip="配音：编辑字幕、台词、时间码，并查看当前片段的配音记录。" onclick={() => onSectionChange('subtitle')}><Captions size={14} /><span>配音</span></button>
 		<button class:active={activeSection === 'voice'} type="button" data-tooltip="音色：管理项目样音，或把当前音频选区保存为音色。" onclick={() => onSectionChange('voice')}><AudioLines size={14} /><span>音色</span></button>
 		<button class:active={activeSection === 'generate'} type="button" data-tooltip="生成：使用当前音色和参数组生成所选字幕的配音。" onclick={() => onSectionChange('generate')}><WandSparkles size={14} /><span>生成</span></button>
 		<button class:active={activeSection === 'style'} type="button" data-tooltip="样式：调整视频预览中的字幕位置和外观。" onclick={() => onSectionChange('style')}><Palette size={14} /><span>样式</span></button>
@@ -579,25 +654,44 @@
 	{/if}
 
 	{#if activeSection === 'subtitle'}
-	<section class="inspector-panel" class:runtime-locked={selectedLocalizedSubtitle ? localizationRuntimeBusy : subtitleRuntimeBusy} aria-busy={selectedLocalizedSubtitle ? localizationRuntimeBusy : subtitleRuntimeBusy}>
+		<section class="inspector-panel subtitle-panel" class:runtime-locked={selectedLocalizedSubtitle ? localizationRuntimeBusy : subtitleRuntimeBusy} aria-busy={selectedLocalizedSubtitle ? localizationRuntimeBusy : subtitleRuntimeBusy}>
+		{#if selectedLocalizedSubtitles.length > 1}
+			<div class="multi-selection-summary">
+				<div><strong>已选 {selectedLocalizedSubtitles.length} 条本土化字幕</strong><span>{selectedLocalizedSubtitlesContiguous ? '连续片段，可合并为一条配音' : '片段不连续，将保留各自边界'}</span></div>
+				<span>{formatTimecode(selectedLocalizedSubtitles[0].start_ms, draft?.source_media.frame_rate ?? 24)} - {formatTimecode(selectedLocalizedSubtitles.at(-1)?.end_ms ?? 0, draft?.source_media.frame_rate ?? 24)}</span>
+			</div>
+		{/if}
 		<div class="panel-head">
 			<h2>{selectedLocalizedSubtitle ? `本土化字幕：${selectedLocalizedSubtitle.subtitle_id}` : `ASR 字幕${selectedCue ? `：${selectedCue.cue_id}` : ''}`}</h2>
 			<span>{selectedLocalizedSubtitle ? '初稿' : selectedCue ? subtitleStatusLabel(selectedCue.review_status) : '未选择'}</span>
 		</div>
 		{#if selectedLocalizedSubtitle}
+			{@const localizedBounds = timingBounds('localized')}
 			<div class="cue-meta">
-				<span>{msLabel(selectedLocalizedSubtitle.end_ms - selectedLocalizedSubtitle.start_ms)}</span>
+				<span class="time-range">时长 {formatTimecode(selectedLocalizedSubtitle.end_ms - selectedLocalizedSubtitle.start_ms, draft?.source_media.frame_rate ?? 24)}</span>
 				<span>来源 {selectedLocalizedSubtitle.source_cue_ids?.length || (selectedLocalizedSubtitle.linked_cue_id ? 1 : 0)} 条原文</span>
 			</div>
 			<div class="editor-grid time-grid">
-				<label class="field">
-					<span>入点 ms</span>
-					<input type="number" min="0" step="100" value={selectedLocalizedSubtitle.start_ms} disabled={localizationRuntimeBusy} onchange={(event) => onUpdateLocalizedSubtitle?.({ start_ms: Number(event.currentTarget.value) })} />
-				</label>
-				<label class="field">
-					<span>出点 ms</span>
-					<input type="number" min="0" step="100" value={selectedLocalizedSubtitle.end_ms} disabled={localizationRuntimeBusy} onchange={(event) => onUpdateLocalizedSubtitle?.({ end_ms: Number(event.currentTarget.value) })} />
-				</label>
+				<ScrubbableTimeField
+					label="入点"
+						value={selectedLocalizedSubtitle.start_ms}
+						min={localizedBounds.minStartMs}
+						max={Math.max(localizedBounds.minStartMs, selectedLocalizedSubtitle.end_ms - MIN_SUBTITLE_DURATION_MS)}
+						frameRate={draft?.source_media.frame_rate ?? 24}
+					disabled={localizationRuntimeBusy}
+					onPreview={(value) => onPreviewLocalizedSubtitle?.({ start_ms: value })}
+					onCommit={(value) => onUpdateLocalizedSubtitle?.({ start_ms: value, end_ms: selectedLocalizedSubtitle.end_ms })}
+				/>
+				<ScrubbableTimeField
+					label="出点"
+						value={selectedLocalizedSubtitle.end_ms}
+						min={selectedLocalizedSubtitle.start_ms + MIN_SUBTITLE_DURATION_MS}
+						max={localizedBounds.maxEndMs}
+						frameRate={draft?.source_media.frame_rate ?? 24}
+					disabled={localizationRuntimeBusy}
+					onPreview={(value) => onPreviewLocalizedSubtitle?.({ end_ms: value })}
+					onCommit={(value) => onUpdateLocalizedSubtitle?.({ start_ms: selectedLocalizedSubtitle.start_ms, end_ms: value })}
+				/>
 			</div>
 			<label class="field">
 				<span>上屏字幕</span>
@@ -617,8 +711,9 @@
 				<button class="danger-btn" type="button" data-tooltip="删除片段：只移除当前本土化字幕片段。" onclick={() => onDeleteLocalizedSubtitle?.(selectedLocalizedSubtitle.subtitle_id)} disabled={localizationRuntimeBusy}>删除片段</button>
 			</div>
 		{:else if selectedCue}
+			{@const asrBounds = timingBounds('asr')}
 			<div class="cue-meta">
-				<span>{timeLabel(selectedCue)}</span>
+					<span class="time-range">{formatTimecode(selectedCue.start_ms, draft?.source_media.frame_rate ?? 24)} - {formatTimecode(selectedCue.end_ms, draft?.source_media.frame_rate ?? 24)}</span>
 				<div class="timing-meta">
 					<span class:timing-low={selectedCue.timing_confidence === 'low'}>时间置信度：{selectedCue.timing_confidence ?? '未评估'}</span>
 					{#if selectedCue.quality_flags.includes('manual_timing_verified')}
@@ -650,14 +745,24 @@
 				</details>
 			{/if}
 			<div class="editor-grid time-grid">
-				<label class="field">
-					<span>入点 ms</span>
-					<input type="number" min="0" step="100" value={selectedCue.start_ms ?? ''} disabled={subtitleRuntimeBusy} oninput={(event) => onUpdateCue({ start_ms: event.currentTarget.value ? Number(event.currentTarget.value) : null })} />
-				</label>
-				<label class="field">
-					<span>出点 ms</span>
-					<input type="number" min="0" step="100" value={selectedCue.end_ms ?? ''} disabled={subtitleRuntimeBusy} oninput={(event) => onUpdateCue({ end_ms: event.currentTarget.value ? Number(event.currentTarget.value) : null })} />
-				</label>
+				<ScrubbableTimeField
+					label="入点"
+						value={selectedCue.start_ms ?? 0}
+						min={asrBounds.minStartMs}
+						max={Math.max(asrBounds.minStartMs, (selectedCue.end_ms ?? MIN_SUBTITLE_DURATION_MS) - MIN_SUBTITLE_DURATION_MS)}
+						frameRate={draft?.source_media.frame_rate ?? 24}
+					disabled={subtitleRuntimeBusy}
+					onCommit={(value) => onUpdateCue({ start_ms: value })}
+				/>
+				<ScrubbableTimeField
+					label="出点"
+						value={selectedCue.end_ms ?? MIN_SUBTITLE_DURATION_MS}
+						min={(selectedCue.start_ms ?? 0) + MIN_SUBTITLE_DURATION_MS}
+						max={asrBounds.maxEndMs}
+						frameRate={draft?.source_media.frame_rate ?? 24}
+					disabled={subtitleRuntimeBusy}
+					onCommit={(value) => onUpdateCue({ end_ms: value })}
+				/>
 			</div>
 			<label class="field">
 				<span>原文/ASR</span>
@@ -682,6 +787,28 @@
 			</div>
 		{:else}
 			<p class="empty-text">点击时间线上的字幕片段后，这里会同步显示原文/ASR 与本土化字幕。</p>
+		{/if}
+		{#if activeTtsSegmentId && onOpenSubtitleGenerate && onReuseSubtitleHistory}
+			<SubtitleTtsHistory
+				items={ttsHistory}
+				selectedSegmentId={activeTtsSegmentId}
+				{segmentLabels}
+				canGenerate={canGenerateSubtitle}
+				busy={generatingVoice}
+				appliedResultId={appliedTtsResultId}
+				canApplyToTimeline={Boolean(activeTtsSegmentId)}
+				timelineClipPresent={Boolean(activeTimelineDubClip)}
+				applyingResultId={historyApplyingResultId}
+				onOpenGenerate={onOpenSubtitleGenerate}
+				onReuse={onReuseSubtitleHistory}
+				onApply={onApplySubtitleHistory}
+				onDelete={onDeleteSubtitleHistory}
+				onDeleteCurrent={onDeleteCurrentSubtitleHistory}
+				onDeleteAll={onDeleteAllSubtitleHistory}
+				selectionCount={selectedLocalizedSubtitles.length || 1}
+				selectionContiguous={selectedLocalizedSubtitlesContiguous}
+				frameRate={draft?.source_media.frame_rate ?? 24}
+			/>
 		{/if}
 	</section>
 	{/if}
@@ -760,6 +887,16 @@
 		overflow: hidden;
 	}
 
+	.inspector.subtitle-view {
+		height: 100%;
+		max-height: none;
+		min-height: 0;
+		box-sizing: border-box;
+		grid-template-rows: auto minmax(0, 1fr);
+		align-content: stretch;
+		overflow: hidden;
+	}
+
 	.task-view-content {
 		min-width: 0;
 		min-height: 0;
@@ -829,6 +966,101 @@
 	.inspector-panel.runtime-locked {
 		border-color: rgba(82, 149, 169, 0.42);
 		box-shadow: inset 0 0 0 1px rgba(82, 149, 169, 0.08);
+	}
+
+	.subtitle-panel {
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+		height: 100%;
+		border: 0;
+		border-radius: 0;
+		background: transparent;
+		overflow: hidden;
+	}
+
+	.subtitle-panel :global(.tts-history) {
+		flex: 1 1 0;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.subtitle-panel.runtime-locked {
+		border: 0;
+		box-shadow: none;
+	}
+
+	.subtitle-panel .panel-head {
+		padding: 3px 0 10px;
+	}
+
+	.multi-selection-summary {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		padding: 7px 0;
+		border-bottom: 1px solid rgba(87, 208, 200, 0.2);
+		color: #dffbf8;
+	}
+
+	.multi-selection-summary div {
+		display: grid;
+		gap: 2px;
+	}
+
+	.multi-selection-summary strong { font-size: 11px; }
+	.multi-selection-summary span { color: #8fa6aa; font-size: 9px; }
+
+	.subtitle-panel .cue-meta {
+		padding: 8px 0;
+	}
+
+	.subtitle-panel .time-grid {
+		padding: 8px 0 0;
+	}
+
+	.subtitle-panel > .field {
+		padding: 8px 0 0;
+	}
+
+	.subtitle-panel .cue-actions {
+		padding: 8px 0 0;
+	}
+
+	.subtitle-panel .asr-audit {
+		margin: 8px 0 0;
+		border: 0;
+		border-top: 1px solid rgba(255, 255, 255, 0.09);
+		border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+		border-radius: 0;
+		background: transparent;
+	}
+
+	.subtitle-panel .asr-audit summary {
+		padding: 8px 0;
+	}
+
+	.subtitle-panel .audit-row {
+		padding-left: 0;
+		padding-right: 0;
+	}
+
+	@media (min-width: 1381px) {
+		.inspector,
+		.inspector.tasks-view,
+		.inspector.subtitle-view {
+			height: 100%;
+			max-height: 100%;
+			min-height: 0;
+		}
+	}
+
+	.time-range {
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+		font-variant-numeric: tabular-nums;
+		color: #d5e4e8;
+		font-size: 10px;
 	}
 
 	.panel-head {
@@ -1128,23 +1360,30 @@
 
 	.field textarea,
 	.field select,
-	.field input[type='number'],
 	.field input:not([type]) {
 		width: 100%;
+		box-sizing: border-box;
 		border: 1px solid var(--line);
 		border-radius: 7px;
 		background: #12171c;
 		color: var(--text);
-		padding: 8px;
+		padding: 7px 8px;
 		resize: vertical;
 		font-size: 12px;
+		line-height: 18px;
+	}
+
+	.field select,
+	.field input:not([type]) {
+		height: 34px;
 	}
 
 	.field textarea.subtitle-textarea {
-		min-height: 30px;
-		height: 30px;
+		min-height: 36px;
+		height: auto;
+		max-height: 160px;
+		field-sizing: content;
 		resize: vertical;
-		line-height: 18px;
 	}
 
 	.field input[type='range'] {

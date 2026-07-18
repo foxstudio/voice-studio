@@ -26,7 +26,11 @@
 		return 'tasks';
 	}
 
-	export function mergeDraftAfterConflict(latest: ConflictDraft, local: ConflictDraft): ConflictDraft {
+	export function mergeDraftAfterConflict(
+		latest: ConflictDraft,
+		local: ConflictDraft,
+		options: { deletedTimelineClipIds?: Iterable<string> } = {}
+	): ConflictDraft {
 		const latestLocalizationRevision = String(latest.localization_state?.created_at ?? '');
 		const localLocalizationRevision = String(local.localization_state?.created_at ?? '');
 		const preserveLatestLocalization = Boolean(
@@ -71,8 +75,11 @@
 				? { ...serverClip, ...clip, audio_path: serverClip.audio_path ?? clip.audio_path, status: serverClip.status ?? clip.status, candidate_id: serverClip.candidate_id ?? clip.candidate_id }
 				: clip;
 		});
+		const deletedTimelineClipIds = new Set(options.deletedTimelineClipIds ?? []);
 		for (const clip of latest.timeline_clips) {
-			if (!localClips.has(clip.clip_id)) mergedClips.push(clip);
+			// A local delete is an explicit edit, not an absent stale value. Do not let a
+			// concurrent task refresh silently put that clip back on the timeline.
+			if (!localClips.has(clip.clip_id) && !deletedTimelineClipIds.has(clip.clip_id)) mergedClips.push(clip);
 		}
 		return {
 			...latest,
@@ -161,6 +168,7 @@
 	import { withoutSubtitleTrack } from './subtitle-track-clear';
 	import type {
 		GenerateRequest,
+		HistoryItem,
 		Project,
 		VideoLocalizationCue,
 		VideoLocalizationCueUpdate,
@@ -197,6 +205,7 @@
 	} from 'lucide-svelte';
 	import { onMount } from 'svelte';
 	import { selectionForPlaybackAtTime } from '$lib/audio/selection-playback';
+	import { normalizeFrameRate, snapTimeToFrame } from './frame-timeline';
 	import { downloadBlob, downloadText } from './downloads';
 	import {
 		buildGenerateRequest,
@@ -231,11 +240,15 @@
 	let projects = $state<Project[]>([]);
 	let operations = $state<VideoLocalizationOperation[]>([]);
 	let foregroundTasks = $state<ActivityTask[]>([]);
+	let ttsHistory = $state<HistoryItem[]>([]);
 	let projectId = $state('');
 	let draft = $state<VideoLocalizationDraft | null>(null);
 	let draftOnlyCueIds = $state<string[]>([]);
 	let selectedCueId = $state('');
 	let selectedLocalizedSubtitleId = $state('');
+	let selectedTimelineAudioClipId = $state('');
+	type TimelineSelectionItem = { kind: 'subtitle' | 'audio'; trackId: VideoLocalizationTrackId; itemId: string };
+	let timelineSelectionItems = $state<TimelineSelectionItem[]>([]);
 	let loading = $state(true);
 	let resetting = $state(false);
 	let savingCue = $state(false);
@@ -257,6 +270,7 @@
 	let exportingLocalizedVideo = $state(false);
 	let referenceUpdatingId = $state('');
 	let candidateApplyingId = $state('');
+	let historyApplyingResultId = $state('');
 	let operationActionId = $state('');
 	let inspectorCollapsed = $state(false);
 	let inspectorWidth = $state(380);
@@ -275,9 +289,19 @@
 	let autoSaveScope = $state<'ui' | 'draft' | null>(null);
 	let pendingUiStatePatch = $state<Record<string, unknown>>({});
 	let lastAutoSavedAt = $state('');
-	type TimelineSnapshot = { clips: VideoLocalizationTimelineClip[]; disabledMediaTracks: string[] };
+	type TimelineSnapshot = {
+		clips: VideoLocalizationTimelineClip[];
+		cues: VideoLocalizationCue[];
+		localizedSubtitles: VideoLocalizationSubtitleCue[];
+		disabledMediaTracks: string[];
+	};
 	let timelineUndoStack = $state<TimelineSnapshot[]>([]);
 	let timelineRedoStack = $state<TimelineSnapshot[]>([]);
+	let timelineDeletedClipIds = new Set<string>();
+	let timelineEditRevision = 0;
+	let timelineSavedRevision = 0;
+	let cueSaveRevision = 0;
+	let localizedSubtitleSaveRevision = 0;
 	let videoInput: HTMLInputElement | null = null;
 	let localizationSrtInput: HTMLInputElement | null = null;
 	let operationPollingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -298,6 +322,22 @@
 			? draft?.localized_subtitles.find((cue) => cue.subtitle_id === selectedLocalizedSubtitleId) ?? null
 			: null
 	);
+	const selectedTimelineAudioClip = $derived(
+		selectedTimelineAudioClipId
+			? draft?.timeline_clips.find((clip) => clip.clip_id === selectedTimelineAudioClipId) ?? null
+			: null
+	);
+	const selectedLocalizedSubtitles = $derived.by(() => {
+		if (!draft || timelineSelectionItems.length < 2 || timelineSelectionItems.some((item) => item.kind !== 'subtitle' || item.trackId !== 'localizedSubtitles')) return [];
+		const selectedIds = new Set(timelineSelectionItems.map((item) => item.itemId));
+		return draft.localized_subtitles.filter((item) => selectedIds.has(item.subtitle_id)).sort((left, right) => left.start_ms - right.start_ms);
+	});
+	const selectedLocalizedSubtitlesContiguous = $derived.by(() => {
+		if (!draft || selectedLocalizedSubtitles.length < 2) return false;
+		const orderedIds = draft.localized_subtitles.slice().sort((left, right) => left.start_ms - right.start_ms).map((item) => item.subtitle_id);
+		const indexes = selectedLocalizedSubtitles.map((item) => orderedIds.indexOf(item.subtitle_id)).sort((left, right) => left - right);
+		return indexes.every((value, index) => index === 0 || value === indexes[index - 1] + 1);
+	});
 	const displayedPreviewTimeMs = $derived(hoverPreviewTimeMs ?? previewTimeMs);
 	const previewCue = $derived(
 		draft?.cues.find((cue) => cue.start_ms !== null && cue.end_ms !== null && displayedPreviewTimeMs >= cue.start_ms && displayedPreviewTimeMs < cue.end_ms) ?? null
@@ -462,9 +502,18 @@
 	}
 
 	async function loadDraft(nextProjectId = projectId) {
+		timelineUndoStack = [];
+		timelineRedoStack = [];
+		timelineSelectionItems = [];
+		cueSaveRevision += 1;
+		localizedSubtitleSaveRevision += 1;
 		if (!nextProjectId) {
 			draft = null;
 			draftOnlyCueIds = [];
+			ttsHistory = [];
+			timelineDeletedClipIds = new Set();
+			timelineEditRevision = 0;
+			timelineSavedRevision = 0;
 			return;
 		}
 		error = '';
@@ -473,6 +522,9 @@
 			const editableDraft = withEditableMediaClips(loadedDraft);
 			const addedMediaClips = editableDraft.timeline_clips.length > loadedDraft.timeline_clips.length;
 			draft = editableDraft;
+			timelineDeletedClipIds = new Set();
+			timelineEditRevision = 0;
+			timelineSavedRevision = 0;
 			if (addedMediaClips) scheduleDraftAutosave();
 			draftOnlyCueIds = [];
 			operations = sortOperations(draft.operations ?? []);
@@ -490,8 +542,23 @@
 			previewTimeMs = clampNumber(draft.ui_state?.playhead_ms, 0, Number.MAX_SAFE_INTEGER, 0);
 			autoSaveStatus = draft.updated_at ? 'saved' : 'idle';
 			await loadOperations(nextProjectId);
+			await loadTtsHistory(nextProjectId);
 		} catch (e) {
 			error = (e as Error).message || '加载草稿失败';
+		}
+	}
+
+	async function loadTtsHistory(nextProjectId = projectId) {
+		if (!nextProjectId) {
+			ttsHistory = [];
+			return;
+		}
+		try {
+			const items = await Api.history({ limit: 500, project_id: nextProjectId, source: 'video_localization' });
+			if (projectId !== nextProjectId) return;
+			ttsHistory = items;
+		} catch {
+			if (projectId === nextProjectId) ttsHistory = [];
 		}
 	}
 
@@ -576,9 +643,11 @@
 		draft = null;
 		draftOnlyCueIds = [];
 		selectedCueId = '';
+		selectedLocalizedSubtitleId = '';
 		selectedVoiceId = '';
 		selectedRecipeId = '';
 		operations = [];
+		ttsHistory = [];
 		previewTimeMs = 0;
 		stopOperationPolling();
 	}
@@ -1093,6 +1162,7 @@
 	}
 
 	function selectCue(cueId: string) {
+		selectedTimelineAudioClipId = '';
 		selectedLocalizedSubtitleId = '';
 		selectedCueId = cueId;
 		updateDraftUiState({ selected_cue_id: cueId });
@@ -1100,10 +1170,30 @@
 	}
 
 	function selectLocalizedSubtitle(subtitleId: string) {
+		selectedTimelineAudioClipId = '';
 		selectedLocalizedSubtitleId = subtitleId;
 		const subtitle = draft?.localized_subtitles.find((item) => item.subtitle_id === subtitleId);
 		if (subtitle?.linked_cue_id) selectedCueId = subtitle.linked_cue_id;
 		focusInspector('subtitle');
+	}
+
+	function selectTimelineAudioClip(clipId: string | null) {
+		selectedTimelineAudioClipId = clipId ?? '';
+		if (!clipId) return;
+		const clip = draft?.timeline_clips.find((item) => item.clip_id === clipId);
+		if (!clip || clip.track_id !== 'dub') return;
+		if (clip.subtitle_id) {
+			selectedLocalizedSubtitleId = clip.subtitle_id;
+			const subtitle = draft?.localized_subtitles.find((item) => item.subtitle_id === clip.subtitle_id);
+			if (subtitle?.linked_cue_id) selectedCueId = subtitle.linked_cue_id;
+			focusInspector('subtitle');
+			return;
+		}
+		if (clip.cue_id) {
+			selectedCueId = clip.cue_id;
+			selectedLocalizedSubtitleId = '';
+			focusInspector('subtitle');
+		}
 	}
 
 	function jumpToTimingConfidence(confidence: 'low' | 'medium') {
@@ -1135,9 +1225,12 @@
 		if (!projectId || !draft || subtitleRuntimeBusy) return;
 		const normalizedStart = Math.max(0, Math.round(startMs));
 		const normalizedEnd = Math.max(normalizedStart + MIN_SUBTITLE_DURATION_MS, Math.round(endMs));
-		const previous = draft.cues;
 		const targetCue = draft.cues.find((cue) => cue.cue_id === cueId);
 		if (!targetCue) return;
+		const previousCue = targetCue;
+		const expectedProjectId = projectId;
+		const saveRevision = ++cueSaveRevision;
+		rememberTimelineClips();
 		const protectedCue = protectCueManualEdit(
 			targetCue,
 			{
@@ -1151,27 +1244,37 @@
 		draft.cues = draft.cues.map((cue) =>
 			cue.cue_id === cueId ? protectedCue : cue
 		);
-			try {
+		try {
 				if (cueNeedsDraftSave(cueId)) await persistDraftSnapshot();
-				draft = await Api.updateVideoLocalizationCue(projectId, cueId, {
+				const savedDraft = await Api.updateVideoLocalizationCue(expectedProjectId, cueId, {
 					start_ms: protectedCue.start_ms,
 					end_ms: protectedCue.end_ms
 				});
+			if (projectId !== expectedProjectId || saveRevision !== cueSaveRevision || !draft) return;
+			const savedCue = savedDraft.cues.find((cue) => cue.cue_id === cueId);
+			if (savedCue) draft = { ...draft, cues: draft.cues.map((cue) => cue.cue_id === cueId ? savedCue : cue) };
 			selectedCueId = cueId;
 			updateDraftUiState({ selected_cue_id: cueId });
 			focusInspector('subtitle');
 			autoSaveStatus = 'saved';
 		} catch (e) {
-			draft = { ...draft, cues: previous };
+			if (projectId !== expectedProjectId || saveRevision !== cueSaveRevision || !draft) return;
+			draft = { ...draft, cues: draft.cues.map((cue) => cue.cue_id === cueId ? previousCue : cue) };
 			error = (e as Error).message || 'ASR 字幕时间保存失败';
 		}
 	}
 
 	async function updateLocalizedSubtitleTime(subtitleId: string, startMs: number, endMs: number) {
 		if (!projectId || !draft || localizationRuntimeBusy) return;
-		const normalizedStart = Math.max(0, Math.round(startMs));
-		const normalizedEnd = Math.max(normalizedStart + MIN_SUBTITLE_DURATION_MS, Math.round(endMs));
-		const previous = draft.localized_subtitles;
+		const target = draft.localized_subtitles.find((cue) => cue.subtitle_id === subtitleId);
+		if (!target) return;
+		const normalized = normalizeLocalizedSubtitleTiming(target, { start_ms: startMs, end_ms: endMs });
+		const normalizedStart = normalized.start_ms;
+		const normalizedEnd = normalized.end_ms;
+		const previousSubtitle = target;
+		const expectedProjectId = projectId;
+		const saveRevision = ++localizedSubtitleSaveRevision;
+		rememberTimelineClips();
 		draft = {
 			...draft,
 			localized_subtitles: draft.localized_subtitles.map((cue) =>
@@ -1179,31 +1282,76 @@
 			)
 		};
 		try {
-			draft = await Api.updateVideoLocalizationLocalizedSubtitle(projectId, subtitleId, {
+			const savedDraft = await Api.updateVideoLocalizationLocalizedSubtitle(expectedProjectId, subtitleId, {
 				start_ms: normalizedStart,
 				end_ms: normalizedEnd
 			});
+			if (projectId !== expectedProjectId || saveRevision !== localizedSubtitleSaveRevision || !draft) return;
+			const savedSubtitle = savedDraft.localized_subtitles.find((cue) => cue.subtitle_id === subtitleId);
+			if (savedSubtitle) draft = { ...draft, localized_subtitles: draft.localized_subtitles.map((cue) => cue.subtitle_id === subtitleId ? savedSubtitle : cue) };
 			autoSaveStatus = 'saved';
 		} catch (e) {
-			draft = { ...draft, localized_subtitles: previous };
+			if (projectId !== expectedProjectId || saveRevision !== localizedSubtitleSaveRevision || !draft) return;
+			draft = { ...draft, localized_subtitles: draft.localized_subtitles.map((cue) => cue.subtitle_id === subtitleId ? previousSubtitle : cue) };
 			error = (e as Error).message || '本土化字幕时间保存失败';
 		}
 	}
 
-	async function updateSelectedLocalizedSubtitle(patch: Partial<VideoLocalizationSubtitleCue>) {
-		if (!projectId || !draft || !selectedLocalizedSubtitle || localizationRuntimeBusy) return;
-		const previous = draft.localized_subtitles;
+	function normalizeLocalizedSubtitleTiming(
+		subtitle: VideoLocalizationSubtitleCue,
+		patch: Partial<VideoLocalizationSubtitleCue>
+	) {
+		if (!draft) return subtitle;
+		const timelineDurationMs = Math.max(draft.source_media.duration_ms ?? subtitle.end_ms, subtitle.end_ms, MIN_SUBTITLE_DURATION_MS);
+		const bounds = subtitleCueDragBounds(
+			draft.localized_subtitles.map((item) => ({ cue_id: item.subtitle_id, start_ms: item.start_ms, end_ms: item.end_ms })),
+			subtitle.subtitle_id,
+			timelineDurationMs
+		);
+		let startMs = Math.round(patch.start_ms ?? subtitle.start_ms);
+		let endMs = Math.round(patch.end_ms ?? subtitle.end_ms);
+		startMs = Math.max(bounds.minStartMs, Math.min(startMs, endMs - MIN_SUBTITLE_DURATION_MS));
+		endMs = Math.max(startMs + MIN_SUBTITLE_DURATION_MS, Math.min(bounds.maxEndMs, endMs));
+		return { ...subtitle, ...patch, start_ms: startMs, end_ms: endMs };
+	}
+
+	function previewSelectedLocalizedSubtitle(patch: Partial<VideoLocalizationSubtitleCue>) {
+		if (!draft || !selectedLocalizedSubtitle || localizationRuntimeBusy) return;
+		const normalized = normalizeLocalizedSubtitleTiming(selectedLocalizedSubtitle, patch);
 		draft = {
 			...draft,
 			localized_subtitles: draft.localized_subtitles.map((cue) =>
-				cue.subtitle_id === selectedLocalizedSubtitle.subtitle_id ? { ...cue, ...patch } : cue
+				cue.subtitle_id === selectedLocalizedSubtitle.subtitle_id ? normalized : cue
+			)
+		};
+	}
+
+	async function updateSelectedLocalizedSubtitle(patch: Partial<VideoLocalizationSubtitleCue>) {
+		if (!projectId || !draft || !selectedLocalizedSubtitle || localizationRuntimeBusy) return;
+		const subtitleId = selectedLocalizedSubtitle.subtitle_id;
+		const previousSubtitle = selectedLocalizedSubtitle;
+		const expectedProjectId = projectId;
+		const saveRevision = ++localizedSubtitleSaveRevision;
+		rememberTimelineClips();
+		const normalized = normalizeLocalizedSubtitleTiming(selectedLocalizedSubtitle, patch);
+		draft = {
+			...draft,
+			localized_subtitles: draft.localized_subtitles.map((cue) =>
+				cue.subtitle_id === subtitleId ? normalized : cue
 			)
 		};
 		try {
-			draft = await Api.updateVideoLocalizationLocalizedSubtitle(projectId, selectedLocalizedSubtitle.subtitle_id, patch);
+			const savedDraft = await Api.updateVideoLocalizationLocalizedSubtitle(expectedProjectId, subtitleId, {
+				...patch,
+				...(('start_ms' in patch || 'end_ms' in patch) ? { start_ms: normalized.start_ms, end_ms: normalized.end_ms } : {})
+			});
+			if (projectId !== expectedProjectId || saveRevision !== localizedSubtitleSaveRevision || !draft) return;
+			const savedSubtitle = savedDraft.localized_subtitles.find((cue) => cue.subtitle_id === subtitleId);
+			if (savedSubtitle) draft = { ...draft, localized_subtitles: draft.localized_subtitles.map((cue) => cue.subtitle_id === subtitleId ? savedSubtitle : cue) };
 			autoSaveStatus = 'saved';
 		} catch (e) {
-			draft = { ...draft, localized_subtitles: previous };
+			if (projectId !== expectedProjectId || saveRevision !== localizedSubtitleSaveRevision || !draft) return;
+			draft = { ...draft, localized_subtitles: draft.localized_subtitles.map((cue) => cue.subtitle_id === subtitleId ? previousSubtitle : cue) };
 			error = (e as Error).message || '本土化字幕保存失败';
 		}
 	}
@@ -1216,6 +1364,7 @@
 			setTimeout(() => (message = ''), 1600);
 			return;
 		}
+		rememberTimelineClips();
 		const splitAt = previewTimeMs > selectedCue.start_ms + MIN_SUBTITLE_DURATION_MS && previewTimeMs < selectedCue.end_ms - MIN_SUBTITLE_DURATION_MS
 			? previewTimeMs
 			: selectedCue.start_ms + Math.round(durationMs / 2);
@@ -1275,6 +1424,140 @@
 		setTimeout(() => (message = ''), 1600);
 	}
 
+	function nextLocalizedSubtitleId(currentDraft: VideoLocalizationDraft) {
+		const used = new Set(currentDraft.localized_subtitles.map((subtitle) => subtitle.subtitle_id));
+		let index = currentDraft.localized_subtitles.length + 1;
+		while (used.has(`localized_${String(index).padStart(4, '0')}`)) index += 1;
+		return `localized_${String(index).padStart(4, '0')}`;
+	}
+
+	function nextTimelineClipId(currentDraft: VideoLocalizationDraft, baseId: string) {
+		const used = new Set(currentDraft.timeline_clips.map((clip) => clip.clip_id));
+		let index = 2;
+		let candidate = `${baseId}_part_${index}`;
+		while (used.has(candidate)) {
+			index += 1;
+			candidate = `${baseId}_part_${index}`;
+		}
+		return candidate;
+	}
+
+	function splitLocalizedSubtitleFromTimeline(subtitleId: string, requestedSplitMs: number) {
+		if (!draft || localizationRuntimeBusy) return;
+		const currentDraft = draft;
+		const subtitle = currentDraft.localized_subtitles.find((item) => item.subtitle_id === subtitleId);
+		if (!subtitle) return;
+		const frameRate = normalizeFrameRate(currentDraft.source_media.frame_rate);
+		const splitMs = snapTimeToFrame(
+			requestedSplitMs,
+			frameRate,
+			'nearest',
+			subtitle.start_ms + MIN_SUBTITLE_DURATION_MS,
+			subtitle.end_ms - MIN_SUBTITLE_DURATION_MS
+		);
+		if (splitMs <= subtitle.start_ms || splitMs >= subtitle.end_ms) return;
+		const ratio = (splitMs - subtitle.start_ms) / Math.max(1, subtitle.end_ms - subtitle.start_ms);
+		const [firstText, secondText] = splitCueText(subtitle.text, ratio);
+		const [firstTts, secondTts] = splitCueText(subtitle.tts_text ?? '', ratio);
+		const nextSubtitleId = nextLocalizedSubtitleId(currentDraft);
+		const clearGeneratedResult = {
+			tts_result_id: null,
+			tts_audio_path: null,
+			tts_batch_task_id: null,
+			tts_batch_status: null,
+			tts_batch_error: null,
+			tts_attempted_at: null,
+			generated_duration_ms: null
+		};
+		const firstSubtitle: VideoLocalizationSubtitleCue = {
+			...subtitle,
+			...clearGeneratedResult,
+			end_ms: splitMs,
+			text: firstText,
+			tts_text: firstTts || null,
+			quality_flags: [...new Set([...(subtitle.quality_flags ?? []), 'timeline_split'])]
+		};
+		const secondSubtitle: VideoLocalizationSubtitleCue = {
+			...subtitle,
+			...clearGeneratedResult,
+			subtitle_id: nextSubtitleId,
+			start_ms: splitMs,
+			text: secondText,
+			tts_text: secondTts || null,
+			quality_flags: [...new Set([...(subtitle.quality_flags ?? []), 'timeline_split'])]
+		};
+		const clips = currentDraft.timeline_clips.flatMap((clip) => {
+			if (clip.subtitle_id !== subtitleId) return [clip];
+			const startMs = Math.round(clip.start_ms ?? subtitle.start_ms);
+			const endMs = Math.max(startMs + 300, Math.round(clip.end_ms ?? subtitle.end_ms));
+			if (splitMs <= startMs + 300 || splitMs >= endMs - 300) return [clip];
+			const sourceStartMs = Math.max(0, Math.round(clip.source_start_ms ?? 0));
+			const sourceEndMs = Math.max(sourceStartMs + 300, Math.round(clip.source_end_ms ?? sourceStartMs + endMs - startMs));
+			const sourceSplitMs = sourceStartMs + (splitMs - startMs);
+			return [
+				{ ...clip, end_ms: splitMs, source_end_ms: sourceSplitMs },
+				{
+					...clip,
+					clip_id: nextTimelineClipId(currentDraft, clip.clip_id),
+					subtitle_id: nextSubtitleId,
+					start_ms: splitMs,
+					end_ms: endMs,
+					source_start_ms: sourceSplitMs,
+					source_end_ms: sourceEndMs
+				}
+			];
+		});
+		rememberTimelineClips();
+		draft = {
+			...draft,
+			localized_subtitles: currentDraft.localized_subtitles.flatMap((item) =>
+				item.subtitle_id === subtitleId ? [firstSubtitle, secondSubtitle] : [item]
+			),
+			timeline_clips: clips
+		};
+		selectedLocalizedSubtitleId = nextSubtitleId;
+		scheduleDraftAutosave();
+		message = '本土化字幕与关联音频已按当前帧拆分';
+		setTimeout(() => (message = ''), 1800);
+	}
+
+	function splitTimelineClipFromTimeline(clipId: string, requestedSplitMs: number) {
+		if (!draft) return;
+		const currentDraft = draft;
+		const clip = currentDraft.timeline_clips.find((item) => item.clip_id === clipId);
+		if (!clip) return;
+		const startMs = Math.max(0, Math.round(clip.start_ms ?? 0));
+		const endMs = Math.max(startMs + 300, Math.round(clip.end_ms ?? startMs + 1800));
+		const frameRate = normalizeFrameRate(currentDraft.source_media.frame_rate);
+		const splitMs = snapTimeToFrame(requestedSplitMs, frameRate, 'nearest', startMs + 300, endMs - 300);
+		if (splitMs <= startMs || splitMs >= endMs) return;
+		const sourceStartMs = Math.max(0, Math.round(clip.source_start_ms ?? 0));
+		const sourceEndMs = Math.max(sourceStartMs + 300, Math.round(clip.source_end_ms ?? sourceStartMs + endMs - startMs));
+		const sourceSplitMs = sourceStartMs + (splitMs - startMs);
+		rememberTimelineClips();
+		draft = {
+			...draft,
+			timeline_clips: currentDraft.timeline_clips.flatMap((item) =>
+				item.clip_id !== clipId
+					? [item]
+					: [
+							{ ...item, end_ms: splitMs, source_end_ms: sourceSplitMs },
+							{
+								...item,
+								clip_id: nextTimelineClipId(currentDraft, item.clip_id),
+								start_ms: splitMs,
+								end_ms: endMs,
+								source_start_ms: sourceSplitMs,
+								source_end_ms: sourceEndMs
+							}
+						]
+			)
+		};
+		scheduleDraftAutosave();
+		message = '音频片段已按当前帧拆分';
+		setTimeout(() => (message = ''), 1800);
+	}
+
 	function mergeSelectedCueWithNext() {
 		if (!draft || !selectedCue) return;
 		const sorted = [...draft.cues].sort((a, b) => (a.start_ms ?? 0) - (b.start_ms ?? 0));
@@ -1285,6 +1568,7 @@
 			setTimeout(() => (message = ''), 1600);
 			return;
 		}
+		rememberTimelineClips();
 		const mergedCue: VideoLocalizationCue = {
 			...selectedCue,
 			end_ms: Math.max(selectedCue.end_ms ?? 0, nextCue.end_ms ?? selectedCue.end_ms ?? 0),
@@ -1338,16 +1622,24 @@
 
 	function timelineSnapshot(): TimelineSnapshot {
 		return {
-			clips: draft?.timeline_clips.map((clip) => ({ ...clip })) ?? [],
+			clips: cloneTimelineData(draft?.timeline_clips ?? []),
+			cues: cloneTimelineData(draft?.cues ?? []),
+			localizedSubtitles: cloneTimelineData(draft?.localized_subtitles ?? []),
 			disabledMediaTracks: Array.isArray(draft?.ui_state?.disabled_media_tracks) ? draft.ui_state.disabled_media_tracks.map(String) : []
 		};
+	}
+
+	function cloneTimelineData<T>(value: T): T {
+		return JSON.parse(JSON.stringify(value)) as T;
 	}
 
 	function applyTimelineSnapshot(snapshot: TimelineSnapshot) {
 		if (!draft) return;
 		draft = {
 			...draft,
-			timeline_clips: snapshot.clips.map((clip) => ({ ...clip })),
+			timeline_clips: cloneTimelineData(snapshot.clips),
+			cues: cloneTimelineData(snapshot.cues),
+			localized_subtitles: cloneTimelineData(snapshot.localizedSubtitles),
 			ui_state: { ...draft.ui_state, disabled_media_tracks: [...snapshot.disabledMediaTracks] }
 		};
 	}
@@ -1355,6 +1647,7 @@
 	function updateTimelineClipFromTimeline(clipId: string, startMs: number, endMs: number, sourceStartMs: number, sourceEndMs: number | null) {
 		if (!draft) return;
 		rememberTimelineClips();
+		timelineEditRevision += 1;
 		const normalizedStart = Math.max(0, Math.round(startMs));
 		const normalizedEnd = Math.max(normalizedStart + 300, Math.round(endMs));
 		const normalizedSourceStart = Math.max(0, Math.round(sourceStartMs));
@@ -1379,6 +1672,8 @@
 	function deleteTimelineClip(clipId: string) {
 		if (!draft) return;
 		rememberTimelineClips();
+		timelineEditRevision += 1;
+		timelineDeletedClipIds.add(clipId);
 		const target = draft.timeline_clips.find((clip) => clip.clip_id === clipId);
 		const isMediaTrack = Boolean(target && ['original', 'vocals', 'background'].includes(target.track_id));
 		const disabledTracks = Array.isArray(draft.ui_state?.disabled_media_tracks) ? draft.ui_state.disabled_media_tracks.map(String) : [];
@@ -1396,6 +1691,9 @@
 
 	function undoTimelineClipEdit() {
 		if (!draft || !timelineUndoStack.length) return;
+		cueSaveRevision += 1;
+		localizedSubtitleSaveRevision += 1;
+		timelineEditRevision += 1;
 		const [previous, ...rest] = timelineUndoStack;
 		timelineUndoStack = rest;
 		timelineRedoStack = [timelineSnapshot(), ...timelineRedoStack].slice(0, 30);
@@ -1405,6 +1703,9 @@
 
 	function redoTimelineClipEdit() {
 		if (!draft || !timelineRedoStack.length) return;
+		cueSaveRevision += 1;
+		localizedSubtitleSaveRevision += 1;
+		timelineEditRevision += 1;
 		const [next, ...rest] = timelineRedoStack;
 		timelineRedoStack = rest;
 		timelineUndoStack = [timelineSnapshot(), ...timelineUndoStack].slice(0, 30);
@@ -1413,6 +1714,7 @@
 	}
 
 	function clearCueSelection() {
+		selectedTimelineAudioClipId = '';
 		selectedCueId = '';
 		selectedLocalizedSubtitleId = '';
 		updateDraftUiState({ selected_cue_id: '' });
@@ -1420,6 +1722,7 @@
 
 	function deleteSubtitleItem(track: 'asr' | 'localized', itemId: string) {
 		if (!draft || subtitleRuntimeBusy || localizationRuntimeBusy) return;
+		rememberTimelineClips();
 		if (track === 'localized') {
 			if (!draft.localized_subtitles.some((cue) => cue.subtitle_id === itemId)) return;
 			draft = { ...draft, localized_subtitles: draft.localized_subtitles.filter((cue) => cue.subtitle_id !== itemId) };
@@ -1793,9 +2096,289 @@
 		return Boolean(cue?.tts_recommended_text?.trim() && reference?.audio_path && reference.cleanliness === 'clean' && reference.asr_status === 'verified');
 	}
 
+	function groupedTimelineSegmentId(clip: VideoLocalizationTimelineClip | null | undefined) {
+		if (!clip || clip.track_id !== 'dub') return '';
+		if (clip.subtitle_id?.startsWith('group_')) return clip.subtitle_id;
+		return clip.clip_id.startsWith('clip_group_') ? clip.clip_id.slice('clip_'.length) : '';
+	}
+
 	function selectedReferenceRecipe(reference: VideoLocalizationReferenceClip) {
 		const recipes = draft?.voice_recipes.filter((recipe) => recipe.reference_clip_id === reference.reference_clip_id) ?? [];
 		return recipes.find((recipe) => recipe.recipe_id === selectedRecipeId) ?? recipes[0] ?? null;
+	}
+
+	async function selectedSubtitleGenerateRequest() {
+		const groupedSegmentId = groupedTimelineSegmentId(selectedTimelineAudioClip);
+		const segmentId = selectedLocalizedSubtitle?.subtitle_id ?? selectedTimelineAudioClip?.cue_id ?? selectedCue?.cue_id;
+		if (!projectId || !segmentId || !draft?.stems.vocals_clean_path) return null;
+		const base = await Api.prepareVideoLocalizationTtsHandoff(projectId, segmentId);
+		if (groupedSegmentId && selectedTimelineAudioClip) {
+			const sourceCueIds = new Set(selectedTimelineAudioClip.source_cue_ids ?? []);
+			const sourceText = draft.cues
+				.filter((cue) => sourceCueIds.has(cue.cue_id))
+				.sort((left, right) => (left.start_ms ?? 0) - (right.start_ms ?? 0))
+				.map((cue) => cue.en_subtitle_text || cue.source_text_raw || '')
+				.filter(Boolean)
+				.join(' ');
+			const candidate = draft.generated_candidates.find((item) => item.candidate_id === selectedTimelineAudioClip.candidate_id);
+			return {
+				...base,
+				segment_id: groupedSegmentId,
+				text: candidate?.text_used?.trim() || base.text,
+				ref_text: sourceText || base.ref_text,
+				custom_reference_trim_start_ms: selectedTimelineAudioClip.start_ms,
+				custom_reference_trim_end_ms: selectedTimelineAudioClip.end_ms
+			};
+		}
+		if (!selectedLocalizedSubtitlesContiguous || selectedLocalizedSubtitles.length < 2) return base;
+		const first = selectedLocalizedSubtitles[0];
+		const last = selectedLocalizedSubtitles.at(-1)!;
+		const sourceCueIds = new Set(selectedLocalizedSubtitles.flatMap((item) => item.source_cue_ids ?? (item.linked_cue_id ? [item.linked_cue_id] : [])));
+		const sourceText = draft.cues
+			.filter((cue) => sourceCueIds.has(cue.cue_id))
+			.sort((left, right) => (left.start_ms ?? 0) - (right.start_ms ?? 0))
+			.map((cue) => cue.en_subtitle_text || cue.source_text_raw || '')
+			.filter(Boolean)
+			.join(' ');
+		return {
+			...base,
+			segment_id: `group_${first.subtitle_id}_${last.subtitle_id}_${selectedLocalizedSubtitles.length}`,
+			text: selectedLocalizedSubtitles.map((item) => item.tts_text?.trim() || item.text.trim()).filter(Boolean).join('\n'),
+			ref_text: sourceText || base.ref_text,
+			custom_reference_trim_start_ms: first.start_ms,
+			custom_reference_trim_end_ms: last.end_ms
+		};
+	}
+
+	function localizedSubtitleForRequest(request: GenerateRequest) {
+		if (!request.segment_id) return null;
+		return draft?.localized_subtitles.find((item) => item.subtitle_id === request.segment_id) ?? null;
+	}
+
+	async function openSelectedSubtitleInGenerate() {
+		if (submittingBatch) return;
+		submittingBatch = true;
+		message = '正在准备当前人声片段…';
+		let request: GenerateRequest | null = null;
+		try {
+			request = await selectedSubtitleGenerateRequest();
+		} catch (e) {
+			error = (e as Error).message || '准备语音合成素材失败';
+			return;
+		} finally {
+			submittingBatch = false;
+		}
+		if (!request || !request.segment_id) return;
+		const subtitle = localizedSubtitleForRequest(request);
+		const handoffMeta = {
+			source: 'video_localization',
+			mode: 'tune_with_recipe',
+			project_id: projectId,
+			cue_id: request.segment_id,
+			subtitle_id: subtitle?.subtitle_id ?? null,
+			reference_clip_id: null,
+			recipe_id: null,
+			created_at: new Date().toISOString()
+		};
+		const params = new URLSearchParams({
+			source: 'video_localization',
+			mode: 'tune_with_recipe',
+			project_id: projectId,
+			cue_id: request.segment_id
+		});
+		sessionStorage.setItem('voice-studio-history-reuse', JSON.stringify(request));
+		sessionStorage.setItem('voice-studio-video-localization-handoff', JSON.stringify(handoffMeta));
+		window.location.href = `/generate?${params.toString()}`;
+	}
+
+	function requestWithHistoryParameters(base: GenerateRequest, history: HistoryItem): GenerateRequest {
+		const snapshot = history.parameter_snapshot as Partial<GenerateRequest>;
+		return {
+			...base,
+			...snapshot,
+			text: base.text,
+			source: base.source,
+			project_id: base.project_id,
+			segment_id: base.segment_id,
+			voice_source: base.voice_source,
+			reference_audio_path: base.reference_audio_path,
+			reference_audio_license_status: base.reference_audio_license_status,
+			reference_audio_tags: base.reference_audio_tags,
+			ref_text: base.ref_text,
+			custom_reference_source_audio_path: base.custom_reference_source_audio_path,
+			custom_reference_source_duration_ms: base.custom_reference_source_duration_ms,
+			custom_reference_trim_start_ms: base.custom_reference_trim_start_ms,
+			custom_reference_trim_end_ms: base.custom_reference_trim_end_ms
+		};
+	}
+
+	async function reuseSubtitleHistory(history: HistoryItem) {
+		let base: GenerateRequest | null = null;
+		try {
+			message = '正在准备当前人声片段…';
+			base = await selectedSubtitleGenerateRequest();
+		} catch (e) {
+			error = (e as Error).message || '准备语音合成素材失败';
+			return;
+		}
+		if (!base || !draft || !base.segment_id) return;
+		await submitSubtitleTts(requestWithHistoryParameters(base, history), `沿用 ${history.engine_id} 参数`);
+	}
+
+	async function applySubtitleHistoryToTimeline(history: HistoryItem) {
+		if (!projectId || !draft || historyApplyingResultId) return;
+		const segmentId = groupedTimelineSegmentId(selectedTimelineAudioClip) || selectedLocalizedSubtitle?.subtitle_id || selectedCue?.cue_id || '';
+		if (!segmentId) {
+			error = '请先选择要采用配音的字幕片段';
+			return;
+		}
+		const selectedDubClip = selectedTimelineAudioClip?.track_id === 'dub' && groupedTimelineSegmentId(selectedTimelineAudioClip) === segmentId
+			? selectedTimelineAudioClip
+			: null;
+		const clip = selectedDubClip ?? draft.timeline_clips.find((item) =>
+				item.track_id === 'dub' && (item.subtitle_id === segmentId || (!selectedLocalizedSubtitle && item.cue_id === segmentId))
+			);
+		historyApplyingResultId = history.result_id;
+		error = '';
+		try {
+			draft = await Api.applyVideoLocalizationHistoryToTimeline(projectId, history.result_id, {
+				segment_id: segmentId,
+				clip_id: clip?.clip_id ?? null
+			});
+			const adoptedClip = draft.timeline_clips.find((item) =>
+				item.track_id === 'dub' && item.result_id === history.result_id && (item.subtitle_id === segmentId || item.cue_id === segmentId)
+			);
+			selectedTimelineAudioClipId = adoptedClip?.clip_id ?? clip?.clip_id ?? '';
+			message = clip ? '已替换当前字幕的配音片段' : '已将历史声音添加到合成配音轨';
+			setTimeout(() => (message = ''), 1800);
+		} catch (e) {
+			error = (e as Error).message || '采用历史声音失败';
+		} finally {
+			historyApplyingResultId = '';
+		}
+	}
+
+	async function deleteSubtitleHistory(history: HistoryItem) {
+		if (!window.confirm('删除这条配音记录吗？已经复制到时间线的音频不会受影响。')) return;
+		try {
+			await Api.deleteHistory(history.result_id);
+			ttsHistory = ttsHistory.filter((item) => item.result_id !== history.result_id);
+			message = '配音记录已删除';
+		} catch (e) {
+			await loadTtsHistory(projectId);
+			error = (e as Error).message || '删除配音记录失败';
+		}
+	}
+
+	async function deleteCurrentSubtitleHistory() {
+		const segmentId = groupedTimelineSegmentId(selectedTimelineAudioClip) || selectedLocalizedSubtitle?.subtitle_id || selectedCue?.cue_id || '';
+		const records = ttsHistory.filter((item) => (item.localized_subtitle_id || item.segment_id || item.cue_id || '') === segmentId);
+		if (!records.length || !window.confirm(`删除当前字幕的 ${records.length} 条配音记录吗？已经复制到时间线的音频不会受影响。`)) return;
+		try {
+			await Promise.all(records.map((item) => Api.deleteHistory(item.result_id)));
+			const removed = new Set(records.map((item) => item.result_id));
+			ttsHistory = ttsHistory.filter((item) => !removed.has(item.result_id));
+			message = `已删除 ${records.length} 条配音记录`;
+		} catch (e) {
+			await loadTtsHistory(projectId);
+			error = (e as Error).message || '删除配音记录失败';
+		}
+	}
+
+	async function deleteAllSubtitleHistory() {
+		if (!ttsHistory.length || !window.confirm(`删除当前项目的全部 ${ttsHistory.length} 条配音记录吗？已经复制到时间线的音频不会受影响。`)) return;
+		try {
+			await Promise.all(ttsHistory.map((item) => Api.deleteHistory(item.result_id)));
+			const removedCount = ttsHistory.length;
+			ttsHistory = [];
+			message = `已删除 ${removedCount} 条配音记录`;
+		} catch (e) {
+			await loadTtsHistory(projectId);
+			error = (e as Error).message || '删除全部配音记录失败';
+		}
+	}
+
+	async function submitSubtitleTts(request: GenerateRequest, actionLabel: string) {
+		if (!draft || !request.segment_id || submittingBatch) return;
+		submittingBatch = true;
+		error = '';
+		message = `${actionLabel}，正在提交…`;
+		try {
+			const task = await Api.generate(request);
+			const groupedSubtitles = request.segment_id.startsWith('group_') && selectedLocalizedSubtitlesContiguous ? selectedLocalizedSubtitles : [];
+			const subtitle = groupedSubtitles[0] ?? localizedSubtitleForRequest(request);
+			const requestCue = draft.cues.find((item) => item.cue_id === request.segment_id) ?? null;
+			const sourceCueIds = Array.from(new Set(
+				groupedSubtitles.length
+					? groupedSubtitles.flatMap((item) => item.source_cue_ids ?? (item.linked_cue_id ? [item.linked_cue_id] : []))
+					: subtitle?.source_cue_ids ?? (subtitle?.linked_cue_id ? [subtitle.linked_cue_id] : requestCue?.cue_id ? [requestCue.cue_id] : [])
+			));
+			const sourceCueId = sourceCueIds[0] ?? null;
+			const candidateId = candidateIdFor(task.task_id);
+			const candidate: VideoLocalizationGeneratedCandidate = {
+				candidate_id: candidateId,
+				recipe_id: `history_${task.task_id}`,
+				reference_clip_id: null,
+				cue_id: sourceCueId,
+				subtitle_id: groupedSubtitles.length ? request.segment_id : subtitle?.subtitle_id ?? null,
+				audio_path: null,
+				duration_ms: null,
+				text_used: request.text,
+				task_id: task.task_id,
+				notes: actionLabel,
+				status: task.status,
+				created_at: new Date().toISOString()
+			};
+			const startMs = request.custom_reference_trim_start_ms ?? requestCue?.start_ms ?? 0;
+			const endMs = request.custom_reference_trim_end_ms ?? requestCue?.end_ms ?? startMs + 1800;
+			const timelineClip: VideoLocalizationTimelineClip = {
+				clip_id: `clip_${request.segment_id}`,
+				cue_id: sourceCueId,
+				subtitle_id: groupedSubtitles.length ? request.segment_id : subtitle?.subtitle_id ?? null,
+				source_cue_ids: sourceCueIds,
+				candidate_id: candidateId,
+				track_id: 'dub',
+				start_ms: startMs,
+				end_ms: endMs,
+				source_start_ms: 0,
+				source_end_ms: null,
+				audio_path: null,
+				status: 'queued'
+			};
+			const coveredSourceCueIds = new Set(sourceCueIds);
+			draft = await Api.saveVideoLocalizationDraft(projectId, {
+				...draft,
+				generated_candidates: [candidate, ...draft.generated_candidates.filter((item) => item.candidate_id !== candidateId)],
+				timeline_clips: [timelineClip, ...draft.timeline_clips.filter((item) => {
+					if (item.clip_id === timelineClip.clip_id) return false;
+					if (item.track_id !== 'dub' || !coveredSourceCueIds.size) return true;
+					return !(item.source_cue_ids ?? []).some((cueId) => coveredSourceCueIds.has(cueId));
+				})]
+			});
+			message = `${actionLabel}，任务已开始`;
+			void monitorSubtitleTtsTask(task.task_id);
+		} catch (e) {
+			error = (e as Error).message || '提交配音生成失败';
+		} finally {
+			submittingBatch = false;
+		}
+	}
+
+	async function monitorSubtitleTtsTask(taskId: string) {
+		for (let attempt = 0; attempt < 900; attempt += 1) {
+			await new Promise((resolve) => setTimeout(resolve, 1000));
+			try {
+				const task = await Api.task(taskId);
+				if (!['success', 'failed', 'cancelled'].includes(task.status)) continue;
+				await refreshDraftOnly();
+				await loadTtsHistory();
+				if (task.status === 'success') message = '配音已生成，并已放入合成配音轨';
+				else error = task.error_message || '配音生成没有完成';
+				return;
+			} catch {
+				if (attempt > 5) return;
+			}
+		}
 	}
 
 	function sendSelectedCueToGenerate(mode: 'default' | 'recipe' = 'default') {
@@ -2040,7 +2623,10 @@
 		if (projectId !== refreshingProjectId) return;
 		const editableDraft = withEditableMediaClips(loadedDraft);
 		const addedMediaClips = editableDraft.timeline_clips.length > loadedDraft.timeline_clips.length;
-		draft = editableDraft;
+		const hasUnsavedTimelineEdits = timelineEditRevision !== timelineSavedRevision;
+		draft = draft && hasUnsavedTimelineEdits
+			? mergeDraftAfterConflict(editableDraft, draft, { deletedTimelineClipIds: timelineDeletedClipIds })
+			: editableDraft;
 		if (addedMediaClips) scheduleDraftAutosave();
 		draftOnlyCueIds = [];
 		operations = sortOperations(draft.operations ?? operations);
@@ -2333,6 +2919,8 @@
 		if (!projectId || !draft) return;
 		const savingProjectId = projectId;
 		const savingDraft = draft;
+		const savingTimelineRevision = timelineEditRevision;
+		const savingDeletedTimelineClipIds = new Set(timelineDeletedClipIds);
 		const savingScope = autoSaveScope ?? 'draft';
 		const uiPatch = pendingUiStatePatch;
 		autoSaveScope = null;
@@ -2348,13 +2936,20 @@
 				} catch (e) {
 					if (!(e instanceof ApiError) || e.code !== 'VIDEO_LOCALIZATION_DRAFT_CONFLICT') throw e;
 					const latest = await Api.videoLocalizationDraft(savingProjectId);
-					savedDraft = await Api.saveVideoLocalizationDraft(savingProjectId, mergeDraftAfterConflict(latest, savingDraft));
+					savedDraft = await Api.saveVideoLocalizationDraft(
+						savingProjectId,
+						mergeDraftAfterConflict(latest, savingDraft, { deletedTimelineClipIds: savingDeletedTimelineClipIds })
+					);
 				}
 			}
 			if (projectId === savingProjectId) {
 				draft = draft === savingDraft || !draft
 					? savedDraft
-					: mergeDraftAfterConflict(savedDraft, draft);
+						: mergeDraftAfterConflict(savedDraft, draft, { deletedTimelineClipIds: timelineDeletedClipIds });
+			}
+			if (timelineEditRevision === savingTimelineRevision) {
+				timelineSavedRevision = savingTimelineRevision;
+				timelineDeletedClipIds = new Set();
 			}
 			draftOnlyCueIds = [];
 			autoSaveStatus = 'saved';
@@ -2641,6 +3236,8 @@
 				{timelineZoom}
 				subtitlePreview={{ ...subtitlePreview, sources: subtitlePreview.sources ?? autoSubtitleSources() }}
 				onSelectCue={selectCue}
+				onSelectAudioClip={selectTimelineAudioClip}
+				onTimelineSelectionChange={(items) => (timelineSelectionItems = items)}
 				onClearCueSelection={clearCueSelection}
 				onExtractAudio={extractSourceAudio}
 				onRestoreOriginalAudio={restoreOriginalAudio}
@@ -2665,6 +3262,8 @@
 				localizationBusy={localizationRuntimeBusy}
 				{localizationPreview}
 				onSplitCue={splitSelectedCue}
+				onSplitLocalizedSubtitle={splitLocalizedSubtitleFromTimeline}
+				onSplitTimelineClip={splitTimelineClipFromTimeline}
 				onMergeCue={mergeSelectedCueWithNext}
 				onDeleteCue={deleteSelectedCue}
 				onSaveSelectionAsVoice={focusSaveSelectionAsVoice}
@@ -2679,6 +3278,8 @@
 				onRedoTimelineClip={redoTimelineClipEdit}
 				canUndoTimeline={timelineUndoStack.length > 0}
 				canRedoTimeline={timelineRedoStack.length > 0}
+				undoTimelineCount={timelineUndoStack.length}
+				redoTimelineCount={timelineRedoStack.length}
 			/>
 		</section>
 
@@ -2689,6 +3290,9 @@
 				{projectId}
 				{selectedCue}
 				{selectedLocalizedSubtitle}
+				{selectedLocalizedSubtitles}
+				selectedLocalizedSubtitlesContiguous={selectedLocalizedSubtitlesContiguous}
+				selectedTimelineAudioClip={selectedTimelineAudioClip}
 				selectionRange={audioSelectionRange}
 				{selectedVoiceId}
 				{selectedRecipeId}
@@ -2698,6 +3302,7 @@
 				onSelectedVoiceIdChange={updateSelectedVoiceId}
 				onSectionChange={(section) => focusInspector(section)}
 				onUpdateCue={updateSelectedCue}
+				onPreviewLocalizedSubtitle={previewSelectedLocalizedSubtitle}
 				onUpdateLocalizedSubtitle={updateSelectedLocalizedSubtitle}
 				onDeleteLocalizedSubtitle={(subtitleId) => deleteSubtitleItem('localized', subtitleId)}
 					onSaveCue={saveSelectedCue}
@@ -2723,6 +3328,14 @@
 				{candidateApplyingId}
 					generatingVoice={submittingBatch}
 					{taskHistory}
+					{ttsHistory}
+					onOpenSubtitleGenerate={openSelectedSubtitleInGenerate}
+					onReuseSubtitleHistory={reuseSubtitleHistory}
+				onApplySubtitleHistory={applySubtitleHistoryToTimeline}
+				onDeleteSubtitleHistory={deleteSubtitleHistory}
+				onDeleteCurrentSubtitleHistory={deleteCurrentSubtitleHistory}
+				onDeleteAllSubtitleHistory={deleteAllSubtitleHistory}
+					historyApplyingResultId={historyApplyingResultId}
 					onCancelTask={cancelActivityTask}
 					onRetryTask={retryActivityTask}
 					{subtitleRuntimeBusy}
@@ -2748,6 +3361,27 @@
 		background: #0f1114;
 	}
 
+	@media (min-width: 1381px) {
+		.video-localization-page {
+			display: grid;
+			grid-template-rows: auto minmax(0, 1fr);
+			height: calc(100dvh - 49px);
+			min-height: 0;
+			padding-bottom: 14px;
+			overflow: hidden;
+		}
+
+		.cutting-shell {
+			height: 100%;
+			min-height: 0;
+		}
+
+		.cutting-stage {
+			min-height: 0;
+			overflow-y: auto;
+		}
+	}
+
 	.cutting-mode {
 		--studio-bg: #0f1114;
 		--studio-panel: #16191d;
@@ -2763,10 +3397,12 @@
 		grid-template-columns: minmax(0, 1fr) auto;
 		align-items: center;
 		gap: 10px;
+		width: 100%;
 		min-height: 44px;
 		margin: 0 auto;
 		max-width: 1720px;
 		padding: 6px 8px;
+		box-sizing: border-box;
 		border: 1px solid var(--line);
 		border-bottom: 0;
 		border-radius: 9px 9px 0 0;
@@ -3075,8 +3711,10 @@
 	.cutting-shell {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) 7px var(--inspector-width, 380px);
+		width: 100%;
 		max-width: 1720px;
 		margin: 0 auto;
+		box-sizing: border-box;
 		border: 1px solid var(--line);
 		border-radius: 0 0 10px 10px;
 		background: var(--studio-panel);
@@ -3245,18 +3883,6 @@
 		height: 1px;
 		margin: 3px 5px;
 		background: var(--line);
-	}
-
-	@media (max-width: 1560px) {
-		.cutting-head {
-			grid-template-columns: minmax(260px, 360px) minmax(180px, 1fr);
-		}
-
-		.cutting-actions {
-			grid-column: 1 / -1;
-			justify-content: flex-end;
-		}
-
 	}
 
 	@media (max-width: 1380px) {

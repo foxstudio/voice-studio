@@ -5,11 +5,57 @@ import re
 from app.errors import AppException
 from app.domains.video_localization.schemas import (
     VideoLocalizationDraft,
+    VideoLocalizationCue,
     VideoLocalizationSpeaker,
+    VideoLocalizationSpeakerCluster,
     VideoLocalizationSpeakerCreate,
     VideoLocalizationSpeakerUpdate,
     VideoLocalizationTimeRange,
 )
+
+
+def bind_diarization_clusters(
+    draft: VideoLocalizationDraft,
+    cues: list[VideoLocalizationCue],
+    clusters: list[VideoLocalizationSpeakerCluster],
+) -> tuple[list[VideoLocalizationSpeaker], list[VideoLocalizationCue], list[VideoLocalizationSpeakerCluster]]:
+    if not clusters:
+        return draft.speakers, cues, clusters
+
+    next_speakers = list(draft.speakers)
+    cluster_to_speaker: dict[str, str] = {}
+    for speaker in next_speakers:
+        for cluster_id in speaker.acoustic_cluster_ids:
+            cluster_to_speaker[cluster_id] = speaker.speaker_id
+
+    existing_ids = {speaker.speaker_id for speaker in next_speakers}
+    for index, cluster in enumerate(clusters, start=1):
+        if cluster.cluster_id in cluster_to_speaker:
+            continue
+        speaker_id = _next_available_speaker_id(existing_ids)
+        existing_ids.add(speaker_id)
+        cluster_to_speaker[cluster.cluster_id] = speaker_id
+        next_speakers.append(
+            VideoLocalizationSpeaker(
+                speaker_id=speaker_id,
+                display_name=f"说话人 {index}",
+                acoustic_cluster_ids=[cluster.cluster_id],
+                review_status="needs_review",
+                notes="由声学说话人分离自动建立，真实身份需结合证据确认。",
+            )
+        )
+
+    bound_clusters = [
+        cluster.model_copy(update={"business_speaker_id": cluster_to_speaker.get(cluster.cluster_id)})
+        for cluster in clusters
+    ]
+    bound_cues = [
+        cue.model_copy(update={"speaker_id": cluster_to_speaker.get(cue.speaker_cluster_id or "")})
+        if cue.speaker_cluster_id
+        else cue
+        for cue in cues
+    ]
+    return next_speakers, bound_cues, bound_clusters
 
 
 def with_created_speaker(draft: VideoLocalizationDraft, payload: VideoLocalizationSpeakerCreate) -> VideoLocalizationDraft:
@@ -105,7 +151,10 @@ def _normalize_speaker_id(value: str | None) -> str:
 
 
 def _next_speaker_id(draft: VideoLocalizationDraft) -> str:
-    existing_ids = {speaker.speaker_id for speaker in draft.speakers}
+    return _next_available_speaker_id({speaker.speaker_id for speaker in draft.speakers})
+
+
+def _next_available_speaker_id(existing_ids: set[str]) -> str:
     index = 1
     while True:
         candidate = f"speaker_{index:02d}"

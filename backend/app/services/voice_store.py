@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -141,6 +143,44 @@ def delete_file(file_id: str, *, unlink: bool = True) -> None:
     db.delete_one("voice_files", "file_id", file_id)
 
 
+def ensure_managed_audio_file(source_path: str | Path, *, file_id: str, original_name: str | None = None) -> VoiceFile:
+    """Copy a local audio source into the managed custom-reference store once."""
+    existing = get_file(file_id)
+    if existing and existing.path and Path(existing.path).exists():
+        return existing
+    source = Path(source_path)
+    if not source.is_file():
+        raise AppException(404, "AUDIO_NOT_FOUND", "Audio not found")
+    settings_store.ensure_directories()
+    suffix = source.suffix.lower() or ".wav"
+    destination = custom_reference_store.allocate_path(file_id, suffix)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(f"{destination.suffix}.tmp")
+    temporary.unlink(missing_ok=True)
+    try:
+        try:
+            os.link(source, temporary)
+        except OSError:
+            shutil.copy2(source, temporary)
+        temporary.replace(destination)
+        meta = audio_tools.probe_audio(destination)
+    except Exception as exc:
+        temporary.unlink(missing_ok=True)
+        destination.unlink(missing_ok=True)
+        raise AppException(400, "SOURCE_AUDIO_UNREADABLE", f"无法准备参考音频: {exc}") from exc
+    voice_file = VoiceFile(
+        file_id=file_id,
+        original_name=original_name or source.name,
+        path=str(destination),
+        mime_type="audio/wav" if suffix == ".wav" else None,
+        size_bytes=meta["size_bytes"],
+        duration_ms=meta["duration_ms"],
+        sample_rate=meta["sample_rate"],
+    )
+    db.upsert("voice_files", voice_file.file_id, voice_file.model_dump())
+    return voice_file
+
+
 async def upload_audio(file: UploadFile) -> dict:
     settings_store.ensure_directories()
     original_name = Path(file.filename or "voice.wav").name or "voice.wav"
@@ -220,7 +260,7 @@ async def _save_upload(file: UploadFile, destination: Path) -> int:
     return total
 
 
-def create_audio_clip(file_id: str, start_ms: int, end_ms: int) -> dict:
+def create_audio_clip(file_id: str, start_ms: int, end_ms: int, *, clip_file_id: str | None = None) -> dict:
     settings_store.ensure_directories()
     source = get_file(file_id)
     if not source or not source.path or not Path(source.path).exists():
@@ -243,7 +283,16 @@ def create_audio_clip(file_id: str, start_ms: int, end_ms: int) -> dict:
         raise AppException(400, "CLIP_TOO_SHORT", "裁切选区不能短于 0.1 秒")
 
     stem = Path(source.original_name or source_path.name).stem or "reference"
-    vf = VoiceFile(original_name=f"{stem}_clip_{start_ms}-{end_ms}ms.wav", path="")
+    if clip_file_id:
+        existing = get_file(clip_file_id)
+        if existing and existing.path and Path(existing.path).exists():
+            quality = _quality_for_voice_file(existing.duration_ms)
+            return {"file_id": existing.file_id, "filename": existing.original_name, "path": existing.path, "quality": quality, "voice_file": existing}
+    vf = VoiceFile(
+        **({"file_id": clip_file_id} if clip_file_id else {}),
+        original_name=f"{stem}_clip_{start_ms}-{end_ms}ms.wav",
+        path="",
+    )
     path = custom_reference_store.allocate_path(vf.file_id, ".wav")
     try:
         audio_tools.crop_file(source_path, path, start_ms, end_ms, "wav")

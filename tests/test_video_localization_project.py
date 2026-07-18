@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -49,7 +50,7 @@ from app.domains.video_localization import exporting as video_localization_expor
 from app.domains.video_localization import service as video_localization_service  # noqa: E402
 from app.domains.video_localization import source_pipeline as video_localization_source_pipeline  # noqa: E402
 from app.domains.video_localization import tts_pipeline as video_localization_tts_pipeline  # noqa: E402
-from app.services import audio_tools, batch_queue, database, project_store, settings_store, task_queue  # noqa: E402
+from app.services import audio_tools, batch_queue, database, history_store, project_store, settings_store, task_queue  # noqa: E402
 from app.api import video_localization as video_localization_api  # noqa: E402
 from app.errors import AppException  # noqa: E402
 
@@ -1535,6 +1536,106 @@ def test_video_localization_source_video_can_be_played_after_import(tmp_path: Pa
     assert response.content == b"fake-video-bytes"
 
 
+def test_video_localization_preview_video_falls_back_to_source(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "预览回退", "description": ""}).json()
+    source_path = _project_root(project["project_id"]) / "source" / "demo.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"source-video")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={"project_type": "video_localization", "schema_version": "v1", "source_media": {"video_path": str(source_path)}},
+    )
+
+    response = client.get(f"/api/projects/{project['project_id']}/video-localization/source-media/preview-video")
+
+    assert response.status_code == 200
+    assert response.content == b"source-video"
+    assert "attachment" not in response.headers.get("content-disposition", "")
+
+
+def test_editing_proxy_is_atomic_cached_and_preserves_source(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "编辑代理", "description": ""}).json()
+    source_path = _project_root(project["project_id"]) / "source" / "source.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"original-4k-av1")
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(media_assets, "probe_video", lambda _path: {"codec_name": "av1", "width": 3840, "height": 2160})
+    monkeypatch.setattr(media_assets.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        Path(command[-1]).write_bytes(b"h264-proxy")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(media_assets.subprocess, "run", fake_run)
+
+    first = media_assets.ensure_editing_proxy(project["project_id"], source_path)
+    second = media_assets.ensure_editing_proxy(project["project_id"], source_path)
+
+    assert first == second
+    assert first.read_bytes() == b"h264-proxy"
+    assert source_path.read_bytes() == b"original-4k-av1"
+    assert len(calls) == 1
+    assert "h264_videotoolbox" in calls[0]
+    assert "0:a:0?" in calls[0]
+    assert "aac" in calls[0]
+    assert not list(first.parent.glob("*.part.mp4"))
+
+
+def test_editing_proxy_falls_back_to_software_encoder(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "代理编码回退", "description": ""}).json()
+    source_path = _project_root(project["project_id"]) / "source" / "source.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"source")
+    encoders: list[str] = []
+
+    monkeypatch.setattr(media_assets, "probe_video", lambda _path: {"codec_name": "av1", "width": 3840, "height": 2160})
+    monkeypatch.setattr(media_assets.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def fake_run(command, **_kwargs):
+        encoder = command[command.index("-c:v") + 1]
+        encoders.append(encoder)
+        if encoder == "libx264":
+            Path(command[-1]).write_bytes(b"software-proxy")
+            return subprocess.CompletedProcess(command, 0, "", "")
+        return subprocess.CompletedProcess(command, 1, "", "hardware unavailable")
+
+    monkeypatch.setattr(media_assets.subprocess, "run", fake_run)
+
+    result = media_assets.ensure_editing_proxy(project["project_id"], source_path)
+
+    assert result.read_bytes() == b"software-proxy"
+    assert encoders == ["h264_videotoolbox", "libx264"]
+
+
+def test_editing_proxy_failure_removes_partial_output(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "代理失败清理", "description": ""}).json()
+    source_path = _project_root(project["project_id"]) / "source" / "source.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"source")
+
+    monkeypatch.setattr(media_assets, "probe_video", lambda _path: {"codec_name": "av1", "width": 3840, "height": 2160})
+    monkeypatch.setattr(media_assets.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def fake_run(command, **_kwargs):
+        Path(command[-1]).write_bytes(b"incomplete")
+        return subprocess.CompletedProcess(command, 1, "", "encode failed")
+
+    monkeypatch.setattr(media_assets.subprocess, "run", fake_run)
+
+    with pytest.raises(AppException, match="Failed to create the editing proxy"):
+        media_assets.ensure_editing_proxy(project["project_id"], source_path)
+
+    preview_dir = _project_root(project["project_id"]) / "preview"
+    assert not list(preview_dir.glob("*.part.mp4"))
+    assert not list(preview_dir.glob("*.mp4"))
+
+
 def test_video_localization_source_audio_endpoint_falls_back_to_original_stem(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "源音回退", "description": ""}).json()
@@ -2930,6 +3031,7 @@ def test_video_localization_async_asr_uses_requested_vocals_track(tmp_path: Path
     assert progress_stages == [
         "准备处理",
         "正在识别人声内容",
+        "正在区分说话人",
         "正在判断是否需要联网核验",
         "正在校对识别文本",
         "正在生成逐词时间码",
@@ -4679,19 +4781,31 @@ def test_video_localization_single_tts_generation_syncs_from_task_queue(tmp_path
     )
     task = GenerationTask(
         task_id="task-video-single",
+        generation_id="task-video-single",
         engine_id="indextts-v2",
         project_id=project["project_id"],
         segment_id="cue_0001",
+        cue_id="cue_0001",
+        bind_to_video_localization=True,
         input_text="源台词。",
         status=TaskStatus.success,
-        parameters={"source": "video_localization"},
+        parameters={
+            "source": "video_localization",
+            "bind_to_video_localization": True,
+            "localized_subtitle_id": None,
+            "cue_id": "cue_0001",
+            "generation_id": "task-video-single",
+        },
     )
     hist = HistoryItem(
         result_id="result-video-single",
         task_id=task.task_id,
+        generation_id=task.generation_id,
         engine_id=task.engine_id,
         project_id=task.project_id,
         segment_id=task.segment_id,
+        cue_id=task.cue_id,
+        bind_to_video_localization=True,
         input_text=task.input_text,
         output_path=str(output_path),
         duration_ms=2300,
@@ -4719,6 +4833,65 @@ def test_video_localization_single_tts_generation_syncs_from_task_queue(tmp_path
 
     task_queue._sync_video_localization_tts_result(task, hist)
     assert list(adopted_path.parent.glob("task-video-single*.wav")) == [adopted_path]
+
+
+def test_video_localization_generate_handoff_does_not_bind_without_explicit_confirmation(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "不自动回填", "description": ""}).json()
+    output_path = tmp_path / "outputs" / "unbound.wav"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(b"standalone-audio")
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [
+                {
+                    "cue_id": "cue_0001",
+                    "start_ms": 1000,
+                    "end_ms": 3200,
+                    "tts_recommended_text": "原项目台词",
+                }
+            ],
+        },
+    )
+    task = GenerationTask(
+        task_id="task-unbound",
+        generation_id="task-unbound",
+        engine_id="indextts-v2",
+        project_id=project["project_id"],
+        segment_id="cue_0001",
+        cue_id="cue_0001",
+        bind_to_video_localization=False,
+        input_text="在语音合成页生成的其他内容",
+        status=TaskStatus.success,
+        parameters={
+            "source": "video_localization",
+            "bind_to_video_localization": False,
+            "cue_id": "cue_0001",
+            "generation_id": "task-unbound",
+        },
+    )
+    hist = HistoryItem(
+        result_id="result-unbound",
+        task_id=task.task_id,
+        generation_id=task.generation_id,
+        engine_id=task.engine_id,
+        project_id=task.project_id,
+        segment_id=task.segment_id,
+        cue_id=task.cue_id,
+        bind_to_video_localization=False,
+        input_text=task.input_text,
+        output_path=str(output_path),
+        duration_ms=1800,
+    )
+
+    task_queue._sync_video_localization_tts_result(task, hist)
+
+    cue = client.get(f"/api/projects/{project['project_id']}/video-localization").json()["cues"][0]
+    assert cue["tts_result_id"] is None
+    assert cue["tts_audio_path"] is None
 
 
 def test_video_localization_candidate_can_be_previewed_and_applied(tmp_path: Path):
@@ -4794,6 +4967,116 @@ def test_video_localization_candidate_can_be_previewed_and_applied(tmp_path: Pat
     )
     assert clip_audio.status_code == 200
     assert clip_audio.content == b"second-audio"
+
+
+def test_video_localization_history_result_replaces_only_the_bound_localized_dub_clip(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "本土化历史替换", "description": ""}).json()
+    old_audio = tmp_path / "outputs" / "old.wav"
+    history_audio = tmp_path / "outputs" / "history.wav"
+    old_audio.parent.mkdir(parents=True, exist_ok=True)
+    audio_tools.write_audio(old_audio, np.full(1_000, 0.2, dtype=np.float32), 1_000)
+    audio_tools.write_audio(history_audio, np.full(1_200, 0.35, dtype=np.float32), 1_000)
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [{"cue_id": "cue_0001", "start_ms": 1_000, "end_ms": 2_500, "tts_recommended_text": "配音台词"}],
+            "localized_subtitles": [{"subtitle_id": "localized_0001", "start_ms": 1_000, "end_ms": 2_500, "text": "上屏字幕", "tts_text": "配音台词", "source_cue_ids": ["cue_0001"]}],
+            "timeline_clips": [{"clip_id": "clip_localized_0001", "track_id": "dub", "subtitle_id": "localized_0001", "cue_id": "cue_0001", "start_ms": 1_000, "end_ms": 2_500, "audio_path": str(old_audio), "status": "ready"}],
+        },
+    )
+    history_store.add(
+        HistoryItem(
+            result_id="history-localized-001",
+            task_id="task-localized-001",
+            generation_id="generation-localized-001",
+            engine_id="indextts-v2",
+            project_id=project["project_id"],
+            segment_id="localized_0001",
+            localized_subtitle_id="localized_0001",
+            cue_id="cue_0001",
+            bind_to_video_localization=True,
+            input_text="配音台词",
+            output_path=str(history_audio),
+            duration_ms=1_200,
+            parameter_snapshot={"source": "video_localization"},
+        )
+    )
+
+    applied = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/timeline-clips/clip_localized_0001/history/history-localized-001/apply"
+    )
+
+    assert applied.status_code == 200
+    body = applied.json()
+    assert body["localized_subtitles"][0]["tts_result_id"] == "history-localized-001"
+    assert body["timeline_clips"][0]["result_id"] == "history-localized-001"
+    assert body["timeline_clips"][0]["audio_path"] != str(history_audio)
+    assert Path(body["timeline_clips"][0]["audio_path"]).exists()
+    preview = client.get(
+        f"/api/projects/{project['project_id']}/video-localization/timeline-clips/clip_localized_0001/audio"
+    )
+    assert preview.status_code == 200
+    assert preview.content == history_audio.read_bytes()
+
+
+def test_video_localization_history_result_adds_a_missing_localized_dub_clip(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "本土化历史添加", "description": ""}).json()
+    history_audio = tmp_path / "outputs" / "history-add.wav"
+    history_audio.parent.mkdir(parents=True, exist_ok=True)
+    audio_tools.write_audio(history_audio, np.full(1_200, 0.35, dtype=np.float32), 1_000)
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [
+                {"cue_id": "cue_0001", "start_ms": 1_000, "end_ms": 2_500, "tts_recommended_text": "第一句"},
+                {"cue_id": "cue_0002", "start_ms": 1_500, "end_ms": 2_800, "tts_recommended_text": "第二句"},
+            ],
+            "localized_subtitles": [
+                {"subtitle_id": "localized_0001", "start_ms": 1_000, "end_ms": 2_500, "text": "第一句", "tts_text": "第一句", "source_cue_ids": ["cue_0001"]},
+                {"subtitle_id": "localized_0002", "start_ms": 1_500, "end_ms": 2_800, "text": "第二句", "tts_text": "第二句", "source_cue_ids": ["cue_0002"]},
+            ],
+            "timeline_clips": [
+                {"clip_id": "clip_localized_0002", "track_id": "dub", "subtitle_id": "localized_0002", "cue_id": "cue_0002", "start_ms": 1_500, "end_ms": 2_800, "audio_path": str(history_audio), "status": "ready"}
+            ],
+        },
+    )
+    history_store.add(
+        HistoryItem(
+            result_id="history-localized-add-001",
+            task_id="task-localized-add-001",
+            engine_id="indextts-v2",
+            project_id=project["project_id"],
+            segment_id="localized_0001",
+            localized_subtitle_id="localized_0001",
+            cue_id="cue_0001",
+            bind_to_video_localization=True,
+            input_text="第一句",
+            output_path=str(history_audio),
+            duration_ms=1_200,
+            parameter_snapshot={"source": "video_localization"},
+        )
+    )
+
+    applied = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/timeline-clips/history/history-localized-add-001/apply",
+        json={"segment_id": "localized_0001", "clip_id": None},
+    )
+
+    assert applied.status_code == 200
+    body = applied.json()
+    assert len(body["timeline_clips"]) == 2
+    added = next(item for item in body["timeline_clips"] if item.get("subtitle_id") == "localized_0001")
+    assert added["clip_id"] == "clip_localized_0001"
+    assert added["result_id"] == "history-localized-add-001"
+    assert added["start_ms"] == 1_000
+    assert added["end_ms"] == 2_200
+    assert body["localized_subtitles"][0]["tts_result_id"] == "history-localized-add-001"
 
 
 def test_video_localization_tts_batch_sync_rejects_wrong_project(tmp_path: Path):

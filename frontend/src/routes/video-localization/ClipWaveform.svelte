@@ -1,3 +1,32 @@
+<script module lang="ts">
+	type CachedWaveformResponse = {
+		peaks: number[];
+		duration: number;
+		bins: number;
+	};
+
+	const waveformPayloadCache = new Map<string, CachedWaveformResponse>();
+	const MAX_CACHED_WAVEFORMS = 128;
+
+	function cachedWaveform(url: string) {
+		const payload = waveformPayloadCache.get(url);
+		if (!payload) return null;
+		waveformPayloadCache.delete(url);
+		waveformPayloadCache.set(url, payload);
+		return payload;
+	}
+
+	function rememberWaveform(url: string, payload: CachedWaveformResponse) {
+		waveformPayloadCache.delete(url);
+		waveformPayloadCache.set(url, payload);
+		while (waveformPayloadCache.size > MAX_CACHED_WAVEFORMS) {
+			const oldest = waveformPayloadCache.keys().next().value;
+			if (typeof oldest !== 'string') break;
+			waveformPayloadCache.delete(oldest);
+		}
+	}
+</script>
+
 <script lang="ts">
 	import { untrack } from 'svelte';
 
@@ -96,6 +125,11 @@
 	});
 
 	async function loadClipWaveform(url: string, seq: number, signal: AbortSignal) {
+		const cached = cachedWaveform(url);
+		if (cached) {
+			applyWaveformPayload(cached, seq, signal);
+			return;
+		}
 		clearWaveformData();
 		waveformError = false;
 		waveformLoading = Boolean(url);
@@ -112,18 +146,8 @@
 				if (!response.ok) throw new Error(`HTTP ${response.status}`);
 				const payload = (await response.json()) as WaveformResponse;
 				if (seq !== loadSeq || signal.aborted) return;
-
-				const duration = Number(payload.duration);
-				if (!Number.isFinite(duration) || duration <= 0 || !Array.isArray(payload.peaks) || !payload.peaks.length) {
-					throw new Error('Invalid waveform payload');
-				}
-				const base = Float32Array.from(payload.peaks, (value) => clamp(Number(value), 0, 1));
-				peakLevels = buildPeakPyramid(base, duration);
-				audioDurationSeconds = duration;
-				dataRevision += 1;
-				onAnalysis?.(buildAnalysisBars(base), duration);
-				onLoadSuccess?.();
-				waveformLoading = false;
+				rememberWaveform(url, payload);
+				applyWaveformPayload(payload, seq, signal);
 				return;
 			} catch (error) {
 				if (seq !== loadSeq || signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) return;
@@ -139,6 +163,22 @@
 		waveformLoading = false;
 		onAnalysis?.([], 0);
 		onLoadError?.();
+	}
+
+	function applyWaveformPayload(payload: WaveformResponse, seq: number, signal: AbortSignal) {
+		if (seq !== loadSeq || signal.aborted) return;
+		const duration = Number(payload.duration);
+		if (!Number.isFinite(duration) || duration <= 0 || !Array.isArray(payload.peaks) || !payload.peaks.length) {
+			throw new Error('Invalid waveform payload');
+		}
+		const base = Float32Array.from(payload.peaks, (value) => clamp(Number(value), 0, 1));
+		peakLevels = buildPeakPyramid(base, duration);
+		audioDurationSeconds = duration;
+		dataRevision += 1;
+		onAnalysis?.(buildAnalysisBars(base), duration);
+		onLoadSuccess?.();
+		waveformError = false;
+		waveformLoading = false;
 	}
 
 	function waitForRetry(delayMs: number, signal: AbortSignal) {
@@ -283,7 +323,7 @@
 <style>
 	.clip-waveform {
 		position: absolute;
-		inset: 4px 7px;
+		inset: 4px 0;
 		overflow: hidden;
 		opacity: 0.68;
 		pointer-events: none;

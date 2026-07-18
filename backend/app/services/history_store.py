@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from app.schemas.voice_studio import HistoryItem
@@ -11,9 +12,30 @@ def add(item: HistoryItem) -> HistoryItem:
     return item
 
 
-def list_history(limit: int = 100, offset: int = 0) -> list[HistoryItem]:
-    rows = db.list_all("history", "created_at")
-    return [HistoryItem(**d) for d in rows[offset : offset + limit]]
+def list_history(
+    limit: int = 100,
+    offset: int = 0,
+    *,
+    project_id: str | None = None,
+    segment_id: str | None = None,
+    source: str | None = None,
+) -> list[HistoryItem]:
+    conditions: list[str] = []
+    values: list[object] = []
+    for path, value in (
+        ("$.project_id", project_id),
+        ("$.segment_id", segment_id),
+        ("$.parameter_snapshot.source", source),
+    ):
+        if value is not None:
+            conditions.append("json_extract(data, ?) = ?")
+            values.extend((path, value))
+    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    query = f"SELECT data FROM history{where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    values.extend((limit if limit < 0 else max(0, limit), max(0, offset)))
+    with db.conn() as connection:
+        rows = connection.execute(query, values).fetchall()
+    return [HistoryItem(**json.loads(row["data"])) for row in rows]
 
 
 def get(result_id: str) -> HistoryItem | None:

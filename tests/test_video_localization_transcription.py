@@ -137,6 +137,11 @@ def test_transcribe_and_process_returns_state_and_reports_stage_progress(monkeyp
 
     monkeypatch.setattr(transcription.boundary_review, "review_candidate_boundaries", fake_boundary_review)
     monkeypatch.setattr(transcription.media_assets, "file_sha256", lambda path: Path(path).name)
+    monkeypatch.setattr(
+        transcription.speaker_diarization_service,
+        "diarize",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("diarization unavailable")),
+    )
     existing_review = VideoLocalizationBoundaryReview(
         boundary_id="word_000001:word_000002",
         left_word_id="word_000001",
@@ -157,6 +162,7 @@ def test_transcribe_and_process_returns_state_and_reports_stage_progress(monkeyp
         source_audio_sha256="cached-source",
         alignment_audio_sha256="cached-alignment",
         progress_callback=lambda value, stage: progress.append((value, stage)),
+        diarization_engine_id="auto",
     )
 
     assert result.raw_text == "Hello world."
@@ -167,11 +173,12 @@ def test_transcribe_and_process_returns_state_and_reports_stage_progress(monkeyp
     assert boundary_review_kwargs["existing_reviews"] == [existing_review]
     assert alignment_inputs == [alignment_audio_path]
     assert boundary_inputs == [audio_path]
-    assert [value for value, _stage in progress] == [0.15, 0.30, 0.40, 0.58, 0.74, 0.82, 0.96]
+    assert [value for value, _stage in progress] == [0.15, 0.24, 0.30, 0.40, 0.58, 0.74, 0.82, 0.96]
     assert progress[-1][1] == "正在生成字幕轨"
     assert result.pipeline_timing["total_duration_ms"] >= 0
     assert set(result.pipeline_timing["stages"]) == {
         "asr",
+        "diarization",
         "web_research",
         "text_review",
         "alignment",
@@ -182,6 +189,9 @@ def test_transcribe_and_process_returns_state_and_reports_stage_progress(monkeyp
     assert result.pipeline_timing["stages"]["text_review"]["model_id"] == "review-model"
     assert result.pipeline_timing["stages"]["boundary_review"]["rounds"][0]["batches"][0]["duration_ms"] == 13
     assert result.pipeline_timing["stages"]["boundary_review"]["model_id"] == "review-model"
+    assert result.diarization_status == "failed"
+    assert result.diarization_error == "diarization unavailable"
+    assert "speaker_diarization_failed" in result.quality_flags
     assert result.model_dump()["pipeline_timing"] == result.pipeline_timing
 
 

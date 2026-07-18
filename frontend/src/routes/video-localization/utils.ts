@@ -78,8 +78,10 @@ export function ttsAudioUrl(projectId: string, cue: VideoLocalizationCue) {
 	return projectId && cue.tts_audio_path ? `/api/projects/${projectId}/video-localization/cues/${cue.cue_id}/tts-audio` : '';
 }
 
-export function sourceVideoUrl(projectId: string, current: VideoLocalizationDraft | null) {
-	return projectId && current?.source_media.video_path ? `/api/projects/${projectId}/video-localization/source-media/video` : '';
+export function sourceVideoUrl(projectId: string, current: VideoLocalizationDraft | null, revision = 0) {
+	if (!projectId || !current?.source_media.video_path) return '';
+	const url = `/api/projects/${projectId}/video-localization/source-media/preview-video`;
+	return revision > 0 ? `${url}?revision=${revision}` : url;
 }
 
 export function sourceAudioUrl(projectId: string, current: VideoLocalizationDraft | null) {
@@ -106,11 +108,18 @@ export function candidateAudioUrl(projectId: string, candidate: VideoLocalizatio
 }
 
 export function timelineClipAudioUrl(projectId: string, clip: VideoLocalizationTimelineClip) {
-	return projectId && (clip.clip_id === 'media_original' || clip.audio_path) ? `/api/projects/${projectId}/video-localization/timeline-clips/${clip.clip_id}/audio` : '';
+	if (!projectId || (clip.clip_id !== 'media_original' && !clip.audio_path)) return '';
+	return withClipMediaVersion(`/api/projects/${projectId}/video-localization/timeline-clips/${clip.clip_id}/audio`, clip);
 }
 
 export function timelineClipWaveformUrl(projectId: string, clip: VideoLocalizationTimelineClip) {
-	return projectId && (clip.clip_id === 'media_original' || clip.audio_path) ? `/api/projects/${projectId}/video-localization/timeline-clips/${clip.clip_id}/waveform` : '';
+	if (!projectId || (clip.clip_id !== 'media_original' && !clip.audio_path)) return '';
+	return withClipMediaVersion(`/api/projects/${projectId}/video-localization/timeline-clips/${clip.clip_id}/waveform`, clip);
+}
+
+function withClipMediaVersion(url: string, clip: VideoLocalizationTimelineClip) {
+	const version = String(clip.result_id || clip.generation_id || clip.audio_path || 'source');
+	return `${url}?v=${encodeURIComponent(version)}`;
 }
 
 export function sourceCueAudioUrl(projectId: string, cue: VideoLocalizationCue) {
@@ -305,7 +314,9 @@ function speakerDisplaySeed(index: number) {
 	return labels[index] ?? `S${index + 1}`;
 }
 
-export function buildGenerateRequest(projectId: string, cue: VideoLocalizationCue, reference: VideoLocalizationReferenceClip | null | undefined): GenerateRequest {
+type GenerateReference = Pick<VideoLocalizationReferenceClip, 'audio_path' | 'duration_ms' | 'asr_text'>;
+
+export function buildGenerateRequest(projectId: string, cue: VideoLocalizationCue, reference: GenerateReference | null | undefined): GenerateRequest {
 	return {
 		text: cue.tts_recommended_text?.trim() ?? '',
 		engine_id: 'indextts-v2',

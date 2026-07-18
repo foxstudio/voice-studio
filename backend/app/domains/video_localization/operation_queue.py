@@ -296,6 +296,7 @@ def _normalized_operation_parameters(
                     str(normalized.get("source_language") or draft.language_config.source_language)
                 ),
                 "segmentation_profile_id": str(normalized.get("segmentation_profile_id") or "generic_zh"),
+                "diarization_engine_id": str(normalized.get("diarization_engine_id") or "auto"),
             }
         )
     elif kind == "localization_draft":
@@ -407,6 +408,7 @@ def _process(operation_id: str) -> None:
                 str(operation.parameters.get("source_language") or "auto")
             )
             segmentation_profile_id = str(operation.parameters.get("segmentation_profile_id") or "generic_zh")
+            diarization_engine_id = str(operation.parameters.get("diarization_engine_id") or "auto")
             stage_timer = _StageTimer(_asr_stage_id)
 
             def report_asr_progress(progress: float, stage: str) -> None:
@@ -439,6 +441,7 @@ def _process(operation_id: str) -> None:
                     result_summary={"preview_phase": phase, "preview_cues": cues},
                 ),
                 segmentation_profile_id=segmentation_profile_id,
+                diarization_engine_id=diarization_engine_id,
                 commit_guard=commit_gate.commit,
             )
             summary = operation_state.english_asr_summary(updated)

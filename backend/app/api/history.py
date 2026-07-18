@@ -21,8 +21,20 @@ class WaveformPeaksResponse(BaseModel):
 
 
 @router.get("", response_model=list[HistoryItem])
-async def list_history(limit: int = 100, offset: int = 0):
-    return history_store.list_history(limit, offset)
+async def list_history(
+    limit: int = 100,
+    offset: int = 0,
+    project_id: str | None = None,
+    segment_id: str | None = None,
+    source: str | None = None,
+):
+    return history_store.list_history(
+        limit,
+        offset,
+        project_id=project_id,
+        segment_id=segment_id,
+        source=source,
+    )
 
 
 @router.delete("/{result_id}")
@@ -38,7 +50,11 @@ async def get_audio(result_id: str, download: bool = False, filename: str | None
         raise AppException(404, "AUDIO_NOT_FOUND", "Audio not found")
     if download:
         return FileResponse(path, filename=_safe_download_filename(filename, path.name), media_type=_history_audio_media_type(path))
-    return FileResponse(path, media_type=_history_audio_media_type(path))
+    return FileResponse(
+        path,
+        media_type=_history_audio_media_type(path),
+        headers={"Cache-Control": "private, max-age=3600, immutable"},
+    )
 
 
 @router.get("/{result_id}/waveform", response_model=WaveformPeaksResponse)
