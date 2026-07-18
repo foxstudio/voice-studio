@@ -490,6 +490,8 @@ def with_applied_history_result(
     output_path: str,
     duration_ms: int | None,
     generation_id: str | None = None,
+    placement_start_ms: int | None = None,
+    dub_lane: int | None = None,
 ) -> VideoLocalizationDraft:
     """Apply an explicitly chosen historical render to one dub clip only."""
     clip = next((dict(item) for item in draft.timeline_clips if item.get("clip_id") == clip_id), None)
@@ -509,6 +511,18 @@ def with_applied_history_result(
 
     target_start_ms = subtitle.start_ms if subtitle else cue.start_ms
     alignment = _speech_onset_alignment(output_path, duration_ms, target_start_ms)
+    if placement_start_ms is not None:
+        placed_start_ms = max(0, int(placement_start_ms))
+        placed_duration_ms = max(1, alignment["source_end_ms"])
+        alignment.update(
+            {
+                "start_ms": placed_start_ms,
+                "end_ms": placed_start_ms + placed_duration_ms,
+                "source_start_ms": 0,
+                "source_end_ms": placed_duration_ms,
+                "alignment_lead_ms": 0,
+            }
+        )
     candidate = next(
         (
             dict(item)
@@ -570,6 +584,7 @@ def with_applied_history_result(
                     "generation_id": generation_id,
                     "audio_path": output_path,
                     "status": "ready",
+                    **({"dub_lane": max(0, int(dub_lane))} if dub_lane is not None else {}),
                     **alignment,
                 }
             )

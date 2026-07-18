@@ -763,12 +763,50 @@ def apply_tts_history_to_timeline_clip(
     )
 
 
+def _place_dub_clip_on_free_lane(
+    draft: VideoLocalizationDraft,
+    clip_id: str,
+    preferred_lane: int,
+) -> VideoLocalizationDraft:
+    target = next((dict(item) for item in draft.timeline_clips if item.get("clip_id") == clip_id), None)
+    if not target:
+        return draft
+    start_ms = int(target.get("start_ms") or 0)
+    end_ms = max(start_ms + 1, int(target.get("end_ms") or start_ms + 1))
+    occupied = [
+        dict(item)
+        for item in draft.timeline_clips
+        if item.get("clip_id") != clip_id and item.get("track_id") == "dub"
+    ]
+    max_lane = max((int(item.get("dub_lane") or 0) for item in occupied), default=0)
+    requested = max(0, int(preferred_lane))
+    candidates = [requested, *(lane for lane in range(max_lane + 2) if lane != requested)]
+    selected_lane = requested
+    for lane in candidates:
+        if not any(
+            int(item.get("dub_lane") or 0) == lane
+            and start_ms < int(item.get("end_ms") or 0)
+            and end_ms > int(item.get("start_ms") or 0)
+            for item in occupied
+        ):
+            selected_lane = lane
+            break
+    updated_clips = [
+        {**dict(item), "dub_lane": selected_lane} if item.get("clip_id") == clip_id else item
+        for item in draft.timeline_clips
+    ]
+    return draft.model_copy(update={"timeline_clips": updated_clips})
+
+
 def apply_tts_history_to_timeline(
     project_id: str,
     result_id: str,
     *,
     segment_id: str,
     clip_id: str | None = None,
+    start_ms: int | None = None,
+    dub_lane: int | None = None,
+    force_new: bool = False,
 ) -> VideoLocalizationDraft | None:
     project = project_store.get_project(project_id)
     if not project:
@@ -783,24 +821,33 @@ def apply_tts_history_to_timeline(
     if history.project_id != project_id or history.parameter_snapshot.get("source") != "video_localization":
         raise AppException(400, "VIDEO_LOCALIZATION_TTS_HISTORY_PROJECT_MISMATCH", "该历史记录不属于当前视频本土化项目")
 
-    clip = next((dict(item) for item in draft.timeline_clips if item.get("clip_id") == clip_id), None) if clip_id else None
-    if clip_id and not clip:
+    clip = next((dict(item) for item in draft.timeline_clips if item.get("clip_id") == clip_id), None) if clip_id and not force_new else None
+    if clip_id and not clip and not force_new:
         raise AppException(404, "VIDEO_LOCALIZATION_TIMELINE_CLIP_NOT_FOUND", "Timeline clip not found")
     if clip and clip.get("track_id", "dub") != "dub":
         raise AppException(400, "VIDEO_LOCALIZATION_TIMELINE_CLIP_NOT_DUB", "Only dub clips can use TTS history")
 
-    target_segment_id = str(
+    requested_segment_id = str(
         segment_id
         or (clip or {}).get("subtitle_id")
         or (clip or {}).get("cue_id")
         or ""
     )
-    subtitle = next((item for item in draft.localized_subtitles if item.subtitle_id == target_segment_id), None)
-    cue = next((item for item in draft.cues if item.cue_id == target_segment_id), None)
+    target_segment_ids = list(
+        dict.fromkeys(
+            value
+            for value in [requested_segment_id, history.localized_subtitle_id, history.cue_id]
+            if value
+        )
+    )
+    subtitles_by_id = {item.subtitle_id: item for item in draft.localized_subtitles}
+    cues_by_id = {item.cue_id: item for item in draft.cues}
+    subtitle = next((subtitles_by_id[item_id] for item_id in target_segment_ids if item_id in subtitles_by_id), None)
+    cue = next((cues_by_id[item_id] for item_id in target_segment_ids if item_id in cues_by_id), None)
     if not subtitle and not cue and not clip:
         raise AppException(404, "VIDEO_LOCALIZATION_TTS_SEGMENT_NOT_FOUND", "找不到要采用配音的字幕片段")
 
-    if not clip:
+    if not clip and not force_new:
         clip = next(
             (
                 dict(item)
@@ -838,29 +885,41 @@ def apply_tts_history_to_timeline(
             suffix += 1
         source_cue_ids = list(dict.fromkeys(subtitle.source_cue_ids)) if subtitle else []
         primary_cue_id = next(iter(source_cue_ids), subtitle.linked_cue_id if subtitle else cue_id)
+        natural_start_ms = subtitle.start_ms if subtitle else cue.start_ms
+        natural_end_ms = subtitle.end_ms if subtitle else cue.end_ms
+        placed_start_ms = max(0, int(start_ms)) if start_ms is not None else natural_start_ms
+        placed_end_ms = (
+            placed_start_ms + max(1, int(history.duration_ms or 0))
+            if start_ms is not None and history.duration_ms
+            else natural_end_ms
+        )
         clip = {
             "clip_id": next_clip_id,
             "track_id": "dub",
             "subtitle_id": subtitle_id or None,
             "cue_id": primary_cue_id,
             "source_cue_ids": source_cue_ids,
-            "start_ms": subtitle.start_ms if subtitle else cue.start_ms,
-            "end_ms": subtitle.end_ms if subtitle else cue.end_ms,
+            "start_ms": placed_start_ms,
+            "end_ms": placed_end_ms,
             "status": "ready",
         }
+        if dub_lane is not None:
+            clip["dub_lane"] = max(0, int(dub_lane))
         working_draft = draft.model_copy(update={"timeline_clips": [*draft.timeline_clips, clip]})
 
-    return save_video_localization(
-        project_id,
-        tts_pipeline.with_applied_history_result(
-            working_draft,
-            str(clip["clip_id"]),
-            result_id=result_id,
-            output_path=str(adopted_path),
-            duration_ms=history.duration_ms,
-            generation_id=history.generation_id or history.task_id,
-        ),
+    applied_draft = tts_pipeline.with_applied_history_result(
+        working_draft,
+        str(clip["clip_id"]),
+        result_id=result_id,
+        output_path=str(adopted_path),
+        duration_ms=history.duration_ms,
+        generation_id=history.generation_id or history.task_id,
+        placement_start_ms=start_ms,
+        dub_lane=dub_lane,
     )
+    if force_new and start_ms is not None:
+        applied_draft = _place_dub_clip_on_free_lane(applied_draft, str(clip["clip_id"]), dub_lane or 0)
+    return save_video_localization(project_id, applied_draft)
 
 
 def tts_audio_file(project_id: str, cue_id: str) -> Path | None:

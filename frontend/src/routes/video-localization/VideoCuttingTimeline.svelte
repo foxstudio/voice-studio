@@ -5,7 +5,7 @@
 	import { buildTimelineTicks, formatTimelineZoom } from '$lib/audio/waveform';
 	import ContextMenu from '$lib/components/shared/ContextMenu.svelte';
 	import type { ContextMenuItem } from '$lib/components/shared/context-menu';
-	import type { VideoLocalizationCue, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationSubtitleCue, VideoLocalizationTimelineClip } from '$lib/api/types';
+	import type { HistoryItem, VideoLocalizationCue, VideoLocalizationDraft, VideoLocalizationOperation, VideoLocalizationSubtitleCue, VideoLocalizationTimelineClip } from '$lib/api/types';
 	import { durationLabel, timelineClipWaveformUrl } from './utils';
 	import { MIN_SUBTITLE_DURATION_MS, reorderAudioTracks, subtitleCueDragBounds, timeRangeIntersectsViewport, timelineViewportRange, TRACK_LABELS, type SubtitlePreviewSource, type SubtitlePreviewState, type VideoLocalizationAudioTrackId, type VideoLocalizationAudioTrackOrder, type VideoLocalizationTrackId, type VideoLocalizationTrackState, type VideoLocalizationTrackStates } from './studio-state';
 	import { buildSubtitleTrackCommands, buildTimelineContextMenuItems, type SubtitleTrackKind, type TimelineContextMenuTarget, type TimelineSelectionItem } from './timeline-context-menu';
@@ -13,7 +13,7 @@
 	import { activityTaskAffectsTrack, type ActivityTask } from './activity-notice';
 	import type { AsrOperationPreview } from './asr-operation-preview';
 	import { isRepeatedPrimaryPress, timelinePointerIntent } from './timeline-interaction';
-	import { buildDubTrackLaneLayout } from './dub-track-lanes';
+	import { buildDubTrackLaneLayout, resolveDubHistoryDropLane } from './dub-track-lanes';
 	import EditableAudioClip from './EditableAudioClip.svelte';
 	import {
 		buildVisibleFrameTicks,
@@ -95,7 +95,10 @@
 		canRedoTimeline,
 		undoTimelineCount = 0,
 		redoTimelineCount = 0,
-		onTimelineSelectionChange = undefined
+		onTimelineSelectionChange = undefined,
+		draggingTtsHistory = null,
+		onDropTtsHistory = undefined,
+		onEndTtsHistoryDrag = undefined
 	}: {
 		projectId: string;
 		draft: VideoLocalizationDraft | null;
@@ -162,6 +165,9 @@
 		undoTimelineCount?: number;
 		redoTimelineCount?: number;
 		onTimelineSelectionChange?: (items: TimelineSelectionItem[]) => void;
+		draggingTtsHistory?: HistoryItem | null;
+		onDropTtsHistory?: (item: HistoryItem, startMs: number, dubLane: number) => void | Promise<void>;
+		onEndTtsHistoryDrag?: () => void;
 	} = $props();
 
 	type DragMode = 'move' | 'trim-start' | 'trim-end';
@@ -206,6 +212,11 @@
 		moved: boolean;
 		additive: boolean;
 		baseItems: TimelineSelectionItem[];
+	};
+	type HistoryDropPreview = {
+		startMs: number;
+		endMs: number;
+		lane: number;
 	};
 
 	let timelineContentEl: HTMLDivElement | null = null;
@@ -253,6 +264,15 @@
 	let activeTool = $state<TimelineTool>('select');
 	let hoverScrubFrame = 0;
 	let snapGuideMs = $state<number | null>(null);
+	let historyDropPreview = $state<HistoryDropPreview | null>(null);
+	let historyDropTargetActive = false;
+	let historyDropCommitting = false;
+	$effect(() => {
+		if (!draggingTtsHistory) {
+			historyDropPreview = null;
+			historyDropTargetActive = false;
+		}
+	});
 	const DEFAULT_TRACK_HEIGHTS: Record<VideoLocalizationTrackId, number> = {
 		original: 58,
 		vocals: 58,
@@ -850,6 +870,7 @@
 			event.preventDefault();
 			if (hasRecoverableVideo && !hasSourceAudio && !extractingAudio) onExtractAudio();
 		} else if (event.key === 'Escape') {
+			cancelTtsHistoryPointer();
 			activeTool = 'select';
 			openVolumeTrack = null;
 			timelineContextMenu = null;
@@ -946,6 +967,73 @@
 		});
 	}
 
+	function historyDropDurationMs(item: HistoryItem) {
+		const duration = Number(item.duration_ms);
+		return Number.isFinite(duration) && duration > 0 ? Math.max(300, Math.round(duration)) : 1800;
+	}
+
+	function historyDropLaneFromPointer(event: PointerEvent | MouseEvent) {
+		if (!timelineContentEl) return null;
+		const hit = document.elementFromPoint(event.clientX, event.clientY);
+		const row = hit?.closest<HTMLElement>('[data-track-row][data-track-id="dub"][data-dub-lane]');
+		if (!row || !timelineContentEl.contains(row)) return null;
+		const lane = Number(row.dataset.dubLane);
+		return Number.isFinite(lane) ? Math.max(0, Math.floor(lane)) : null;
+	}
+
+	function updateHistoryDropPreview(event: PointerEvent | MouseEvent, requestedLane: number) {
+		if (!draggingTtsHistory || trackInteractionLocked('dub')) return;
+		const duration = historyDropDurationMs(draggingTtsHistory);
+		const maxStart = Math.max(0, timelineDurationMs - Math.min(duration, timelineDurationMs));
+		const startMs = snapTimeToFrame(rawTimeFromPointer(event), timelineFrameRate, 'nearest', 0, maxStart);
+		const endMs = startMs + duration;
+		const clips = clipsForTrack('dub').map((clip) => ({ ...clip, ...timelineClipTime(clip) }));
+		historyDropPreview = {
+			startMs,
+			endMs,
+			lane: resolveDubHistoryDropLane(clips, startMs, endMs, requestedLane)
+		};
+		historyDropTargetActive = true;
+	}
+
+	function moveTtsHistoryPointer(event: PointerEvent) {
+		if (!draggingTtsHistory) return;
+		const requestedLane = historyDropLaneFromPointer(event);
+		if (requestedLane === null || trackInteractionLocked('dub')) {
+			historyDropPreview = null;
+			historyDropTargetActive = false;
+			return;
+		}
+		updateHistoryDropPreview(event, requestedLane);
+	}
+
+	async function endTtsHistoryPointer(event: PointerEvent | MouseEvent) {
+		if (!draggingTtsHistory || historyDropCommitting) return;
+		const requestedLane = historyDropLaneFromPointer(event);
+		if (requestedLane !== null && !trackInteractionLocked('dub')) updateHistoryDropPreview(event, requestedLane);
+		const preview = historyDropTargetActive ? historyDropPreview : null;
+		const item = draggingTtsHistory;
+		historyDropPreview = null;
+		historyDropTargetActive = false;
+		if (!preview) {
+			onEndTtsHistoryDrag?.();
+			return;
+		}
+		historyDropCommitting = true;
+		try {
+			await onDropTtsHistory?.(item, preview.startMs, preview.lane);
+		} finally {
+			historyDropCommitting = false;
+		}
+	}
+
+	function cancelTtsHistoryPointer() {
+		if (!draggingTtsHistory) return;
+		historyDropPreview = null;
+		historyDropTargetActive = false;
+		onEndTtsHistoryDrag?.();
+	}
+
 	function clipLabel(clip: VideoLocalizationTimelineClip, trackId: VideoLocalizationTrackId) {
 		if (trackId === 'dub') return clip.cue_id || clip.clip_id;
 		return trackName(trackId);
@@ -978,7 +1066,7 @@
 
 	function razorSplitMs(event: PointerEvent) {
 		const rawTimeMs = rawTimeFromPointer(event);
-		return frameCoverage(rawTimeMs, timelineFrameRate, timelineDurationMs).endMs;
+		return frameCoverage(rawTimeMs, timelineFrameRate, timelineDurationMs).startMs;
 	}
 
 	function cutAudioClipAtPointer(event: PointerEvent, clip: VideoLocalizationTimelineClip) {
@@ -1828,7 +1916,7 @@
 	});
 </script>
 
-<svelte:window onkeydown={handleTimelineKeydown} onpointerdown={closeFloatingControls} />
+<svelte:window onkeydown={handleTimelineKeydown} onpointerdown={closeFloatingControls} onpointermove={moveTtsHistoryPointer} onpointerup={endTtsHistoryPointer} onpointercancel={cancelTtsHistoryPointer} onmouseup={endTtsHistoryPointer} onblur={cancelTtsHistoryPointer} />
 
 <section class="cut-timeline" aria-label="视频本土化时间线">
 	<div class="timeline-toolbar">
@@ -2037,7 +2125,7 @@
 				</div>
 				<button class="track-resize-handle" type="button" aria-label="调整合成配音轨高度" data-tooltip="调整合成配音轨高度：上下拖动，双击恢复默认高度。" onpointerdown={(event) => beginTrackHeightResize(event, 'dub')} ondblclick={(event) => resetTrackHeight(event, 'dub')}></button>
 			</div>
-			{#each dubTrackLanes.slice(1) as _, laneOffset (laneOffset)}
+				{#each dubTrackLanes.slice(1) as _, laneOffset (laneOffset)}
 				<div class="track-label track-audio track-dub secondary-dub-track" role="group" aria-label={`合成配音轨 ${laneOffset + 2}`} class:track-muted={trackStates.dub.muted} class:track-locked={trackStates.dub.locked} style={audioTrackStyle('dub')} onwheel={(event) => handleTrackHeaderWheel(event, 'dub')} oncontextmenu={(event) => openTrackHeightContextMenu(event, 'dub')}>
 					<i class="track-title-level" style={`width:${trackMeterPercent('dub')}%`}></i>
 					<div><strong>合成配音 {laneOffset + 2}</strong><span>重叠片段自动分轨</span></div>
@@ -2048,8 +2136,13 @@
 					</div>
 					<button class="track-resize-handle" type="button" aria-label="调整所有合成配音轨高度" data-tooltip="所有合成配音分轨共用高度；拖动调整，双击恢复默认高度。" onpointerdown={(event) => beginTrackHeightResize(event, 'dub')} ondblclick={(event) => resetTrackHeight(event, 'dub')}></button>
 				</div>
-			{/each}
-			<button class="track-label-width-handle" type="button" aria-label="调整轨道标题宽度" data-tooltip="调整标题宽度：左右拖动改变所有轨道标题栏宽度。" onpointerdown={beginLabelColumnResize}></button>
+				{/each}
+				{#if historyDropPreview && historyDropPreview.lane >= dubTrackLanes.length}
+					<div class="track-label track-audio track-dub secondary-dub-track history-drop-new-lane" role="group" aria-label={`即将创建合成配音轨 ${historyDropPreview.lane + 1}`} style={audioTrackStyle('dub')}>
+						<div><strong>合成配音 {historyDropPreview.lane + 1}</strong><span>松开后自动创建分轨</span></div>
+					</div>
+				{/if}
+				<button class="track-label-width-handle" type="button" aria-label="调整轨道标题宽度" data-tooltip="调整标题宽度：左右拖动改变所有轨道标题栏宽度。" onpointerdown={beginLabelColumnResize}></button>
 		</div>
 
 		<div
@@ -2078,9 +2171,9 @@
 				onpointermove={handleTimelinePointerMove}
 				onpointerup={endTimelinePointerWork}
 				onpointercancel={endTimelinePointerWork}
-				onlostpointercapture={endTimelinePointerWork}
-				onpointerleave={endHoverScrub}
-			>
+					onlostpointercapture={endTimelinePointerWork}
+					onpointerleave={endHoverScrub}
+				>
 				<div class="timeline-ruler">
 					{#if showFramePrecision}
 						{#each visibleSecondTicks as tick}
@@ -2113,9 +2206,6 @@
 				<div class="playhead" style={`left:${playheadPercent}%`}></div>
 				{#if hoverTimeMs !== null && (hoverScrubEnabled || activeTool === 'razor') && !isPlaying}
 					<div class="hover-playhead" style={`left:${((hoverFrame?.startMs ?? hoverTimeMs) / timelineDurationMs) * 100}%`} aria-hidden="true"></div>
-				{/if}
-				{#if activeTool === 'razor' && hoverFrame && !isPlaying}
-					<div class="razor-cut-guide" style={`left:${(hoverFrame.endMs / timelineDurationMs) * 100}%`} aria-hidden="true"></div>
 				{/if}
 				{#if snapGuideMs !== null && showFramePrecision}
 					<div class="frame-snap-guide" style={`left:${(snapGuideMs / timelineDurationMs) * 100}%`} aria-hidden="true"><span>{frameIndexAtTime(snapGuideMs, timelineFrameRate)}f</span></div>
@@ -2271,7 +2361,10 @@
 						<div class="pending-block">原音轨就绪后，可分离出背景音乐</div>
 					{/if}
 				</div>
-				<div class="track-row row-dub" data-track-row data-track-id="dub" data-dub-lane="0" data-audio-selection-track="dub" aria-busy={trackRuntimeBusy('dub')} class:muted={trackStates.dub.muted} class:locked={trackInteractionLocked('dub')} class:processing={trackRuntimeBusy('dub')} style={audioTrackStyle('dub')}>
+				<div class="track-row row-dub" data-track-row data-track-id="dub" data-dub-lane="0" data-audio-selection-track="dub" role="group" aria-label="合成配音轨时间线" aria-busy={trackRuntimeBusy('dub')} class:muted={trackStates.dub.muted} class:locked={trackInteractionLocked('dub')} class:processing={trackRuntimeBusy('dub')} class:history-drop-target={historyDropPreview?.lane === 0} style={audioTrackStyle('dub')}>
+					{#if historyDropPreview?.lane === 0}
+						<div class="history-drop-ghost" style={`left:${clipLeft(historyDropPreview.startMs)}%;width:${clipWidth(historyDropPreview.startMs, historyDropPreview.endMs)}%`} aria-label="配音落位预览"><i></i><span>{draggingTtsHistory?.input_text || '配音记录'}</span></div>
+					{/if}
 					{#if clipsForTrack('dub').length}
 						{#each visibleDubLaneClips(0) as clip (clip.clip_id)}
 							<EditableAudioClip {clip} waveformSrc={timelineClipWaveformUrl(projectId, clip)} label={clipLabel(clip, 'dub')} tone={clipTone('dub')} left={clipLeft(timelineClipTime(clip).start_ms)} width={clipWidth(timelineClipTime(clip).start_ms, timelineClipTime(clip).end_ms)} dragging={clipDragState?.clipId === clip.clip_id} selected={timelineItemSelected({ kind: 'audio', trackId: 'dub', itemId: clip.clip_id })} locked={trackInteractionLocked('dub', clip.clip_id)} processing={trackRuntimeBusy('dub', clip.clip_id)} startMs={timelineClipTime(clip).start_ms} endMs={timelineClipTime(clip).end_ms} sourceStartMs={timelineClipTime(clip).source_start_ms ?? 0} sourceEndMs={timelineClipTime(clip).source_end_ms ?? null} {timelineDurationMs} {timelineZoom} {timelineScrollLeft} {timelineViewportWidth} onSelect={(event) => selectAudioTimelineItem('dub', clip.clip_id, event.ctrlKey || event.metaKey)} onMove={(event) => startClipDrag(event, clip, 'move')} onTrimStart={(event) => startClipDrag(event, clip, 'trim-start')} onTrimEnd={(event) => startClipDrag(event, clip, 'trim-end')} onDelete={() => onDeleteTimelineClip(clip.clip_id)} onAnalysis={(bars, durationSeconds) => updateDubWaveform(clip.clip_id, bars, durationSeconds)} />
@@ -2281,12 +2374,20 @@
 					{/if}
 				</div>
 				{#each dubTrackLanes.slice(1) as lane, laneOffset (laneOffset)}
-					<div class="track-row row-dub secondary-dub-row" data-track-row data-track-id="dub" data-dub-lane={laneOffset + 1} data-audio-selection-track="dub" aria-label={`合成配音轨 ${laneOffset + 2} 时间线`} class:muted={trackStates.dub.muted} class:locked={trackInteractionLocked('dub')} style={audioTrackStyle('dub')}>
+					<div class="track-row row-dub secondary-dub-row" data-track-row data-track-id="dub" data-dub-lane={laneOffset + 1} data-audio-selection-track="dub" role="group" aria-label={`合成配音轨 ${laneOffset + 2} 时间线`} class:muted={trackStates.dub.muted} class:locked={trackInteractionLocked('dub')} class:history-drop-target={historyDropPreview?.lane === laneOffset + 1} style={audioTrackStyle('dub')}>
+						{#if historyDropPreview?.lane === laneOffset + 1}
+							<div class="history-drop-ghost" style={`left:${clipLeft(historyDropPreview.startMs)}%;width:${clipWidth(historyDropPreview.startMs, historyDropPreview.endMs)}%`} aria-label="配音落位预览"><i></i><span>{draggingTtsHistory?.input_text || '配音记录'}</span></div>
+						{/if}
 						{#each visibleDubLaneClips(laneOffset + 1) as clip (clip.clip_id)}
 							<EditableAudioClip {clip} waveformSrc={timelineClipWaveformUrl(projectId, clip)} label={clipLabel(clip, 'dub')} tone={clipTone('dub')} left={clipLeft(timelineClipTime(clip).start_ms)} width={clipWidth(timelineClipTime(clip).start_ms, timelineClipTime(clip).end_ms)} dragging={clipDragState?.clipId === clip.clip_id} selected={timelineItemSelected({ kind: 'audio', trackId: 'dub', itemId: clip.clip_id })} locked={trackInteractionLocked('dub', clip.clip_id)} processing={trackRuntimeBusy('dub', clip.clip_id)} startMs={timelineClipTime(clip).start_ms} endMs={timelineClipTime(clip).end_ms} sourceStartMs={timelineClipTime(clip).source_start_ms ?? 0} sourceEndMs={timelineClipTime(clip).source_end_ms ?? null} {timelineDurationMs} {timelineZoom} {timelineScrollLeft} {timelineViewportWidth} onSelect={(event) => selectAudioTimelineItem('dub', clip.clip_id, event.ctrlKey || event.metaKey)} onMove={(event) => startClipDrag(event, clip, 'move')} onTrimStart={(event) => startClipDrag(event, clip, 'trim-start')} onTrimEnd={(event) => startClipDrag(event, clip, 'trim-end')} onDelete={() => onDeleteTimelineClip(clip.clip_id)} onAnalysis={(bars, durationSeconds) => updateDubWaveform(clip.clip_id, bars, durationSeconds)} />
 						{/each}
 					</div>
 				{/each}
+				{#if historyDropPreview && historyDropPreview.lane >= dubTrackLanes.length}
+					<div class="track-row row-dub secondary-dub-row history-drop-new-row history-drop-target" data-track-row data-track-id="dub" data-dub-lane={historyDropPreview.lane} data-audio-selection-track="dub" role="group" aria-label={`即将创建合成配音轨 ${historyDropPreview.lane + 1} 时间线`} style={audioTrackStyle('dub')}>
+						<div class="history-drop-ghost" style={`left:${clipLeft(historyDropPreview.startMs)}%;width:${clipWidth(historyDropPreview.startMs, historyDropPreview.endMs)}%`} aria-label="配音落位预览"><i></i><span>{draggingTtsHistory?.input_text || '配音记录'}</span></div>
+					</div>
+				{/if}
 			</div>
 		</div>
 		<div class="timeline-edge-shadow left" aria-hidden="true"></div>
@@ -3028,7 +3129,7 @@
 	.timeline-content.razor-tool .track-row *,
 	.timeline-content.razor-tool .track-row :global(.audio-clip),
 	.timeline-content.razor-tool .track-row :global(.audio-clip *) {
-		cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Cg transform='translate(2 2) rotate(-18 12 12)' fill='none' stroke='%2312181d' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.8'%3E%3Cpath d='M22 8h-2V6H4v2H2v8h2v2h16v-2h2Z' fill='%23eef7f8'/%3E%3Cpath d='M6 11v2m4-1H6m12 0h-4m4-1v2' stroke='%2357d0c8'/%3E%3Ccircle cx='12' cy='12' r='2' fill='%2312181d' stroke='%2357d0c8'/%3E%3C/g%3E%3C/svg%3E") 14 14, crosshair;
+		cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Cg transform='translate(2 2) rotate(-18 12 12)' fill='none' stroke='%2379858b' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.45' opacity='.78'%3E%3Cpath d='M22 8h-2V6H4v2H2v8h2v2h16v-2h2Z' fill='%23aeb8bc' fill-opacity='.52'/%3E%3Cpath d='M6 11v2m4-1H6m12 0h-4m4-1v2'/%3E%3Ccircle cx='12' cy='12' r='2' fill='%235e696f' fill-opacity='.7'/%3E%3C/g%3E%3C/svg%3E") 14 14, crosshair;
 	}
 
 	.timeline-content.razor-tool .timeline-ruler,
@@ -3044,6 +3145,8 @@
 
 	:global(.razor-blade-icon) {
 		transform: rotate(-18deg);
+		color: rgba(174, 184, 188, 0.72);
+		opacity: 0.82;
 	}
 
 	.playhead {
@@ -3068,15 +3171,56 @@
 		pointer-events: none;
 	}
 
-	.razor-cut-guide {
+	.history-drop-target {
+		background-color: rgba(87, 208, 200, 0.035);
+		box-shadow: inset 0 0 0 1px rgba(87, 208, 200, 0.16);
+	}
+
+	.history-drop-ghost {
 		position: absolute;
-		top: 28px;
-		bottom: 0;
-		z-index: 9;
-		width: 1px;
-		border-left: 1px solid rgba(244, 211, 107, 0.92);
-		filter: drop-shadow(0 0 3px rgba(244, 211, 107, 0.3));
+		top: 5px;
+		bottom: 5px;
+		z-index: 11;
+		min-width: 12px;
+		border: 1px solid rgba(111, 220, 212, 0.58);
+		border-radius: 3px;
+		background: rgba(38, 102, 99, 0.34);
+		box-shadow: 0 3px 12px rgba(0, 0, 0, 0.2), inset 0 0 0 1px rgba(255, 255, 255, 0.035);
+		overflow: hidden;
 		pointer-events: none;
+		animation: history-drop-in 110ms ease-out;
+	}
+
+	.history-drop-ghost i {
+		position: absolute;
+		inset: 6px 3px;
+		opacity: 0.48;
+		background: repeating-linear-gradient(90deg, rgba(163, 235, 230, 0.88) 0 1px, transparent 1px 4px);
+		mask-image: linear-gradient(to bottom, transparent 0 18%, #000 18% 82%, transparent 82% 100%);
+	}
+
+	.history-drop-ghost span {
+		position: relative;
+		z-index: 1;
+		display: block;
+		padding: 4px 6px;
+		color: rgba(225, 247, 245, 0.84);
+		font-size: 9px;
+		line-height: 1;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.history-drop-new-lane,
+	.history-drop-new-row {
+		opacity: 0.76;
+		border-top-color: rgba(87, 208, 200, 0.24);
+	}
+
+	@keyframes history-drop-in {
+		from { opacity: 0.35; transform: translateY(-2px); }
+		to { opacity: 1; transform: translateY(0); }
 	}
 
 	.frame-snap-guide {

@@ -5235,6 +5235,56 @@ def test_video_localization_history_result_adds_a_missing_localized_dub_clip(tmp
     assert body["localized_subtitles"][0]["tts_result_id"] == "history-localized-add-001"
 
 
+def test_video_localization_history_result_can_be_dropped_at_an_explicit_time_and_lane(tmp_path: Path):
+    client = _client(tmp_path)
+    project = client.post("/api/projects", json={"name": "本土化历史拖放", "description": ""}).json()
+    history_audio = tmp_path / "outputs" / "history-drop.wav"
+    history_audio.parent.mkdir(parents=True, exist_ok=True)
+    audio_tools.write_audio(history_audio, np.full(1_200, 0.35, dtype=np.float32), 1_000)
+    client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "cues": [{"cue_id": "cue_0001", "start_ms": 1_000, "end_ms": 2_500, "tts_recommended_text": "拖放台词"}],
+            "localized_subtitles": [{"subtitle_id": "localized_0001", "start_ms": 1_000, "end_ms": 2_500, "text": "拖放字幕", "tts_text": "拖放台词", "source_cue_ids": ["cue_0001"]}],
+            "timeline_clips": [{"clip_id": "clip_localized_0001", "track_id": "dub", "subtitle_id": "localized_0001", "cue_id": "cue_0001", "start_ms": 1_000, "end_ms": 2_200, "audio_path": str(history_audio), "status": "ready"}],
+        },
+    )
+    history_store.add(
+        HistoryItem(
+            result_id="history-localized-drop-001",
+            task_id="task-localized-drop-001",
+            engine_id="indextts-v2",
+            project_id=project["project_id"],
+            segment_id="group_localized_0001_localized_0001_1",
+            localized_subtitle_id="localized_0001",
+            cue_id="cue_0001",
+            bind_to_video_localization=True,
+            input_text="拖放台词",
+            output_path=str(history_audio),
+            duration_ms=1_200,
+            parameter_snapshot={"source": "video_localization"},
+        )
+    )
+
+    applied = client.post(
+        f"/api/projects/{project['project_id']}/video-localization/timeline-clips/history/history-localized-drop-001/apply",
+        json={"segment_id": "group_localized_0001_localized_0001_1", "start_ms": 1_500, "dub_lane": 0, "force_new": True},
+    )
+
+    assert applied.status_code == 200
+    body = applied.json()
+    assert len(body["timeline_clips"]) == 2
+    dropped = next(item for item in body["timeline_clips"] if item["clip_id"] == "clip_localized_0001_2")
+    assert dropped["result_id"] == "history-localized-drop-001"
+    assert dropped["start_ms"] == 1_500
+    assert dropped["end_ms"] == 2_700
+    assert dropped["source_start_ms"] == 0
+    assert dropped["source_end_ms"] == 1_200
+    assert dropped["dub_lane"] == 1
+
+
 def test_video_localization_tts_batch_sync_rejects_wrong_project(tmp_path: Path):
     client = _client(tmp_path)
     project = client.post("/api/projects", json={"name": "项目 A", "description": ""}).json()

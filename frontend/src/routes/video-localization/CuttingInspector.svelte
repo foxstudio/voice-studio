@@ -79,6 +79,7 @@
 		onDeleteSubtitleHistory = undefined,
 		onDeleteCurrentSubtitleHistory = undefined,
 		onDeleteAllSubtitleHistory = undefined,
+		onHistoryDragStart = undefined,
 		historyApplyingResultId = '',
 		onCancelTask = undefined,
 		onRetryTask = undefined,
@@ -135,6 +136,7 @@
 		onDeleteSubtitleHistory?: (item: HistoryItem) => void | Promise<void>;
 		onDeleteCurrentSubtitleHistory?: () => void | Promise<void>;
 		onDeleteAllSubtitleHistory?: () => void | Promise<void>;
+		onHistoryDragStart?: (item: HistoryItem) => void;
 		historyApplyingResultId?: string;
 		onCancelTask?: (task: ActivityTask) => void | Promise<void>;
 		onRetryTask?: (task: ActivityTask) => void | Promise<void>;
@@ -454,6 +456,7 @@
 			onDelete={onDeleteSubtitleHistory}
 			onDeleteCurrent={onDeleteCurrentSubtitleHistory}
 			onDeleteAll={onDeleteAllSubtitleHistory}
+			onHistoryDragStart={onHistoryDragStart}
 			selectionCount={selectedLocalizedSubtitles.length || 1}
 			selectionContiguous={selectedLocalizedSubtitlesContiguous}
 			frameRate={draft?.source_media.frame_rate ?? 24}
@@ -729,6 +732,7 @@
 				onDelete={onDeleteSubtitleHistory}
 				onDeleteCurrent={onDeleteCurrentSubtitleHistory}
 				onDeleteAll={onDeleteAllSubtitleHistory}
+				onHistoryDragStart={onHistoryDragStart}
 				selectionCount={selectedLocalizedSubtitles.length || 1}
 				selectionContiguous={selectedLocalizedSubtitlesContiguous}
 				frameRate={draft?.source_media.frame_rate ?? 24}

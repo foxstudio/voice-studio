@@ -9,14 +9,26 @@
 		waveformUrl,
 		downloadUrl,
 		label,
-		frameRate = 24
+		frameRate = 24,
+		draggable = false,
+		onDragStart = undefined
 	}: {
 		audioUrl: string;
 		waveformUrl: string;
 		downloadUrl: string;
 		label: string;
 		frameRate?: number;
+		draggable?: boolean;
+		onDragStart?: (event: PointerEvent) => void;
 	} = $props();
+	type PointerDragState = {
+		pointerId: number;
+		startX: number;
+		startY: number;
+		x: number;
+		y: number;
+		moved: boolean;
+	};
 
 	let audioEl: HTMLAudioElement | null = $state(null);
 	let peaks = $state<number[]>([]);
@@ -25,6 +37,9 @@
 	let playing = $state(false);
 	let currentTime = $state(0);
 	let duration = $state(0);
+	let dragging = $state(false);
+	let pointerDrag = $state<PointerDragState | null>(null);
+	let suppressSeekUntil = 0;
 	let loadToken = 0;
 	let activeAudioUrl = '';
 
@@ -96,6 +111,7 @@
 	}
 
 	function seek(event: MouseEvent) {
+		if (performance.now() < suppressSeekUntil) return;
 		if (!audioEl || !duration) return;
 		const target = event.currentTarget as HTMLElement | null;
 		if (!target) return;
@@ -109,6 +125,47 @@
 		if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
 		event.preventDefault();
 		audioEl.currentTime = Math.max(0, Math.min(duration, audioEl.currentTime + (event.key === 'ArrowRight' ? 1 : -1)));
+	}
+
+	function beginDrag(event: PointerEvent) {
+		if (!draggable || event.button !== 0) return;
+		dragging = true;
+		const source = event.currentTarget as HTMLElement;
+		pointerDrag = {
+			pointerId: event.pointerId,
+			startX: event.clientX,
+			startY: event.clientY,
+			x: event.clientX,
+			y: event.clientY,
+			moved: false
+		};
+		source.setPointerCapture(event.pointerId);
+		onDragStart?.(event);
+	}
+
+	function moveDrag(event: PointerEvent) {
+		if (!pointerDrag || event.pointerId !== pointerDrag.pointerId) return;
+		const moved = pointerDrag.moved || Math.hypot(event.clientX - pointerDrag.startX, event.clientY - pointerDrag.startY) >= 4;
+		pointerDrag = { ...pointerDrag, x: event.clientX, y: event.clientY, moved };
+		if (moved) event.preventDefault();
+	}
+
+	function finishDrag() {
+		if (!pointerDrag) return;
+		if (pointerDrag.moved) suppressSeekUntil = performance.now() + 350;
+		dragging = false;
+		pointerDrag = null;
+	}
+
+	function endDrag(event: PointerEvent) {
+		if (!pointerDrag || event.pointerId !== pointerDrag.pointerId) return;
+		const source = event.target;
+		if (source instanceof HTMLElement && source.hasPointerCapture(event.pointerId)) source.releasePointerCapture(event.pointerId);
+		finishDrag();
+	}
+
+	function endMouseDrag() {
+		finishDrag();
 	}
 
 	function syncTime() {
@@ -133,6 +190,8 @@
 	});
 </script>
 
+<svelte:window onpointermove={moveDrag} onpointerup={endDrag} onpointercancel={endDrag} onmouseup={endMouseDrag} onblur={finishDrag} />
+
 <div class="audio-waveform" class:playing aria-label={label}>
 	<audio
 		bind:this={audioEl}
@@ -153,6 +212,8 @@
 	</button>
 	<div
 		class="wave-track"
+		class:draggable
+		class:dragging
 		role="slider"
 		tabindex="0"
 		aria-label={`${label}波形`}
@@ -162,6 +223,7 @@
 		style={`--progress:${progress}%`}
 		onclick={seek}
 		onkeydown={seekByKeyboard}
+		onpointerdown={beginDrag}
 	>
 		<div class="wave-bars wave-bars-base" aria-hidden="true">
 			{#each displayBars as height}
@@ -177,6 +239,17 @@
 	</div>
 	<a class="download-button" href={downloadUrl} download aria-label={`下载${label}`} data-tooltip={`下载${label}`}><Download size={13} /></a>
 </div>
+
+{#if pointerDrag?.moved}
+	<div class="wave-drag-shadow" style={`left:${pointerDrag.x + 14}px;top:${pointerDrag.y + 12}px`} aria-hidden="true">
+		<div class="shadow-bars">
+			{#each displayBars.slice(0, 28) as height}
+				<span style={`--bar-height:${Math.max(10, height * 100)}%`}></span>
+			{/each}
+		</div>
+		<small>拖到合成配音轨</small>
+	</div>
+{/if}
 
 <style>
 	.audio-waveform {
@@ -222,6 +295,69 @@
 		border: 0;
 		background: transparent;
 		cursor: pointer;
+	}
+
+	.wave-track.draggable {
+		border-radius: 4px;
+		cursor: grab;
+		touch-action: none;
+		user-select: none;
+		transition: scale 90ms ease-out, opacity 90ms ease-out, filter 90ms ease-out, background 90ms ease-out;
+	}
+
+	.wave-track.draggable:hover {
+		background: rgba(255, 255, 255, 0.025);
+	}
+
+	.wave-track.draggable:active,
+	.wave-track.dragging {
+		scale: 0.985;
+		filter: brightness(0.88);
+		cursor: grabbing;
+	}
+
+	.wave-track.dragging {
+		opacity: 0.48;
+		background: rgba(103, 217, 208, 0.08);
+	}
+
+	.wave-drag-shadow {
+		position: fixed;
+		z-index: 1000;
+		display: grid;
+		grid-template-rows: 28px auto;
+		width: 176px;
+		padding: 5px 7px 4px;
+		box-sizing: border-box;
+		border: 1px solid rgba(111, 220, 212, 0.48);
+		border-radius: 4px;
+		background: rgba(20, 42, 42, 0.78);
+		box-shadow: 0 8px 22px rgba(0, 0, 0, 0.34);
+		backdrop-filter: blur(5px);
+		pointer-events: none;
+		opacity: 0.82;
+		animation: drag-shadow-in 90ms ease-out;
+	}
+
+	.shadow-bars {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		min-width: 0;
+	}
+
+	.shadow-bars span {
+		flex: 1 1 0;
+		min-width: 1px;
+		height: var(--bar-height);
+		border-radius: 1px;
+		background: rgba(125, 220, 212, 0.76);
+	}
+
+	.wave-drag-shadow small {
+		color: rgba(219, 239, 238, 0.78);
+		font-size: 9px;
+		line-height: 13px;
 	}
 
 	.wave-track:focus-visible {
@@ -291,6 +427,7 @@
 	}
 
 	@keyframes spin { to { transform: rotate(360deg); } }
+	@keyframes drag-shadow-in { from { opacity: 0; transform: scale(0.96); } }
 
 	@media (prefers-reduced-motion: reduce) {
 		.spin { animation: none; }

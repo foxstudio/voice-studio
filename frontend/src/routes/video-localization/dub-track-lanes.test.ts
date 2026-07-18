@@ -3,7 +3,8 @@ import type { VideoLocalizationTimelineClip } from '$lib/api/types';
 import {
 	buildDubTrackLaneLayout,
 	getDubTrackClipLane,
-	getDubTrackLaneCount
+	getDubTrackLaneCount,
+	resolveDubHistoryDropLane
 } from './dub-track-lanes';
 
 function clip(
@@ -131,5 +132,20 @@ describe('dub track lane layout', () => {
 			['a', 'c'],
 			['b']
 		]);
+	});
+
+	it('previews a history drop on the requested lane when it is free', () => {
+		expect(resolveDubHistoryDropLane([clip('existing', 0, 1000)], 1200, 2200, 0)).toBe(0);
+	});
+
+	it('previews a history drop on a new lane when the requested lane overlaps', () => {
+		expect(resolveDubHistoryDropLane([clip('existing', 0, 2000)], 500, 1500, 0)).toBe(1);
+	});
+
+	it('uses another existing lane before creating an unnecessary lane', () => {
+		expect(resolveDubHistoryDropLane([
+			clip('lane-zero', 0, 2000),
+			clip('lane-one', 0, 400, { dub_lane: 1 })
+		], 500, 1500, 0)).toBe(1);
 	});
 });

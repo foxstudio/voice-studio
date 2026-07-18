@@ -19,6 +19,7 @@
 		onDelete = undefined,
 		onDeleteCurrent = undefined,
 		onDeleteAll = undefined,
+		onHistoryDragStart = undefined,
 		selectionCount = 1,
 		selectionContiguous = false,
 		frameRate = 24
@@ -38,6 +39,7 @@
 		onDelete?: (item: HistoryItem) => void | Promise<void>;
 		onDeleteCurrent?: () => void | Promise<void>;
 		onDeleteAll?: () => void | Promise<void>;
+		onHistoryDragStart?: (item: HistoryItem) => void;
 		selectionCount?: number;
 		selectionContiguous?: boolean;
 		frameRate?: number;
@@ -85,6 +87,14 @@
 
 	function waveformUrl(item: HistoryItem) {
 		return `/api/history/${encodeURIComponent(item.result_id)}/waveform`;
+	}
+
+	function beginHistoryDrag(event: PointerEvent, item: HistoryItem) {
+		if (!item.output_path || busy || applyingResultId) {
+			event.preventDefault();
+			return;
+		}
+		onHistoryDragStart?.(item);
 	}
 </script>
 
@@ -138,7 +148,15 @@
 					{#if scope === 'all'}<p class="script-line" data-tooltip={item.input_text || '无台词'}>{item.input_text || '无台词'}</p>{/if}
 					<span class="parameter-summary" data-tooltip={`生成参数：${parameterSummary(item)}`}><SlidersHorizontal size={11} />{parameterSummary(item)}</span>
 					{#if item.output_path}
-						<SubtitleAudioWaveform label="配音" audioUrl={audioUrl(item)} waveformUrl={waveformUrl(item)} downloadUrl={audioUrl(item)} {frameRate} />
+						<SubtitleAudioWaveform
+							label="配音"
+							audioUrl={audioUrl(item)}
+							waveformUrl={waveformUrl(item)}
+							downloadUrl={audioUrl(item)}
+							{frameRate}
+							draggable={!busy && !applyingResultId}
+							onDragStart={(event) => beginHistoryDrag(event, item)}
+						/>
 					{/if}
 				</article>
 			{/each}

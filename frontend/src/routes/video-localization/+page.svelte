@@ -270,6 +270,7 @@
 	let referenceUpdatingId = $state('');
 	let candidateApplyingId = $state('');
 	let historyApplyingResultId = $state('');
+	let draggingTtsHistory = $state<HistoryItem | null>(null);
 	let operationActionId = $state('');
 	let inspectorCollapsed = $state(false);
 	let inspectorWidth = $state(380);
@@ -2250,6 +2251,47 @@
 		}
 	}
 
+	function beginSubtitleHistoryDrag(history: HistoryItem) {
+		draggingTtsHistory = history;
+	}
+
+	function endSubtitleHistoryDrag() {
+		draggingTtsHistory = null;
+	}
+
+	async function dropSubtitleHistoryOnTimeline(history: HistoryItem, startMs: number, dubLane: number) {
+		if (!projectId || !draft || historyApplyingResultId) return;
+		const segmentId = history.segment_id || history.localized_subtitle_id || history.cue_id || '';
+		if (!segmentId) {
+			error = '这条配音记录缺少字幕关联，无法放入时间线';
+			return;
+		}
+		const previousClipIds = new Set(draft.timeline_clips.map((clip) => clip.clip_id));
+		historyApplyingResultId = history.result_id;
+		error = '';
+		try {
+			draft = await Api.applyVideoLocalizationHistoryToTimeline(projectId, history.result_id, {
+				segment_id: segmentId,
+				clip_id: null,
+				start_ms: startMs,
+				dub_lane: dubLane,
+				force_new: true
+			});
+			const addedClip = draft.timeline_clips.find((clip) =>
+				!previousClipIds.has(clip.clip_id) && clip.track_id === 'dub' && clip.result_id === history.result_id
+			);
+			selectedTimelineAudioClipId = addedClip?.clip_id ?? '';
+			const actualLane = Number(addedClip?.dub_lane);
+			message = `已添加到合成配音轨 ${Number.isFinite(actualLane) ? actualLane + 1 : dubLane + 1}`;
+			setTimeout(() => (message = ''), 1800);
+		} catch (e) {
+			error = (e as Error).message || '拖入配音记录失败';
+		} finally {
+			historyApplyingResultId = '';
+			draggingTtsHistory = null;
+		}
+	}
+
 	async function deleteSubtitleHistory(history: HistoryItem) {
 		if (!window.confirm('删除这条配音记录吗？已经复制到时间线的音频不会受影响。')) return;
 		try {
@@ -3271,9 +3313,12 @@
 				onRedoTimelineClip={redoTimelineClipEdit}
 				canUndoTimeline={timelineUndoStack.length > 0}
 				canRedoTimeline={timelineRedoStack.length > 0}
-				undoTimelineCount={timelineUndoStack.length}
-				redoTimelineCount={timelineRedoStack.length}
-			/>
+					undoTimelineCount={timelineUndoStack.length}
+					redoTimelineCount={timelineRedoStack.length}
+					{draggingTtsHistory}
+					onDropTtsHistory={dropSubtitleHistoryOnTimeline}
+					onEndTtsHistoryDrag={endSubtitleHistoryDrag}
+				/>
 		</section>
 
 		{#if !inspectorCollapsed}
@@ -3326,8 +3371,9 @@
 					onReuseSubtitleHistory={reuseSubtitleHistory}
 				onApplySubtitleHistory={applySubtitleHistoryToTimeline}
 				onDeleteSubtitleHistory={deleteSubtitleHistory}
-				onDeleteCurrentSubtitleHistory={deleteCurrentSubtitleHistory}
-				onDeleteAllSubtitleHistory={deleteAllSubtitleHistory}
+					onDeleteCurrentSubtitleHistory={deleteCurrentSubtitleHistory}
+					onDeleteAllSubtitleHistory={deleteAllSubtitleHistory}
+					onHistoryDragStart={beginSubtitleHistoryDrag}
 					historyApplyingResultId={historyApplyingResultId}
 					onCancelTask={cancelActivityTask}
 					onRetryTask={retryActivityTask}

@@ -20,6 +20,7 @@
 		onDelete = undefined,
 		onDeleteCurrent = undefined,
 		onDeleteAll = undefined,
+		onHistoryDragStart = undefined,
 		selectionCount = 1,
 		selectionContiguous = false,
 		frameRate = 24
@@ -40,6 +41,7 @@
 		onDelete?: (item: HistoryItem) => void | Promise<void>;
 		onDeleteCurrent?: () => void | Promise<void>;
 		onDeleteAll?: () => void | Promise<void>;
+		onHistoryDragStart?: (item: HistoryItem) => void;
 		selectionCount?: number;
 		selectionContiguous?: boolean;
 		frameRate?: number;
@@ -75,6 +77,7 @@
 		{onDelete}
 		{onDeleteCurrent}
 		{onDeleteAll}
+		{onHistoryDragStart}
 		{selectionCount}
 		{selectionContiguous}
 		{frameRate}

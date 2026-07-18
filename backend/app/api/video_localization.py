@@ -4,7 +4,7 @@ import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Body, File, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api.video_localization_responses import audio_file_response, download_file_response, json_attachment, media_file_response, require_resource, srt_attachment
 from app.domains.video_localization import operation_queue
@@ -39,6 +39,9 @@ class WaveformPeaksResponse(BaseModel):
 class TtsHistoryTimelineApplyRequest(BaseModel):
     segment_id: str
     clip_id: str | None = None
+    start_ms: int | None = Field(default=None, ge=0)
+    dub_lane: int | None = Field(default=None, ge=0)
+    force_new: bool = False
 
 
 @router.post("/video-localization/sync-projects", response_model=list[Project])
@@ -331,6 +334,9 @@ async def apply_video_localization_history_to_timeline(
         result_id,
         segment_id=payload.segment_id,
         clip_id=payload.clip_id,
+        start_ms=payload.start_ms,
+        dub_lane=payload.dub_lane,
+        force_new=payload.force_new,
     )
     return require_resource(updated)
 

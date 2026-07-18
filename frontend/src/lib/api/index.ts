@@ -229,7 +229,7 @@ export const Api = {
 	applyVideoLocalizationCandidate: (id: string, candidateId: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/candidates/${candidateId}/apply`),
 	applyVideoLocalizationHistoryToTimelineClip: (id: string, clipId: string, resultId: string) =>
 		api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/timeline-clips/${encodeURIComponent(clipId)}/history/${encodeURIComponent(resultId)}/apply`),
-	applyVideoLocalizationHistoryToTimeline: (id: string, resultId: string, body: { segment_id: string; clip_id?: string | null }) =>
+	applyVideoLocalizationHistoryToTimeline: (id: string, resultId: string, body: { segment_id: string; clip_id?: string | null; start_ms?: number | null; dub_lane?: number | null; force_new?: boolean }) =>
 		api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/timeline-clips/history/${encodeURIComponent(resultId)}/apply`, body),
 	generateVideoLocalizationChineseDraft: (id: string) => api.post<VideoLocalizationDraft>(`/projects/${id}/video-localization/localize/zh`),
 	submitVideoLocalizationBatchTts: (id: string) => api.post<BatchTask>(`/projects/${id}/video-localization/tts/batch`),

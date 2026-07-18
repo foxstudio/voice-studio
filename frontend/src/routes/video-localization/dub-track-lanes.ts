@@ -97,3 +97,21 @@ export function getDubTrackClipLane(
 ) {
 	return layout.laneByClipId.get(typeof clip === 'string' ? clip : clip.clip_id);
 }
+
+export function resolveDubHistoryDropLane(
+	clips: VideoLocalizationTimelineClip[],
+	startMs: number,
+	endMs: number,
+	preferredLane: number
+) {
+	const previewId = '__tts_history_drop_preview__';
+	const preview: VideoLocalizationTimelineClip = {
+		clip_id: previewId,
+		track_id: 'dub',
+		start_ms: startMs,
+		end_ms: endMs,
+		dub_lane: Math.max(0, Math.floor(preferredLane))
+	};
+	const layout = buildDubTrackLaneLayout([...clips, preview]);
+	return getDubTrackClipLane(layout, previewId) ?? 0;
+}
