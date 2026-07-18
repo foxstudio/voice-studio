@@ -1,6 +1,8 @@
 import type { VideoLocalizationTimelineClip } from '$lib/api/types';
 
-export const AUDIO_DRIFT_TOLERANCE_SECONDS = 0.12;
+export const AUDIO_DRIFT_TOLERANCE_SECONDS = 0.06;
+export const AUDIO_HARD_SYNC_THRESHOLD_SECONDS = 0.6;
+export const AUDIO_MAX_RATE_ADJUSTMENT = 0.05;
 
 export function timelineClipKey(clip: VideoLocalizationTimelineClip) {
 	return `${clip.clip_id}:${clip.audio_path ?? ''}`;
@@ -25,8 +27,24 @@ export function clipSourceTimeSeconds(clip: VideoLocalizationTimelineClip, timel
 	return sourceStart + Math.max(0, timelineTimeSeconds - timelineStart);
 }
 
-export function shouldCorrectAudioDrift(currentTime: number, targetTime: number) {
-	return !Number.isFinite(currentTime) || Math.abs(currentTime - targetTime) > AUDIO_DRIFT_TOLERANCE_SECONDS;
+export function shouldCorrectAudioDrift(
+	currentTime: number,
+	targetTime: number,
+	tolerance = AUDIO_DRIFT_TOLERANCE_SECONDS
+) {
+	return !Number.isFinite(currentTime) || Math.abs(currentTime - targetTime) > tolerance;
+}
+
+export function shouldHardCorrectAudioDrift(currentTime: number, targetTime: number) {
+	return shouldCorrectAudioDrift(currentTime, targetTime, AUDIO_HARD_SYNC_THRESHOLD_SECONDS);
+}
+
+export function audioPlaybackRateForDrift(currentTime: number, targetTime: number) {
+	if (!Number.isFinite(currentTime) || !Number.isFinite(targetTime)) return 1;
+	const drift = targetTime - currentTime;
+	if (Math.abs(drift) <= AUDIO_DRIFT_TOLERANCE_SECONDS || Math.abs(drift) >= AUDIO_HARD_SYNC_THRESHOLD_SECONDS) return 1;
+	const adjustment = Math.max(-AUDIO_MAX_RATE_ADJUSTMENT, Math.min(AUDIO_MAX_RATE_ADJUSTMENT, drift * 0.25));
+	return 1 + adjustment;
 }
 
 export function upcomingTimelineClips(

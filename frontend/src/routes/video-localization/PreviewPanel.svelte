@@ -3,7 +3,7 @@
 	import type { VideoLocalizationCue, VideoLocalizationDraft, VideoLocalizationSubtitleCue } from '$lib/api/types';
 	import { sourceAudioUrl, sourceVideoUrl, stemAudioUrl, timelineClipAudioUrl } from './utils';
 	import { defaultSubtitlePreviewState, defaultTrackStates, TRACK_LABELS, type SubtitlePreviewState, type VideoLocalizationTrackId, type VideoLocalizationTrackStates } from './studio-state';
-	import { activeTimelineClips, clipSourceTimeSeconds, shouldCorrectAudioDrift, timelineClipKey, upcomingTimelineClips } from './preview-playback';
+	import { activeTimelineClips, audioPlaybackRateForDrift, clipSourceTimeSeconds, shouldCorrectAudioDrift, shouldHardCorrectAudioDrift, timelineClipKey, upcomingTimelineClips } from './preview-playback';
 
 	type PlaybackController = {
 		playPause: () => void;
@@ -69,6 +69,7 @@
 	let playbackIntentRevision = 0;
 	let pendingVideoPlayRevision = 0;
 	let playbackWanted = false;
+	let playbackPreparing = $state(false);
 	const PLAYBACK_UI_INTERVAL_MS = 50;
 	// Media elements normally share the same clock after an aligned start. Check
 	// often enough to recover from decoder stalls without repeatedly seeking them.
@@ -195,7 +196,7 @@
 		if (backgroundActive) labels.push(TRACK_LABELS.background);
 		if (dubActive) labels.push(TRACK_LABELS.dub);
 		if (!labels.length) return '静音预览';
-		return labels.join(' + ');
+		return playbackPreparing ? `正在准备音频 · ${labels.join(' + ')}` : labels.join(' + ');
 	}
 
 	function applyTrackMix() {
@@ -221,6 +222,7 @@
 		}
 		if (!active) {
 			audio.pause();
+			resetAudioPlaybackRate(audio);
 			return;
 		}
 	}
@@ -327,18 +329,33 @@
 		}
 		if (Number.isFinite(audio.duration) && currentTime > audio.duration) {
 			audio.pause();
+			resetAudioPlaybackRate(audio);
 			return;
 		}
-		if (shouldCorrectAudioDrift(audio.currentTime, currentTime)) {
+		const playing = !audio.paused && !audio.ended;
+		const needsSeek = playing
+			? shouldHardCorrectAudioDrift(audio.currentTime, currentTime)
+			: shouldCorrectAudioDrift(audio.currentTime, currentTime);
+		if (needsSeek) {
 			try {
 				audio.currentTime = currentTime;
 			} catch {
 				startAudioWhenReady(audio);
 			}
 		}
+		setAudioPlaybackRate(audio, playing ? audioPlaybackRateForDrift(audio.currentTime, currentTime) : 1);
 		if (playIfNeeded && (audio.paused || audio.ended)) {
 			playAudioTrack(audio);
 		}
+	}
+
+	function setAudioPlaybackRate(audio: HTMLAudioElement, rate: number) {
+		const nextRate = Math.max(0.95, Math.min(1.05, Number.isFinite(rate) ? rate : 1));
+		if (Math.abs(audio.playbackRate - nextRate) > 0.001) audio.playbackRate = nextRate;
+	}
+
+	function resetAudioPlaybackRate(audio: HTMLAudioElement | null) {
+		if (audio) setAudioPlaybackRate(audio, 1);
 	}
 
 	function playAudioTrack(audio: HTMLAudioElement) {
@@ -395,6 +412,7 @@
 		});
 		if (!clip) {
 			audio?.pause();
+			resetAudioPlaybackRate(audio);
 			return;
 		}
 		const sourceStartSeconds = Math.max(0, (clip.source_start_ms ?? 0) / 1000);
@@ -407,7 +425,10 @@
 		const active = activeTimelineClips(dubTrackClips, 'dub', timeMs);
 		const activeKeys = new Set(active.map(timelineClipKey));
 		for (const [key, audio] of dubAudioElements) {
-			if (!activeKeys.has(key)) audio.pause();
+			if (!activeKeys.has(key)) {
+				audio.pause();
+				resetAudioPlaybackRate(audio);
+			}
 		}
 		for (const clip of active) {
 			const audio = dubAudioElements.get(timelineClipKey(clip));
@@ -416,7 +437,10 @@
 	}
 
 	function pauseDubTracks() {
-		for (const audio of dubAudioElements.values()) audio.pause();
+		for (const audio of dubAudioElements.values()) {
+			audio.pause();
+			resetAudioPlaybackRate(audio);
+		}
 	}
 
 	function registerDubAudio(audio: HTMLAudioElement, key: string) {
@@ -475,9 +499,10 @@
 	}
 
 	function pauseAuxiliaryTracks() {
-		originalAudioEl?.pause();
-		vocalsAudioEl?.pause();
-		backgroundAudioEl?.pause();
+		for (const audio of [originalAudioEl, vocalsAudioEl, backgroundAudioEl]) {
+			audio?.pause();
+			resetAudioPlaybackRate(audio);
+		}
 		pauseDubTracks();
 	}
 
@@ -486,6 +511,8 @@
 		if (!previewVideoEl.paused || playbackWanted) {
 			playbackIntentRevision += 1;
 			playbackWanted = false;
+			playbackPreparing = false;
+			pendingVideoPlayRevision = 0;
 			previewVideoEl.pause();
 			pauseAuxiliaryTracks();
 			onPlaybackStateChange(false);
@@ -498,12 +525,20 @@
 		if (!previewVideoEl || (!previewVideoEl.paused && playbackWanted)) return;
 		if (hoverScrubbing) endScrubPreview();
 		const intentRevision = ++playbackIntentRevision;
-		pendingVideoPlayRevision = intentRevision;
 		playbackWanted = true;
 		onPlaybackStateChange(true);
 		prepareAudioOutputFromGesture();
-		// Issue every active media play request while the user gesture is still
-		// active. Browsers can otherwise reject a delayed canplay callback.
+		syncAuxiliaryTracks(false);
+		void startPreparedPlayback(intentRevision);
+	}
+
+	async function startPreparedPlayback(intentRevision: number) {
+		const activeAudio = activeAudioElementsAtCurrentTime();
+		playbackPreparing = activeAudio.some((audio) => audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA);
+		if (playbackPreparing) await Promise.all(activeAudio.map((audio) => waitForAudioReady(audio)));
+		if (intentRevision !== playbackIntentRevision || !playbackWanted || !previewVideoEl) return;
+		playbackPreparing = false;
+		pendingVideoPlayRevision = intentRevision;
 		syncAuxiliaryTracks(true);
 		const videoPlayRequest = previewVideoEl.play();
 		void videoPlayRequest
@@ -516,36 +551,62 @@
 				onPlaybackStateChange(false);
 				if (previewVideoEl) previewVideoEl.dataset.playbackError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 			})
-			.finally(() => {
-				if (pendingVideoPlayRevision === intentRevision) pendingVideoPlayRevision = 0;
-			});
+				.finally(() => {
+					if (pendingVideoPlayRevision === intentRevision) pendingVideoPlayRevision = 0;
+				});
+	}
+
+	function activeAudioElementsAtCurrentTime() {
+		const items: HTMLAudioElement[] = [];
+		const time = previewVideoEl?.currentTime ?? 0;
+		if (originalActive && timelineTrackActiveAt('original', time) && originalAudioEl) items.push(originalAudioEl);
+		if (vocalsActive && timelineTrackActiveAt('vocals', time) && vocalsAudioEl) items.push(vocalsAudioEl);
+		if (backgroundActive && timelineTrackActiveAt('background', time) && backgroundAudioEl) items.push(backgroundAudioEl);
+		if (dubActive) {
+			for (const clip of activeTimelineClips(dubTrackClips, 'dub', Math.round(time * 1000))) {
+				const audio = dubAudioElements.get(timelineClipKey(clip));
+				if (audio) items.push(audio);
+			}
+		}
+		return [...new Set(items)];
+	}
+
+	function timelineTrackActiveAt(trackId: VideoLocalizationTrackId, time: number) {
+		const clips = draft?.timeline_clips.filter((clip) => clip.track_id === trackId && clip.audio_path) ?? [];
+		if (!clips.length) return true;
+		const timeMs = Math.round(time * 1000);
+		return clips.some((clip) => timeMs >= (clip.start_ms ?? 0) && timeMs < (clip.end_ms ?? (clip.start_ms ?? 0) + 1800));
+	}
+
+	function waitForAudioReady(audio: HTMLAudioElement, timeoutMs = 1200) {
+		if (audio.error || audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return Promise.resolve();
+		if (audio.networkState === HTMLMediaElement.NETWORK_EMPTY) audio.load();
+		return new Promise<void>((resolve) => {
+			let timeout = 0;
+			const finish = () => {
+				audio.removeEventListener('canplay', finish);
+				audio.removeEventListener('error', finish);
+				if (timeout) window.clearTimeout(timeout);
+				resolve();
+			};
+			audio.addEventListener('canplay', finish, { once: true });
+			audio.addEventListener('error', finish, { once: true });
+			timeout = window.setTimeout(finish, timeoutMs);
+		});
 	}
 
 	async function prepareEditingProxy(targetProjectId: string, key: string) {
 		try {
-			const beforeVersion = await fetchMediaVersion(`/api/projects/${targetProjectId}/video-localization/source-media/preview-video`);
 			const response = await fetch(`/api/projects/${targetProjectId}/video-localization/source-media/preview-video`, {
 				method: 'POST'
 			});
 			if (!response.ok || previewProxyKey !== key) return;
-			const payload = (await response.json()) as { profile?: string };
-			if (payload.profile !== '720p-h264-v1') return;
-			const afterVersion = await fetchMediaVersion(`/api/projects/${targetProjectId}/video-localization/source-media/preview-video`);
-			if (beforeVersion && afterVersion && beforeVersion === afterVersion) return;
+			const payload = (await response.json()) as { profile?: string; changed?: boolean };
+			if (payload.profile !== '720p-h264-v1' || payload.changed !== true) return;
 			preparedProxyRevision = Date.now();
 			activatePreparedProxyIfIdle();
 		} catch {
 			// The original source remains available when proxy preparation fails.
-		}
-	}
-
-	async function fetchMediaVersion(url: string) {
-		try {
-			const response = await fetch(url, { method: 'HEAD', cache: 'no-store' });
-			if (!response.ok) return '';
-			return [response.headers.get('etag'), response.headers.get('last-modified'), response.headers.get('content-length')].join(':');
-		} catch {
-			return '';
 		}
 	}
 
@@ -776,13 +837,13 @@
 				ontimeupdate={handleVideoTimeUpdate}
 			></video>
 			{#if originalAudioSrc}
-				<audio bind:this={originalAudioEl} data-audio-group="video-localization-preview" preload="auto" src={originalAudioSrc} aria-label="原音轨预览" onwaiting={handleAuxiliaryPlaybackStall} onstalled={handleAuxiliaryPlaybackStall}></audio>
+				<audio bind:this={originalAudioEl} data-audio-group="video-localization-preview" preload={originalActive ? 'auto' : 'metadata'} src={originalAudioSrc} aria-label="原音轨预览" onwaiting={handleAuxiliaryPlaybackStall} onstalled={handleAuxiliaryPlaybackStall}></audio>
 			{/if}
 			{#if vocalsAudioSrc}
-				<audio bind:this={vocalsAudioEl} data-audio-group="video-localization-preview" preload="auto" src={vocalsAudioSrc} aria-label="人声轨预览" onwaiting={handleAuxiliaryPlaybackStall} onstalled={handleAuxiliaryPlaybackStall}></audio>
+				<audio bind:this={vocalsAudioEl} data-audio-group="video-localization-preview" preload={vocalsActive ? 'auto' : 'metadata'} src={vocalsAudioSrc} aria-label="人声轨预览" onwaiting={handleAuxiliaryPlaybackStall} onstalled={handleAuxiliaryPlaybackStall}></audio>
 			{/if}
 			{#if backgroundAudioSrc}
-				<audio bind:this={backgroundAudioEl} data-audio-group="video-localization-preview" preload="auto" src={backgroundAudioSrc} aria-label="背景音乐轨预览" onwaiting={handleAuxiliaryPlaybackStall} onstalled={handleAuxiliaryPlaybackStall}></audio>
+				<audio bind:this={backgroundAudioEl} data-audio-group="video-localization-preview" preload={backgroundActive ? 'auto' : 'metadata'} src={backgroundAudioSrc} aria-label="背景音乐轨预览" onwaiting={handleAuxiliaryPlaybackStall} onstalled={handleAuxiliaryPlaybackStall}></audio>
 			{/if}
 			{#each dubTrackClips as clip (timelineClipKey(clip))}
 				<audio

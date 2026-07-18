@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { VideoLocalizationTimelineClip } from '$lib/api/types';
 import {
 	activeTimelineClips,
+	audioPlaybackRateForDrift,
 	clipSourceTimeSeconds,
 	shouldCorrectAudioDrift,
+	shouldHardCorrectAudioDrift,
 	timelineClipKey,
 	upcomingTimelineClips
 } from './preview-playback';
@@ -32,8 +34,17 @@ describe('preview playback scheduling', () => {
 	});
 
 	it('corrects meaningful drift while leaving tiny clock differences alone', () => {
-		expect(shouldCorrectAudioDrift(4, 4.08)).toBe(false);
-		expect(shouldCorrectAudioDrift(4, 4.13)).toBe(true);
+		expect(shouldCorrectAudioDrift(4, 4.04)).toBe(false);
+		expect(shouldCorrectAudioDrift(4, 4.08)).toBe(true);
+		expect(shouldHardCorrectAudioDrift(4, 4.3)).toBe(false);
+		expect(shouldHardCorrectAudioDrift(4, 4.7)).toBe(true);
+	});
+
+	it('uses bounded rate correction for ordinary playback drift', () => {
+		expect(audioPlaybackRateForDrift(4, 4.04)).toBe(1);
+		expect(audioPlaybackRateForDrift(4, 4.3)).toBeCloseTo(1.05);
+		expect(audioPlaybackRateForDrift(4.3, 4)).toBeCloseTo(0.95);
+		expect(audioPlaybackRateForDrift(4, 4.7)).toBe(1);
 	});
 
 	it('preloads the active and nearest future clips in timeline order', () => {

@@ -102,9 +102,14 @@ async def get_video_localization_source_preview_video(project_id: str):
 
 @router.post("/{project_id}/video-localization/source-media/preview-video")
 async def prepare_video_localization_source_preview_video(project_id: str):
+    previous_path = video_localization_service.source_preview_video_file(project_id)
     video_path = await asyncio.to_thread(video_localization_service.ensure_source_preview_video, project_id)
     return require_resource(
-        {"status": "ready", "profile": video_localization_service.source_preview_profile(video_path)},
+        {
+            "status": "ready",
+            "profile": video_localization_service.source_preview_profile(video_path),
+            "changed": previous_path != video_path,
+        },
         code="VIDEO_LOCALIZATION_SOURCE_VIDEO_NOT_FOUND",
         message="Source video file not found",
     )
