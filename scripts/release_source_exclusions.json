@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "exclusions": {
+    "scripts/genshin_analysis.json": "Generated analysis of maintainer audio assets; users generate their own input report.",
+    "scripts/genshin_import_report.json": "Generated voice import results, not application source.",
+    "scripts/genshin_npc_import_report.json": "Generated voice import results, not application source.",
+    "scripts/import_report.json": "Generated voice import results, not application source.",
+    "docs/OPEN_SOURCE_FIRST_RELEASE_PLAN.md": "Internal first-release migration inventory and remote history audit."
+  }
+}

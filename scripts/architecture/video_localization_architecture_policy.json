@@ -1,0 +1,38 @@
+{
+  "schema_version": "video-localization-architecture-policy-v1",
+  "baseline_schema_version": "video-localization-architecture-baseline-v1",
+  "mode": "no-new-debt",
+  "owner": "video-localization architecture",
+  "exception_exit_conditions": {
+    "allowed_runtime_cycles": "No runtime cycle is allowed; keep this list empty",
+    "allowed_package_runtime_cycles": "No package runtime cycle is allowed; keep this list empty",
+    "allowed_cross_layer_importers": "WP-02/WP-06/WP-10 migrate callers to application ports",
+    "allowed_async_without_await": "WP-02 classifies and converts every blocking API route",
+    "allowed_async_unprotected_app_calls": "WP-02 moves synchronous app calls in async handlers behind explicit thread boundaries",
+    "allowed_unreachable_svelte_components": "WP-15 restores a supported entry or deletes each component",
+    "allowed_source_string_tests": "WP-15 replaces source assertions with component behavior tests"
+  },
+  "allowed_runtime_cycles": [],
+  "allowed_package_runtime_cycles": [],
+  "allowed_cross_layer_importers": [
+    "app.api.generate",
+    "app.api.projects",
+    "app.api.video_localization",
+    "app.api.video_localization_public_contracts",
+    "app.main",
+    "app.services.longform_queue",
+    "app.services.semantic_alignment_labse",
+    "app.services.settings_storage",
+    "app.services.settings_store",
+    "app.services.task_queue",
+    "app.services.video_localization_exports",
+    "app.services.video_localization_operations"
+  ],
+  "allowed_async_without_await": [],
+  "allowed_async_unprotected_app_calls": [],
+  "allowed_unreachable_svelte_components": [],
+  "allowed_source_string_tests": [
+    "VideoCuttingTimeline.test.ts",
+    "page-policy.test.ts"
+  ]
+}

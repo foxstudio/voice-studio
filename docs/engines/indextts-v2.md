@@ -1,0 +1,85 @@
+# IndexTTS v2
+
+> Bilibili IndexTeam 出品的工业级零样本文本转语音系统，支持情绪控制和声音克隆。
+
+## 基本信息
+
+| 项目 | 详情 |
+|---|---|
+| 开发者 | Bilibili IndexTeam (IndexTeam) |
+| 开源时间 | 2025 年 6 月首次开源，9 月正式发布 |
+| 架构 | 基于 Transformer 的自回归零样本 TTS 基座模型 |
+| 许可证 | 开源 |
+| 仓库 | [github.com/index-tts/index-tts](https://github.com/index-tts/index-tts) |
+| 论文 | [arXiv 2601.03888](https://arxiv.org/html/2601.03888v3) |
+
+## 核心能力
+
+- **零样本声音克隆**：仅需一段参考音频即可复刻任意说话人音色
+- **情绪控制**：通过多模态输入实现 8 种精细情绪控制（开心、悲伤、愤怒、恐惧、惊讶、厌恶、中性等）
+- **高表现力**：被广泛认为是 2025 年最具表现力的开源 TTS 模型之一
+- **时长精确控制**：支持精确的时间对齐，适合配音和视频旁白
+- **拼音控制**：支持拼音标注以精确控制发音
+
+## 在本项目中的适配
+
+- 基于 MLX 框架移植到 Apple Silicon (M1–M4) 本地运行
+- 声码器路径：S2Mel → BigVGAN2
+- 采样率：22050 Hz
+- 最大 token 数：1815（支持较长文本）
+- 支持语言：中文、英文
+- 默认由同一条参考音频同时提供音色和情绪；高级设置可单独选择或上传情绪参考片段
+
+## 适用场景
+
+- 中文口播内容制作
+- 情绪化配音和角色配音
+- 视频旁白和有声读物
+- 已授权音色的声音克隆
+
+## 模型文件与离线运行
+
+IndexTTS v2 生成时不会联网下载模型。参考 WAV 需要三个预处理依赖，优先从当前
+IndexTTS 模型目录下的 `preprocessing/` 读取；旧安装已经存在于 Hugging Face 缓存时
+会只读复用。两处都没有时会停止并报告缺少的文件，不会用未加载权重继续生成。
+所有缓存查找固定到项目核验过的上游提交，不跟随会变化的 `main`。
+
+| 依赖 | 受管相对目录 | 官方来源与许可 |
+|---|---|---|
+| MaskGCT Semantic Codec | `preprocessing/amphion-maskgct/semantic_codec/` | [amphion/MaskGCT](https://huggingface.co/amphion/MaskGCT)，CC BY-NC 4.0，非商业许可 |
+| W2V-BERT 2.0 | `preprocessing/facebook-w2v-bert-2.0/` | [facebook/w2v-bert-2.0](https://huggingface.co/facebook/w2v-bert-2.0)，MIT |
+| CAM++ | `preprocessing/funasr-campplus/` | [funasr/campplus](https://huggingface.co/funasr/campplus)，Apache-2.0 |
+
+模型许可彼此独立。Voice Studio 仓库不分发这些权重；尤其 MaskGCT 的非商业条款不应
+被描述成可无条件商用。
+
+环境检查会把状态分成两层：核心 MLX 权重完整时可以使用预计算的 `.npz` 音色；只有
+MaskGCT、W2V-BERT、CAM++ 和 W2V 统计文件也齐全时，才会报告 WAV 参考音频可用。
+目录存在或只有 GPT 权重不会再被误判为完整模型。
+
+新安装使用 `voice-studio convert` 时会把以上三个配套模型按固定 revision 下载到转换后的
+模型目录；转换完成后无需保留独立的配套缓存。旧安装仍可只读复用已有 Hugging Face 缓存。
+引擎健康接口继续区分“核心 `.npz` 可用”和“产品里的 WAV 上传可用”；引擎管理页只有后者
+完整时才显示为全部就绪。
+
+## 当前参数与默认值
+
+生成页当前按引擎 schema 显示 IndexTTS v2 参数。正文放在合成文本框；本地音色来自音色库，必须带参考音频。默认使用“跟随参考音色”，不强行叠加情绪向量。
+
+| 参数 | 默认值 | 大白话说明 |
+|---|---:|---|
+| 语速 `speed` | `1.0` | 1 是正常速度，低于 1 慢一点，高于 1 快一点。 |
+| 情绪 `emotion` | 跟随参考音色 | 不选固定情绪时，更贴近参考音频本来的表达。 |
+| 情绪强度 `emo_alpha` | `0.6` | 选择内置情绪或独立情绪参考后，数值越高越接近目标情绪；独立参考下 0 等于原音色情绪，1 等于完整目标情绪。 |
+| `temperature` / `top_p` / `top_k` | `0.8` / `0.8` / `30` | 控制生成变化范围；默认优先稳定。 |
+| 分段 Token / 段间静默 | `120` / `200ms` | 控制长文本切段和段落停顿。 |
+| 扩散步数 / CFG / 最大 Mel / 重复惩罚 | `25` / `0.7` / `1500` / `10` | 高级质量和稳定性参数，普通口播通常不用改。 |
+
+内置预设：贴近参考音色、轻微开心、强情绪短句、教程慢讲、信息流快讲、长文本剪辑。生成页“一键重置参数”会恢复以上默认值，但保留正文和已选音色。
+
+高级设置中的“使用独立情绪参考”不会更换人物音色。主参考音频仍负责音色、韵律提示和声码器提示；第二条音频只提取情绪条件。情绪素材可以来自音色库或本地上传，并可在时间线上框选片段。情绪片段裁切不运行 ASR。
+
+## 参考链接
+
+- [IndexTTS GitHub](https://github.com/index-tts/index-tts)
+- [IndexTTS 2.5 技术报告](https://arxiv.org/html/2601.03888v3)

@@ -1,0 +1,134 @@
+<script lang="ts">
+	import '../app.css';
+	import Sidebar from '$lib/components/Sidebar.svelte';
+	import { Api } from '$lib/api';
+	import { API_RECOVERED_EVENT, shouldNotifyApiRecovery } from '$lib/api-health-recovery';
+	import { backendHealth, connectedBackendHealth, failedBackendHealth } from '$lib/backend-health';
+	import { engineStatusLabel } from '$lib/labels';
+	import { page } from '$app/state';
+	import { onMount } from 'svelte';
+	import { get } from 'svelte/store';
+	import { initTooltips } from '$lib/tooltip';
+	import { Menu } from 'lucide-svelte';
+
+	let { children } = $props();
+	let engines = $state<Record<string, string>>({});
+	let sidebarCollapsed = $state(false);
+	let sidebarMobileOpen = $state(false);
+	let showGlobalEngineStatus = $derived(page.url.pathname !== '/video-localization');
+	let consecutiveHealthFailures = 0;
+	let healthCheckInFlight = false;
+
+	async function checkHealth() {
+		if (healthCheckInFlight) return;
+		healthCheckInFlight = true;
+		try {
+			const h = await Api.health();
+			const previousStatus = get(backendHealth).responseStatus;
+			consecutiveHealthFailures = 0;
+			backendHealth.set(connectedBackendHealth(h));
+			engines = Object.fromEntries(
+				Object.entries(h.engines).filter(([, state]) => state === 'loaded')
+			);
+			if (shouldNotifyApiRecovery(previousStatus, h.status)) {
+				window.dispatchEvent(new Event(API_RECOVERED_EVENT));
+			}
+		} catch {
+			consecutiveHealthFailures += 1;
+			const nextHealth = failedBackendHealth(consecutiveHealthFailures);
+			backendHealth.set(nextHealth);
+			if (nextHealth.kind === 'offline') engines = {};
+		} finally {
+			healthCheckInFlight = false;
+		}
+	}
+
+	onMount(() => {
+		initTooltips();
+		checkHealth();
+		const healthTimer = setInterval(checkHealth, 5000);
+		sidebarCollapsed = localStorage.getItem('voice-studio-sidebar') === 'collapsed';
+		const onPlay = (event: Event) => {
+			const current = event.target;
+			if (!(current instanceof HTMLAudioElement)) return;
+			const concurrentGroup = current.dataset.audioGroup;
+			if (concurrentGroup) return;
+			document.querySelectorAll('audio').forEach((audio) => {
+				if (audio === current) return;
+				audio.pause();
+			});
+		};
+		document.addEventListener('play', onPlay, true);
+		return () => {
+			clearInterval(healthTimer);
+			document.removeEventListener('play', onPlay, true);
+		};
+	});
+
+	function toggleSidebar() {
+		sidebarCollapsed = !sidebarCollapsed;
+		localStorage.setItem('voice-studio-sidebar', sidebarCollapsed ? 'collapsed' : 'expanded');
+	}
+
+	function toggleMobileSidebar() {
+		sidebarMobileOpen = !sidebarMobileOpen;
+	}
+
+	function closeMobileSidebar() {
+		sidebarMobileOpen = false;
+	}
+</script>
+
+<svelte:head><link rel="icon" href="/voice-studio-mark.png" /></svelte:head>
+
+<div class="app-shell" class:sidebar-collapsed={sidebarCollapsed} class:sidebar-mobile-open={sidebarMobileOpen}>
+	{#if sidebarMobileOpen}
+		<div
+			class="sidebar-overlay"
+			role="button"
+			tabindex="0"
+			aria-label="关闭导航"
+			onclick={closeMobileSidebar}
+			onkeydown={(event) => {
+				if (event.key === 'Enter' || event.key === ' ' || event.key === 'Escape') {
+					event.preventDefault();
+					closeMobileSidebar();
+				}
+			}}
+		></div>
+	{/if}
+	<Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} onNavClick={closeMobileSidebar} />
+	<div class="main">
+		<header class="topbar">
+			<div class="row">
+				<button class="icon-btn hamburger-btn" type="button" onclick={toggleMobileSidebar} aria-label="打开导航">
+					<Menu size={18} />
+				</button>
+				<span
+					class="backend-health-summary"
+					class:online={$backendHealth.kind === 'online'}
+					class:checking={$backendHealth.kind === 'checking'}
+					class:degraded={$backendHealth.kind === 'degraded'}
+					class:offline={$backendHealth.kind === 'offline'}
+					role="status"
+					aria-live="polite"
+					aria-label={`${$backendHealth.label}。${$backendHealth.detail}`}
+					title={`${$backendHealth.label}：${$backendHealth.detail}`}
+				>
+					<i aria-hidden="true"></i>
+					<span class="backend-health-copy">
+						<strong>{$backendHealth.label}</strong>
+						<span>{$backendHealth.detail}</span>
+					</span>
+				</span>
+				{#if showGlobalEngineStatus}
+					{#each Object.entries(engines) as [id, state]}
+						<span class="badge engine-status-badge" class:ok={state === 'loaded'} title={`${id}: ${engineStatusLabel(state)}`}>{id}: {engineStatusLabel(state)}</span>
+					{/each}
+				{/if}
+			</div>
+			<span class="muted">本地语音工作台</span>
+		</header>
+		{@render children()}
+	</div>
+</div>

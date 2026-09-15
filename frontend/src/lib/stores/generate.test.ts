@@ -1,0 +1,547 @@
+import { describe, expect, it } from 'vitest';
+import { createGenerateStore, pickEngineSpecificParameters, REFERENCE_VOICE_ENGINE_IDS } from './generate';
+import type { EngineDetail, GenerateRequest, ParameterSchema, VoiceAsset } from '$lib/api/types';
+
+function parameter(partial: Partial<ParameterSchema> & Pick<ParameterSchema, 'key' | 'label' | 'type'>): ParameterSchema {
+	return {
+		default: null,
+		description: null,
+		min: null,
+		max: null,
+		step: null,
+		options: [],
+		required: false,
+		capability: null,
+		level: 'basic',
+		...partial
+	};
+}
+
+function engineDetail(engineId: string, parameterSchema: EngineDetail['manifest']['parameter_schema'] = []): EngineDetail {
+	return {
+		manifest: {
+			engine_id: engineId,
+			display_name: engineId,
+			engine_type: engineId.startsWith('mimo-') ? 'cloud' : 'local',
+			provider: 'test',
+			version: 'test',
+			description: '',
+			supported_languages: ['zh', 'en'],
+			capabilities: ['text_to_speech'],
+			sample_rate: null,
+			max_tokens: null,
+			privacy_level: 'local',
+			default_use_case: '',
+			parameter_schema: parameterSchema
+		},
+		state: {
+			engine_id: engineId,
+			status: 'loaded',
+			model_path: null,
+			error_message: null,
+			loaded_at: null
+		}
+	};
+}
+
+function voiceAsset(partial: Partial<VoiceAsset> = {}): VoiceAsset {
+	return {
+		name: '本地参考音色',
+		voice_type: 'test_sample',
+		description: '',
+		default_language: 'zh',
+		tags: [],
+		reference_text: '这是一段库内参考台词。',
+		recommended_engine_id: 'qwen3-tts-mlx-0.6b',
+		reference_audio_ids: ['ref-audio-1'],
+		license_status: 'self_voice',
+		voice_id: 'voice-1',
+		quality_status: 'unchecked',
+		quality_notes: '',
+		favorite: false,
+		emotion_tags: [],
+		created_at: '',
+		updated_at: '',
+		last_used_at: null,
+		engine_bindings: [],
+		...partial
+	};
+}
+
+function qwen3Schema(): ParameterSchema[] {
+	return [
+		parameter({ key: 'language', label: '目标语言', type: 'select', default: 'chinese', options: [{ label: '自动', value: 'auto' }, { label: '中文', value: 'chinese' }, { label: '英文', value: 'english' }] }),
+		parameter({ key: 'speaker_id', label: '预置音色', type: 'select', default: 'Vivian', options: [{ label: 'Vivian', value: 'Vivian' }] }),
+		parameter({ key: 'voice_design_prompt', label: '声音描述', type: 'textarea', default: '' }),
+		parameter({ key: 'style_instruction', label: '风格指令', type: 'textarea', default: '' }),
+		parameter({ key: 'temperature', label: 'Temperature', type: 'slider', default: 0.7, level: 'advanced' }),
+		parameter({ key: 'top_p', label: 'Top-P', type: 'slider', default: 0.9, level: 'advanced' }),
+		parameter({ key: 'top_k', label: 'Top-K', type: 'number', default: 50, level: 'advanced' }),
+		parameter({ key: 'repetition_penalty', label: '重复惩罚', type: 'number', default: 1.1, level: 'advanced' }),
+		parameter({ key: 'max_tokens', label: '最长生成量', type: 'number', default: 1200, level: 'advanced' })
+	];
+}
+
+describe('generate store custom reference voice requests', () => {
+	it('round-trips the existing IndexTTS built-in emotion without enabling an independent reference', () => {
+		const store = createGenerateStore();
+		store.update((state) => ({ ...state, engines: [engineDetail('indextts-v2', [parameter({ key: 'emotion', label: '情绪', type: 'select', default: '' })])] }));
+		store.fromRequest({ text: '情绪往返', engine_id: 'indextts-v2', language: 'zh', emotion_mode: 'emotion_vector', emotion: 'happy', emo_alpha: 0.8, output_format: 'wav' } as GenerateRequest);
+		const request = store.toRequest();
+		expect(request.emotion_mode).toBe('emotion_vector');
+		expect(request.emotion).toBe('happy');
+		expect(request.emo_alpha).toBe(0.8);
+		expect(request).not.toHaveProperty('emotion_reference_audio_path');
+		expect(request).not.toHaveProperty('emotion_reference_voice_id');
+	});
+	it('keeps model UI drafts isolated and intact while switching engines', () => {
+		const store = createGenerateStore();
+		const seedDraft = { mode: 'audio', prompt: '@音频1 测试' };
+		store.update((state) => ({
+			...state,
+			engines: [engineDetail('indextts-v2'), engineDetail('doubao-seed-audio-1.0')],
+			engineUiStateById: { 'doubao-seed-audio-1.0': seedDraft, 'future-engine': { prompt: '另一个模型' } }
+		}));
+
+		store.setEngine('doubao-seed-audio-1.0');
+		store.setEngine('indextts-v2');
+
+		const unsubscribe = store.subscribe((value) => {
+			expect(value.engineUiStateById['doubao-seed-audio-1.0']).toBe(seedDraft);
+			expect(value.engineUiStateById['future-engine']).toEqual({ prompt: '另一个模型' });
+		});
+		unsubscribe();
+	});
+	it('preserves compatible languages across engines and maps Qwen3 aliases', () => {
+		const store = createGenerateStore();
+		const commonLanguageSchema = [parameter({ key: 'language', label: '语言', type: 'select', default: 'zh', options: [{ label: '中文', value: 'zh' }, { label: '英文', value: 'en' }] })];
+		store.update((state) => ({
+			...state,
+			engines: [engineDetail('indextts-v2', commonLanguageSchema), engineDetail('qwen3-tts-mlx-0.6b', qwen3Schema())],
+			engineId: 'indextts-v2',
+			language: 'en'
+		}));
+
+		store.setEngine('qwen3-tts-mlx-0.6b');
+		expect(store.toRequest().language).toBe('english');
+
+		store.update((state) => ({ ...state, language: 'chinese' }));
+		store.setEngine('indextts-v2');
+		expect(store.toRequest().language).toBe('zh');
+
+		store.setEngine('qwen3-tts-mlx-0.6b');
+		store.update((state) => ({ ...state, language: 'japanese' }));
+		store.setEngine('indextts-v2');
+		expect(store.toRequest().language).toBe('zh');
+	});
+
+	it('loads manifest defaults for speed, duration controls, and F5 reference controls', () => {
+		const store = createGenerateStore();
+		const omniSchema = [
+			parameter({ key: 'speed', label: '语速', type: 'slider', default: 1.15 }),
+			parameter({ key: 'guidance_scale', label: '引导强度', type: 'slider', default: 2.4 }),
+			parameter({ key: 'duration', label: '固定时长', type: 'number', default: 8 }),
+			parameter({ key: 'audio_chunk_duration', label: '分段目标', type: 'number', default: 18 }),
+			parameter({ key: 'audio_chunk_threshold', label: '分段阈值', type: 'number', default: 36 })
+		];
+		const f5Schema = [
+			parameter({ key: 'speed', label: '语速', type: 'slider', default: 0.95 }),
+			parameter({ key: 'nfe_step', label: '步数', type: 'slider', default: 40 }),
+			parameter({ key: 'cfg_strength', label: '贴合度', type: 'slider', default: 2.5 }),
+			parameter({ key: 'target_rms', label: 'RMS', type: 'slider', default: 0.12 }),
+			parameter({ key: 'cross_fade_duration', label: '衔接', type: 'slider', default: 0.2 }),
+			parameter({ key: 'remove_silence', label: '移除静音', type: 'toggle', default: true })
+		];
+		store.update((state) => ({ ...state, engines: [engineDetail('omnivoice', omniSchema), engineDetail('f5-tts', f5Schema)] }));
+
+		store.setEngine('omnivoice');
+		expect(store.toRequest()).toMatchObject({ speed: 1.15, guidance_scale: 2.4, duration: 8, audio_chunk_duration: 18, audio_chunk_threshold: 36 });
+
+		store.setEngine('f5-tts');
+		expect(store.toRequest()).toMatchObject({ speed: 0.95, nfe_step: 40, cfg_strength: 2.5, target_rms: 0.12, cross_fade_duration: 0.2, remove_silence: true });
+	});
+
+	it('loads IndexTTS segmentation defaults from the manifest without changing legacy fallbacks', () => {
+		const store = createGenerateStore();
+		store.update((state) => ({
+			...state,
+			engines: [engineDetail('indextts-v2', [
+				parameter({ key: 'speed', label: '语速', type: 'slider', default: 1.05 }),
+				parameter({ key: 'max_text_tokens_per_segment', label: '分段长度', type: 'slider', default: 180 }),
+				parameter({ key: 'interval_silence', label: '分段静音', type: 'number', default: 350 }),
+				parameter({ key: 'max_mel_tokens', label: '最长声学长度', type: 'number', default: 1900 })
+			])]
+		}));
+
+		store.setEngine('indextts-v2');
+		expect(store.toRequest()).toMatchObject({ speed: 1.05, max_text_tokens_per_segment: 180, interval_silence: 350, max_mel_tokens: 1900 });
+
+		store.update((state) => ({ ...state, engines: [engineDetail('indextts-v2')] }));
+		store.setEngine('indextts-v2');
+		expect(store.toRequest()).toMatchObject({ speed: 1, max_text_tokens_per_segment: 120, interval_silence: 200, max_mel_tokens: 1500 });
+	});
+	it('sends custom audio and transcript for every engine that accepts a direct reference upload', () => {
+		for (const engineId of REFERENCE_VOICE_ENGINE_IDS.filter((engineId) => engineId !== 'doubao-tts-voiceclone')) {
+			const store = createGenerateStore();
+
+			store.update((state) => ({
+				...state,
+				engines: [engineDetail(engineId)],
+				engineId,
+				text: '需要合成的文本',
+				voiceSource: 'reference_audio',
+				voiceId: '',
+				customVoiceReferenceAudioPath: '/tmp/custom-reference.wav',
+				customVoiceSourceAudioPath: '/tmp/original-source.wav',
+				customVoiceSourceDurationMs: 300000,
+				customVoiceTrimStartMs: 12000,
+				customVoiceTrimEndMs: 18000,
+				customVoiceTranscript: '这是自定义音色对应的参考台词。',
+				customVoiceConfirmed: false
+			}));
+
+			const request = store.toRequest();
+
+			expect(request.engine_id).toBe(engineId);
+			expect(request.voice_id).toBeNull();
+			expect(request.voice_source).toBe('reference_audio');
+			expect(request.reference_audio_path).toBe('/tmp/custom-reference.wav');
+			expect(request.ref_text).toBe('这是自定义音色对应的参考台词。');
+			expect(request.custom_reference_source_audio_path).toBe('/tmp/original-source.wav');
+			expect(request.custom_reference_source_duration_ms).toBe(300000);
+			expect(request.custom_reference_trim_start_ms).toBe(12000);
+			expect(request.custom_reference_trim_end_ms).toBe(18000);
+			expect(request.reference_audio_license_status).toBe('self_voice');
+			expect(request.reference_audio_tags).toEqual(['custom-reference']);
+		}
+	});
+
+	it('does not send a raw custom reference to Doubao voice clone', () => {
+		const store = createGenerateStore();
+
+		store.update((state) => ({
+			...state,
+			engines: [engineDetail('doubao-tts-voiceclone')],
+			engineId: 'doubao-tts-voiceclone',
+			voiceSource: 'reference_audio',
+			customVoiceReferenceAudioPath: '/tmp/custom-reference.wav',
+			customVoiceSourceAudioPath: '/tmp/original-source.wav',
+			customVoiceTranscript: '这段台词不能直接发给豆包复刻合成。'
+		}));
+
+		const request = store.toRequest();
+
+		expect(request.voice_source).toBe('voice_library');
+		expect(request.reference_audio_path).toBeNull();
+		expect(request.ref_text).toBeNull();
+		expect(request.custom_reference_source_audio_path).toBeNull();
+	});
+
+	it('applies Confucius4 manifest defaults including seed', () => {
+		const store = createGenerateStore();
+
+		store.update((state) => ({
+			...state,
+			engines: [
+				engineDetail('confucius4-mlx-int8', [
+					parameter({ key: 'language', label: '目标语言', type: 'select', default: 'zh', options: [{ label: '中文', value: 'zh' }] }),
+					parameter({ key: 'temperature', label: '随机性', type: 'slider', default: 0.8, min: 0.1, max: 1.5, step: 0.05, level: 'advanced' }),
+					parameter({ key: 'top_p', label: 'Top-P', type: 'slider', default: 0.8, min: 0.01, max: 1, step: 0.01, level: 'advanced' }),
+					parameter({ key: 'top_k', label: 'Top-K', type: 'slider', default: 30, min: 1, max: 100, step: 1, level: 'advanced' }),
+					parameter({ key: 'repetition_penalty', label: '重复惩罚', type: 'slider', default: 10, min: 1, max: 20, step: 0.5, level: 'advanced' }),
+					parameter({ key: 'diffusion_steps', label: '声学采样步数', type: 'slider', default: 25, min: 1, max: 60, step: 1, level: 'advanced' }),
+					parameter({ key: 'cfg_rate', label: '声学引导强度', type: 'slider', default: 0.7, min: 0, max: 1, step: 0.05, level: 'advanced' }),
+					parameter({ key: 'seed', label: '随机种子', type: 'number', default: 0, min: 0, max: 2147483647, step: 1, level: 'developer' })
+				])
+			]
+		}));
+
+		store.setEngine('confucius4-mlx-int8');
+		const request = store.toRequest();
+
+		expect(request.engine_id).toBe('confucius4-mlx-int8');
+		expect(request.language).toBe('zh');
+		expect(request.temperature).toBe(0.8);
+		expect(request.top_p).toBe(0.8);
+		expect(request.top_k).toBe(30);
+		expect(request.repetition_penalty).toBe(10);
+		expect(request.diffusion_steps).toBe(25);
+		expect(request.cfg_rate).toBe(0.7);
+		expect(request.seed).toBe(0);
+	});
+
+	it('resets F5 developer values from the active manifest instead of retaining a previous value', () => {
+		const store = createGenerateStore();
+		store.update((state) => ({
+			...state,
+			engines: [
+				engineDetail('f5-tts', [
+					parameter({ key: 'sway_sampling_coef', label: '采样摆动', type: 'slider', default: -1, min: -1, max: 1, step: 0.1, level: 'developer' }),
+					parameter({ key: 'fix_duration', label: '固定总时长', type: 'number', default: 0, min: 0, max: 600, step: 0.1, level: 'developer' })
+				]),
+			],
+			swaySamplingCoef: 0.7,
+			fixDuration: 24
+		}));
+
+		store.setEngine('f5-tts');
+		const unsubscribe = store.subscribe((state) => {
+			expect(state.swaySamplingCoef).toBe(-1);
+			expect(state.fixDuration).toBe(0);
+		});
+		unsubscribe();
+	});
+
+	it('round-trips the official Doubao TTS audio parameters only when declared', () => {
+		const store = createGenerateStore();
+		const schema = [
+			parameter({ key: 'speaker_id', label: '音色', type: 'select', default: 'speaker-1' }),
+			parameter({ key: 'pitch_rate', label: '音调', type: 'slider', default: 0, min: -12, max: 12, step: 1, level: 'advanced' }),
+			parameter({ key: 'sample_rate', label: '采样率', type: 'select', default: 24000, level: 'advanced' }),
+			parameter({ key: 'bit_rate', label: '码率', type: 'select', default: 128000, level: 'advanced' }),
+			parameter({ key: 'loudness_rate', label: '音量', type: 'slider', default: 0, level: 'advanced' }),
+			parameter({ key: 'enable_subtitle', label: '时间戳', type: 'toggle', default: false, level: 'advanced' }),
+			parameter({ key: 'silence_duration', label: '结尾静音', type: 'number', default: 0, level: 'advanced' }),
+			parameter({ key: 'aigc_watermark', label: 'AIGC 标识', type: 'toggle', default: false, level: 'advanced' })
+		];
+		store.update((state) => ({
+			...state,
+			engines: [engineDetail('doubao-tts-preset', schema)],
+			engineId: 'doubao-tts-preset',
+			text: '测试文本',
+			pitchRate: 5,
+			doubaoSampleRate: 48000,
+			doubaoBitRate: 160000,
+			doubaoLoudnessRate: 25,
+			doubaoEnableSubtitle: true,
+			doubaoSilenceDuration: 700,
+			doubaoAigcWatermark: true
+		}));
+
+		const request = store.toRequest();
+		expect(request.pitch_rate).toBe(5);
+		expect(request.sample_rate).toBe(48000);
+		expect(request.bit_rate).toBe(160000);
+		expect(request.loudness_rate).toBe(25);
+		expect(request.enable_subtitle).toBe(true);
+		expect(request.silence_duration).toBe(700);
+		expect(request.aigc_watermark).toBe(true);
+
+		store.fromRequest({ ...request, pitch_rate: -4, sample_rate: 16000, bit_rate: 96000, loudness_rate: -20, enable_subtitle: false, silence_duration: 200, aigc_watermark: false });
+		const unsubscribe = store.subscribe((value) => {
+			expect(value.pitchRate).toBe(-4);
+			expect(value.doubaoSampleRate).toBe(16000);
+			expect(value.doubaoBitRate).toBe(96000);
+			expect(value.doubaoLoudnessRate).toBe(-20);
+			expect(value.doubaoEnableSubtitle).toBe(false);
+			expect(value.doubaoSilenceDuration).toBe(200);
+			expect(value.doubaoAigcWatermark).toBe(false);
+		});
+		unsubscribe();
+	});
+
+	it('keeps model-specific preset parameters while ignoring shared request fields', () => {
+		const store = createGenerateStore();
+		const schema = [
+			parameter({ key: 'speaker_id', label: '音色', type: 'select', default: 'speaker-1' }),
+			parameter({ key: 'speed', label: '语速', type: 'slider', default: 1 }),
+			parameter({ key: 'max_length_to_filter_parenthesis', label: '不朗读圆括号内容', type: 'toggle', default: false, level: 'advanced' }),
+			parameter({ key: 'latex_parser_mode', label: '公式朗读', type: 'select', default: 'off', level: 'advanced' })
+		];
+		store.update((state) => ({ ...state, engines: [engineDetail('doubao-tts-preset', schema)] }));
+
+		const parameters = pickEngineSpecificParameters({
+			speaker_id: 'speaker-2',
+			speed: 1.2,
+			max_length_to_filter_parenthesis: true,
+			latex_parser_mode: 'enhanced'
+		});
+		expect(parameters).toEqual({ max_length_to_filter_parenthesis: true, latex_parser_mode: 'enhanced' });
+
+		store.setEngine('doubao-tts-preset');
+		store.fromRequest({ ...store.toRequest(), text: '测试文本', speaker_id: 'speaker-2', speed: 1.2, engine_parameters: parameters });
+		expect(store.toRequest().engine_parameters).toEqual({ max_length_to_filter_parenthesis: true, latex_parser_mode: 'enhanced' });
+	});
+
+	it('uses high-quality Doubao defaults while preserving explicit historical values', () => {
+		const store = createGenerateStore();
+		const schema = [
+			parameter({ key: 'speaker_id', label: '音色', type: 'select', default: 'speaker-1' }),
+			parameter({ key: 'sample_rate', label: '采样率', type: 'select', default: 48000, level: 'advanced' }),
+			parameter({ key: 'bit_rate', label: '码率', type: 'select', default: 160000, level: 'advanced' })
+		];
+		store.update((state) => ({ ...state, engines: [engineDetail('doubao-tts-preset', schema)] }));
+		store.setEngine('doubao-tts-preset');
+
+		let request = store.toRequest();
+		expect(request.sample_rate).toBe(48000);
+		expect(request.bit_rate).toBe(160000);
+
+		store.fromRequest({ ...request, sample_rate: 24000, bit_rate: 128000 });
+		request = store.toRequest();
+		expect(request.sample_rate).toBe(24000);
+		expect(request.bit_rate).toBe(128000);
+	});
+
+	it('does not add Doubao pitch rate to unrelated engine requests', () => {
+		const store = createGenerateStore();
+		store.update((state) => ({
+			...state,
+			engines: [engineDetail('indextts-v2')],
+			engineId: 'indextts-v2',
+			pitchRate: 7
+		}));
+
+		expect(store.toRequest().pitch_rate).toBeUndefined();
+	});
+
+	it('keeps Qwen3 preset, voice design, library, and custom voice routes mutually exclusive', () => {
+		const store = createGenerateStore();
+
+		store.update((state) => ({
+			...state,
+			engines: [engineDetail('qwen3-tts-mlx-0.6b', qwen3Schema())],
+			voices: [voiceAsset()],
+			engineId: 'qwen3-tts-mlx-0.6b',
+			text: '需要合成的文本'
+		}));
+		store.setEngine('qwen3-tts-mlx-0.6b');
+
+		store.update((state) => ({
+			...state,
+			voiceSource: 'voice_library',
+			voiceId: 'voice-1',
+			speakerId: 'Vivian',
+			voiceDesignPrompt: '温柔的中文女声',
+			styleInstruction: '语速稍慢'
+		}));
+		const libraryRequest = store.toRequest();
+		expect(libraryRequest.language).toBe('chinese');
+		expect(libraryRequest.voice_id).toBe('voice-1');
+		expect(libraryRequest.ref_text).toBe('这是一段库内参考台词。');
+		expect(libraryRequest.reference_audio_path).toBeNull();
+		expect(libraryRequest.speaker_id).toBeNull();
+		expect(libraryRequest.voice_design_prompt).toBeNull();
+		expect(libraryRequest.style_instruction).toBeNull();
+		expect(libraryRequest.cfg_scale).toBeUndefined();
+		expect(libraryRequest.ddpm_steps).toBeUndefined();
+
+		store.update((state) => ({
+			...state,
+			voiceSource: 'reference_audio',
+			voiceId: '',
+			customVoiceReferenceAudioPath: '/tmp/custom-reference.wav',
+			customVoiceTranscript: '自定义参考台词。',
+			speakerId: 'Vivian',
+			voiceDesignPrompt: '温柔的中文女声',
+			styleInstruction: '语速稍慢'
+		}));
+		const customRequest = store.toRequest();
+		expect(customRequest.voice_id).toBeNull();
+		expect(customRequest.reference_audio_path).toBe('/tmp/custom-reference.wav');
+		expect(customRequest.ref_text).toBe('自定义参考台词。');
+		expect(customRequest.speaker_id).toBeNull();
+		expect(customRequest.voice_design_prompt).toBeNull();
+		expect(customRequest.style_instruction).toBeNull();
+
+		store.update((state) => ({
+			...state,
+			voiceSource: 'voice_library',
+			voiceId: '',
+			customVoiceReferenceAudioPath: '',
+			customVoiceTranscript: '',
+			speakerId: 'Vivian',
+			voiceDesignPrompt: '',
+			styleInstruction: '语速稍慢'
+		}));
+		const presetRequest = store.toRequest();
+		expect(presetRequest.voice_id).toBeNull();
+		expect(presetRequest.reference_audio_path).toBeNull();
+		expect(presetRequest.speaker_id).toBe('Vivian');
+		expect(presetRequest.style_instruction).toBe('语速稍慢');
+
+		store.update((state) => ({ ...state, voiceDesignPrompt: '年轻中文女声，吐字清晰' }));
+		const designRequest = store.toRequest();
+		expect(designRequest.speaker_id).toBeNull();
+		expect(designRequest.voice_design_prompt).toBe('年轻中文女声，吐字清晰');
+		expect(designRequest.style_instruction).toBeNull();
+	});
+
+	it('preserves video localization context across request restore', () => {
+		const store = createGenerateStore();
+		store.update((state) => ({ ...state, engines: [engineDetail('indextts-v2')] }));
+
+		store.fromRequest({
+			text: '一九九二年，这件事，改变了一切。',
+			engine_id: 'indextts-v2',
+			source: 'video_localization',
+			project_id: 'project-1',
+			segment_id: 'cue_0001',
+				localized_subtitle_id: 'localized_0001',
+				cue_id: 'cue_0001',
+			timeline_clip_id: 'clip_localized_0001',
+			bind_to_video_localization: true,
+			video_localization_workflow_id: 'vltts-workflow-1',
+			video_localization_start_ms: 1250,
+			video_localization_end_ms: 3480,
+			video_localization_target_subtitle_ids: ['localized_0001', 'localized_0002'],
+			video_localization_source_cue_ids: ['cue_0001', 'cue_0002'],
+			reference_audio_path: '/tmp/reference.wav',
+			reference_audio_license_status: 'project_source_audio',
+			reference_audio_tags: ['video-localization', 'managed-reference'],
+			ref_text: 'In 1992, this changed everything.',
+			custom_reference_source_audio_path: '/tmp/source.wav',
+			custom_reference_source_duration_ms: 8000,
+			custom_reference_trim_start_ms: 1250,
+			custom_reference_trim_end_ms: 3480,
+			language: 'zh',
+			emotion_mode: 'follow_reference',
+			nfe_step: 32,
+			cfg_strength: 2,
+			target_rms: 0.1,
+			cross_fade_duration: 0.15,
+			sway_sampling_coef: -1,
+			fix_duration: 0,
+			remove_silence: false,
+			emo_alpha: 0.6,
+			speed: 1,
+			temperature: 0.8,
+			top_p: 0.8,
+			top_k: 30,
+			repetition_penalty: 10,
+			max_mel_tokens: 1500,
+			max_text_tokens_per_segment: 120,
+			interval_silence: 200,
+			segment_overlap_ms: 50,
+			diffusion_steps: 25,
+			cfg_rate: 0.7,
+			guidance_scale: 2,
+			duration: 0,
+			output_format: 'wav'
+		});
+
+		const request = store.toRequest();
+
+		expect(request.source).toBe('video_localization');
+		expect(request.project_id).toBe('project-1');
+		expect(request.segment_id).toBe('cue_0001');
+		expect(request.localized_subtitle_id).toBe('localized_0001');
+			expect(request.cue_id).toBe('cue_0001');
+		expect(request.timeline_clip_id).toBe('clip_localized_0001');
+		expect(request.bind_to_video_localization).toBe(true);
+		expect(request.video_localization_workflow_id).toBe('vltts-workflow-1');
+		expect(request.video_localization_start_ms).toBe(1250);
+		expect(request.video_localization_end_ms).toBe(3480);
+		expect(request.video_localization_target_subtitle_ids).toEqual(['localized_0001', 'localized_0002']);
+		expect(request.video_localization_source_cue_ids).toEqual(['cue_0001', 'cue_0002']);
+		expect(request.reference_audio_license_status).toBe('project_source_audio');
+		expect(request.reference_audio_tags).toEqual(['video-localization', 'managed-reference']);
+		expect(request.ref_text).toBe('In 1992, this changed everything.');
+		expect(request.custom_reference_source_audio_path).toBe('/tmp/source.wav');
+		expect(request.custom_reference_trim_start_ms).toBe(1250);
+		expect(request.custom_reference_trim_end_ms).toBe(3480);
+
+		store.fromRequest(request, { preserveVideoLocalizationBinding: false });
+		expect(store.toRequest().bind_to_video_localization).toBe(false);
+	});
+});

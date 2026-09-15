@@ -1,0 +1,55 @@
+{
+  "schema_version": "localization-requirements-catalog-v1",
+  "default_profile_id": "zh_cn_native_creator_v1",
+  "profiles": [
+    {
+      "profile_id": "zh_cn_native_creator_v1",
+      "profile_version": "1",
+      "label": "中国大陆自然表达",
+      "target_language": "zh-Hans",
+      "target_locale": "zh-CN",
+      "audience": "中国大陆普通观众",
+      "deliverables": {
+        "display_subtitles": true,
+        "spoken_script": true,
+        "rendered_audio": false,
+        "label": "中文字幕与配音台词"
+      },
+      "expression": {
+        "goal": "像中文母语者在当前内容场景下自然表达，而不是逐句翻译",
+        "preserve": [
+          "事实、数字、专名、否定和因果关系",
+          "人物的专业程度、态度、情绪和说话节奏",
+          "与文化背景无关的人格特征"
+        ],
+        "adapt": [
+          "按中国大陆口语习惯重组句子和篇章",
+          "把情绪、惊叹、幽默和网络口语换成强度相近的中文表达",
+          "把文化相关说法替换成中国观众能自然理解的等效表达"
+        ],
+        "avoid": [
+          "逐句对应英文字幕条",
+          "为了覆盖每个英文单词而保留翻译腔",
+          "把固定中英词表当成文化迁移规则"
+        ]
+      },
+      "timing": {
+        "policy_id": "semantic_window",
+        "label": "按画面语义时间对应",
+        "description": "中文可以重新分段，不要求与英文字幕条一一对齐；每段中文要落在原视频表达相同意思的时间范围内，并在下一段意思开始前结束。",
+        "align_by": "semantic_window",
+        "source_cue_alignment_required": false,
+        "overlap_next_semantic_window_allowed": false
+      },
+      "source_reference": {
+        "asr_document_brief_usage": "reference_only",
+        "full_source_reanalysis_required": true,
+        "description": "ASR 阶段的全文概述只作参考；本土化仍须重新通读完整英文原文。"
+      },
+      "subtitle": {
+        "profile_id": "general_zh_hans",
+        "label": "简体中文通用上屏字幕"
+      }
+    }
+  ]
+}

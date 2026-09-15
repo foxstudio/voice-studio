@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+from typing import Literal
+
+RunnerKind = Literal["local", "cloud", "external_subprocess", "persistent_worker", "asr_local"]
+
+CLOUD_RESULT_UNKNOWN_MESSAGE = (
+    "云端音频生成结果无法确认；为避免重复计费，未自动重放。"
+    "请先核对云端状态，再确认是否重新提交。"
+)
+
+_ALIASES = {"mimo-v2.5-tts": "mimo-v2.5-tts-preset"}
+
+MIMO_TTS_ENGINES = {"mimo-v2.5-tts", "mimo-v2.5-tts-preset", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"}
+MIMO_ENGINES = {*MIMO_TTS_ENGINES, "mimo-v2.5-asr"}
+DOUBAO_TTS_ENGINES = {"doubao-tts-preset", "doubao-tts-voiceclone"}
+DOUBAO_SEED_AUDIO_ENGINES = {"doubao-seed-audio-1.0"}
+DOUBAO_ENGINES = {*DOUBAO_TTS_ENGINES, *DOUBAO_SEED_AUDIO_ENGINES}
+EXTERNAL_WORKER_ENGINES = {
+    "f5-tts",
+    "cosyvoice-sft",
+    "cosyvoice-zero-shot",
+    "qwen3-tts-mlx-0.6b",
+}
+EXTERNAL_SUBPROCESS_ENGINES = {"emotivoice", "confucius4-mlx-int8", *EXTERNAL_WORKER_ENGINES}
+LOCAL_MODEL_ENGINES = {"indextts-v2", "omnivoice"}
+LOCAL_ASR_ENGINES = {
+    "qwen3-asr-mlx",
+    "moss-transcribe-diarize-mlx",
+    "faster-whisper-turbo",
+    "vibevoice-asr-mlx-4bit",
+    "vibevoice-asr-mlx-8bit",
+}
+
+_TIMEOUTS = {
+    "omnivoice": 600,
+    "indextts-v2": 420,
+    "emotivoice": 420,
+    "confucius4-mlx-int8": 600,
+    "qwen3-tts-mlx-0.6b": 600,
+    "f5-tts": 600,
+    "cosyvoice-sft": 900,
+    "cosyvoice-zero-shot": 900,
+    "mimo-v2.5-tts": 300,
+    "mimo-v2.5-tts-preset": 300,
+    "mimo-v2.5-tts-voicedesign": 300,
+    "mimo-v2.5-tts-voiceclone": 300,
+    "doubao-tts-preset": 300,
+    "doubao-tts-voiceclone": 300,
+    "doubao-seed-audio-1.0": 300,
+}
+
+
+def resolve_engine_id(engine_id: str) -> str:
+    return _ALIASES.get(engine_id, engine_id)
+
+
+def is_mimo_tts(engine_id: str) -> bool:
+    return engine_id in MIMO_TTS_ENGINES
+
+
+def is_doubao_tts(engine_id: str) -> bool:
+    return engine_id in DOUBAO_TTS_ENGINES
+
+
+def is_doubao_engine(engine_id: str) -> bool:
+    return engine_id in DOUBAO_ENGINES
+
+
+def is_cloud_engine(engine_id: str) -> bool:
+    return engine_id in MIMO_ENGINES or engine_id in DOUBAO_ENGINES
+
+
+def requires_idempotency_marker(engine_id: str) -> bool:
+    return is_mimo_tts(engine_id)
+
+
+def requires_manual_replay_after_start(engine_id: str) -> bool:
+    return is_cloud_engine(engine_id)
+
+
+def is_single_generation_only(engine_id: str) -> bool:
+    return engine_id in DOUBAO_SEED_AUDIO_ENGINES
+
+
+def supports_longform(engine_id: str) -> bool:
+    return not is_single_generation_only(engine_id)
+
+
+def supports_batch(engine_id: str) -> bool:
+    return not is_single_generation_only(engine_id)
+
+
+def timeout_seconds_for(engine_id: str) -> int:
+    return _TIMEOUTS.get(engine_id, 300)
+
+
+def runner_kind_for(engine_id: str) -> RunnerKind:
+    resolved = resolve_engine_id(engine_id)
+    if resolved in MIMO_ENGINES:
+        return "cloud"
+    if resolved in DOUBAO_ENGINES:
+        return "cloud"
+    if resolved in EXTERNAL_WORKER_ENGINES:
+        return "persistent_worker"
+    if resolved in EXTERNAL_SUBPROCESS_ENGINES:
+        return "external_subprocess"
+    if resolved in LOCAL_ASR_ENGINES:
+        return "asr_local"
+    return "local"

@@ -1,0 +1,600 @@
+from __future__ import annotations
+
+from typing import Any
+
+from app.schemas.voice_studio import BatchGenerateRequest, GenerateRequest, VoiceAsset
+from app.models.exceptions import AppException
+from app.services import confucius4_paths, doubao_client, qwen3_tts_paths, settings_store
+
+# Official pay-as-you-go endpoint. A user-entered Token Plan endpoint remains
+# valid and takes precedence through AppSettings.mimo_base_url.
+MIMO_DEFAULT_BASE_URL = "https://api.xiaomimimo.com/v1"
+MIMO_TTS_ENGINE_IDS = {"mimo-v2.5-tts", "mimo-v2.5-tts-preset", "mimo-v2.5-tts-voicedesign", "mimo-v2.5-tts-voiceclone"}
+DOUBAO_TTS_ENGINE_IDS = {"doubao-tts-preset", "doubao-tts-voiceclone"}
+DOUBAO_VOICE_READY_STATUSES = {"success", "active", "available", "passed", "2", "3"}
+
+
+def is_mimo_tts_request(engine_id: str) -> bool:
+    return engine_id in MIMO_TTS_ENGINE_IDS
+
+
+def is_doubao_tts_request(engine_id: str) -> bool:
+    return engine_id in DOUBAO_TTS_ENGINE_IDS
+
+
+def _doubao_additions_parameters(values: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep model-specific additions out of the shared TTS request surface."""
+    source = values if isinstance(values, dict) else {}
+    keys = (
+        "max_length_to_filter_parenthesis",
+        "disable_markdown_filter",
+        "latex_parser_mode",
+        "aigc_metadata_enable",
+        "content_producer",
+        "produce_id",
+        "content_propagator",
+        "propagate_id",
+        "tone_fidelity",
+    )
+    return {key: source.get(key) for key in keys}
+
+
+def build_doubao_tts_single_kwargs(req: GenerateRequest, output_path: str, *, voice: VoiceAsset | None = None) -> dict[str, Any]:
+    settings, api_key = _doubao_auth()
+    speaker = _doubao_speaker_for_request(req, voice)
+    resource_id = (
+        settings.doubao_default_icl_resource_id
+        if req.engine_id == "doubao-tts-voiceclone"
+        else settings.doubao_default_tts_resource_id
+    )
+    additions = _doubao_additions_parameters(req.engine_parameters)
+    if req.engine_id != "doubao-tts-voiceclone":
+        additions["tone_fidelity"] = False
+    return {
+        "text": req.text,
+        "output_path": output_path,
+        "base_url": settings.doubao_base_url or doubao_client.DEFAULT_BASE_URL,
+        "api_key": api_key,
+        "resource_id": resource_id or doubao_client.DEFAULT_TTS_RESOURCE_ID,
+        "speaker": speaker,
+        "style_instruction": req.style_instruction if req.engine_id == "doubao-tts-preset" else None,
+        "explicit_language": req.language if req.engine_id == "doubao-tts-preset" and "language" in req.model_fields_set else None,
+        "speed": req.speed,
+        "sample_rate": req.sample_rate or doubao_client.DEFAULT_TTS_SAMPLE_RATE,
+        "bit_rate": req.bit_rate or doubao_client.DEFAULT_TTS_BIT_RATE,
+        "loudness_rate": req.loudness_rate,
+        "pitch_rate": req.pitch_rate,
+        # TTS 2.0 preset voices and ICL 2.0 trained voices both support word
+        # timestamps. Do not silently drop the clone setting.
+        "enable_subtitle": req.enable_subtitle,
+        "silence_duration": req.silence_duration,
+        "aigc_watermark": req.aigc_watermark,
+        **additions,
+    }
+
+
+def build_doubao_tts_batch_common_kwargs(req: BatchGenerateRequest, *, voice: VoiceAsset | None = None) -> dict[str, Any]:
+    settings, api_key = _doubao_auth()
+    values = GenerateRequest(text="placeholder", engine_id=req.engine_id, language=req.language).model_dump()
+    values.update(req.parameters)
+    request = GenerateRequest(
+        text="placeholder",
+        engine_id=req.engine_id,
+        voice_id=req.voice_id,
+        reference_audio_path=req.reference_audio_path,
+        speaker_id=values.get("speaker_id"),
+        style_instruction=values.get("style_instruction"),
+        speed=values.get("speed") or 1.0,
+        language=req.language,
+    )
+    speaker = _doubao_speaker_for_request(request, voice)
+    resource_id = (
+        settings.doubao_default_icl_resource_id
+        if req.engine_id == "doubao-tts-voiceclone"
+        else settings.doubao_default_tts_resource_id
+    )
+    additions = _doubao_additions_parameters(values)
+    if req.engine_id != "doubao-tts-voiceclone":
+        additions["tone_fidelity"] = False
+    return {
+        "base_url": settings.doubao_base_url or doubao_client.DEFAULT_BASE_URL,
+        "api_key": api_key,
+        "resource_id": resource_id or doubao_client.DEFAULT_TTS_RESOURCE_ID,
+        "speaker": speaker,
+        "style_instruction": values.get("style_instruction") if req.engine_id == "doubao-tts-preset" else None,
+        "explicit_language": (
+            values.get("language")
+            if req.engine_id == "doubao-tts-preset" and "language" in req.parameters
+            else req.language
+            if req.engine_id == "doubao-tts-preset" and "language" in req.model_fields_set
+            else None
+        ),
+        "speed": values.get("speed"),
+        "sample_rate": values.get("sample_rate") or doubao_client.DEFAULT_TTS_SAMPLE_RATE,
+        "bit_rate": values.get("bit_rate") or doubao_client.DEFAULT_TTS_BIT_RATE,
+        "loudness_rate": values.get("loudness_rate"),
+        "pitch_rate": values.get("pitch_rate"),
+        "enable_subtitle": bool(values.get("enable_subtitle")),
+        "silence_duration": values.get("silence_duration") or 0,
+        "aigc_watermark": bool(values.get("aigc_watermark")),
+        **additions,
+    }
+
+
+def _doubao_speaker_for_request(req: GenerateRequest, voice: VoiceAsset | None) -> str:
+    if req.engine_id == "doubao-tts-preset":
+        return req.speaker_id or "zh_female_vv_uranus_bigtts"
+    if req.engine_id != "doubao-tts-voiceclone":
+        return req.speaker_id or "zh_female_vv_uranus_bigtts"
+    if req.reference_audio_path:
+        raise AppException(400, "DOUBAO_REFERENCE_AUDIO_NOT_SUPPORTED", "豆包云端复刻合成只能使用已训练的 speaker_id，不支持直接上传本地参考音频")
+    if not voice or voice.external_provider != "doubao" or not voice.external_voice_id:
+        raise AppException(400, "DOUBAO_VOICE_NOT_BOUND", "请选择已训练成功的豆包云端音色")
+    status = str(voice.external_status or "").strip().lower()
+    if status not in DOUBAO_VOICE_READY_STATUSES:
+        raise AppException(400, "DOUBAO_VOICE_NOT_READY", f"豆包云端音色还不可用，当前状态：{voice.external_status or '未知'}")
+    return voice.external_voice_id
+
+
+def build_mimo_tts_single_kwargs(
+    req: GenerateRequest,
+    output_path: str,
+    *,
+    reference_audio_path: str | None,
+    idempotency_marker: str,
+) -> dict[str, Any]:
+    settings, api_key = _mimo_auth()
+    return {
+        "text": req.text,
+        "output_path": output_path,
+        "base_url": settings.mimo_base_url or MIMO_DEFAULT_BASE_URL,
+        "api_key": api_key,
+        "model": _mimo_model(req.engine_id),
+        "voice": req.mimo_voice or settings.mimo_default_voice,
+        "instruction": req.style_instruction or req.emotion_text or req.emotion,
+        "voice_design_prompt": req.voice_design_prompt or req.style_instruction or req.emotion_text,
+        "optimize_text_preview": req.optimize_text_preview,
+        "reference_audio_path": reference_audio_path,
+        "idempotency_marker": idempotency_marker,
+    }
+
+
+def build_mimo_tts_batch_common_kwargs(
+    req: BatchGenerateRequest,
+    *,
+    reference_audio_path: str | None,
+) -> dict[str, Any]:
+    settings, api_key = _mimo_auth()
+    instruction = _mimo_instruction(req.parameters)
+    return {
+        "base_url": settings.mimo_base_url or MIMO_DEFAULT_BASE_URL,
+        "api_key": api_key,
+        "model": _mimo_model(req.engine_id),
+        "mimo_voice": req.parameters.get("mimo_voice") or settings.mimo_default_voice,
+        "instruction": instruction,
+        "style_instruction": instruction,
+        "voice_design_prompt": _mimo_voice_design_prompt(req.parameters),
+        "optimize_text_preview": req.parameters.get("optimize_text_preview", False),
+        "reference_audio_path": reference_audio_path,
+    }
+
+
+def build_f5_tts_single_kwargs(
+    req: GenerateRequest,
+    output_path: str,
+    *,
+    reference_audio: str | None,
+    ref_text: str | None,
+    device: str | None = None,
+) -> dict[str, Any]:
+    result = {
+        "text": req.text,
+        "reference_audio": reference_audio,
+        "ref_text": ref_text,
+        "output_path": output_path,
+        "speed": req.speed,
+        "nfe_step": req.nfe_step,
+        "cfg_strength": req.cfg_strength,
+        "target_rms": req.target_rms,
+        "cross_fade_duration": req.cross_fade_duration,
+        "sway_sampling_coef": req.sway_sampling_coef,
+        "fix_duration": req.fix_duration if req.fix_duration > 0 else None,
+        "remove_silence": req.remove_silence,
+        "seed": req.seed,
+    }
+    if device is not None:
+        result["device"] = device
+    return result
+
+
+def build_f5_tts_batch_common_kwargs(
+    values: dict[str, Any],
+    *,
+    reference_audio: str | None,
+    ref_text: str | None,
+    device: str | None = None,
+) -> dict[str, Any]:
+    result = {
+        "reference_audio": reference_audio,
+        "ref_text": ref_text,
+        "speed": values.get("speed"),
+        "nfe_step": values.get("nfe_step"),
+        "cfg_strength": values.get("cfg_strength"),
+        "target_rms": values.get("target_rms"),
+        "cross_fade_duration": values.get("cross_fade_duration"),
+        "sway_sampling_coef": values.get("sway_sampling_coef"),
+        "fix_duration": values.get("fix_duration") or None,
+        "remove_silence": values.get("remove_silence"),
+        "seed": values.get("seed"),
+    }
+    if device is not None:
+        result["device"] = device
+    return result
+
+
+def build_cosyvoice_zero_shot_single_kwargs(
+    req: GenerateRequest,
+    output_path: str,
+    *,
+    reference_audio: str | None,
+    ref_text: str | None,
+) -> dict[str, Any]:
+    return {
+        "text": req.text,
+        "reference_audio": reference_audio,
+        "ref_text": ref_text,
+        "output_path": output_path,
+        "speed": req.speed,
+    }
+
+
+def build_cosyvoice_zero_shot_batch_common_kwargs(
+    values: dict[str, Any],
+    *,
+    reference_audio: str | None,
+    ref_text: str | None,
+) -> dict[str, Any]:
+    return {
+        "reference_audio": reference_audio,
+        "ref_text": ref_text,
+        "speed": values.get("speed"),
+    }
+
+
+def build_confucius4_mlx_single_kwargs(
+    req: GenerateRequest,
+    output_path: str,
+    *,
+    reference_audio: str | None,
+    model_dir: str,
+) -> dict[str, Any]:
+    return {
+        "text": req.text,
+        "reference_audio": reference_audio,
+        "output_path": output_path,
+        "model_dir": model_dir,
+        "language": confucius4_paths.require_supported_language(req.language),
+        "temperature": req.temperature,
+        "top_p": req.top_p,
+        "top_k": req.top_k,
+        "repetition_penalty": req.repetition_penalty,
+        "diffusion_steps": req.diffusion_steps,
+        "cfg_rate": req.cfg_rate,
+        "seed": req.seed if req.seed is not None else 0,
+    }
+
+
+def build_confucius4_mlx_batch_common_kwargs(
+    values: dict[str, Any],
+    *,
+    reference_audio: str | None,
+    language: str,
+    model_dir: str,
+) -> dict[str, Any]:
+    return {
+        "reference_audio": reference_audio,
+        "model_dir": model_dir,
+        "language": confucius4_paths.require_supported_language(values.get("language") or language),
+        "temperature": values.get("temperature"),
+        "top_p": values.get("top_p"),
+        "top_k": values.get("top_k"),
+        "repetition_penalty": values.get("repetition_penalty"),
+        "diffusion_steps": values.get("diffusion_steps"),
+        "cfg_rate": values.get("cfg_rate"),
+        "seed": values.get("seed") if values.get("seed") is not None else 0,
+    }
+
+
+def build_qwen3_tts_single_kwargs(
+    req: GenerateRequest,
+    output_path: str,
+    *,
+    reference_audio: str | None,
+    ref_text: str | None,
+) -> dict[str, Any]:
+    voice_design_prompt = req.voice_design_prompt if not reference_audio else None
+    preset_route = not reference_audio and not voice_design_prompt
+    generation_parameters = {
+        key: getattr(req, key) if key in req.model_fields_set else default
+        for key, default in qwen3_tts_paths.GENERATION_DEFAULTS.items()
+    }
+    return {
+        "text": req.text,
+        "reference_audio": reference_audio,
+        "ref_text": ref_text,
+        "output_path": output_path,
+        "language": req.language,
+        "speaker_id": req.speaker_id if preset_route else None,
+        "style_instruction": req.style_instruction if preset_route else None,
+        "voice_design_prompt": voice_design_prompt,
+        "speed": req.speed,
+        **generation_parameters,
+        "max_tokens": req.max_tokens,
+    }
+
+
+def build_qwen3_tts_batch_common_kwargs(
+    values: dict[str, Any],
+    *,
+    parameters: dict[str, Any],
+    reference_audio: str | None,
+    ref_text: str | None,
+    language: str,
+) -> dict[str, Any]:
+    voice_design_prompt = values.get("voice_design_prompt") if not reference_audio else None
+    preset_route = not reference_audio and not voice_design_prompt
+    generation_parameters = {
+        key: parameters[key] if key in parameters else default
+        for key, default in qwen3_tts_paths.GENERATION_DEFAULTS.items()
+    }
+    return {
+        "reference_audio": reference_audio,
+        "ref_text": ref_text,
+        "language": values.get("language") or language,
+        "speaker_id": values.get("speaker_id") if preset_route else None,
+        "style_instruction": values.get("style_instruction") if preset_route else None,
+        "voice_design_prompt": voice_design_prompt,
+        "speed": values.get("speed"),
+        **generation_parameters,
+        "max_tokens": values.get("max_tokens"),
+    }
+
+
+def build_indextts_v2_single_kwargs(
+    req: GenerateRequest,
+    output_path: str,
+    *,
+    reference_audio: str | None,
+    emotion_reference_audio: str | None,
+    model_dir: str,
+    device: str | None = None,
+) -> dict[str, Any]:
+    result = {
+        "text": req.text,
+        "reference_audio": reference_audio,
+        "emotion_reference_audio": emotion_reference_audio,
+        "output_path": output_path,
+        "model_dir": model_dir,
+        "temperature": req.temperature,
+        "top_p": req.top_p,
+        "top_k": req.top_k,
+        "repetition_penalty": req.repetition_penalty,
+        "max_text_tokens_per_segment": req.max_text_tokens_per_segment,
+        "interval_silence": req.interval_silence,
+        "segment_overlap_ms": req.segment_overlap_ms,
+        "speed": req.speed,
+        "seed": req.seed,
+        "max_mel_tokens": req.max_mel_tokens or 1500,
+        "diffusion_steps": req.diffusion_steps,
+        "cfg_rate": req.cfg_rate,
+        "emotion": _indextts_request_emotion(req),
+        "emo_alpha": req.emo_alpha,
+    }
+    if device is not None:
+        result["device"] = device
+    return result
+
+
+def build_indextts_v2_batch_common_kwargs(
+    values: dict[str, Any],
+    *,
+    parameters: dict[str, Any],
+    reference_audio: str | None,
+    emotion_reference_audio: str | None,
+    language: str,
+    model_dir: str,
+    device: str | None = None,
+) -> dict[str, Any]:
+    common = {
+        "reference_audio": reference_audio,
+        "emotion_reference_audio": emotion_reference_audio,
+        "language": language,
+        "model_dir": model_dir,
+    }
+    if device is not None:
+        common["device"] = device
+    for key in [
+        "temperature",
+        "top_p",
+        "top_k",
+        "repetition_penalty",
+        "max_text_tokens_per_segment",
+        "interval_silence",
+        "segment_overlap_ms",
+        "speed",
+        "seed",
+        "max_mel_tokens",
+        "diffusion_steps",
+        "cfg_rate",
+        "emotion",
+        "emo_alpha",
+    ]:
+        common[key] = values.get(key)
+    common["emotion"] = _indextts_batch_emotion(parameters, values)
+    return common
+
+
+def build_preset_voice_single_kwargs(req: GenerateRequest, output_path: str) -> dict[str, Any]:
+    return {
+        "text": req.text,
+        "output_path": output_path,
+        "speaker_id": req.speaker_id,
+        "prompt": req.prompt or req.emotion,
+        "speed": req.speed,
+    }
+
+
+def build_preset_voice_batch_common_kwargs(values: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "speaker_id": values.get("speaker_id"),
+        "prompt": values.get("prompt"),
+        "speed": values.get("speed"),
+    }
+
+
+def build_emotivoice_single_kwargs(req: GenerateRequest, output_path: str) -> dict[str, Any]:
+    """EmotiVoice's bundled CLI accepts a speaker and an acting prompt only."""
+    return {
+        "text": req.text,
+        "output_path": output_path,
+        "speaker_id": req.speaker_id,
+        "prompt": req.prompt or req.emotion,
+    }
+
+
+def build_emotivoice_batch_common_kwargs(values: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "speaker_id": values.get("speaker_id"),
+        "prompt": values.get("prompt"),
+    }
+
+
+def build_omnivoice_single_kwargs(
+    req: GenerateRequest,
+    output_path: str,
+    *,
+    reference_audio: str | None,
+    ref_text: str | None,
+    model_dir: str,
+    device: str | None = None,
+) -> dict[str, Any]:
+    # GenerateRequest carries IndexTTS's generic default (25).  OmniVoice's
+    # own documented/runtime default is 32, and the page already shows 32.
+    # `model_fields_set` lets a direct API caller still request 25 explicitly.
+    diffusion_steps = req.diffusion_steps if "diffusion_steps" in req.model_fields_set else 32
+    engine_parameters = req.engine_parameters if isinstance(req.engine_parameters, dict) else {}
+    result = {
+        "text": req.text,
+        "reference_audio": reference_audio,
+        "output_path": output_path,
+        "model_dir": model_dir,
+        "speed": req.speed,
+        "language": req.language,
+        "ref_text": ref_text,
+        "emotion_text": req.emotion_text,
+        "diffusion_steps": diffusion_steps,
+        "guidance_scale": req.guidance_scale,
+        "duration": req.duration,
+        "audio_chunk_duration": req.audio_chunk_duration,
+        "audio_chunk_threshold": req.audio_chunk_threshold,
+        "t_shift": engine_parameters.get("t_shift", 0.1),
+        "layer_penalty_factor": engine_parameters.get("layer_penalty_factor", 5.0),
+        "position_temperature": engine_parameters.get("position_temperature", 5.0),
+        "class_temperature": engine_parameters.get("class_temperature", 0.0),
+        "denoise": engine_parameters.get("denoise", True),
+        "preprocess_prompt": engine_parameters.get("preprocess_prompt", True),
+        "postprocess_output": engine_parameters.get("postprocess_output", True),
+    }
+    if device is not None:
+        result["device"] = device
+    return result
+
+
+def build_omnivoice_batch_common_kwargs(
+    values: dict[str, Any],
+    *,
+    reference_audio: str | None,
+    ref_text: str | None,
+    language: str,
+    model_dir: str,
+    device: str | None = None,
+) -> dict[str, Any]:
+    common = {
+        "reference_audio": reference_audio,
+        "language": language,
+        "model_dir": model_dir,
+        "ref_text": ref_text,
+    }
+    if device is not None:
+        common["device"] = device
+    # OmniVoice accepts only this narrow set on the active runtime path.
+    # Do not forward generic IndexTTS sampling/emotion fields: forwarding
+    # them makes API/batch callers believe the control affects audio when the
+    # runtime simply drops it.
+    for key in [
+        "speed",
+        "diffusion_steps",
+        "guidance_scale",
+        "duration",
+        "audio_chunk_duration",
+        "audio_chunk_threshold",
+        "emotion_text",
+        "t_shift",
+        "layer_penalty_factor",
+        "position_temperature",
+        "class_temperature",
+        "denoise",
+        "preprocess_prompt",
+        "postprocess_output",
+    ]:
+        common[key] = values.get(key)
+    return common
+
+
+def _mimo_auth():
+    settings = settings_store.get()
+    api_key = settings_store.mimo_api_key()
+    if not settings.cloud_enabled:
+        raise AppException(403, "MIMO_CLOUD_DISABLED", "MiMo 云端引擎未启用，请在设置中开启")
+    if not api_key:
+        raise AppException(403, "MIMO_API_KEY_MISSING", "缺少 MiMo API Key，请在设置中配置")
+    return settings, api_key
+
+
+def _doubao_auth():
+    settings = settings_store.get()
+    api_key = settings_store.doubao_api_key()
+    if not settings.cloud_enabled:
+        raise AppException(403, "DOUBAO_CLOUD_DISABLED", "豆包云端引擎未启用，请在设置中开启")
+    if not api_key:
+        raise AppException(403, "DOUBAO_API_KEY_MISSING", "缺少豆包 API Key，请在设置中配置")
+    return settings, api_key
+
+
+def _mimo_model(engine_id: str) -> str:
+    return "mimo-v2.5-tts" if engine_id in {"mimo-v2.5-tts", "mimo-v2.5-tts-preset"} else engine_id
+
+
+def _mimo_instruction(values: dict[str, Any]) -> str | None:
+    return values.get("style_instruction") or values.get("emotion_text") or values.get("emotion")
+
+
+def _mimo_voice_design_prompt(values: dict[str, Any]) -> str | None:
+    return values.get("voice_design_prompt") or values.get("style_instruction") or values.get("emotion_text")
+
+
+def _indextts_request_emotion(req: GenerateRequest):
+    if req.emotion_mode == "follow_reference":
+        return None
+    if req.emotion_mode == "emotion_vector":
+        return req.emotion_values if req.emotion_values else req.emotion
+    return None
+
+
+def _indextts_batch_emotion(parameters: dict[str, Any], values: dict[str, Any]) -> str | None:
+    mode = parameters.get("emotion_mode")
+    if mode == "emotion_vector":
+        return parameters.get("emotion_values") or values.get("emotion")
+    if mode in {"follow_reference", "emotion_reference"}:
+        return None
+    return values.get("emotion")

@@ -1,0 +1,278 @@
+import { describe, expect, it, vi } from 'vitest';
+import { buildTimelineContextMenuItems, type TimelineContextMenuTarget } from './timeline-context-menu';
+
+describe('timeline context menu', () => {
+	const context = (overrides = {}) => ({
+		itemCount: 8,
+		locked: false,
+		canGenerateAsr: true,
+		asrBusy: false,
+		canGenerateLocalization: true,
+		localizationBusy: false,
+		canGenerateDubSubtitles: true,
+		dubSubtitleGenerationBusy: false,
+		trackBusy: false,
+		asrUnavailableReason: '',
+		localizationUnavailableReason: '',
+		hasSelectionPoints: false,
+		onGenerateAsr: vi.fn(),
+		onGenerateLocalization: vi.fn(),
+		onGenerateDubSubtitles: vi.fn(),
+		onClearSubtitleTrack: vi.fn(),
+		onDeleteSubtitleItem: vi.fn(),
+		onDeleteAudioClip: vi.fn(),
+		onDeleteSelectedItems: vi.fn(),
+		onFillSubtitleGaps: vi.fn(),
+		onSetSelectionStart: vi.fn(),
+		onSetSelectionEnd: vi.fn(),
+		onClearSelection: vi.fn(),
+		...overrides
+	});
+
+	it('registers generate and clear commands for empty ASR track space', async () => {
+		const clear = vi.fn();
+		const target: TimelineContextMenuTarget = {
+			kind: 'track',
+			hit: 'empty',
+			trackId: 'subtitles',
+			subtitleTrack: 'asr',
+			timeMs: 1200
+		};
+		const items = buildTimelineContextMenuItems(target, context({ onClearSubtitleTrack: clear }));
+
+		expect(items).toHaveLength(6);
+		expect(items[0]).toMatchObject({
+			id: 'generate-asr-subtitles',
+			label: '重新生成 ASR 字幕',
+			description: '重新识别人声并完整替换当前 ASR 字幕',
+			disabled: false
+		});
+		expect(items[1]).toMatchObject({ id: 'fill-asr-subtitle-gaps', separatorBefore: true });
+		expect(items[2]).toMatchObject({ id: 'clear-asr-subtitle-track', tone: 'danger', disabled: false });
+		expect(items[3]).toMatchObject({ id: 'set-selection-start', separatorBefore: true });
+		await items[2].onSelect();
+		expect(clear).toHaveBeenCalledWith('asr');
+	});
+
+	it('keeps subtitle and selection commands available over a subtitle clip', () => {
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'subtitle-clip', trackId: 'subtitles', subtitleTrack: 'asr', itemId: 'cue_0001', timeMs: 1200 },
+			context({ itemCount: 1 })
+		);
+		expect(items.map((item) => item.id)).toEqual([
+			'delete-asr-subtitle-cue_0001',
+			'generate-asr-subtitles',
+			'fill-asr-subtitle-gaps',
+			'clear-asr-subtitle-track',
+			'set-selection-start',
+			'set-selection-end',
+			'clear-selection'
+		]);
+	});
+
+	it('keeps localization generation, cleanup and short-gap commands available', async () => {
+		const generate = vi.fn();
+		const target: TimelineContextMenuTarget = {
+			kind: 'track',
+			hit: 'empty',
+			trackId: 'localizedSubtitles',
+			subtitleTrack: 'localized',
+			timeMs: 0
+		};
+		const items = buildTimelineContextMenuItems(target, context({ itemCount: 4, onGenerateLocalization: generate }));
+		expect(items).toHaveLength(8);
+		expect(items[0]).toMatchObject({
+			id: 'generate-localized-subtitles',
+			label: '重新生成本土化字幕',
+			disabled: false
+		});
+		expect(items[1]).toMatchObject({
+			id: 'generate-dub-subtitles',
+			label: '生成／更新配音字幕',
+			disabled: false
+		});
+		expect(items[2]).toMatchObject({ id: 'regenerate-all-dub-subtitles', label: '全部重做配音字幕', disabled: false });
+		expect(items[3]).toMatchObject({ id: 'fill-localized-subtitle-gaps', separatorBefore: true });
+		expect(items[4].id).toBe('clear-localized-subtitle-track');
+		await items[0].onSelect();
+		expect(generate).toHaveBeenCalledOnce();
+	});
+
+	it('submits dubbing subtitle recognition from the localized track command', async () => {
+		const generate = vi.fn();
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'track', hit: 'empty', trackId: 'localizedSubtitles', subtitleTrack: 'localized', timeMs: 0 },
+			context({ onGenerateDubSubtitles: generate })
+		);
+
+		await items[1].onSelect();
+		expect(generate).toHaveBeenCalledOnce();
+		await items[2].onSelect();
+		expect(generate).toHaveBeenLastCalledWith('full');
+	});
+
+	it('keeps dubbing subtitle recognition visible with its missing-audio reason', () => {
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'track', hit: 'empty', trackId: 'localizedSubtitles', subtitleTrack: 'localized', timeMs: 0 },
+			context({
+				canGenerateDubSubtitles: false,
+				dubSubtitleUnavailableReason: '合成配音轨为空'
+			})
+		);
+
+		expect(items[1]).toMatchObject({
+			id: 'generate-dub-subtitles',
+			disabled: true,
+			description: '合成配音轨为空'
+		});
+	});
+
+	it('keeps localization generation visible with its unmet prerequisite', () => {
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'track', hit: 'empty', trackId: 'localizedSubtitles', subtitleTrack: 'localized', timeMs: 0 },
+			context({
+				itemCount: 0,
+				canGenerateLocalization: false,
+				localizationUnavailableReason: 'ASR 字幕轨为空'
+			})
+		);
+
+		expect(items[0]).toMatchObject({
+			id: 'generate-localized-subtitles',
+			label: '生成本土化字幕',
+			disabled: true,
+			description: 'ASR 字幕轨为空'
+		});
+	});
+
+	it('locks every localized subtitle mutation while a localization task is running', () => {
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'subtitle-clip', trackId: 'localizedSubtitles', subtitleTrack: 'localized', itemId: 'localized_01', timeMs: 0 },
+			context({ localizationBusy: true })
+		);
+		const mutationIds = new Set([
+			'delete-localized-subtitle-localized_01',
+			'generate-localized-subtitles',
+			'generate-dub-subtitles',
+			'regenerate-all-dub-subtitles',
+			'fill-localized-subtitle-gaps',
+			'clear-localized-subtitle-track'
+		]);
+		expect(items.filter((item) => mutationIds.has(item.id)).every((item) => item.disabled)).toBe(true);
+		expect(items.find((item) => item.id === 'set-selection-start')?.disabled).not.toBe(true);
+	});
+
+	it('deletes the selected audio clip without exposing subtitle commands', async () => {
+		const remove = vi.fn();
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'audio-clip', trackId: 'vocals', itemId: 'clip_01', timeMs: 900 },
+			context({ itemCount: 0, onDeleteAudioClip: remove })
+		);
+		expect(items[0]).toMatchObject({ id: 'delete-audio-clip-clip_01', tone: 'danger' });
+		await items[0].onSelect();
+		expect(remove).toHaveBeenCalledWith('clip_01');
+	});
+
+	it('deletes the complete multi-selection when right-clicking one selected item', async () => {
+		const remove = vi.fn();
+		const selectedItems = [
+			{ kind: 'subtitle' as const, trackId: 'localizedSubtitles' as const, itemId: 'localized_01' },
+			{ kind: 'audio' as const, trackId: 'dub' as const, itemId: 'clip_01' }
+		];
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'subtitle-clip', trackId: 'localizedSubtitles', subtitleTrack: 'localized', itemId: 'localized_01', timeMs: 900 },
+			context({ selectedItems, onDeleteSelectedItems: remove })
+		);
+
+		expect(items[0]).toMatchObject({ id: 'delete-selected-timeline-items', label: '删除所选片段（2）', tone: 'danger' });
+		await items[0].onSelect();
+		expect(remove).toHaveBeenCalledWith(selectedItems);
+	});
+
+	it('keeps an unselected right-click target as a single-item delete', () => {
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'audio-clip', trackId: 'vocals', itemId: 'clip_02', timeMs: 900 },
+			context({
+				selectedItems: [
+					{ kind: 'audio' as const, trackId: 'vocals' as const, itemId: 'clip_01' },
+					{ kind: 'audio' as const, trackId: 'dub' as const, itemId: 'clip_03' }
+				]
+			})
+		);
+
+		expect(items[0]).toMatchObject({ id: 'delete-audio-clip-clip_02', label: '删除当前音频片段' });
+	});
+
+	it('adds whole-track deletion to empty audio track space', async () => {
+		const removeTrack = vi.fn();
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'track', hit: 'empty', trackId: 'dub', timeMs: 4321 },
+			context({ trackItemCount: 3, onDeleteTrack: removeTrack })
+		);
+
+		expect(items[0]).toMatchObject({ id: 'delete-track-dub', label: '删除整个轨道', disabled: false, tone: 'danger' });
+		await items[0].onSelect();
+		expect(removeTrack).toHaveBeenCalledWith('dub');
+	});
+
+	it('disables multi-selection deletion when any selected item is locked or busy', () => {
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'audio-clip', trackId: 'dub', itemId: 'clip_01', timeMs: 0 },
+			context({
+				selectionLocked: true,
+				selectedItems: [
+					{ kind: 'audio' as const, trackId: 'dub' as const, itemId: 'clip_01' },
+					{ kind: 'subtitle' as const, trackId: 'localizedSubtitles' as const, itemId: 'localized_01' }
+				]
+			})
+		);
+
+		expect(items[0]).toMatchObject({ id: 'delete-selected-timeline-items', disabled: true });
+	});
+
+	it('does not re-block an active audio clip after deletion policy has approved it', () => {
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'audio-clip', trackId: 'dub', itemId: 'clip_running', timeMs: 0 },
+			context({ trackBusy: true, selectionLocked: false })
+		);
+
+		expect(items[0]).toMatchObject({ id: 'delete-audio-clip-clip_running', disabled: false });
+	});
+
+	it('adds selection commands to every audio track and uses the pointer time', async () => {
+		const setStart = vi.fn();
+		const setEnd = vi.fn();
+		const clear = vi.fn();
+		const items = buildTimelineContextMenuItems(
+			{ kind: 'track', hit: 'empty', trackId: 'vocals', timeMs: 4321 },
+			context({ hasSelectionPoints: true, onSetSelectionStart: setStart, onSetSelectionEnd: setEnd, onClearSelection: clear })
+		);
+		expect(items.map((item) => item.id)).toEqual(['set-selection-start', 'set-selection-end', 'clear-selection']);
+		await items[0].onSelect();
+		await items[1].onSelect();
+		await items[2].onSelect();
+		expect(setStart).toHaveBeenCalledWith(4321);
+		expect(setEnd).toHaveBeenCalledWith(4321);
+		expect(clear).toHaveBeenCalledOnce();
+	});
+
+	it('keeps ASR generation visible with a reason when its source is unavailable', () => {
+		const target: TimelineContextMenuTarget = {
+			kind: 'track', hit: 'empty', trackId: 'subtitles', subtitleTrack: 'asr', timeMs: 0
+		};
+		const items = buildTimelineContextMenuItems(target, context({ itemCount: 0, canGenerateAsr: false, asrUnavailableReason: '人声轨为空' }));
+		expect(items[0]).toMatchObject({ id: 'generate-asr-subtitles', label: '从人声轨生成 ASR 字幕', disabled: true, description: '人声轨为空' });
+		expect(items[1].disabled).toBe(true);
+	});
+
+	it('disables ASR mutation commands while transcription is running', () => {
+		const target: TimelineContextMenuTarget = {
+			kind: 'track', hit: 'empty', trackId: 'subtitles', subtitleTrack: 'asr', timeMs: 0
+		};
+		const items = buildTimelineContextMenuItems(target, context({ asrBusy: true }));
+		const asrMutations = items.filter((item) => item.id === 'generate-asr-subtitles' || item.id === 'clear-asr-subtitle-track');
+		expect(asrMutations.every((item) => item.disabled)).toBe(true);
+		expect(items.find((item) => item.id === 'set-selection-start')?.disabled).not.toBe(true);
+		expect(items.find((item) => item.id === 'set-selection-end')?.disabled).not.toBe(true);
+	});
+});

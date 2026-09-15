@@ -1,0 +1,134 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+/lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.test
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+/models/
+checkpoints/
+weights/
+ref_audios/
+*.safetensors
+*.ckpt
+*.onnx
+*.gguf
+*.bin
+*.pth
+*.pt
+*.npz
+*.npy
+/output*.wav
+/tmp/
+output/
+outputs/
+uploads/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.aac
+*.ogg
+*.pcm
+*.mp4
+*.mov
+*.m4v
+*.webm
+*.mkv
+*.sqlite
+*.sqlite3
+*.db
+*.log
+logs/
+
+# Second venv (Qwen forced aligner)
+.venv-qwen-align/
+
+# Development artifacts
+voice_studio_prd_package_*/
+voice_studio_frontend_png_*/
+/backups/
+/backup/
+/manifests/
+
+# Benchmark outputs
+test_outputs/
+benchmark_outputs/
+test_benchmark/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# UV
+.python-version
+
+# Claude Code
+.claude/
+
+# Local agent/tool state
+.mimocode/
+.omc/
+.omo/
+.playwright-cli/
+.sisyphus/
+
+# Docs — 只排除内部 RFC/TODO
+docs/ASR_PRODUCT_ROADMAP.md
+docs/LONGFORM_TTS_VERIFICATION_RFC.md
+docs/MIMO_V2_5_CLOUD_API_RFC.md
+docs/VOICE_STUDIO_TODO.md
+
+# Frontend
+node_modules/
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/
+frontend/package/
+frontend/.env
+
+# Maintainer reports and first-release internal audit
+/scripts/genshin_analysis.json
+/scripts/genshin_import_report.json
+/scripts/genshin_npc_import_report.json
+/scripts/import_report.json
+/docs/OPEN_SOURCE_FIRST_RELEASE_PLAN.md
