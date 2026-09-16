@@ -27,6 +27,7 @@ VIDEO_LOCALIZATION_WORKER_LOG="${VOICE_STUDIO_VIDEO_LOCALIZATION_WORKER_LOG:-${V
 VIDEO_LOCALIZATION_WORKER_PID_FILE="${VOICE_STUDIO_VIDEO_LOCALIZATION_WORKER_PID_FILE:-${VOICE_STUDIO_LOG_ROOT}/video-localization-worker.pid}"
 BACKEND_HEALTH_URL="http://localhost:${BACKEND_PORT}/api/health"
 FRONTEND_HEALTH_URL="http://localhost:${FRONTEND_PORT}/"
+BACKEND_STARTUP_TIMEOUT="${VOICE_STUDIO_BACKEND_STARTUP_TIMEOUT:-120}"
 PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
 FORCE="${FORCE:-false}"
 DEV_RELOAD="${DEV_RELOAD:-false}"
@@ -313,7 +314,7 @@ BACKEND_PID=$!
 disown
 log "后端启动中... (PID $BACKEND_PID)"
 
-if ! wait_for_url "$BACKEND_HEALTH_URL" "后端健康检查" 30; then
+if ! wait_for_url "$BACKEND_HEALTH_URL" "后端健康检查" "$BACKEND_STARTUP_TIMEOUT"; then
   stop_external_video_localization_worker
   err "后端启动失败，查看日志: $BACKEND_LOG"
   exit 1

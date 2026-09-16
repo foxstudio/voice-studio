@@ -126,6 +126,43 @@ def _save(task: GenerationTask) -> GenerationTask:
     return task
 
 
+
+def record_completed_audio_diagnosis(
+    engine_id: str,
+    request: GenerateRequest,
+    output_path: Path,
+    *,
+    duration_ms: int,
+    generation_time_ms: int | None,
+) -> HistoryItem:
+    """Register an already-generated audition without scheduling another inference."""
+    voice = voice_store.get_voice(request.voice_id) if request.voice_id else None
+    parameters = request.model_dump(mode="json")
+    parameters["source"] = "engine_diagnosis"
+    task = GenerationTask(
+        task_id=output_path.stem, engine_id=engine_id, voice_id=request.voice_id,
+        input_text=request.text, status=TaskStatus.success, progress=1.0,
+        result_audio_id=output_path.stem, result_duration_ms=duration_ms,
+        generation_time_ms=generation_time_ms, parameters=parameters,
+        completed_at=now_iso(),
+    )
+    task.generation_id = task.task_id
+    parameters["generation_id"] = task.task_id
+    task.parameters = parameters
+    history = HistoryItem(
+        task_id=task.task_id, generation_id=task.task_id, engine_id=engine_id,
+        voice_id=request.voice_id, voice_name=voice.name if voice else None,
+        input_text=request.text, output_audio_id=output_path.stem,
+        output_path=str(output_path), duration_ms=duration_ms,
+        generation_time_ms=generation_time_ms, parameter_snapshot=parameters,
+    )
+    task.result_id = history.result_id
+    with _task_write_lock, db.conn() as connection:
+        history_store.add_from_connection(connection, history)
+        db.upsert_from_connection(connection, "tasks", task.task_id, task.model_dump(mode="json"))
+    return history
+
+
 def update_pending_production_priorities(
     project_id: str, *, plan_revision: int, group_priorities: dict[str, str]
 ) -> list[str]:
@@ -703,6 +740,8 @@ async def _auto_verify_task(task_id: str) -> None:
     task = get_task(task_id)
     if not task or not task.result_id or task.verification:
         return
+    if task.parameters.get("source") == "engine_diagnosis":
+        return
     if task.parameters.get("source") == "video_localization" and task.bind_to_video_localization:
         # Video-localization owns its placement through the durable handoff
         # outbox.  Generic TTS verification must neither delay nor replay that
@@ -732,6 +771,7 @@ def _missing_auto_verification_task_ids(limit: int = 20) -> list[str]:
             or task.verification is not None
             or task.verification_error
             or task.task_type in {"segment", "export"}
+            or task.parameters.get("source") == "engine_diagnosis"
             or (
                 task.parameters.get("source") == "video_localization"
                 and task.bind_to_video_localization

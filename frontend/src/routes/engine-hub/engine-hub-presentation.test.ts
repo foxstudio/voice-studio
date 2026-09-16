@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { EngineDetail, EngineInstallation } from '$lib/api/types';
 import {
+	installationRuntimeEngineId,
+	standaloneResources,
 	engineAvailability,
 	engineFamilyId,
 	engineTask,
@@ -100,4 +102,25 @@ describe('engine hub presentation', () => {
 		expect(resourceSizeLabel(installation({ total_bytes: 639_000_000 }))).toBe('下载约 639 MB');
 		expect(resourceSizeLabel(installation({ installed: true, size_bytes: 3_270_000_000 }))).toBe('3.27 GB');
 	});
+});
+
+
+describe('unified engine and model inventory', () => {
+ it('shows linked engines once while retaining auxiliary and reference files', () => {
+  const runtime = engine('vibevoice-asr-mlx-4bit', ['speech_recognition']);
+  const linked = installation({engine_id: 'vibevoice-asr-4bit', family_id: 'vibevoice-asr', variant_id: '4bit'});
+  const reference = installation({engine_id: 'vibevoice-asr-official', family_id: 'vibevoice-asr', reference_only: true});
+  const auxiliary = installation({engine_id: 'bs-roformer'});
+  expect(installationRuntimeEngineId(linked)).toBe(runtime.manifest.engine_id);
+  expect(standaloneResources([runtime], [linked, reference, auxiliary])).toEqual([reference, auxiliary]);
+  expect(standaloneResources([], [linked, reference, auxiliary])).toEqual([linked, reference, auxiliary]);
+ });
+ it('keeps reference resources separate even if runtime metadata is present', () => {
+  expect(installationRuntimeEngineId(installation({reference_only: true, runtime_engine_id: 'test-model'}))).toBeNull();
+ });
+ it('shows an active download and a failed installation on the engine card', () => {
+  const runtime = engine('omnivoice', ['voice_cloning']);
+  expect(engineAvailability(runtime, installation({installation_status: 'installing'}))).toMatchObject({label:'下载中'});
+  expect(engineAvailability(runtime, installation({installation_status:'failed', error:'network unavailable'}))).toMatchObject({key:'error', detail:'network unavailable'});
+ });
 });

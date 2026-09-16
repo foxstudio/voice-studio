@@ -2649,6 +2649,8 @@ export interface CommunityVoicePack {
 }
 
 export interface EngineAudioDiagnosis {
+	task_id?: string;
+	result_id?: string;
 	engine_id: string;
 	status: 'passed' | 'failed';
 	output_path: string | null;

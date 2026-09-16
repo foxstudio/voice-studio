@@ -112,7 +112,7 @@
 
 <style>
 	.engine-popover { position: relative; }
-	.popover-trigger { min-height: 26px; padding: 3px 7px; gap: 4px; border-radius: 6px; font-size: 10px; line-height: 1.1; }
+	.popover-trigger { min-height: 32px; padding: 3px 7px; gap: 4px; border-radius: 6px; font-size: 12px; line-height: 1.1; }
 	.popover-trigger :global(svg) { transition: transform 120ms ease; }
 	.popover-trigger.open { border-color: #46505d; background: #252a31; color: #e5ebf2; }
 	.popover-trigger.open :global(svg) { transform: rotate(180deg); }
@@ -134,8 +134,8 @@
 	.wide .popover-panel { width: min(520px, calc(100vw - 32px)); }
 	@keyframes popover-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
 	@media (max-width: 760px) {
-		.popover-panel { right: auto; left: 0; width: min(320px, calc(100vw - 32px)); }
-		.wide .popover-panel { width: min(520px, calc(100vw - 32px)); }
+		.popover-panel { position: fixed; top: auto; bottom: 16px; right: 16px; left: 16px; max-height: 70dvh; overflow: auto; width: auto; }
+		.wide .popover-panel { width: auto; }
 	}
 	@media (prefers-reduced-motion: reduce) {
 		.popover-trigger :global(svg) { transition: none; }

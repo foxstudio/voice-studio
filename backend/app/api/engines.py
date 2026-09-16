@@ -8,12 +8,14 @@ from fastapi.responses import FileResponse
 
 from app.errors import AppException
 from app.schemas.model_installation import ManagedModelInstallRequest
-from app.schemas.voice_studio import EngineAudioDiagnosisRequest, EngineDetail, EngineSpeaker
+from app.schemas.voice_studio import EngineAudioDiagnosisRequest, EngineDetail, EngineSpeaker, GenerateRequest, new_id
 from app.services import (
     asr_selection_policy,
     audio_tools,
     doubao_speaker_catalog_store,
     engine_registry,
+    history_store,
+    task_queue,
     model_catalog,
     omnivoice_model,
     settings_store,
@@ -190,9 +192,9 @@ async def diagnose_audio(engine_id: str, data: EngineAudioDiagnosisRequest):
         ref = data.reference_audio_path
         if not ref and data.voice_id:
             ref = voice_store.reference_path(data.voice_id)
-        out_dir = settings_store.output_dir() / "diagnostics"
+        out_dir = settings_store.output_dir()
         out_dir.mkdir(parents=True, exist_ok=True)
-        output_path = out_dir / f"{engine_id}-diagnosis.wav"
+        output_path = out_dir / f"{new_id()}.wav"
         kwargs = {
             "text": data.text,
             "reference_audio": ref,
@@ -304,7 +306,21 @@ async def diagnose_audio(engine_id: str, data: EngineAudioDiagnosisRequest):
         result = await asyncio.to_thread(engine_registry.run_isolated, engine_id, kwargs, timeout)
         final_path = Path(result["output_path"])
         quality = audio_tools.quality_metrics(final_path)
+        history = task_queue.record_completed_audio_diagnosis(
+            engine_id, GenerateRequest(**{
+                **{key: value for key, value in kwargs.items() if key in GenerateRequest.model_fields},
+                "engine_id": engine_id, "voice_id": data.voice_id,
+                "reference_audio_path": ref, "source": "engine_diagnosis",
+                "mimo_voice": kwargs.get("voice"),
+            }), final_path,
+            duration_ms=int(quality.get("duration_ms") or 0),
+            generation_time_ms=result.get("generation_time_ms"),
+        )
         return {
+            "task_id": history.task_id,
+            "result_id": history.result_id,
+            "audio_url": f"/api/history/{history.result_id}/audio",
+
             "engine_id": engine_id,
             "status": "passed" if quality["passed"] else "failed",
             "output_path": str(final_path),
@@ -327,7 +343,10 @@ async def diagnose_audio(engine_id: str, data: EngineAudioDiagnosisRequest):
 async def get_diagnostic_audio(engine_id: str):
     if not engine_registry.get_engine(engine_id):
         raise AppException(404, "ENGINE_NOT_FOUND", "Engine not found")
-    path = settings_store.output_dir() / "diagnostics" / f"{engine_id}-diagnosis.wav"
+    # Keep the legacy latest-audition URL readable; new clients use the immutable history URL.
+    latest = next((item for item in history_store.list_history(limit=-1, source="engine_diagnosis")
+                   if item.engine_id == engine_id and item.output_path and Path(item.output_path).is_file()), None)
+    path = Path(latest.output_path) if latest else settings_store.output_dir() / "diagnostics" / f"{engine_id}-diagnosis.wav"
     if not path.exists():
         raise AppException(404, "DIAGNOSTIC_AUDIO_NOT_FOUND", "Diagnostic audio not found")
     return FileResponse(path)

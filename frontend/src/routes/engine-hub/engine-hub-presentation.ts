@@ -1,6 +1,5 @@
 import type { EngineDetail, EngineInstallation } from '$lib/api/types';
 
-export type HubView = 'engines' | 'models';
 export type EngineTask = 'tts' | 'asr' | 'audio_generation';
 export type ResourceGroup = 'tts' | 'asr' | 'workflow';
 export type AvailabilityKey = 'ready' | 'needs_install' | 'needs_setup' | 'error';
@@ -18,12 +17,6 @@ export const engineTaskGroups: Array<{ id: EngineTask; label: string; descriptio
 	{ id: 'tts', label: '语音合成', description: '把文字变成语音，包括预置音色、声音设计和声音克隆。' },
 	{ id: 'asr', label: '语音识别', description: '把音频转成文字，包括本地转写和云端识别。' },
 	{ id: 'audio_generation', label: '音频生成', description: '生成音效、音乐或其他非语音合成音频。' }
-];
-
-export const resourceGroups: Array<{ id: ResourceGroup; label: string; description: string }> = [
-	{ id: 'tts', label: '语音合成模型', description: '供本地语音合成引擎读取的模型文件。' },
-	{ id: 'asr', label: '语音识别模型', description: '供本地转写引擎读取的模型文件，参考版本也归入对应家族。' },
-	{ id: 'workflow', label: '流程辅助模型', description: '由视频与音频工作流调用，包括分离、说话人分析和声纹复核。' }
 ];
 
 export function engineTask(engine: EngineDetail): EngineTask {
@@ -85,11 +78,14 @@ export function engineAvailability(
 	if (engine.state.status === 'loaded' || engine.state.status === 'running') {
 		return { key: 'ready', label: '运行中', detail: '引擎已加载', tone: 'ok' };
 	}
+	if (installation?.installation_status === 'installing') {
+		return { key: 'needs_install', label: '下载中', detail: '正在下载模型文件', tone: 'warning' };
+	}
+	if (installation?.installation_status === 'failed' || installation?.error) {
+		return { key: 'error', label: '安装异常', detail: installation.error || '请检查模型文件', tone: 'fail' };
+	}
 	if (!installation || !installation.installed) {
 		return { key: 'needs_install', label: '需安装', detail: '模型尚未下载', tone: 'warning' };
-	}
-	if (installation.installation_status === 'failed' || installation.error) {
-		return { key: 'error', label: '运行错误', detail: installation.error || '模型文件校验失败', tone: 'fail' };
 	}
 	if (installation.runtime_ready !== true) {
 		return { key: 'needs_setup', label: '需配置', detail: '模型已下载 · 运行环境未就绪', tone: 'warning' };
@@ -158,4 +154,17 @@ export function resourceAvailability(installation: EngineInstallation): StatusPr
 
 export function availabilityMatches(filter: AvailabilityFilter, key: AvailabilityKey): boolean {
 	return filter === 'all' || filter === key;
+}
+
+/** Join file inventory to runtime entries; keep unregistered/reference resources visible. */
+export function installationRuntimeEngineId(item: EngineInstallation): string | null {
+ if (item.reference_only) return null;
+ if (item.runtime_engine_id) return item.runtime_engine_id;
+ if (item.family_id === 'vibevoice-asr' && ['4bit', '8bit'].includes(item.variant_id ?? '')) return `vibevoice-asr-mlx-${item.variant_id}`;
+ return item.engine_id;
+}
+
+export function standaloneResources(engines: EngineDetail[], installations: EngineInstallation[]): EngineInstallation[] {
+ const ids = new Set(engines.map(engine => engine.manifest.engine_id));
+ return installations.filter(item => !ids.has(installationRuntimeEngineId(item) ?? ''));
 }

@@ -1,3 +1,6 @@
+import os
+import shlex
+import subprocess
 from pathlib import Path
 
 
@@ -81,6 +84,64 @@ def test_development_launcher_requests_the_server_extra_for_backend_processes():
 
     assert script.count("uv run --extra server uvicorn") == 2
     assert "uv run --extra server python run_video_localization_worker.py" in script
+
+
+def _run_wait_for_url_with_fake_clock(tmp_path: Path, *, successes_after: int, timeout: int) -> subprocess.CompletedProcess[str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    attempts = tmp_path / "attempts"
+    (bin_dir / "curl").write_text(
+        "#!/usr/bin/env bash\n"
+        f"attempts_file={shlex.quote(str(attempts))}\n"
+        "attempts=0\n"
+        "[ -f \"$attempts_file\" ] && attempts=$(cat \"$attempts_file\")\n"
+        "attempts=$((attempts + 1))\n"
+        "printf '%s' \"$attempts\" > \"$attempts_file\"\n"
+        f"[ \"$attempts\" -ge {successes_after} ]\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    for command in (bin_dir / "curl", bin_dir / "sleep"):
+        command.chmod(0o755)
+    script = (ROOT / "start.sh").read_text(encoding="utf-8")
+    function_start = script.index("wait_for_url() {")
+    function_end = script.index("\n}\n", function_start) + 3
+    wait_function = tmp_path / "wait-for-url.sh"
+    wait_function.write_text(script[function_start:function_end], encoding="utf-8")
+    command = (
+        "log() { printf '%s\\n' \"$*\"; }; warn() { printf '%s\\n' \"$*\" >&2; }; "
+        f"source {shlex.quote(str(wait_function))}; "
+        f'wait_for_url "http://example.invalid/health" "测试健康检查" {timeout}'
+    )
+    return subprocess.run(
+        ["bash", "-c", command],
+        cwd=ROOT,
+        env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_backend_cold_start_wait_accepts_health_after_more_than_thirty_polls(tmp_path: Path):
+    result = _run_wait_for_url_with_fake_clock(tmp_path, successes_after=31, timeout=120)
+
+    assert result.returncode == 0
+    assert "up (31s)" in result.stdout
+
+
+def test_backend_cold_start_wait_still_fails_after_its_deadline(tmp_path: Path):
+    result = _run_wait_for_url_with_fake_clock(tmp_path, successes_after=99, timeout=3)
+
+    assert result.returncode == 1
+    assert "未在 3s 内响应" in result.stderr
+
+
+def test_backend_cold_start_timeout_defaults_to_two_minutes_and_is_configurable():
+    script = (ROOT / "start.sh").read_text(encoding="utf-8")
+
+    assert 'BACKEND_STARTUP_TIMEOUT="${VOICE_STUDIO_BACKEND_STARTUP_TIMEOUT:-120}"' in script
+    assert 'wait_for_url "$BACKEND_HEALTH_URL" "后端健康检查" "$BACKEND_STARTUP_TIMEOUT"' in script
 
 
 def test_windows_launcher_can_forward_to_production_entrypoint():

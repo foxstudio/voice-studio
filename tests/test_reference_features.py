@@ -925,3 +925,41 @@ def test_history_audio_path_falls_back_to_existing_sibling_file(tmp_path: Path):
     )
 
     assert history_store.audio_path("result-with-fallback") == actual
+
+
+def test_engine_auditions_are_independent_history_results(tmp_path, monkeypatch):
+    client = _client(tmp_path)
+    monkeypatch.setattr(engine_registry, 'ensure_loaded', lambda engine_id: None)
+    def run(engine_id, kwargs, timeout):
+        Path(kwargs['output_path']).write_bytes(_valid_wav_bytes())
+        return {'output_path': kwargs['output_path'], 'generation_time_ms': 12}
+    monkeypatch.setattr(engine_registry, 'run_isolated', run)
+    responses = [client.post('/api/engines/omnivoice/diagnose-audio', json={'text': text}) for text in ['第一次试听', '第二次试听']]
+    assert all(response.status_code == 200 for response in responses)
+    results = [response.json() for response in responses]
+    assert results[0]['result_id'] != results[1]['result_id']
+    assert results[0]['output_path'] != results[1]['output_path']
+    for text, result in zip(['第一次试听', '第二次试听'], results):
+        task = task_queue.get_task(result['task_id'])
+        assert task.status.value == 'success'
+        assert task.input_text == text
+        assert task.result_id == result['result_id']
+        assert task.parameters['source'] == 'engine_diagnosis'
+        history = history_store.get(result['result_id'])
+        assert history.task_id == task.task_id
+        assert client.get(result['audio_url']).content == _valid_wav_bytes()
+    assert not task_queue._missing_auto_verification_task_ids()
+    assert len(history_store.list_history(source='engine_diagnosis')) == 2
+    assert client.get('/api/engines/omnivoice/diagnostic-audio').status_code == 200
+
+
+def test_failed_audition_does_not_create_success_history(tmp_path, monkeypatch):
+    client = _client(tmp_path)
+    monkeypatch.setattr(engine_registry, 'ensure_loaded', lambda engine_id: None)
+    def fail(*args):
+        raise RuntimeError('inference failed')
+    monkeypatch.setattr(engine_registry, 'run_isolated', fail)
+    result = client.post('/api/engines/omnivoice/diagnose-audio', json={}).json()
+    assert result['status'] == 'failed'
+    assert result['output_path'] is None
+    assert not history_store.list_history(source='engine_diagnosis')

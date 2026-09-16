@@ -83,12 +83,14 @@ API 与前端适配层
 | 单句语音合成 | `/generate` | `api/generate.py` → `services/task_queue.py`、`engine_request_builder.py` | 生成任务、历史记录和音频文件；REST/OpenAPI | 任务执行仍集中在大型队列服务，过渡中 |
 | 长文本与批量 | `/script-studio` | `api/longform.py`、`api/batches.py` → `longform_queue.py`、`batch_queue.py` | 长文父子任务、批次与分段结果；REST/OpenAPI | 两类队列保留各自语义，统一状态规范仍在渐进实施 |
 | 音色库 | `/voice-library` | `api/voices.py` → `voice_store.py`、云端音色适配器 | 音色、参考音频和云端绑定；REST/OpenAPI + 数据库/文件 | 本地音色与供应商绑定由同一页面组合，Provider 差异留在后端 |
-| 引擎管理 | `/engine-hub` | `api/engines.py` → `engine_registry.py`、`model_catalog.py`、engine policy/provider 模块 | 引擎能力、健康状态、模型来源/下载状态和参数 Schema；REST/OpenAPI | 本地模型下载、来源和详情统一归此页；注册表仍承担部分兼容职责，Provider 拆分过渡中 |
+| 引擎管理 | `/engine-hub` | `api/engines.py` → `engine_registry.py`、`model_catalog.py`、engine policy/provider 模块 | 引擎能力、健康状态、模型来源/下载状态和参数 Schema；REST/OpenAPI | 页面按运行引擎关联模型清单，同一能力只显示一张卡；未关联的辅助模型与参考版本继续可见，来源和文件位置收进共用详情；注册表仍承担部分兼容职责，Provider 拆分过渡中 |
 | 任务与生成历史 | 侧栏、`/generate` | `api/tasks.py`、`api/history.py` → `task_queue.py`、`history_store.py` | 运行状态、取消/重试、生成记录和波形；REST/OpenAPI | 页面只消费任务与历史，不自行创建第二套任务状态 |
 | 音频工具与语音转写 | `/audio-tools` | `api/audio_tools.py`、`api/asr.py` → `audio_tools.py`、`asr_service.py`、`asr_tasks.py` | 音频处理和转写任务；REST/OpenAPI | 通用 ASR 与视频本土化 ASR 共享底层 Provider，但拥有不同用例编排 |
 | 质量评测 | `/eval-reference` | `api/evaluations.py` → `asr_service.py`、`text_verifier.py`、`history_store.py` | 评测请求、材料与结果；REST/OpenAPI | 当前是跨服务应用用例，尚无独立领域包 |
 | 视频本土化 | `/video-localization` | `api/video_localization.py` → `services/video_localization_operations.py`、`services/video_localization_exports.py`、`services/video_localization_tts_handoff.py`、`domains/video_localization/service.py` 与领域门面 | 项目草稿、媒体、字幕、说话人、任务和导出；版本化领域契约 + REST/OpenAPI | operation 命令与 TTS 跨状态源回写已有独立应用端口；TTS 注册/放轨/终态使用 durable outbox、跨进程 lease/fencing 和启动重放；共享队列不反向导入本土化 service |
 | 设置 | `/settings` | `api/settings.py` → `settings_store.py`、`llm_runtime.py` 及拆分后的设置/Provider 模块 | 配置、密钥引用、目录、连接状态、默认 TTS/ASR 与默认大模型；typed REST/OpenAPI + 设置存储 | 设置页只选择默认引擎并链接到引擎管理，不复制模型下载和来源管理；其余设置服务仍较大，设置系统重构尚未实施 |
+
+引擎音频试听完成后，由 `task_queue.record_completed_audio_diagnosis` 在同一事务写入任务与历史；每次使用独立音频文件，来源标记为 `engine_diagnosis`。试听响应返回稳定的历史音频地址，合成工作台复用现有查询、播放、下载与删除入口。试听不触发自动转写校对，用户仍可在历史中手动校对。旧的最近试听地址保留读取兼容，历史固定文件不伪造为新任务。
 
 单条生成音频的下载序号由历史下载服务在确认文件存在后原子分配，
 `download_counters` 保存跨模型、跨日期的全局累计值。任务生成、页面读取、试听和波形加载不分配序号。

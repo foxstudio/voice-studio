@@ -85,6 +85,8 @@ cd ..
 ./start.sh
 ```
 
+首次启动会初始化本机数据和可选能力；后端健康检查默认最多等待 120 秒。需要调整时可设置 `VOICE_STUDIO_BACKEND_STARTUP_TIMEOUT`。
+
 Windows PowerShell 会自动转交给 WSL 2，并在 WSL 内检查 Python、uv、pnpm 等实际运行依赖：
 
 ```powershell
