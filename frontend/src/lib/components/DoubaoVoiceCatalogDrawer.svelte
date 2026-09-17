@@ -3,7 +3,7 @@
 	import { Api } from '$lib/api';
 	import type { DoubaoSpeakerCatalogStatus, EngineSpeaker } from '$lib/api/types';
 	import Tooltip from '$lib/components/shared/Tooltip.svelte';
-	import { ArrowRight, Check, Clock3, Heart, Library, Pause, Play, RefreshCw, Search, Shuffle, Sparkles, X } from 'lucide-svelte';
+	import { ArrowRight, Check, Clock3, Heart, Library, Pause, Play, RefreshCw, Search, Sparkles, X } from 'lucide-svelte';
 	import { onDestroy, onMount, tick } from 'svelte';
 	import {
 		buildDoubaoCatalogFacets,
@@ -285,11 +285,6 @@
 		filters = { ...EMPTY_DOUBAO_FILTERS };
 	}
 
-	function reshuffle() {
-		sort = 'random';
-		randomSeed = Math.floor(Math.random() * 1e9);
-	}
-
 	function toggleChipFacet(key: DoubaoChipFacet, value: string) {
 		filters = { ...filters, [key]: filters[key] === value ? 'all' : value };
 	}
@@ -404,7 +399,6 @@
 				<div class="doubao-head-title-row">
 					<h2 id="doubao-catalog-title">{mode === 'embedded' ? '豆包官方音色' : '官方音色目录'}</h2>
 					<div class="doubao-head-actions">
-						{#if mode === 'embedded'}<button class="doubao-icon-action" type="button" aria-label="换一批随机顺序" data-tooltip="重新随机排列音色" onclick={reshuffle}><Shuffle size={15} /></button>{/if}
 						<button class="doubao-icon-action" type="button" aria-label="刷新官方音色目录" data-tooltip={catalogStatus?.sync_available === false ? '在设置中配置火山引擎 AK/SK 后可同步官方目录' : '刷新官方音色目录'} disabled={syncing || catalogStatus?.sync_available === false} onclick={syncCatalog}><RefreshCw size={15} class={syncing ? 'spinning' : ''} /></button>
 						{#if mode === 'drawer'}<button class="doubao-icon-action" type="button" aria-label="关闭音色目录" data-tooltip="关闭音色目录" onclick={closeDrawer}><X size={17} /></button>{/if}
 					</div>
@@ -499,7 +493,12 @@
 							<button class:active={tab === 'recent'} type="button" onclick={() => (tab = 'recent')}><Clock3 size={13} />最近 <span>{tabCounts.recent}</span></button>
 							<button class:active={tab === 'all'} type="button" onclick={() => (tab = 'all')}><Library size={13} />全部 <span>{tabCounts.all}</span></button>
 						</nav>
-						<span class="doubao-library-count">{displayedSpeakers.length} / {orderedSpeakers.length} / {speakers.length} 个音色</span>
+						<div class="doubao-library-status">
+							<span class="doubao-library-source" class:syncing class:warning={Boolean(statusError) || catalogStatus?.stale} role="status" aria-live="polite">{statusLine()}</span>
+							<button class="doubao-sync-button" type="button" disabled={syncing || catalogStatus?.sync_available === false} data-tooltip={catalogStatus?.sync_available === false ? '先在设置里配置火山引擎 AK/SK' : '从火山引擎拉取最新官方目录'} onclick={syncCatalog}><RefreshCw size={13} class={syncing ? 'spinning' : ''} />{syncing ? '同步中' : '同步目录'}</button>
+							{#if catalogStatus?.sync_available === false}<a class="doubao-sync-link" href="/settings">去设置</a>{/if}
+							<span class="doubao-library-count">{#if orderedSpeakers.length === speakers.length}已显示 {displayedSpeakers.length} / 共 {speakers.length} 个{:else}已显示 {displayedSpeakers.length} / 匹配 {orderedSpeakers.length} 个（全部 {speakers.length} 个）{/if}</span>
+						</div>
 					</div>
 				</section>
 
@@ -664,37 +663,39 @@
 	.doubao-manual-entry > div { display: flex; gap: 6px; margin-top: 6px; }
 	.doubao-manual-entry input { flex: 1; min-width: 0; height: 32px; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
 	.doubao-manual-entry div button { min-width: 94px; border-radius: 7px; font-size: 10px; }
-	.doubao-catalog-drawer.embedded .doubao-drawer-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 2px 0 9px; }
-	.doubao-catalog-drawer.embedded .doubao-head-meta { flex: 1 1 auto; display: grid; justify-content: start; gap: 2px; }
-	.doubao-catalog-drawer.embedded .doubao-head-meta p { max-width: none; text-align: left; }
-	.doubao-catalog-drawer.embedded .doubao-head-title-row { flex: 0 0 auto; width: auto; }
-	.doubao-catalog-drawer.embedded .doubao-head-title-row h2 { display: none; }
-	.doubao-catalog-drawer.embedded .doubao-kicker { color: #88bce9; font-size: 9px; }
-	.doubao-library-toolbar { padding: 9px 11px 7px; border: 1px solid var(--line); border-radius: 9px; background: #12161c; }
-	.doubao-library-toolbar-grid { display: grid; grid-template-columns: minmax(240px, 1fr) repeat(3, minmax(110px, auto)); align-items: end; gap: 9px; }
-	.doubao-library-toolbar-grid > label { min-width: 0; display: grid; gap: 4px; }
-	.doubao-library-toolbar-grid > label > span { color: var(--muted); font-size: 10px; }
-	.doubao-library-toolbar-grid select { min-width: 110px; height: 33px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; background: #0e1217; color: #c5d0dc; font-size: 11px; }
-	.doubao-library-search > div { min-width: 0; height: 33px; display: flex; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid var(--line); border-radius: 7px; background: #0e1217; color: #708092; }
+	.doubao-catalog-drawer.embedded .doubao-drawer-head { display: none; }
+	.doubao-library-toolbar { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #12161c; }
+	.doubao-library-toolbar-grid { display: grid; grid-template-columns: minmax(240px, 1fr) repeat(3, minmax(110px, auto)); align-items: end; gap: 12px; }
+	.doubao-library-toolbar-grid > label { min-width: 0; display: grid; gap: 6px; }
+	.doubao-library-toolbar-grid > label > span { color: var(--muted); font-size: 12px; }
+	.doubao-library-toolbar-grid select { min-width: 110px; height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: #0e1217; color: #c5d0dc; font-size: 12px; }
+	.doubao-library-search > div { min-width: 0; height: 34px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: #0e1217; color: #708092; }
 	.doubao-library-search > div:focus-within { border-color: rgba(89, 156, 226, .58); box-shadow: 0 0 0 2px rgba(78, 151, 231, .1); }
 	.doubao-library-search input { flex: 1; min-width: 0; height: 30px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
 	.doubao-library-search button { display: inline-grid; place-items: center; padding: 3px; border: 0; background: transparent; color: #788697; }
-	.doubao-library-toolbar-foot { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 7px; }
+	.doubao-library-toolbar-foot { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 	.doubao-tabs.embedded-tabs { width: fit-content; display: flex; gap: 2px; padding: 0; border: 0; border-radius: 0; background: transparent; }
-	.doubao-tabs.embedded-tabs button { min-height: 25px; padding: 0 8px; border-radius: 6px; font-size: 10px; }
-	.doubao-library-count { flex: 0 0 auto; color: #6f7d8d; font-size: 10px; }
-	.doubao-tag-cloud { display: grid; gap: 5px; padding: 9px 0 11px; }
-	.doubao-tag-cloud-title { display: flex; align-items: center; justify-content: space-between; color: #c6d0dc; font-size: 11px; font-weight: 600; }
-	.doubao-tag-cloud-title button { padding: 0; border: 0; background: transparent; color: #79afe0; font-size: 10px; }
-	.doubao-tag-category { position: relative; min-height: 22px; max-height: 22px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; overflow: hidden; padding-right: 38px; }
+	.doubao-tabs.embedded-tabs button { min-height: 28px; padding: 0 10px; border-radius: 6px; font-size: 12px; }
+	.doubao-library-status { min-width: 0; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+	.doubao-library-source { color: #7f8d9d; font-size: 11px; }
+	.doubao-library-source.warning { color: #d8aa73; }
+	.doubao-sync-button { display: inline-flex; align-items: center; gap: 5px; min-height: 26px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-2); color: var(--text); font-size: 12px; cursor: pointer; }
+	.doubao-sync-button:hover:not(:disabled) { border-color: rgba(79, 156, 249, .5); color: #cfe4ff; }
+	.doubao-sync-button:disabled { opacity: .48; cursor: not-allowed; }
+	.doubao-sync-link { color: #79afe0; font-size: 12px; }
+	.doubao-library-count { flex: 0 0 auto; color: #6f7d8d; font-size: 11px; }
+	.doubao-tag-cloud { display: grid; gap: 6px; padding: 10px 0; }
+	.doubao-tag-cloud-title { display: flex; align-items: center; justify-content: space-between; color: #c6d0dc; font-size: 12px; font-weight: 500; }
+	.doubao-tag-cloud-title button { padding: 0; border: 0; background: transparent; color: #79afe0; font-size: 12px; }
+	.doubao-tag-category { position: relative; min-height: 26px; max-height: 26px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; overflow: hidden; padding-right: 38px; }
 	.doubao-tag-category.expanded { max-height: none; overflow: visible; }
-	.doubao-tag-label { width: 34px; flex: 0 0 34px; color: #798696; font-size: 10px; }
-	.doubao-tag-category > button:not(.doubao-tag-expand) { min-height: 20px; display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border: 1px solid rgba(118, 145, 175, .2); border-radius: 999px; background: rgba(22, 29, 38, .72); color: #8f9dad; font-size: 9px; }
+	.doubao-tag-label { width: 36px; flex: 0 0 36px; color: #798696; font-size: 11px; }
+	.doubao-tag-category > button:not(.doubao-tag-expand) { min-height: 22px; display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; border: 1px solid rgba(118, 145, 175, .2); border-radius: 999px; background: rgba(22, 29, 38, .72); color: #8f9dad; font-size: 11px; }
 	.doubao-tag-category > button:not(.doubao-tag-expand):hover, .doubao-tag-category > button.active { border-color: rgba(93, 165, 235, .5); background: rgba(55, 113, 171, .2); color: #b9daf7; }
-	.doubao-tag-category button span { color: #6f9bc3; font: 8px ui-monospace, SFMono-Regular, Menlo, monospace; }
-	.doubao-tag-expand { position: absolute; top: 1px; right: 0; padding: 2px 0 2px 8px; border: 0; background: linear-gradient(90deg, transparent, #0d1116 28%); color: #69a5dc; font-size: 9px; }
-	.doubao-library-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-items: stretch; gap: 9px; }
-	.doubao-library-card { min-width: 0; min-height: 192px; display: flex; flex-direction: column; padding: 11px; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: #171b21; transition: border-color 120ms ease, background 120ms ease, transform 120ms ease; }
+	.doubao-tag-category button span { color: #6f9bc3; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+	.doubao-tag-expand { position: absolute; top: 1px; right: 0; padding: 2px 0 2px 8px; border: 0; background: linear-gradient(90deg, transparent, #0d1116 28%); color: #69a5dc; font-size: 11px; }
+	.doubao-library-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-items: stretch; gap: 12px; }
+	.doubao-library-card { min-width: 0; min-height: 192px; display: flex; flex-direction: column; padding: 12px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #171b21; transition: border-color 120ms ease, background 120ms ease, transform 120ms ease; }
 	.doubao-library-card:hover { border-color: rgba(103, 163, 224, .4); background: #191f27; transform: translateY(-1px); }
 	.doubao-library-card.previewing { border-color: rgba(77, 169, 245, .68); background: linear-gradient(130deg, rgba(34, 78, 117, .32), #171d25 52%); }
 	.doubao-library-card.selected { border-color: rgba(79, 178, 144, .52); }
@@ -702,21 +703,21 @@
 	.doubao-library-card-head { min-width: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 	.doubao-library-identity { min-width: 0; display: flex; align-items: center; gap: 8px; }
 	.doubao-library-identity > div { min-width: 0; }
-	.doubao-library-identity h3 { max-width: 100%; margin: 0; overflow: hidden; color: #e7edf5; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-	.doubao-library-identity > div > span { color: #738293; font-size: 9px; }
+	.doubao-library-identity h3 { max-width: 100%; margin: 0; overflow: hidden; color: #e7edf5; font-size: 16px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+	.doubao-library-identity > div > span { color: #738293; font-size: 11px; }
 	.doubao-library-card-head .doubao-icon-action { width: 25px; height: 25px; flex-basis: 25px; border: 0; background: transparent; opacity: .62; }
 	.doubao-library-card:hover .doubao-library-card-head .doubao-icon-action, .doubao-library-card-head .doubao-icon-action.active, .doubao-library-card-head .doubao-icon-action:focus-visible { opacity: 1; }
-	.doubao-library-description { min-height: 33px; margin: 8px 0 7px; overflow: hidden; color: #909ba9; font-size: 10.5px; line-height: 1.5; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-	.doubao-library-tags { min-height: 21px; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 4px; overflow: hidden; }
-	.doubao-library-tags button, .doubao-library-tags > span, .doubao-library-meta span { min-height: 18px; display: inline-flex; align-items: center; padding: 1px 5px; border: 1px solid rgba(117, 145, 175, .18); border-radius: 999px; background: rgba(21, 29, 38, .76); color: #8391a1; font-size: 8.5px; }
+	.doubao-library-description { min-height: 38px; margin: 8px 0 8px; overflow: hidden; color: #909ba9; font-size: 13px; line-height: 1.45; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+	.doubao-library-tags { min-height: 22px; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 4px; overflow: hidden; }
+	.doubao-library-tags button, .doubao-library-tags > span, .doubao-library-meta span { min-height: 22px; display: inline-flex; align-items: center; padding: 1px 6px; border: 1px solid rgba(117, 145, 175, .18); border-radius: 999px; background: rgba(21, 29, 38, .76); color: #8391a1; font-size: 11px; line-height: 1.4; }
 	.doubao-library-tags button.special { border-color: rgba(103, 169, 231, .3); color: #8fc4f0; background: rgba(43, 91, 137, .17); }
 	.doubao-library-tags button:hover { border-color: rgba(103, 169, 231, .48); color: #b8dafa; }
 	.doubao-library-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 	.doubao-library-meta span.verified { border-color: rgba(76, 168, 137, .28); color: #83cbb1; }
 	.doubao-library-meta span.denied { border-color: rgba(190, 86, 106, .28); color: #d49aa4; }
-	.doubao-library-id { margin-top: 7px; overflow: hidden; color: #596777; font: 8px ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+	.doubao-library-id { margin-top: 7px; overflow: hidden; color: #596777; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
 	.doubao-library-actions { display: flex; align-items: center; gap: 6px; margin-top: auto; padding-top: 8px; }
-	.doubao-preview-button, .doubao-use-button { min-height: 27px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; border-radius: 6px; font-size: 10px; }
+	.doubao-preview-button, .doubao-use-button { min-height: 26px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; border-radius: 6px; font-size: 12px; }
 	.doubao-preview-button { border: 1px solid var(--line); background: #11161c; color: #aab5c1; }
 	.doubao-preview-button:hover, .doubao-preview-button.active { border-color: rgba(87, 163, 231, .48); color: #b9dcfb; }
 	.doubao-use-button { margin-left: auto; border: 1px solid rgba(84, 160, 226, .35); background: rgba(50, 119, 181, .14); color: #9dcef7; }

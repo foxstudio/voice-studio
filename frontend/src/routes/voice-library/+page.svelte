@@ -3,7 +3,7 @@
 	import type { EngineSpeaker, VoiceAsset } from '$lib/api/types';
 	import DoubaoVoiceCatalogDrawer from '$lib/components/DoubaoVoiceCatalogDrawer.svelte';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
-	import { ArrowRight, Check, ClipboardCopy, CloudUpload, Database, FileText, FileAudio, Heart, Pencil, Pause, Plus, RefreshCw, Search, ShieldCheck, Trash2, Upload, Volume2, X } from 'lucide-svelte';
+	import { ArrowRight, ArrowUp, Check, ClipboardCopy, CloudUpload, Database, FileText, FileAudio, Heart, Pencil, Pause, Plus, RefreshCw, Search, ShieldCheck, Trash2, Upload, Volume2, X } from 'lucide-svelte';
 	import { licenseLabel } from '$lib/labels';
 	import { onMount } from 'svelte';
 
@@ -28,12 +28,25 @@
 
 	let voiceEngineFilter = $state('all');
 	let voiceLicenseFilter = $state('all');
-	let voiceSort = $state<'random' | 'updated' | 'name'>('random');
+	function initialVoiceSort(): 'random' | 'updated' | 'name' {
+		if (typeof window === 'undefined') return 'random';
+		const value = new URLSearchParams(window.location.search).get('sort');
+		return value === 'updated' || value === 'name' ? value : 'random';
+	}
+	let voiceSort = $state<'random' | 'updated' | 'name'>(initialVoiceSort());
 	const sessionRandomSeed = Math.floor(Math.random() * 1e9);
+	// Fold the session seed into a 32-bit key with integer math: the previous
+	// `seed * 2654435761 + hash` overflowed double precision (2.65e18 > 2^53),
+	// so the per-voice hash was swallowed and the order barely changed.
+	const sessionRandomKey = Math.imul(sessionRandomSeed, 2654435761) >>> 0;
 	let voicePreviewAudio = $state<HTMLAudioElement | null>(null);
 	let playingVoiceId = $state('');
+	let showBackToTop = $state(false);
 
 	let batchAsrProgress = $state({ active: false, current: 0, total: 0 });
+	let batchAsrCancelRequested = $state(false);
+	let batchSerCancelRequested = $state(false);
+	let copiedLineId = $state('');
 	let voiceAsrStatus = $state(new Map<string, 'idle' | 'generating' | 'done' | 'error'>());
 	let voiceSerStatus = $state(new Map<string, 'idle' | 'generating' | 'done' | 'error'>());
 	let doubaoCloneStatus = $state(new Map<string, 'idle' | 'training' | 'refreshing' | 'done' | 'error'>());
@@ -135,6 +148,13 @@
 			playingVoiceId = '';
 		}
 	}
+	function scrollLibraryToTop() {
+		const scrollRoot = document.querySelector('.main');
+		if (!scrollRoot) return;
+		const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		scrollRoot.scrollTo({ top: 0, behavior: smooth ? 'smooth' : 'auto' });
+	}
+
 	onMount(() => {
 		loadInitial();
 		const scrollRoot = document.querySelector('.main');
@@ -142,9 +162,23 @@
 			if (entries[0].isIntersecting) loadMore();
 		}, { root: scrollRoot, rootMargin: '200px' });
 		if (sentinel) observer.observe(sentinel);
-		return () => observer.disconnect();
+		const onScroll = () => { showBackToTop = (scrollRoot?.scrollTop ?? 0) > 600; };
+		scrollRoot?.addEventListener('scroll', onScroll, { passive: true });
+		onScroll();
+		return () => {
+			observer.disconnect();
+			scrollRoot?.removeEventListener('scroll', onScroll);
+		};
 	});
 
+
+	// 排序写回地址栏：刷新保留当前选择，重新输入网址则回到默认的随机排序。
+	$effect(() => {
+		const url = new URL(window.location.href);
+		if (voiceSort === 'random') url.searchParams.delete('sort');
+		else url.searchParams.set('sort', voiceSort);
+		window.history.replaceState({}, '', url);
+	});
 
 	async function generateAsrForVoice(voice: VoiceAsset) {
 		if (!voice.reference_audio_ids[0]) return;
@@ -173,11 +207,15 @@
 			isFakeReferenceText(v.reference_text) && v.reference_audio_ids[0]
 		);
 		if (!candidates.length) return;
+		if (!window.confirm(`为 ${candidates.length} 个缺少台词的音色依次运行本地 ASR？过程中页面不要关闭。`)) return;
+		batchAsrCancelRequested = false;
 		batchAsrProgress = { active: true, current: 0, total: candidates.length };
 		for (let i = 0; i < candidates.length; i++) {
+			if (batchAsrCancelRequested) break;
 			batchAsrProgress = { ...batchAsrProgress, current: i + 1 };
 			await generateAsrForVoice(candidates[i]);
 		}
+		batchAsrCancelRequested = false;
 		batchAsrProgress = { active: false, current: 0, total: 0 };
 	}
 
@@ -265,11 +303,15 @@
 	async function batchGenerateSer() {
 		const candidates = allVoices.filter(v => v.reference_audio_ids?.length && (!v.emotion_tags || v.emotion_tags.length === 0));
 		if (!candidates.length) return;
+		if (!window.confirm(`为 ${candidates.length} 个还没有情绪标签的音色依次运行情绪识别？过程中页面不要关闭。`)) return;
+		batchSerCancelRequested = false;
 		batchSerProgress = { active: true, current: 0, total: candidates.length };
 		for (let i = 0; i < candidates.length; i++) {
+			if (batchSerCancelRequested) break;
 			batchSerProgress = { ...batchSerProgress, current: i + 1 };
 			await generateSerForVoice(candidates[i]);
 		}
+		batchSerCancelRequested = false;
 		batchSerProgress = { active: false, current: 0, total: 0 };
 	}
 	function resetForm() {
@@ -324,9 +366,23 @@
 		resetForm();
 		await refresh();
 	}
-	async function remove(id: string) {
-		await Api.deleteVoice(id);
-		if (editingVoice?.voice_id === id) resetForm();
+	async function copyVoiceLine(voice: VoiceAsset) {
+		try {
+			await navigator.clipboard.writeText(voiceLineText(voice.reference_text));
+			copiedLineId = voice.voice_id;
+			setTimeout(() => { if (copiedLineId === voice.voice_id) copiedLineId = ''; }, 1500);
+		} catch {
+			uploadMessage = '复制台词失败，请检查浏览器剪贴板权限';
+		}
+	}
+
+	async function remove(voice: VoiceAsset) {
+		const cloudNote = voice.external_voice_id
+			? '；豆包云端的 speaker_id 不会一起删除，需要时请到火山引擎控制台处理'
+			: '';
+		if (!window.confirm(`删除音色「${voice.name}」？它的参考音频文件会一并从本机删除，且不能恢复${cloudNote}。`)) return;
+		await Api.deleteVoice(voice.voice_id);
+		if (editingVoice?.voice_id === voice.voice_id) resetForm();
 		await refresh();
 	}
 
@@ -335,6 +391,14 @@
 		'官方示例', '参考声音', '社区音色', 'Apache 2.0', '中文',
 		'ASR待复核', '仅测试', '测试音色', '声音设计'
 	]);
+
+	/** 描述声音本身质地的常用词；命中才归入「音色」，否则落入「其他」。 */
+	const TIMBRE_KEYWORDS = [
+		'温柔', '低沉', '磁性', '浑厚', '清脆', '沙哑', '干练', '沉稳', '优雅', '明亮',
+		'儒雅', '甜美', '御姐', '轻快', '清冷', '冷艳', '高贵', '英气', '温和', '诗意',
+		'清亮', '清澈', '醇厚', '圆润', '柔美', '阳刚', '清朗', '软糯', '纯净', '硬朗',
+		'高音', '中音', '低音', '霸气', '威严', '温暖', '正气', '活泼', '可爱'
+	];
 
 	function tagCategory(tag: string): string {
 		if (['男声', '女声', '童声'].some((k) => tag.includes(k))) return 'gender';
@@ -354,7 +418,8 @@
 			'四川话', '动画', '轻喜剧', '解说', '角色扮演', '角色配音', '角色感',
 			'对白'
 		].some((k) => tag.includes(k))) return 'use';
-		return 'timbre';
+		if (TIMBRE_KEYWORDS.some((k) => tag.includes(k))) return 'timbre';
+		return 'other';
 	}
 
 	function tagClass(tag: string) {
@@ -479,13 +544,22 @@
 			.sort((a, b) => {
 				if (voiceSort === 'name') return a.name.localeCompare(b.name, 'zh-Hans-CN');
 				if (voiceSort === 'updated') return b.updated_at.localeCompare(a.updated_at);
-				const ha = ((sessionRandomSeed * 2654435761 + hashStr(a.voice_id || a.name)) >>> 0);
-				const hb = ((sessionRandomSeed * 2654435761 + hashStr(b.voice_id || b.name)) >>> 0);
+				const ha = (sessionRandomKey ^ hashStr(a.voice_id || a.name)) >>> 0;
+				const hb = (sessionRandomKey ^ hashStr(b.voice_id || b.name)) >>> 0;
 				return ha - hb;
 			});
 	});
 
 	const visibleVoices = $derived(filteredVoices.slice(0, displayedCount));
+
+	function engineFilterCount(engineId: string) {
+		return allVoices.filter((voice) =>
+			voice.engine_bindings?.some((binding) => binding.engine_id === engineId && binding.available)).length;
+	}
+
+	function licenseFilterCount(status: string) {
+		return allVoices.filter((voice) => voice.license_status === status).length;
+	}
 
 	const selfOrAuthorizedCount = $derived(
 		allVoices.filter((voice) => ['self_voice', 'authorized', 'company_authorized'].includes(voice.license_status)).length
@@ -493,11 +567,14 @@
 	const canSaveVoice = $derived(Boolean(name.trim()) && (Boolean(editingVoice) || Boolean(file)));
 
 	const help = [
-		{ title: '新增声音', body: '这里只保留自己上传参考音频这一条路径。准备一段 10-20 秒左右的 mp3 或 wav，填写名称和参考文本后保存，它就会进入本地音色库。' },
-		{ title: '音色库怎么用', body: '音色库里的声音主要作为声音克隆参考。IndexTTS v2 通常需要选择一个参考声音；F5-TTS 和 CosyVoice Zero-Shot 需要参考音频和准确参考台词；OmniVoice 可以选择参考声音，也可以不选，改用声音设计标签。' },
-		{ title: '参考文本', body: '参考文本是参考音频里大概说了什么。克隆或多语言模型有时会用它理解发音和音色；卡片里的文本按钮可以快速查看，不会撑大卡片。' },
-		{ title: '编辑声音', body: '卡片上的“编辑”会把名称、描述、标签、参考文本和推荐引擎载入右侧表单。这里保存的是同一个声音名称，生成页下拉菜单会同步显示。' },
-		{ title: '豆包云端音色', body: '豆包训练会上传参考音频并把返回的 speaker_id 绑定到本地音色。页面可以刷新状态或解除本地绑定；真正删除云端 SpeakerID、续费或订单管理，需要到火山引擎控制台相关接口处理。' },
+		{ title: '新增声音', body: '准备一段 10-20 秒的 mp3 或 wav；选视频也可以，页面会自动抽出参考音频。填好名称保存后，它就会出现在本地音色库。' },
+		{ title: '音色库怎么用', body: '这里的音色主要作为声音克隆的参考。IndexTTS v2 通常要选一个参考声音；F5-TTS 和 CosyVoice Zero-Shot 需要参考音频加准确台词；OmniVoice 可以不选参考，改用声音设计标签。' },
+		{ title: '参考文本和台词', body: '参考文本是参考音频里大概说了什么，克隆模型会用它判断发音。卡片上的「台词」按钮悬停看全文、点击复制；旁边的转写图标会自动跑 ASR 把台词补上。' },
+		{ title: '卡片上的图标', body: '从左到右依次是：训练或查询豆包云端音色、生成 ASR 台词、识别情绪标签、复制音色 ID、编辑、删除。鼠标停在任意图标上都会显示它的用途。' },
+		{ title: '编辑和删除', body: '铅笔图标打开编辑弹窗，可以改名称、描述、标签、参考文本、授权和推荐引擎。删除会把参考音频文件一起从本机移除且不能恢复；训练过豆包云端的音色，云端那份需要另外去火山引擎控制台处理。' },
+		{ title: '批量处理', body: '顶部「批量ASR」给所有缺台词的音色依次转写，「批量情绪识别」给还没有情绪标签的音色补标签。开始前会告知影响多少个音色，跑起来后点进度条右边的按钮可以停下来，已经跑完的结果保留。' },
+		{ title: '筛选和排序', body: '标签筛选按类别列出音色属性，点一个标签就把它加进搜索条件。排序默认是「随机」，每次打开顺序都不一样；换成其他排序会记在网址里，刷新后保持不变，重新输入网址就回到随机。' },
+		{ title: '豆包官方音色', body: '切到「豆包官方音色」标签页可以试听、收藏火山引擎的官方预置声线并直接去合成，这些云端音色不会混进本地音色库；点右下角「同步目录」可以拉取云端最新版本。' },
 	];
 </script>
 
@@ -505,13 +582,16 @@
 
 <main class="page">
 		<div class="page-head">
+			<div class="page-head-copy">
 			<div class="page-title-row">
 				<h1>音色管理</h1>
 				<div class="stat-pills">
 					<span class="stat-pill"><Database size={14} /> {allVoices.length} 音色</span>
-					<span class="stat-pill"><ShieldCheck size={14} /> {selfOrAuthorizedCount} 授权</span>
+					<span class="stat-pill" title="标记为本人声音、已授权或公司授权的音色数量"><ShieldCheck size={14} /> 已授权 {selfOrAuthorizedCount}</span>
 				</div>
 				<HelpDrawer title="音色管理" sections={help} />
+			</div>
+			<p class="page-subtitle">{libraryView === 'mine' ? '本地音色库：试听、编辑、补台词和情绪，然后拿去合成。' : '豆包云端的官方声线：试听、收藏后直接去合成，不会存进本地音色库。'}</p>
 			</div>
 			<div class="page-title-actions">
 				{#if libraryView === 'mine'}
@@ -520,6 +600,7 @@
 					<span class="batch-indicator asr">
 						<span class="batch-bar" style="width: {(batchAsrProgress.current / batchAsrProgress.total * 100).toFixed(0)}%"></span>
 						<span class="batch-label"><FileAudio size={12} /> ASR {batchAsrProgress.current}/{batchAsrProgress.total}</span>
+						<button class="batch-stop" type="button" aria-label="停止批量 ASR" data-tooltip="当前音色跑完就停" onclick={() => (batchAsrCancelRequested = true)} disabled={batchAsrCancelRequested}><X size={12} /></button>
 					</span>
 				{:else}
 					<button class="btn-asr-batch" onclick={batchGenerateAsr} disabled={batchAsrProgress.active}>
@@ -530,6 +611,7 @@
 					<span class="batch-indicator ser">
 						<span class="batch-bar" style="width: {(batchSerProgress.current / batchSerProgress.total * 100).toFixed(0)}%"></span>
 						<span class="batch-label"><Heart size={12} /> SER {batchSerProgress.current}/{batchSerProgress.total}</span>
+						<button class="batch-stop" type="button" aria-label="停止批量情绪识别" data-tooltip="当前音色跑完就停" onclick={() => (batchSerCancelRequested = true)} disabled={batchSerCancelRequested}><X size={12} /></button>
 					</span>
 				{:else}
 					<button class="btn-ser-batch" onclick={batchGenerateSer} disabled={batchSerProgress.active}>
@@ -565,21 +647,21 @@
 						<span>可用引擎</span>
 						<select bind:value={voiceEngineFilter}>
 							<option value="all">全部</option>
-							<option value="indextts-v2">IndexTTS v2</option>
-							<option value="omnivoice">OmniVoice</option>
-							<option value="mimo-v2.5-tts-voiceclone">MiMo VoiceClone</option>
-							<option value="doubao-tts-voiceclone">豆包云端复刻</option>
+							<option value="indextts-v2">IndexTTS v2（{engineFilterCount('indextts-v2')}）</option>
+							<option value="omnivoice">OmniVoice（{engineFilterCount('omnivoice')}）</option>
+							<option value="mimo-v2.5-tts-voiceclone">MiMo VoiceClone（{engineFilterCount('mimo-v2.5-tts-voiceclone')}）</option>
+							<option value="doubao-tts-voiceclone">豆包云端复刻（{engineFilterCount('doubao-tts-voiceclone')}）</option>
 						</select>
 					</label>
 					<label class="field">
 						<span>授权</span>
 						<select bind:value={voiceLicenseFilter}>
 							<option value="all">全部</option>
-							<option value="self_voice">本人声音</option>
-							<option value="authorized">已授权</option>
-							<option value="本土化">本土化</option>
-							<option value="test_only">仅测试</option>
-							<option value="unknown">未知</option>
+							<option value="self_voice">本人声音（{licenseFilterCount('self_voice')}）</option>
+							<option value="authorized">已授权（{licenseFilterCount('authorized')}）</option>
+							<option value="本土化">本土化（{licenseFilterCount('本土化')}）</option>
+							<option value="test_only">仅测试（{licenseFilterCount('test_only')}）</option>
+							<option value="unknown">未知（{licenseFilterCount('unknown')}）</option>
 						</select>
 					</label>
 					<label class="field">
@@ -591,7 +673,7 @@
 						</select>
 					</label>
 				</div>
-					<span class="toolbar-count muted">{visibleVoices.length} / {filteredVoices.length} / {allVoices.length} 条结果</span>
+					<span class="toolbar-count muted">{#if filteredVoices.length === allVoices.length}已显示 {visibleVoices.length} / 共 {allVoices.length} 条{:else}已显示 {visibleVoices.length} / 匹配 {filteredVoices.length} 条（全部 {allVoices.length} 条）{/if}</span>
 			</section>
 
 			{#if Object.keys(tagsByCategory).length > 0}
@@ -605,7 +687,8 @@
 					{ key: 'timbre', label: '音色' },
 					{ key: 'emotion', label: '情绪' },
 					{ key: 'use', label: '用途' },
-					{ key: 'source', label: '来源' }
+					{ key: 'source', label: '来源' },
+					{ key: 'other', label: '其他' }
 				] as cat}
 					{#if tagsByCategory[cat.key]?.length}
 						<div class="tag-cloud-category" class:expanded={expandedCategories.has(cat.key)}>
@@ -663,7 +746,7 @@
 							<button class="icon-btn-sm" type="button" aria-label="编辑音色" data-tooltip="编辑这个音色的名称、标签和授权信息" onclick={() => editVoice(voice)}>
 								<Pencil size={13} />
 							</button>
-							<button class="icon-btn-sm danger" type="button" aria-label="删除音色" data-tooltip="删除这个音色资产" onclick={() => remove(voice.voice_id)}>
+							<button class="icon-btn-sm danger" type="button" aria-label="删除音色" data-tooltip="删除这个音色资产" onclick={() => remove(voice)}>
 								<Trash2 size={13} />
 							</button>
 					</div>
@@ -676,7 +759,7 @@
 								{/each}
 							{/if}
 							{#each cleanTags(voice.tags, expandedCards.has(voice.voice_id) ? 99 : 4) as tag}
-							<button class={`badge tag-filter ${tagClass(tag)}`} type="button" title={`添加到搜索：${tag}`} onclick={() => appendVoiceQueryTag(tag)}>{tag}<span class="tag-count">{tagCounts.get(tag)}</span></button>
+							<button class={`badge tag-filter ${tagClass(tag)}`} type="button" title={`添加到搜索：${tag}`} onclick={() => appendVoiceQueryTag(tag)}>{tag}</button>
 						{/each}
 						{#if cleanTags(voice.tags, 99).length > 4 && !expandedCards.has(voice.voice_id)}
 							<button class="tag-expand-btn" type="button" onclick={() => { expandedCards = new Set([...expandedCards, voice.voice_id]); }}>+{cleanTags(voice.tags, 99).length - 4}</button>
@@ -691,7 +774,7 @@
 						{#if doubaoCloudStatusLabel(voice)}
 							<button class="badge cloud-binding-badge" type="button" title={`添加到搜索：${doubaoCloudStatusLabel(voice)}`} onclick={() => appendVoiceQueryTag(doubaoCloudStatusLabel(voice))}>{doubaoCloudStatusLabel(voice)}</button>
 						{/if}
-						<span class="text-pop text-chip" data-text={voiceLineText(voice.reference_text)}><FileText size={13} /> 台词</span>
+						<button class="text-pop text-chip" type="button" title="点击复制台词内容" data-text={voiceLineText(voice.reference_text)} onclick={() => copyVoiceLine(voice)}><FileText size={13} /> {copiedLineId === voice.voice_id ? '已复制' : '台词'}</button>
 					</div>
 					<div class="card-actions">
 					{#if voice.reference_audio_ids[0]}
@@ -704,7 +787,7 @@
 					<span class="dog-ear" class:ok={voice.license_status === "self_voice"}>{licenseLabel(voice.license_status)}</span>
 				</article>
 		{:else}
-			<div class="empty">还没有声音资产</div>
+			<div class="empty">{#if allVoices.length}<span>没有符合当前条件的音色</span><button class="btn" type="button" onclick={() => { voiceQuery = ''; voiceEngineFilter = 'all'; voiceLicenseFilter = 'all'; }}>清空筛选</button>{:else}还没有声音资产{/if}</div>
 		{/each}
 		{#if hasMore}<div bind:this={sentinel} class="scroll-sentinel"></div>{/if}
 		{#if loading}
@@ -718,11 +801,7 @@
 		</section>
 			{:else}
 				<section class="doubao-official-library">
-					<div class="doubao-official-intro">
-						<div><strong>豆包语音 TTS 2.0 官方目录</strong><p>试听、收藏并选择官方预置声线；这些云端音色不会混入可编辑的本地音色。</p></div>
-						<div class="doubao-official-intro-actions">{#if doubaoOfficialError}<button class="btn icon-text" type="button" onclick={loadDoubaoOfficialSpeakers}>重试</button>{/if}<a class="btn icon-text" href="/settings">同步设置</a></div>
-					</div>
-					{#if doubaoOfficialError}<p class="doubao-official-error" role="alert">{doubaoOfficialError}</p>{/if}
+				{#if doubaoOfficialError}<p class="doubao-official-error" role="alert">{doubaoOfficialError}</p>{/if}
 					<DoubaoVoiceCatalogDrawer
 						mode="embedded"
 						speakers={doubaoOfficialSpeakers}
@@ -782,6 +861,11 @@
 			if (voicePreviewAudio?.ended || !voicePreviewAudio?.currentTime) playingVoiceId = "";
 		}}
 	></audio>
+	{#if showBackToTop}
+		<button class="back-to-top" type="button" aria-label="回到音色列表顶部" data-tooltip="回到音色列表顶部" onclick={scrollLibraryToTop}>
+			<ArrowUp size={15} /> 回到顶部
+		</button>
+	{/if}
 </main>
 
 <style>
@@ -869,6 +953,18 @@
 			align-items: center;
 			gap: 14px;
 		}
+
+		.page-head-copy {
+			display: grid;
+			gap: 6px;
+			min-width: 0;
+		}
+
+		.page-subtitle {
+			margin: 0;
+			color: var(--muted);
+			font-size: 13px;
+		}
 		.page-title-row h1 {
 			margin: 0;
 			font-size: 18px;
@@ -931,36 +1027,12 @@
 		}
 		.doubao-official-library {
 			display: grid;
-			gap: 10px;
-		}
-		.doubao-official-intro {
-			display: flex;
-			align-items: center;
-			justify-content: space-between;
-			gap: 14px;
-			padding: 1px 0 3px;
-		}
-		.doubao-official-intro > div {
-			display: grid;
-			gap: 2px;
-		}
-		.doubao-official-intro strong {
-			font-size: 13px;
-		}
-		.doubao-official-intro p {
-			margin: 0;
-			color: var(--muted);
-			font-size: 11px;
-		}
-		.doubao-official-intro-actions {
-			display: flex;
-			align-items: center;
-			gap: 6px;
+			gap: 12px;
 		}
 		.doubao-official-error {
 			margin: 0;
 			color: #d8aa73;
-			font-size: 11px;
+			font-size: 12px;
 		}
 		.toolbar-count {
 			display: block;
@@ -1043,6 +1115,13 @@
 		grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 	}
 
+	.voice-grid .empty {
+		grid-column: 1 / -1;
+		display: grid;
+		gap: 10px;
+		justify-items: center;
+	}
+
 
 
 	.tag-row {
@@ -1067,6 +1146,32 @@
 		gap: 5px;
 		align-items: center;
 		justify-content: flex-start;
+	}
+
+	.back-to-top {
+		position: fixed;
+		right: 22px;
+		bottom: 22px;
+		z-index: 40;
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		min-height: 34px;
+		padding: 0 12px;
+		border: 1px solid var(--line);
+		border-radius: 999px;
+		background: rgba(24, 28, 34, 0.94);
+		box-shadow: 0 10px 26px rgba(0, 0, 0, 0.42);
+		backdrop-filter: blur(8px);
+		color: var(--text);
+		font-size: 12px;
+		cursor: pointer;
+	}
+
+	.back-to-top:hover,
+	.back-to-top:focus-visible {
+		border-color: rgba(79, 156, 249, 0.5);
+		color: #cfe4ff;
 	}
 
 		/* 折角标签 - 右下角 */
@@ -1107,6 +1212,10 @@
 		min-width: 0;
 		background: transparent;
 		color: var(--muted);
+	}
+
+	.text-chip {
+		cursor: pointer;
 	}
 
 	.asset-meta button.badge {
@@ -1160,6 +1269,12 @@
 		color: #d4c8e8;
 		border-color: rgba(130, 110, 160, 0.45);
 		background: rgba(95, 80, 120, 0.2);
+	}
+
+	.tag-filter.tag-other {
+		color: #9aa6b4;
+		border-color: rgba(120, 132, 148, 0.4);
+		background: rgba(70, 78, 90, 0.18);
 	}
 
 	.tag-expand-btn {
@@ -1548,6 +1663,23 @@
 			gap: 4px;
 			animation: batch-pulse 1.8s ease-in-out infinite;
 		}
+		.batch-indicator .batch-stop {
+			position: relative;
+			z-index: 1;
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 18px;
+			height: 18px;
+			padding: 0;
+			border: 0;
+			border-radius: 999px;
+			background: rgba(255, 255, 255, 0.1);
+			color: inherit;
+			cursor: pointer;
+		}
+		.batch-indicator .batch-stop:hover { background: rgba(255, 255, 255, 0.2); }
+		.batch-indicator .batch-stop:disabled { opacity: 0.45; cursor: default; }
 		.batch-indicator.asr {
 			color: #8ec5f5;
 			background: rgba(78, 163, 255, 0.08);
