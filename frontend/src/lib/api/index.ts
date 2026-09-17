@@ -43,6 +43,7 @@ import type {
 	ProjectTranscriptionImportResponse,
 	Role,
 	ScriptSegment,
+	TranscriptionHistoryPage,
 	TranscriptionRecord,
 	TranscriptionTask,
 	StorageAudit,
@@ -573,7 +574,12 @@ export const Api = {
 	cancelTranscriptionTask: (taskId: string) => api.post<{ status: string; task_id: string }>(`/asr/tasks/${taskId}/cancel`),
 	retryTranscriptionTask: (taskId: string) => api.post<{ task_id: string; status: string }>(`/asr/tasks/${taskId}/retry`),
 	deleteTranscriptionTask: (taskId: string) => api.delete<{ status: string; task_id: string }>(`/asr/tasks/${taskId}`),
-	transcriptionHistory: () => api.get<TranscriptionRecord[]>('/asr/history'),
+	transcriptionHistory: (params?: { limit?: number; offset?: number }) => {
+		const search = new URLSearchParams();
+		if (params?.limit !== undefined) search.set('limit', String(params.limit));
+		if (params?.offset !== undefined) search.set('offset', String(params.offset));
+		return api.get<TranscriptionHistoryPage>(`/asr/history${search.size ? `?${search.toString()}` : ''}`);
+	},
 	predictEmotion: (voiceId: string) => api.post<SEREmotionResult>('/ser/predict', { voice_id: voiceId }),
 	predictEmotionForFile: (fileId: string) => api.post<SEREmotionResult>('/ser/predict-file', { file_id: fileId }),
 	batchPredictAllEmotions: () => api.post<{ results: SEREmotionResult[] }>('/ser/batch-predict', { all: true }),

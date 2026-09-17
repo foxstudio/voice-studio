@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, UploadFile
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi.responses import FileResponse, PlainTextResponse
+from pydantic import BaseModel
 
 from app.errors import AppException
 from app.schemas.voice_studio import (
@@ -22,7 +23,9 @@ from app.services import (
     asr_service,
     asr_tasks,
     audio_tools,
+    custom_reference_store,
     database as db,
+    settings_store,
     subtitle_evidence,
 )
 
@@ -72,9 +75,25 @@ async def transcribe_audio(
     return record
 
 
-@router.get("/history", response_model=list[TranscriptionRecord])
-async def transcription_history():
-    return [TranscriptionRecord(**item) for item in db.list_all("transcriptions", "created_at")]
+class TranscriptionHistoryPage(BaseModel):
+    items: list[TranscriptionRecord]
+    total: int
+
+
+@router.get("/history", response_model=TranscriptionHistoryPage)
+async def transcription_history(
+    limit: int = Query(0, ge=0, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """按创建时间倒序返回；limit=0 表示不分页，返回偏移之后的所有记录。"""
+    # limit=-1 表示取全部：否则 db.list_all 会默认只给 100 条，总数也会跟着算错。
+    items = db.list_all("transcriptions", "created_at", limit=-1)
+    total = len(items)
+    page = items[offset:offset + limit] if limit else items[offset:]
+    return TranscriptionHistoryPage(
+        items=[TranscriptionRecord(**item) for item in page],
+        total=total,
+    )
 
 
 @router.post("/tasks", response_model=TranscriptionTask)
@@ -215,6 +234,29 @@ async def supplement_transcription_timestamps_batch(body: TranscriptionBatchSupp
         db.upsert("transcriptions", transcription_id, {**data, **record.model_dump()}, "created_at")
         records.append(record)
     return records
+
+
+@router.get("/{transcription_id}/audio")
+async def transcription_source_audio(transcription_id: str):
+    """返回转写时保留的原始音频，供结果区边听边看字幕。"""
+    data = db.get_one("transcriptions", "transcription_id", transcription_id)
+    if not data:
+        raise AppException(404, "TRANSCRIPTION_NOT_FOUND", "Transcription not found")
+    raw_path = data.get("source_audio_path")
+    if not raw_path:
+        raise AppException(404, "SOURCE_AUDIO_UNAVAILABLE", "这条转写没有保留原始音频")
+    path = Path(raw_path)
+    # 源音频可能来自两处：转写时直接上传的（cache/asr_uploads），
+    # 或者转写的是音色库/参考音频（assets/reference-audio/custom）。
+    # 只允许这两类受管目录，避免记录被篡改后变成任意文件读取。
+    resolved = path.resolve()
+    upload_root = (settings_store.cache_dir() / "asr_uploads").resolve()
+    in_uploads = resolved == upload_root or upload_root in resolved.parents
+    if not in_uploads and not custom_reference_store.is_managed_custom_path(resolved):
+        raise AppException(403, "SOURCE_AUDIO_FORBIDDEN", "源音频不在允许的目录内")
+    if not path.is_file():
+        raise AppException(404, "SOURCE_AUDIO_MISSING", "源音频文件已不存在")
+    return FileResponse(path)
 
 
 @router.get("/{transcription_id}/export")

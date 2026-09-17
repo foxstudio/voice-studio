@@ -542,6 +542,11 @@ export interface TranscriptionSegment {
 	language: string | null;
 }
 
+export interface TranscriptionHistoryPage {
+	items: TranscriptionRecord[];
+	total: number;
+}
+
 export interface TranscriptionRecord {
 	transcription_id: string;
 	engine_id: string;

@@ -234,7 +234,7 @@ def test_asr_transcribe_endpoint_returns_transcript_and_stores_history(tmp_path:
 
     history = client.get("/api/asr/history")
     assert history.status_code == 200
-    entries = history.json()
+    entries = history.json()["items"]
     assert len(entries) == 1
     assert entries[0]["transcription_id"] == record["transcription_id"]
     assert entries[0]["text"] == "今天下午三点开会。"
@@ -573,7 +573,7 @@ def test_async_asr_task_endpoint_completes_and_persists_history(tmp_path: Path, 
 
     history = client.get("/api/asr/history")
     assert history.status_code == 200
-    assert any(item["transcription_id"] == final["transcription_id"] for item in history.json())
+    assert any(item["transcription_id"] == final["transcription_id"] for item in history.json()["items"])
 
 
 def test_qwen3_asr_health_reports_runtime_missing_when_model_exists(tmp_path: Path, monkeypatch):

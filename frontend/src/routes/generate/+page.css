@@ -1588,22 +1588,6 @@
 		cursor: wait;
 	}
 
-	.pagination-bar {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 6px;
-		flex-wrap: wrap;
-		min-width: 0;
-	}
-	.pagination-bar .btn {
-		min-width: 72px;
-		justify-content: center;
-		white-space: nowrap;
-	}
-	.pagination-bar .muted {
-		white-space: nowrap;
-	}
 	.page-jump {
 		display: flex;
 		align-items: center;

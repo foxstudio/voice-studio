@@ -27,7 +27,9 @@
 		TextQuote,
 		Trash2,
 		UploadCloud,
-		X
+		X,
+		ChevronsLeft,
+		ChevronsRight
 	} from 'lucide-svelte';
 	import { onMount } from 'svelte';
 
@@ -50,6 +52,9 @@
 	const FORCED_ALIGN_MAX_DURATION_MS = 5 * 60 * 1000;
 
 	let history = $state<HistoryItem[]>([]);
+	let historyTotal = $state(0);
+	let historyPage = $state(1);
+	const HISTORY_PAGE_SIZE = 20;
 	let transcriptions = $state<TranscriptionRecord[]>([]);
 	let transcriptionTasks = $state<TranscriptionTask[]>([]);
 	let projects = $state<ProjectSummary[]>([]);
@@ -71,6 +76,30 @@
 	let submittingTask = $state(false);
 	let supplementingTimestamps = $state(false);
 	let transcript = $state<TranscriptionRecord | null>(null);
+	let transcriptAudio = $state<HTMLAudioElement | null>(null);
+	let segmentListEl = $state<HTMLElement | null>(null);
+	let activeSegment = $state(-1);
+
+	/** 播放时把当前这句标出来，并让它滚到可见范围。 */
+	function syncActiveSegment() {
+		const audio = transcriptAudio;
+		const segments = transcript?.segments ?? [];
+		if (!audio || !segments.length) return;
+		const ms = audio.currentTime * 1000;
+		const index = segments.findIndex((segment) => ms >= segment.start_ms && ms < segment.end_ms);
+		if (index === activeSegment) return;
+		activeSegment = index;
+		if (index < 0 || !segmentListEl) return;
+		segmentListEl.querySelectorAll('.segment-row')[index]?.scrollIntoView({ block: 'nearest' });
+	}
+
+	/** 点某句就跳到那句开始播。 */
+	function playSegment(startMs: number) {
+		const audio = transcriptAudio;
+		if (!audio) return;
+		audio.currentTime = startMs / 1000;
+		void audio.play().catch(() => undefined);
+	}
 	let asrError = $state('');
 	let asrInfo = $state('');
 	let activeTaskId = $state<string | null>(null);
@@ -163,16 +192,27 @@
 	);
 	const engineMap = $derived(new Map(engines.map((engine) => [engine.manifest.engine_id, engine])));
 
+	async function loadHistoryPage() {
+		const page = await Api.historyPage({
+			limit: HISTORY_PAGE_SIZE,
+			offset: (historyPage - 1) * HISTORY_PAGE_SIZE
+		});
+		history = page.items;
+		historyTotal = page.total;
+	}
+
 	async function refresh() {
-		const [nextHistory, nextTranscriptions, nextEngines, nextTasks, nextProjects] = await Promise.all([
-			Api.history(),
-			Api.transcriptionHistory(),
+		const [historyPageResult, transcriptionPage, nextEngines, nextTasks, nextProjects] = await Promise.all([
+			Api.historyPage({ limit: HISTORY_PAGE_SIZE, offset: (historyPage - 1) * HISTORY_PAGE_SIZE }),
+			// 转写记录一次取全：列表上的引擎/时间戳/关键字筛选都在本地做，分页会让筛选结果不完整。
+			Api.transcriptionHistory({ limit: 0 }),
 			Api.engines(),
 			Api.transcriptionTasks(),
 			Api.projectSummaries('script')
 		]);
-		history = nextHistory;
-		transcriptions = nextTranscriptions;
+		history = historyPageResult.items;
+		historyTotal = historyPageResult.total;
+		transcriptions = transcriptionPage.items;
 		transcriptionTasks = nextTasks;
 		projects = nextProjects;
 		engines = nextEngines;
@@ -195,7 +235,7 @@
 		);
 
 		if (selectedTranscriptionId) {
-			const existing = nextTranscriptions.find(
+			const existing = transcriptionPage.items.find(
 				(item) => item.transcription_id === selectedTranscriptionId
 			);
 			if (existing) transcript = existing;
@@ -966,15 +1006,34 @@
 					</div>
 					<p class="transcript">{transcript.text}</p>
 					{#if transcript.segments.length}
-						<div class="stack transcript-segments">
-							{#each transcript.segments as segment}
-								<div class="segment-row">
-									<div class="row wrap">
+						{#if transcript.has_source_audio}
+							<audio
+								class="asr-source-audio"
+								controls
+								preload="metadata"
+								src={`/api/asr/${transcript.transcription_id}/audio`}
+								bind:this={transcriptAudio}
+								ontimeupdate={syncActiveSegment}
+								onemptied={() => (activeSegment = -1)}
+							></audio>
+							<p class="muted segment-hint">播放时会自动高亮当前句；点任意一句可跳到那句。</p>
+						{/if}
+						<div class="stack transcript-segments" bind:this={segmentListEl}>
+							{#each transcript.segments as segment, index}
+								<button
+									class="segment-row"
+									class:active={index === activeSegment}
+									class:seekable={transcript.has_source_audio}
+									type="button"
+									disabled={!transcript.has_source_audio}
+									onclick={() => playSegment(segment.start_ms)}
+								>
+									<span class="segment-head">
 										<span class="badge">{segmentLabel(segment)}</span>
 										{#if segment.language}<span class="muted">{segment.language}</span>{/if}
-									</div>
-									<p>{segment.text}</p>
-								</div>
+									</span>
+									<span>{segment.text}</span>
+								</button>
 							{/each}
 						</div>
 					{/if}
@@ -1229,6 +1288,15 @@
 						{/each}
 					</tbody>
 				</table>
+				{#if historyTotal > HISTORY_PAGE_SIZE}
+					<div class="pagination-bar">
+						<button class="btn" disabled={historyPage <= 1} onclick={() => { historyPage = 1; void loadHistoryPage(); }}><ChevronsLeft size={15} /> 首页</button>
+						<button class="btn" disabled={historyPage <= 1} onclick={() => { historyPage -= 1; void loadHistoryPage(); }}><ChevronLeft size={15} /> 上一页</button>
+						<span class="muted">第 {historyPage} / {Math.max(1, Math.ceil(historyTotal / HISTORY_PAGE_SIZE))} 页 · 共 {historyTotal} 条</span>
+						<button class="btn" disabled={historyPage >= Math.ceil(historyTotal / HISTORY_PAGE_SIZE)} onclick={() => { historyPage += 1; void loadHistoryPage(); }}>下一页 <ChevronRight size={15} /></button>
+						<button class="btn" disabled={historyPage >= Math.ceil(historyTotal / HISTORY_PAGE_SIZE)} onclick={() => { historyPage = Math.ceil(historyTotal / HISTORY_PAGE_SIZE); void loadHistoryPage(); }}>尾页 <ChevronsRight size={15} /></button>
+					</div>
+				{/if}
 			</section>
 
 			<aside class="panel stack">
@@ -1370,8 +1438,53 @@
 	.segment-row {
 		display: grid;
 		gap: 6px;
-		padding: 10px 0;
+		width: 100%;
+		padding: 10px 12px;
+		border: 0;
 		border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+		border-radius: 8px;
+		background: transparent;
+		color: inherit;
+		font: inherit;
+		text-align: left;
+	}
+
+	.segment-head {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+
+	/* 有源音频时整行可点：跳到那句开始播。 */
+	.segment-row.seekable {
+		cursor: pointer;
+		transition: background 120ms ease, box-shadow 120ms ease;
+	}
+
+	.segment-row.seekable:hover {
+		background: rgba(255, 255, 255, 0.035);
+	}
+
+	.segment-row.seekable:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: -2px;
+	}
+
+	/* 正在播放的那句。 */
+	.segment-row.active {
+		background: rgba(79, 156, 249, 0.1);
+		box-shadow: inset 2px 0 0 var(--accent);
+	}
+
+	.asr-source-audio {
+		width: 100%;
+		height: 38px;
+	}
+
+	.segment-hint {
+		margin: 0;
+		font-size: 12px;
 	}
 
 	.segment-row:last-child {
