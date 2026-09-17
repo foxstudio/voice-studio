@@ -132,3 +132,15 @@ frontend/.env
 /scripts/genshin_npc_import_report.json
 /scripts/import_report.json
 /docs/OPEN_SOURCE_FIRST_RELEASE_PLAN.md
+
+# 维护者私人的音色导入脚本：针对本人素材与特定作品目录，不随开源仓库分发。
+# 本地保留可用，新增同类脚本时请在此登记。
+/scripts/analyze_genshin_pack.py
+/scripts/genshin_*.py
+/scripts/anime_voice_import.py
+/scripts/batch_import_local.py
+/scripts/batch_voice_import.py
+/scripts/curated_voice_import.py
+/scripts/full_voice_import.py
+/scripts/replace_short_refs.py
+/scripts/voice_importer.py

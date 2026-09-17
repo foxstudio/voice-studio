@@ -105,11 +105,13 @@ scripts/
 
 Candidate mapping:
 
-- `imports/`: `anime_voice_import.py`, `batch_voice_import.py`, `curated_voice_import.py`, `full_voice_import.py`, `genshin_batch_import.py`, `genshin_npc_import.py`, `voice_importer.py`, `batch_import_local.py`
-- `maintenance/`: `backfill_voice_reference_text.py`, `genshin_cleanup_refs.py`, `genshin_ref_text_check.py`, `genshin_reorder_refs.py`, `replace_short_refs.py`, `migration/audit_voice_studio_data.py`
+- `imports/`: 音色批量导入脚本。维护者私人的导入脚本（`anime_voice_import.py`、`batch_voice_import.py`、
+  `curated_voice_import.py`、`full_voice_import.py`、`voice_importer.py`、`batch_import_local.py` 及
+  `genshin_*.py` 系列）针对本人素材与特定作品目录，已在 `.gitignore` 登记，只在本地保留、不随仓库分发。
+- `maintenance/`: `backfill_voice_reference_text.py`, `migration/audit_voice_studio_data.py`
 - `evaluation/`: `alignment_test.py`, `alignment_test_v2.py`, `dump_pytorch_outputs.py`, `dump_pytorch_outputs_v2.py`, `run_voice_studio_deep_eval.py`, `run_voice_studio_quality_suite.py`, `verify_mlx_v2.py`
-- `dev/`: `webui_smoke_playwright.mjs`, `qwen_forced_align_worker.py`, `genshin_asr_check.py`, `genshin_asr_fix.py`, `analyze_genshin_pack.py`
-- `reports/`: `genshin_analysis.json`, `genshin_import_report.json`, `genshin_npc_import_report.json`, `import_report.json`
+- `dev/`: `webui_smoke_playwright.mjs`, `qwen_forced_align_worker.py`
+- `reports/`: 生成的分析报告，不含源码逻辑；维护者本人生成的那几份不随仓库分发
 
 Do not move scripts until their hard-coded paths and docs references are reviewed. Several scripts contain absolute project paths.
 

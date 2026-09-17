@@ -108,9 +108,9 @@ pnpm --dir frontend build
 `scripts/release_source_exclusions.json`。排除仅影响发布副本，不删除开发目录中的文件。
 常规文件门禁不认识所有业务报告；JSON 后缀不代表文件一定可以公开。
 
-`genshin_analysis.json` 是素材分析工具的输出，导入工具使用者应先针对自己的合法素材
-运行 `scripts/analyze_genshin_pack.py` 生成它，再执行对应导入工具；不分发维护者已生成
-的分析结果或音色导入报告。模型和声音素材的使用权仍由使用者自行确认。
+维护者私人的音色导入脚本（`scripts/genshin_*.py`、`analyze_genshin_pack.py`、`voice_importer.py` 等）
+针对本人素材与特定作品目录，只在本机保留，不随仓库分发；`.gitignore` 已登记这些路径。模型和声音素材的
+使用权仍由使用者自行确认。
 
 文件门禁只检查当前受跟踪文件，不证明 Git 历史可以公开。删除文件或加入
 `.gitignore` 不会清除历史提交中的音频、内部日志或凭据。直接推送开发分支前，
