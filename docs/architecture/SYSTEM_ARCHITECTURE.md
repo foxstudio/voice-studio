@@ -81,12 +81,12 @@ API 与前端适配层
 | 产品能力 | 页面 | 后端入口与当前所有者 | 状态与公共契约 | 当前边界 |
 | --- | --- | --- | --- | --- |
 | 单句语音合成 | `/generate` | `api/generate.py` → `services/task_queue.py`、`engine_request_builder.py` | 生成任务、历史记录和音频文件；REST/OpenAPI | 任务执行仍集中在大型队列服务，过渡中 |
-| 长文本与批量 | `/script-studio` | `api/longform.py`、`api/batches.py` → `longform_queue.py`、`batch_queue.py` | 长文父子任务、批次与分段结果；REST/OpenAPI | 两类队列保留各自语义，统一状态规范仍在渐进实施 |
+| 长文本与批量 | `/generate` 长文本区 | `api/longform.py`、`api/batches.py` → `longform_queue.py`、`batch_queue.py` | 长文父子任务、批次与分段结果；REST/OpenAPI | 原先独立的脚本工作台页面已移除，入口并入语音合成；两类队列保留各自语义，统一状态规范仍在渐进实施 |
 | 音色库 | `/voice-library` | `api/voices.py` → `voice_store.py`、云端音色适配器 | 音色、参考音频和云端绑定；REST/OpenAPI + 数据库/文件 | 本地音色与供应商绑定由同一页面组合，Provider 差异留在后端 |
 | 引擎管理 | `/engine-hub` | `api/engines.py` → `engine_registry.py`、`model_catalog.py`、engine policy/provider 模块 | 引擎能力、健康状态、模型来源/下载状态和参数 Schema；REST/OpenAPI | 页面按运行引擎关联模型清单，同一能力只显示一张卡；未关联的辅助模型与参考版本继续可见，来源和文件位置收进共用详情；注册表仍承担部分兼容职责，Provider 拆分过渡中 |
 | 任务与生成历史 | 侧栏、`/generate` | `api/tasks.py`、`api/history.py` → `task_queue.py`、`history_store.py` | 运行状态、取消/重试、生成记录和波形；REST/OpenAPI | 页面只消费任务与历史，不自行创建第二套任务状态 |
-| 音频工具与语音转写 | `/audio-tools` | `api/audio_tools.py`、`api/asr.py` → `audio_tools.py`、`asr_service.py`、`asr_tasks.py` | 音频处理和转写任务；REST/OpenAPI | 通用 ASR 与视频本土化 ASR 共享底层 Provider，但拥有不同用例编排 |
-| 质量评测 | `/eval-reference` | `api/evaluations.py` → `asr_service.py`、`text_verifier.py`、`history_store.py` | 评测请求、材料与结果；REST/OpenAPI | 当前是跨服务应用用例，尚无独立领域包 |
+| 音频处理与语音转写 | 无独立页面 | `api/audio_tools.py`、`api/asr.py` → `audio_tools.py`、`asr_service.py`、`asr_tasks.py` | 音频处理和转写任务；REST/OpenAPI | 前端界面已移除；能力仍由音色库的批量 ASR、语音合成页和视频本土化共用，外部工具直接调用这些接口 |
+| TTS 校对 | 无独立页面 | `api/evaluations.py` → `asr_service.py`、`text_verifier.py`、`history_store.py` | 校验合成结果与预期文本；REST/OpenAPI | 前端界面已移除；语音合成页的“立即校对”仍在使用 |
 | 视频本土化 | `/video-localization` | `api/video_localization.py` → `services/video_localization_operations.py`、`services/video_localization_exports.py`、`services/video_localization_tts_handoff.py`、`domains/video_localization/service.py` 与领域门面 | 项目草稿、媒体、字幕、说话人、任务和导出；版本化领域契约 + REST/OpenAPI | operation 命令与 TTS 跨状态源回写已有独立应用端口；TTS 注册/放轨/终态使用 durable outbox、跨进程 lease/fencing 和启动重放；共享队列不反向导入本土化 service |
 | 设置 | `/settings` | `api/settings.py` → `settings_store.py`、`llm_runtime.py` 及拆分后的设置/Provider 模块 | 配置、密钥引用、目录、连接状态、默认 TTS/ASR 与默认大模型；typed REST/OpenAPI + 设置存储 | 设置页只选择默认引擎并链接到引擎管理，不复制模型下载和来源管理；其余设置服务仍较大，设置系统重构尚未实施 |
 

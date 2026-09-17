@@ -38,7 +38,7 @@ TAG_METADATA = {
         "导入视频，完成源音轨、分轨、ASR、翻译、配音、时间线和成品导出。",
     ),
     "exports": ("导出管理", "创建、查看和下载导出文件。"),
-    "evaluations": ("质量评测", "评测 TTS 结果并获取评测材料。"),
+    "evaluations": ("TTS 校对", "校验合成结果与预期文本是否一致。"),
     "presets": ("生成预设", "保存和复用语音生成参数。"),
     "voice-seeds": ("音色种子", "查看和导入音色种子。"),
     "community-voice-packs": ("社区音色包", "浏览和导入社区共享的音色包。"),
@@ -73,6 +73,7 @@ SUMMARY_TRANSLATIONS = {
     "Supplement Transcription Timestamps": "补全转写时间戳",
     "Supplement Transcription Timestamps Batch": "批量补全转写时间戳",
     "Export Transcription": "导出转写结果",
+    "Transcription Source Audio": "读取转写的源音频",
     "生成严格字幕时间证据": "生成严格字幕时间证据",
     # 通用音频、批次和音色包
     "Merge Audio": "合并音频",

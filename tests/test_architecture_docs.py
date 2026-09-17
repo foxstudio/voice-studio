@@ -45,11 +45,8 @@ def test_system_architecture_maps_every_top_level_product_page_to_real_backend_o
     ).read_text(encoding="utf-8")
     page_routes = (
         "generate",
-        "script-studio",
         "voice-library",
         "engine-hub",
-        "audio-tools",
-        "eval-reference",
         "video-localization",
         "settings",
     )

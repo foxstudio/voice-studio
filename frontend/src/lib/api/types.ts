@@ -2664,43 +2664,6 @@ export interface EngineAudioDiagnosis {
 	generation_time_ms: number | null;
 }
 
-export interface EvaluationAudioSample {
-	id: string;
-	title: string;
-	engine_id: string;
-	text: string;
-	expectation: string;
-	status: string;
-	params: Record<string, unknown>;
-	metrics: {
-		duration_sec?: number;
-		sample_rate?: number;
-		peak?: number;
-		rms?: number;
-		silence_ratio?: number;
-		zero_crossing_rate?: number;
-		size_bytes?: number;
-	};
-	audio_file: string;
-	audio_url: string;
-}
-
-export interface EvaluationReport {
-	run_id: string;
-	report_dir: string;
-	success_count: number;
-	total_count: number;
-	report_markdown: string;
-	files: {
-		markdown: string;
-		docx: string;
-		metrics: string;
-		manifest: string;
-	};
-	audio_samples: EvaluationAudioSample[];
-	file_sizes: Record<string, number>;
-}
-
 export interface SEREmotionResult {
 	voice_id: string;
 	top_emotion: string | null;

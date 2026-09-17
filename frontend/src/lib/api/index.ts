@@ -17,7 +17,6 @@ import type {
 	EngineSpeaker,
 	DoubaoSpeakerCatalogStatus,
 	ExportRecord,
-	EvaluationReport,
 	EngineAudioDiagnosis,
 	GeneratePlanRequest,
 	GeneratePlanResponse,
@@ -541,7 +540,6 @@ export const Api = {
 	) => api.post<ProjectTranscriptionImportResponse>(`/projects/${id}/transcriptions/import`, body),
 	generateProject: (id: string) => api.post<{ task_ids: string[]; status: string }>(`/projects/${id}/generate`),
 	exports: () => api.get<ExportRecord[]>('/exports'),
-	latestEvaluation: () => api.get<EvaluationReport>('/evaluations/latest'),
 	verifyTTSOutput: (body: TTSVerificationRequest) => api.post<TTSVerificationResponse>('/evaluations/tts-verification', body),
 	createExport: (body: { result_ids?: string[]; audio_ids?: string[]; project_id?: string | null; format: string; silence_ms: number; normalize: boolean }) => api.post<ExportRecord>('/exports', body),
 	transcribeAudio: (file: File, language: 'auto' | 'zh' | 'en' = 'auto', engineId = 'mimo-v2.5-asr') => {
