@@ -1667,7 +1667,7 @@
 					<div class="param-control">
 						{#if hasSearchableSpeakerCatalog}
 							<div class="speaker-catalog-tools">
-								<div class="gen-search-field speaker-search"><Search size={14} /><input bind:value={$store.speakerQuery} placeholder="搜索名称或 ID" />{#if $store.speakerQuery.trim()}<button class="gen-search-clear" type="button" onclick={() => ($store.speakerQuery = '')}><X size={13} /></button>{/if}</div>
+								<div class="search-field speaker-search"><Search size={14} /><input bind:value={$store.speakerQuery} placeholder="搜索名称或 ID" />{#if $store.speakerQuery.trim()}<button class="search-clear" type="button" onclick={() => ($store.speakerQuery = '')}><X size={13} /></button>{/if}</div>
 								<select class="speaker-gender" aria-label="音色性别" bind:value={$store.speakerGenderFilter}><option value="all">全部</option><option value="F">女声</option><option value="M">男声</option></select>
 							</div>
 						{/if}
@@ -1791,7 +1791,7 @@
 			<div class="records-toolbar">
 				<div class="toolbar-control-row">
 					<div class="records-filter-inline">
-						<div class="gen-search-field compact"><Search size={13} /><input bind:value={$store.taskQuery} placeholder="搜索台词、模型、音色、状态" /></div>
+						<div class="search-field compact"><Search size={13} /><input bind:value={$store.taskQuery} placeholder="搜索台词、模型、音色、状态" /></div>
 						<select class="compact-filter engine-filter" bind:value={$store.taskEngineFilter} onchange={() => ($store.currentPage = 1)}>{#each taskEngineOptions as o}<option value={o}>{o === 'all' ? '全部模型' : o}</option>{/each}</select>
 						<select class="compact-filter source-filter" bind:value={$store.taskSourceFilter} onchange={() => ($store.currentPage = 1)}><option value="all">全部来源</option><option value="local">本地</option><option value="cloud">云端</option></select>
 						<select class="compact-filter sort-filter" bind:value={$store.taskSortBy} onchange={() => ($store.currentPage = 1)}><option value="latest">最新</option><option value="oldest">最旧</option><option value="duration_desc">时长↓</option></select>

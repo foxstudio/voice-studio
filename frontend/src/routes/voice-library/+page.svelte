@@ -1089,31 +1089,6 @@
 		grid-template-columns: repeat(4, minmax(0, 1fr));
 	}
 
-	.search-clear {
-		display: inline-grid;
-		place-items: center;
-		flex: 0 0 auto;
-		width: 22px;
-		height: 22px;
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		border-radius: 999px;
-		background: rgba(255, 255, 255, 0.04);
-		color: var(--muted);
-		cursor: pointer;
-		padding: 0;
-	}
-
-	.search-clear:hover {
-		border-color: rgba(78, 163, 255, 0.5);
-		background: rgba(78, 163, 255, 0.12);
-		color: var(--text);
-	}
-
-	.search-clear:focus-visible {
-		outline: 2px solid rgba(78, 163, 255, 0.75);
-		outline-offset: 2px;
-	}
-
 	.library-toolbar {
 		padding-bottom: 12px;
 	}

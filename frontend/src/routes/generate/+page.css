@@ -894,58 +894,6 @@
 	.records-filter-inline .sort-filter { flex-basis: 108px; }
 	.records-filter-inline .page-size-filter { flex-basis: 102px; }
 
-	.gen-search-field {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		border: 1px solid var(--line);
-		border-radius: 7px;
-		padding: 0 10px;
-		background: #0f1216;
-		min-height: 28px;
-	}
-
-	.gen-search-field.compact {
-		min-height: 28px;
-	}
-
-	.gen-search-field.compact input {
-		min-height: 28px;
-	}
-
-	.records-filter-inline .gen-search-field input {
-		border: 0;
-		background: transparent;
-		width: 100%;
-		min-height: 28px;
-		color: inherit;
-		outline: none;
-		padding: 0;
-	}
-
-	.gen-search-clear {
-		display: inline-grid;
-		place-items: center;
-		flex: 0 0 auto;
-		width: 22px;
-		height: 22px;
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		border-radius: 999px;
-		background: rgba(255, 255, 255, 0.04);
-		color: var(--muted);
-		cursor: pointer;
-		padding: 0;
-	}
-
-	.gen-search-clear:hover,
-	.gen-search-clear:focus-visible {
-		border-color: var(--generate-control-hover-border);
-		background: var(--generate-control-hover-bg);
-		color: #eef6ff;
-		box-shadow: var(--generate-control-hover-shadow);
-		outline: none;
-	}
-
 	.speaker-catalog-tools {
 		display: grid;
 		grid-template-columns: minmax(180px, 1fr) 76px;
@@ -1327,18 +1275,18 @@
 		line-height: 1.35;
 	}
 
-	.records-filter-inline .gen-search-field {
+	.records-filter-inline .search-field {
 		min-width: min(360px, 100%);
 		padding-right: 8px;
 	}
 
-	.records-filter-inline .gen-search-field input {
+	.records-filter-inline .search-field input {
 		font-size: 11.5px;
 		line-height: 1.25;
 		padding-right: 0;
 	}
 
-	.records-filter-inline .gen-search-field input::placeholder {
+	.records-filter-inline .search-field input::placeholder {
 		font-size: 11.5px;
 		color: #6f7b89;
 	}
@@ -2590,7 +2538,7 @@
 	}
 
 
-	.records-filter-inline .gen-search-field {
+	.records-filter-inline .search-field {
 		min-width: 220px;
 		flex: 1 1 280px;
 		border: 0;
@@ -2687,7 +2635,7 @@
 			gap: 6px;
 		}
 
-		.records-filter-inline .gen-search-field {
+		.records-filter-inline .search-field {
 			min-width: 100%;
 			flex-basis: 100%;
 		}

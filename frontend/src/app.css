@@ -214,6 +214,35 @@ h3 { font-size: 14px; margin: 0 0 8px; }
 	color: inherit;
 	font-size: 12px;
 }
+/* 紧凑变体：用在记录区这类空间受限的工具栏里。 */
+.search-field.compact {
+	height: 28px;
+	min-height: 28px;
+}
+.search-field.compact input {
+	height: 24px;
+	min-height: 24px;
+}
+.search-clear {
+	display: inline-grid;
+	place-items: center;
+	flex: 0 0 auto;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.04);
+	color: var(--muted);
+	cursor: pointer;
+}
+.search-clear:hover,
+.search-clear:focus-visible {
+	border-color: rgba(78, 163, 255, 0.5);
+	background: rgba(78, 163, 255, 0.12);
+	color: #eef6ff;
+	outline: none;
+}
 
 /* 筛选行：搜索框宽一些，其余控件等分。 */
 .toolbar-grid {
