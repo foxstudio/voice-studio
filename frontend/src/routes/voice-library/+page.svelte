@@ -3,6 +3,7 @@
 	import type { EngineSpeaker, VoiceAsset } from '$lib/api/types';
 	import DoubaoVoiceCatalogDrawer from '$lib/components/DoubaoVoiceCatalogDrawer.svelte';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { ArrowRight, ArrowUp, Check, ClipboardCopy, CloudUpload, Database, FileText, FileAudio, Heart, Pencil, Pause, Plus, RefreshCw, Search, ShieldCheck, Trash2, Upload, Volume2, X } from 'lucide-svelte';
 	import { licenseLabel } from '$lib/labels';
 	import { onMount } from 'svelte';
@@ -639,19 +640,15 @@
 <svelte:head><title>音色管理 - 声音工作台</title></svelte:head>
 
 <main class="page">
-		<div class="page-head">
-			<div class="page-head-copy">
-			<div class="page-title-row">
-				<h1>音色管理</h1>
+		<PageHeader title="音色管理" subtitle={libraryView === 'mine' ? '本地音色库：试听、编辑、补台词和情绪，然后拿去合成。' : '豆包云端的官方声线：试听、收藏后直接去合成，不会存进本地音色库。'}>
+			{#snippet meta()}
 				<div class="stat-pills">
 					<span class="stat-pill"><Database size={14} /> {allVoices.length} 音色</span>
 					<span class="stat-pill" title="标记为本人声音、已授权或公司授权的音色数量"><ShieldCheck size={14} /> 已授权 {selfOrAuthorizedCount}</span>
 				</div>
 				<HelpDrawer title="音色管理" sections={help} />
-			</div>
-			<p class="page-subtitle">{libraryView === 'mine' ? '本地音色库：试听、编辑、补台词和情绪，然后拿去合成。' : '豆包云端的官方声线：试听、收藏后直接去合成，不会存进本地音色库。'}</p>
-			</div>
-			<div class="page-title-actions">
+			{/snippet}
+			{#snippet actions()}
 				{#if libraryView === 'mine'}
 				<button class="btn-add-voice" onclick={() => { resetForm(); showVoiceModal = true; }}><Plus size={13} /> 新增声音</button>
 				{#if batchAsrProgress.active}
@@ -691,8 +688,8 @@
 					<button class="btn" onclick={() => (batchMode = true)}><Check size={13} /> 批量管理</button>
 				{/if}
 				{/if}
-			</div>
-		</div>
+			{/snippet}
+		</PageHeader>
 		<nav class="library-view-tabs" aria-label="音色库类型">
 			<button class:active={libraryView === 'mine'} type="button" onclick={() => openLibraryView('mine')}><Database size={14} /> 我的音色</button>
 			<button class:active={libraryView === 'doubao-official'} type="button" onclick={() => openLibraryView('doubao-official')}><Volume2 size={14} /> 豆包官方音色</button>
@@ -1015,35 +1012,6 @@
 		flex-shrink: 0;
 	}
 
-		.page-head {
-			display: flex;
-			justify-content: space-between;
-			align-items: center;
-			flex-wrap: wrap;
-			gap: 8px;
-			padding-bottom: 12px;
-		}
-		.page-title-row {
-			display: flex;
-			align-items: center;
-			gap: 14px;
-		}
-
-		.page-head-copy {
-			display: grid;
-			gap: 6px;
-			min-width: 0;
-		}
-
-		.page-subtitle {
-			margin: 0;
-			color: var(--muted);
-			font-size: 13px;
-		}
-		.page-title-row h1 {
-			margin: 0;
-			font-size: 18px;
-		}
 		.stat-pills {
 			display: flex;
 			align-items: center;
@@ -1060,11 +1028,6 @@
 			color: var(--accent);
 			opacity: 0.6;
 			flex-shrink: 0;
-		}
-		.page-title-actions {
-			display: flex;
-			align-items: center;
-			gap: 8px;
 		}
 		.library-view-tabs {
 			display: inline-flex;

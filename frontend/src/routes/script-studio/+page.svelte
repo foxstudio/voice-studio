@@ -2,6 +2,7 @@
 	import { Api } from '$lib/api';
 	import type { EngineDetail, Project, ProjectSummary, Role, ScriptSegment, VoiceAsset } from '$lib/api/types';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { segmentStatusLabel } from '$lib/labels';
 	import { Mic, Plus, Rows3, Send, SlidersHorizontal, Trash2 } from 'lucide-svelte';
 
@@ -135,10 +136,12 @@
 <svelte:head><title>脚本与批量 - 声音工作台</title></svelte:head>
 
 <main class="page">
-	<div class="page-head">
-		<div><h1>脚本与批量</h1><p class="muted">多段落、多角色、批量配音和 agent 批处理入口</p></div>
-		<div class="row"><HelpDrawer title="脚本与批量" sections={help} /><button class="btn primary" onclick={generateProject} disabled={!current}><Send size={15} /> 批量生成</button></div>
-	</div>
+	<PageHeader title="脚本与批量" subtitle="多段落、多角色、批量配音和 agent 批处理入口">
+		{#snippet actions()}
+			<HelpDrawer title="脚本与批量" sections={help} />
+			<button class="btn primary" onclick={generateProject} disabled={!current}><Send size={15} /> 批量生成</button>
+		{/snippet}
+	</PageHeader>
 	<div class="workbench">
 		<section class="panel stack">
 			<div class="toolbar">

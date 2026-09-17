@@ -578,7 +578,7 @@
 	.security-note,
 	.common-status-item { display: flex; align-items: center; }
 	.title-row { justify-content: space-between; gap: 14px; margin-bottom: 16px; }
-	h1 { margin: 0; color: #f4f6f8; font-size: 27px; font-weight: 720; letter-spacing: -.035em; }
+	h1 { margin: 0; color: #f4f6f8; font-size: 22px; font-weight: 720; letter-spacing: -.02em; }
 
 	.settings-toolbar { display: grid; grid-template-columns: minmax(320px, 1fr) auto; gap: 18px; }
 	.search-shell { position: relative; display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: center; min-height: 42px; padding: 0 13px; border: 1px solid #2b3440; border-radius: 9px; background: rgba(22, 27, 35, .92); color: #8b96a5; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .025); }
@@ -710,7 +710,7 @@
 		.settings-frame { padding: 18px 16px 76px; }
 		.settings-header { margin-bottom: 16px; }
 		.title-row { margin-bottom: 14px; }
-		h1 { font-size: 25px; }
+		h1 { font-size: 20px; }
 		.search-shell { min-height: 44px; padding-inline: 12px; }
 		.search-shell input { min-height: 42px; }
 		.save-actions { align-items: stretch; }

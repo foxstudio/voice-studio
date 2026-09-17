@@ -9,6 +9,7 @@
 		TranscriptionTask
 	} from '$lib/api/types';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 	import {
 		ChevronLeft,
 		ChevronRight,
@@ -713,16 +714,12 @@
 <svelte:head><title>语音转写 - 声音工作台</title></svelte:head>
 
 <main class="page">
-	<div class="page-head">
-		<div>
-			<h1>语音转写</h1>
-			<p class="muted">先转写，再导字幕、导脚本；历史音频合并放在下面，避免一进来就被旧记录淹没。</p>
-		</div>
-		<div class="row">
+	<PageHeader title="语音转写" subtitle="先转写，再导字幕、导脚本；历史音频合并放在下面，避免一进来就被旧记录淹没。">
+		{#snippet actions()}
 			<HelpDrawer title="语音转写" sections={help} />
 			<button class="btn" onclick={refresh}><RefreshCw size={15} /> 刷新</button>
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<section class="hero-grid">
 		<section class="panel stack asr-panel">

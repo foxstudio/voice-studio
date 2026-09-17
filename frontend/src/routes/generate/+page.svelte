@@ -8,6 +8,7 @@
 		parseVideoLocalizationTtsHandoffIntent
 	} from '$lib/video-localization-tts-handoff';
 	import { taskStatusLabel } from '$lib/labels';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { Captions, CheckSquare, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleCheck, CloudUpload, FileAudio, FileText, Info, Mic, Cpu, Pencil, Play, Plus, Repeat, RotateCcw, Save, Search, Settings, SlidersHorizontal, Square, Trash2, X } from 'lucide-svelte';
 	import { onMount, tick, untrack } from 'svelte';
 	import { get } from 'svelte/store';
@@ -1547,7 +1548,12 @@
 
 <svelte:head><title>语音合成 - 声音工作台</title></svelte:head>
 <main class="page generate-page">
-	<div class="page-head"><div><h1>语音合成</h1><p class="muted">短文本合成、文本处理、任务进度和生成记录统一放在一个工作台里。</p>{#if videoLocalizationHandoffPreparing}<p class="muted" role="status">正在准备视频片段的参考音频，页面其他设置仍可操作…</p>{/if}</div></div>
+	<PageHeader
+		title="语音合成"
+		subtitle={videoLocalizationHandoffPreparing
+			? '正在准备视频片段的参考音频，页面其他设置仍可操作…'
+			: '短文本合成、文本处理、任务进度和生成记录统一放在一个工作台里。'}
+	/>
 	<div class="workbench"><div class="panel stack compose-panel">
 		<div class="row gen-section-head preset-head"><div><h2>合成预设</h2><p class="muted">跟随当前引擎{isSeedAudio ? '和模式' : ''}，只显示可用于 {selected?.manifest.display_name ?? $store.engineId}{isSeedAudio ? ` · ${seedAudioState.mode === 'text' ? '文本' : seedAudioState.mode === 'audio' ? '语音' : '图片'}模式` : ''} 的参数组合。</p></div><div class="row wrap preset-tools"><span class="muted">{enginePresets.length} 组</span><button class="btn compact preset-toggle-btn" type="button" aria-expanded={presetStripOpen} data-tooltip={presetStripOpen ? '收起预设面板' : '展开预设面板'} onclick={() => (presetStripOpen = !presetStripOpen)}><ChevronRight size={14} /> {presetStripOpen ? '收起' : '展开'}</button></div></div>
 		{#if presetStripOpen}<div class="preset-strip">{#each enginePresets as p}{#if p.preset_id.startsWith('custom_')}<div class="preset-chip custom-preset"><div class="preset-custom-head"><button class="preset-action-btn" type="button" aria-label="编辑预设" data-tooltip="编辑这个自定义预设" onclick={() => openPresetEditor(p)}><Pencil size={12} /></button><button class="preset-custom-title text-pop" type="button" data-text={presetTooltip(p)} onclick={() => applyComposerPreset(p)}><strong>{p.name}</strong></button><button class="preset-action-btn danger" type="button" aria-label="删除预设" data-tooltip="删除这个自定义预设" onclick={() => deletePreset(p)}><Trash2 size={12} /></button></div><button class="preset-custom-subtitle text-pop" type="button" data-text={presetTooltip(p)} onclick={() => applyComposerPreset(p)}>{p.scene || p.description || H.engineTypeLabel(p.engine_id, engineMap)}</button></div>{:else}<div class="preset-chip"><button class="preset-main" type="button" aria-label={`应用预设：${p.name}`} use:presetDescriptionMarquee onclick={() => applyComposerPreset(p)}><strong>{p.name}</strong><span class="preset-description-marquee"><span class="preset-description-track">{p.scene || p.description || H.engineTypeLabel(p.engine_id, engineMap)}</span></span></button></div>{/if}{/each}<button class="preset-chip preset-add-chip" type="button" aria-label="保存当前参数为预设" data-tooltip="把当前文本、素材和参数保存成这个引擎当前模式的自定义预设" onclick={() => openPresetEditor()}><Plus size={17} /><span>保存当前</span></button></div>{/if}

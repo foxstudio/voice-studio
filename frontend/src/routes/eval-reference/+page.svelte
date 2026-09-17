@@ -2,6 +2,7 @@
 	import { Api } from '$lib/api';
 	import type { EvaluationAudioSample, EvaluationReport } from '$lib/api/types';
 	import HelpDrawer from '$lib/components/HelpDrawer.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { Download, FileJson, FileText, Music, RefreshCw, TableProperties } from 'lucide-svelte';
 
 	let report = $state<EvaluationReport | null>(null);
@@ -69,13 +70,12 @@
 <svelte:head><title>参数参考 - 声音工作台</title></svelte:head>
 
 <main class="page">
-	<div class="page-head">
-		<div>
-			<h1>参数参考</h1>
-			<p class="muted">试听成功样本，理解哪些参数适合旁白、快讲、长文本和情绪表达</p>
-		</div>
-		<div class="row"><HelpDrawer title="参数参考" sections={help} /><button class="btn" onclick={loadReport} disabled={loading}><RefreshCw size={16} /> 刷新</button></div>
-	</div>
+	<PageHeader title="参数参考" subtitle="试听成功样本，理解哪些参数适合旁白、快讲、长文本和情绪表达">
+		{#snippet actions()}
+			<HelpDrawer title="参数参考" sections={help} />
+			<button class="btn" onclick={loadReport} disabled={loading}><RefreshCw size={15} /> 刷新</button>
+		{/snippet}
+	</PageHeader>
 
 	{#if loading}
 		<div class="empty">正在读取最新评测包...</div>

@@ -5,6 +5,7 @@
 	import { Activity, Download, ExternalLink, Play, RotateCcw, Search, Square, Volume2 } from 'lucide-svelte';
 	import { capabilityLabel } from '$lib/labels';
 	import { modelInstallationGuidance } from '$lib/model-installation-presentation';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { onMount } from 'svelte';
 	import ModelResourceCard from './ModelResourceCard.svelte';
 	import ModelDetails from './ModelDetails.svelte';
@@ -418,7 +419,11 @@
 <svelte:head><title>引擎与模型 - 声音工作台</title></svelte:head>
 
 <main class="page">
-	<div class="page-head"><div><h1>引擎与模型</h1><p class="muted">下载模型、启动引擎、生成试听，都在这里。</p></div><button class="btn" disabled={loadingEngines} onclick={refreshPage}><RotateCcw size={16} /> {loadingEngines ? '读取中' : '刷新'}</button></div>
+	<PageHeader title="引擎与模型" subtitle="下载模型、启动引擎、生成试听，都在这里。">
+		{#snippet actions()}
+			<button class="btn" disabled={loadingEngines} onclick={refreshPage}><RotateCcw size={16} /> {loadingEngines ? '读取中' : '刷新'}</button>
+		{/snippet}
+	</PageHeader>
 	{#if message}<div class="panel muted page-notice">{message}</div>{/if}
 	{#if engineLoadError || installationLoadError || voiceLoadError}
 		<div class="panel load-issue" role="alert">
