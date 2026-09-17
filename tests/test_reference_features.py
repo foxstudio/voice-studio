@@ -432,6 +432,12 @@ def test_predict_file_emotion_uses_uploaded_voice_file(tmp_path: Path, monkeypat
         return {"top_emotion": "calm", "emotion_scores": {"calm": 0.9, "happy": 0.2}}
 
     monkeypatch.setattr(ser_service, "predict_emotion", fake_predict)
+    # 该用例只关心路径传递；运行环境与模型由单独的健康检查用例覆盖。
+    monkeypatch.setattr(
+        ser_service,
+        "health_check",
+        lambda: {"healthy": True, "status": "ok", "missing": []},
+    )
 
     resp = client.post("/api/ser/predict-file", json={"file_id": uploaded["file_id"]})
 
@@ -440,6 +446,26 @@ def test_predict_file_emotion_uses_uploaded_voice_file(tmp_path: Path, monkeypat
     assert resp.json()["voice_id"] == uploaded["file_id"]
     assert resp.json()["top_emotion"] == "calm"
     assert resp.json()["emotion_scores"]["happy"] == 0.2
+
+
+def test_predict_file_emotion_reports_unavailable_runtime(tmp_path: Path, monkeypatch):
+    """模型没装好时，接口要给出可读原因，而不是让 worker 抛底层错误。"""
+    client = _client(tmp_path)
+
+    uploaded = client.post(
+        "/api/voices/upload",
+        files={"file": ("custom.wav", _valid_wav_bytes(), "audio/wav")},
+    ).json()
+
+    called: list[str] = []
+    monkeypatch.setattr(ser_service, "predict_emotion", lambda path: called.append(path) or {})
+
+    resp = client.post("/api/ser/predict-file", json={"file_id": uploaded["file_id"]})
+
+    assert resp.status_code == 503
+    assert resp.json()["error"]["code"] == "SER_UNAVAILABLE"
+    assert "情绪识别" in resp.json()["error"]["message"]
+    assert called == []
 
 
 def test_builtin_presets_are_readonly(tmp_path: Path):

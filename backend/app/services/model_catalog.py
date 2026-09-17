@@ -14,6 +14,7 @@ from app.services import (
     qwen_mlx_asr,
     qwen3_tts_paths,
     semantic_alignment_labse,
+    ser_service,
     settings_store,
     speaker_diarization_service,
     speaker_verification_service,
@@ -396,6 +397,23 @@ SOURCES: dict[str, dict[str, Any]] = {
             }
         ],
     },
+    ser_service.MODEL_ID: {
+        "display_name": "emotion2vec+ 情绪识别",
+        "source_url": "https://modelscope.cn/models/iic/emotion2vec_plus_large",
+        "source_label": "ModelScope iic emotion2vec+ large",
+        "install_kind": "external_runtime",
+        "license_note": "用于给音色参考音频打情绪标签，供语音合成挑选情绪参考；模型约 1.8 GB。",
+        "download_sources": [
+            {
+                "provider": "modelscope",
+                "label": "emotion2vec+ 国内模型",
+                "url": "https://modelscope.cn/models/iic/emotion2vec_plus_large",
+                "region": "cn",
+                "preferred": True,
+                "compatibility_note": "复用 CAM++ 引擎运行时里的 funasr，无需另装依赖。",
+            }
+        ],
+    },
 }
 
 
@@ -488,6 +506,8 @@ def _entry(engine_id: str, source: dict[str, Any]) -> dict[str, Any]:
         health = speaker_diarization_service.health_check()
     elif engine_id == speaker_verification_service.ENGINE_ID:
         health = speaker_verification_service.health_check()
+    elif engine_id == ser_service.MODEL_ID:
+        health = ser_service.health_check()
     else:
         health = engine_health.health_check(engine_id)
     runtime_ready = health.get("product_ready", health.get("healthy")) is True
@@ -592,6 +612,8 @@ def _candidates(engine_id: str) -> list[Path]:
             speaker_verification_service.model_path(),
             speaker_verification_service.runtime_root(),
         ]
+    if engine_id == ser_service.MODEL_ID:
+        return [ser_service.model_path()]
     if engine_id == "indextts-v2":
         return settings_store.model_candidates(engine_id)
     if engine_id == confucius4_paths.ENGINE_ID:

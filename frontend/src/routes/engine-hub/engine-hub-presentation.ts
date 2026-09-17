@@ -117,6 +117,7 @@ export function resourceRoleLabel(installation: EngineInstallation): string {
 	if (id.includes('roformer')) return '人声/背景声分离';
 	if (id.includes('moss-transcribe-diarize')) return '说话人分离';
 	if (id.includes('campplus')) return '声纹复核';
+	if (id.includes('emotion2vec')) return '情绪标签';
 	if (id.includes('forced-aligner')) return '字幕时间对齐';
 	if (id.includes('labse')) return '语义对齐';
 	if (installation.reference_only) return '参考版本';
