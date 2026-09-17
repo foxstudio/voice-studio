@@ -13,7 +13,7 @@ describe('generation submission preview', () => {
 			engineId: 'omnivoice',
 			engineName: 'OmniVoice',
 			engineKind: 'local' as const,
-			voiceLabel: '狐狸 Fox'
+			voiceLabel: '示例音色'
 		};
 		const preview = createSubmissionPreview(draft, {
 			submissionId: 'submission-1',
@@ -30,7 +30,7 @@ describe('generation submission preview', () => {
 			engineId: 'omnivoice',
 			engineName: 'OmniVoice',
 			engineKind: 'local',
-			voiceLabel: '狐狸 Fox',
+			voiceLabel: '示例音色',
 			createdAt: '2026-07-22T10:00:00.000Z',
 			stage: 'initializing'
 		});

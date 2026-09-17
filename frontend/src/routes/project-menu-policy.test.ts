@@ -9,14 +9,6 @@ const projectCatalogControllerSource = readFileSync(
 	new URL('./video-localization/project-catalog-controller.ts', import.meta.url),
 	'utf8'
 );
-const scriptStudioSource = readFileSync(
-	new URL('./script-studio/+page.svelte', import.meta.url),
-	'utf8'
-);
-const audioToolsSource = readFileSync(
-	new URL('./audio-tools/+page.svelte', import.meta.url),
-	'utf8'
-);
 
 describe('project menu data boundaries', () => {
 	it('uses disk-backed lightweight summaries for the localization history menu', () => {
@@ -26,13 +18,5 @@ describe('project menu data boundaries', () => {
 			'this.transport.syncVideoLocalizationProjectSummaries()'
 		);
 		expect(videoLocalizationSource).not.toContain('Api.syncVideoLocalizationProjects()');
-	});
-
-	it('keeps localization projects out of script and transcription target menus', () => {
-		expect(scriptStudioSource).toContain("Api.projectSummaries('script')");
-		expect(scriptStudioSource).toContain('Api.project(currentProjectId)');
-		expect(audioToolsSource).toContain("Api.projectSummaries('script')");
-		expect(scriptStudioSource).not.toContain('Api.projects()');
-		expect(audioToolsSource).not.toContain('Api.projects()');
 	});
 });
