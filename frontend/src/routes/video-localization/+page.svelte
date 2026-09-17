@@ -6075,7 +6075,7 @@
 						<div class="project-name-display">
 							<h1>{selectedProject?.name || draft?.source_media.filename || '未命名本土化项目'}</h1>
 							<button type="button" aria-label="修改项目名称" data-tooltip="修改名称：项目目录会随新名称同步调整。" onclick={startProjectNameEdit} disabled={!selectedProject || importing}><Pencil size={12} /></button>
-							<button class="auto-name-button" type="button" aria-label="自动命名项目" aria-busy={projectAutoNaming} data-tooltip="自动命名：根据字幕内容和已查资料生成项目名。" onclick={autoNameProject} disabled={!selectedProject || importing || projectNameSaving || projectAutoNaming}>
+							<button  type="button" aria-label="自动命名项目" aria-busy={projectAutoNaming} data-tooltip="自动命名：根据字幕内容和已查资料生成项目名。" onclick={autoNameProject} disabled={!selectedProject || importing || projectNameSaving || projectAutoNaming}>
 								{#if projectAutoNaming}<CommandSpinner size={12} />{:else}<Sparkles size={12} />{/if}
 							</button>
 							<div class="project-switcher">
@@ -6235,7 +6235,7 @@
 			/>
 			{#if subtitleWorkflowSettingsOpen}
 				{#await import('./SubtitleWorkflowSettings.svelte')}
-					<div class="dialog-loading">正在打开字幕设置…</div>
+					<div>正在打开字幕设置…</div>
 				{:then { default: SubtitleWorkflowSettings }}
 					<SubtitleWorkflowSettings
 						open
