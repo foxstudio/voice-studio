@@ -101,8 +101,16 @@ def test_startup_maintenance_is_configurable_and_failure_safe(tmp_path, monkeypa
     monkeypatch.setattr(storage_maintenance.settings_store, "cache_dir", lambda: cache)
     monkeypatch.setenv("VOICE_STUDIO_CACHE_MAINTENANCE_TTL_SECONDS", "10")
     monkeypatch.setenv("VOICE_STUDIO_CACHE_MAINTENANCE_MAX_BYTES", "0")
-    monkeypatch.setattr(storage_maintenance.custom_reference_store, "cleanup_orphaned_uploads", lambda **kwargs: [])
-    monkeypatch.setattr(storage_maintenance.seed_asset_store, "cleanup_orphaned_assets", lambda **kwargs: [])
+    monkeypatch.setattr(
+        storage_maintenance.storage_retention,
+        "run_all",
+        lambda *_args, **_kwargs: {
+            "categories": [],
+            "trashed_files": 0,
+            "trashed_bytes": 0,
+            "trash_available": True,
+        },
+    )
 
     result = storage_maintenance.run_startup_maintenance()
 
@@ -115,40 +123,35 @@ def test_startup_maintenance_is_configurable_and_failure_safe(tmp_path, monkeypa
     assert failed["errors"]
 
 
-def test_startup_orphan_cleanup_requires_explicit_opt_in(
+def test_startup_retention_follows_saved_policy(
     tmp_path,
     monkeypatch,
 ):
-    calls: list[str] = []
+    """启动维护按设置里保存的保留天数清理，不再需要环境变量开关。"""
+    calls: list[object] = []
     monkeypatch.setattr(
         storage_maintenance.settings_store,
         "cache_dir",
         lambda: tmp_path / "cache",
     )
     monkeypatch.setattr(
-        storage_maintenance.custom_reference_store,
-        "cleanup_orphaned_uploads",
-        lambda **_kwargs: calls.append("references") or [],
-    )
-    monkeypatch.setattr(
-        storage_maintenance.seed_asset_store,
-        "cleanup_orphaned_assets",
-        lambda **_kwargs: calls.append("images") or [],
+        storage_maintenance.storage_retention,
+        "run_all",
+        lambda settings, **_kwargs: calls.append(settings)
+        or {
+            "categories": [],
+            "trashed_files": 3,
+            "trashed_bytes": 4096,
+            "trash_available": True,
+        },
     )
 
     result = storage_maintenance.run_startup_maintenance()
 
-    assert result["orphan_asset_cleanup_enabled"] is False
-    assert calls == []
-
-    monkeypatch.setenv(
-        "VOICE_STUDIO_STARTUP_ORPHAN_ASSET_CLEANUP_ENABLED",
-        "1",
-    )
-    result = storage_maintenance.run_startup_maintenance()
-
+    assert len(calls) == 1, "启动维护应按保存的策略执行一次清理"
     assert result["orphan_asset_cleanup_enabled"] is True
-    assert calls == ["references", "images"]
+    assert result["orphan_asset_cleanup_trashed_files"] == 3
+    assert result["retention"]["trashed_bytes"] == 4096
 
 
 def test_background_maintenance_does_not_block_startup_and_runs_only_once(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
@@ -57,10 +57,56 @@ class StorageFlow(BaseModel):
     description: str
 
 
+class StorageRetentionCategory(BaseModel):
+    """一类过程产物的占用与当前保留策略。"""
+
+    key: str
+    label: str
+    description: str
+    warning: str | None = None
+    retention_days: int
+    total_bytes: int
+    total_files: int
+    reclaimable_bytes: int
+    reclaimable_files: int
+    roots: list[str] = []
+
+
 class StorageAuditResponse(BaseModel):
     locations: list[StorageLocation]
     flows: list[StorageFlow]
     total_bytes: int
+    retention: list[StorageRetentionCategory] = []
+    trash_available: bool = True
+
+
+class StorageRetentionUpdateRequest(BaseModel):
+    """保留天数；0 表示永不自动清理，None 表示保持现状。"""
+
+    rebuildable_cache: int | None = None
+    process_artifacts: int | None = None
+    generated_outputs: int | None = None
+
+
+class StorageRetentionCleanupRequest(BaseModel):
+    categories: list[str] = []
+
+
+class StorageRetentionCleanupItem(BaseModel):
+    key: str
+    label: str
+    retention_days: int = 0
+    trashed_files: int = 0
+    trashed_bytes: int = 0
+    skipped: str | None = None
+    failed: list[dict[str, Any]] = []
+
+
+class StorageRetentionCleanupResponse(BaseModel):
+    categories: list[StorageRetentionCleanupItem]
+    trashed_files: int
+    trashed_bytes: int
+    trash_available: bool
 
 
 class StorageCleanupRequest(BaseModel):
@@ -398,6 +444,19 @@ async def get_storage_audit():
 @router.post("/storage/cleanup", response_model=StorageCleanupResponse)
 async def cleanup_storage(data: StorageCleanupRequest):
     return settings_store.cleanup_storage(data.targets)
+
+
+@router.put("/storage/retention", response_model=StorageAuditResponse)
+async def update_storage_retention(data: StorageRetentionUpdateRequest):
+    """保存各分类的保留天数。"""
+    settings_store.update_storage_retention(data.model_dump())
+    return settings_store.storage_audit()
+
+
+@router.post("/storage/retention/cleanup", response_model=StorageRetentionCleanupResponse)
+async def cleanup_storage_retention(data: StorageRetentionCleanupRequest):
+    """按当前保留策略立即清理；文件会进系统废纸篓。"""
+    return settings_store.cleanup_storage_retention(data.categories)
 
 
 @router.post("/storage/open", response_model=StorageOpenResponse)

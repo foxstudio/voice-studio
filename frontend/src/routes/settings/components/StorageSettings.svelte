@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Api } from '$lib/api';
 	import type { StorageAudit, StorageLocation } from '$lib/api/types';
-	import { ChevronDown, Database, FolderOpen, HardDrive, RefreshCw, Trash2 } from 'lucide-svelte';
+	import { ChevronDown, Database, FileAudio, FolderOpen, HardDrive, Layers, RefreshCw, Trash2 } from 'lucide-svelte';
 	import { onMount } from 'svelte';
 
 	let audit = $state<StorageAudit | null>(null);
@@ -9,8 +9,97 @@
 	let busy = $state(false);
 	let cleanupBusy = $state('');
 	let openingBusy = $state('');
+	let retentionBusy = $state('');
+	let customDays = $state<Record<string, string>>({});
+	// 哪些行当前处于「自定义」模式：选择本身不改服务端值，所以单独记状态。
+	let customMode = $state<Record<string, boolean>>({});
+
+	// 下拉里的预设天数；其它值走「自定义」输入框。
+	const RETENTION_PRESETS = [0, 7, 16, 30, 90, 365];
+
+	// 每类产物的图标；与上方目录列表的图标风格保持一致。
+	const RETENTION_ICONS: Record<string, typeof Database> = {
+		rebuildable_cache: RefreshCw,
+		process_artifacts: Layers,
+		generated_outputs: FileAudio
+	};
 
 	const cleanupLocations = $derived((audit?.locations ?? []).filter((location) => location.cleanup_key));
+	const reclaimableBytes = $derived(
+		(audit?.retention ?? []).reduce((sum, item) => sum + item.reclaimable_bytes, 0)
+	);
+	const reclaimableFiles = $derived(
+		(audit?.retention ?? []).reduce((sum, item) => sum + item.reclaimable_files, 0)
+	);
+
+	function retentionSelection(key: string, days: number): string {
+		if (customMode[key]) return 'custom';
+		return RETENTION_PRESETS.includes(days) ? String(days) : 'custom';
+	}
+
+	async function saveRetention(key: string, raw: string) {
+		if (raw === 'custom') {
+			const current = audit?.retention.find((entry) => entry.key === key);
+			customMode = { ...customMode, [key]: true };
+			customDays = {
+				...customDays,
+				[key]: customDays[key] ?? String(current?.retention_days || 30),
+			};
+			return;
+		}
+		const days = Number(raw);
+		if (!Number.isFinite(days) || days < 0) return;
+		customMode = { ...customMode, [key]: false };
+		retentionBusy = key;
+		try {
+			audit = await Api.updateSettingsStorageRetention({ [key]: days });
+			message = days === 0 ? '已设为永不自动清理' : `已设为保留 ${days} 天`;
+		} catch (error) {
+			message = error instanceof Error ? error.message : '保存失败';
+		} finally {
+			retentionBusy = '';
+		}
+	}
+
+	async function saveCustomRetention(key: string) {
+		const parsed = Number(customDays[key]);
+		if (!Number.isFinite(parsed) || parsed < 1) {
+			message = '请填写大于 0 的天数';
+			return;
+		}
+		retentionBusy = key;
+		try {
+			audit = await Api.updateSettingsStorageRetention({ [key]: Math.round(parsed) });
+			customMode = { ...customMode, [key]: false };
+			message = `已设为保留 ${Math.round(parsed)} 天`;
+		} catch (error) {
+			message = error instanceof Error ? error.message : '保存失败';
+		} finally {
+			retentionBusy = '';
+		}
+	}
+
+	async function cleanupRetention(key: string, label: string) {
+		const item = audit?.retention.find((entry) => entry.key === key);
+		const scope = item?.reclaimable_files
+			? `将清理 ${item.reclaimable_files} 个文件（${formatBytes(item.reclaimable_bytes)}）`
+			: '当前没有到期的文件，仍要执行一次检查吗？';
+		const warning = item?.warning ? `\n${item.warning}` : '';
+		if (!window.confirm(`${scope}\n\n删除的内容会进系统废纸篓，可以从那里恢复。${warning}\n\n继续清理「${label}」？`)) return;
+		retentionBusy = key;
+		try {
+			const result = await Api.cleanupSettingsStorageRetention([key]);
+			const failed = result.categories.reduce((sum, entry) => sum + entry.failed.length, 0);
+			message = failed
+				? `已移入废纸篓 ${result.trashed_files} 个，${failed} 个失败`
+				: `已移入废纸篓 ${result.trashed_files} 个 / ${formatBytes(result.trashed_bytes)}`;
+			audit = await Api.settingsStorage();
+		} catch (error) {
+			message = error instanceof Error ? error.message : '清理失败';
+		} finally {
+			retentionBusy = '';
+		}
+	}
 
 	onMount(refresh);
 
@@ -138,6 +227,74 @@
 			</div>
 		{/if}
 
+		<section class="retention">
+			<div class="retention-head">
+				<div>
+					<h3>自动清理</h3>
+					<p>按保留天数清理过程中产生的文件。清理的内容会进系统废纸篓，可以自己找回来。</p>
+				</div>
+				{#if reclaimableBytes > 0}
+					<span class="retention-summary">当前可清 {formatBytes(reclaimableBytes)} / {reclaimableFiles} 个</span>
+				{:else}
+					<span class="retention-summary idle">当前没有到期文件</span>
+				{/if}
+			</div>
+
+			{#if !audit.trash_available}
+				<p class="retention-blocked">系统废纸篓不可用，自动清理已暂停，以免直接删除文件。</p>
+			{/if}
+
+			<div class="retention-list">
+				{#each audit.retention as item (item.key)}
+					{@const Icon = RETENTION_ICONS[item.key] ?? Database}
+					<article class="retention-row">
+						<span class="retention-icon" aria-hidden="true"><Icon size={18} /></span>
+						<div class="retention-copy">
+							<div class="retention-name"><strong>{item.label}</strong></div>
+							<p>{item.description}</p>
+							{#if item.warning}<p class="retention-warning">{item.warning}</p>{/if}
+						</div>
+						<div class="retention-meta">
+							<strong>{formatBytes(item.total_bytes)}</strong>
+							<span>{item.total_files} 个文件</span>
+						</div>
+						<div class="retention-actions">
+							<select
+								aria-label={`${item.label}的保留策略`}
+								value={retentionSelection(item.key, item.retention_days)}
+								onchange={(event) => saveRetention(item.key, event.currentTarget.value)}
+								disabled={retentionBusy === item.key}
+							>
+								<option value="0">永不删除</option>
+								<option value="7">保留 7 天</option>
+								<option value="16">保留 16 天</option>
+								<option value="30">保留 30 天</option>
+								<option value="90">保留 90 天</option>
+								<option value="365">保留 1 年</option>
+								<option value="custom">自定义…</option>
+							</select>
+							{#if retentionSelection(item.key, item.retention_days) === 'custom'}
+								<span class="custom-days">
+									<input
+										type="number"
+										min="1"
+										max="3650"
+										aria-label={`${item.label}的自定义天数`}
+										value={customDays[item.key] ?? String(item.retention_days || 30)}
+										oninput={(event) => (customDays = { ...customDays, [item.key]: event.currentTarget.value })}
+									/>
+									<button class="secondary-button" type="button" onclick={() => saveCustomRetention(item.key)} disabled={retentionBusy === item.key}>保存</button>
+								</span>
+							{/if}
+							<button class="danger-button" type="button" onclick={() => cleanupRetention(item.key, item.label)} disabled={retentionBusy === item.key}>
+								<Trash2 size={14} /> 立即清理
+							</button>
+						</div>
+					</article>
+				{/each}
+			</div>
+		</section>
+
 		<details class="flow-details">
 			<summary><span><Database size={15} /> 文件从哪里来</span><ChevronDown class="flow-chevron" size={15} /></summary>
 			<div class="flow-list">
@@ -224,6 +381,28 @@
 	.risk-medium { color: #ecc469; }
 	.risk-high { color: #ff9c9f; }
 	.location-actions { justify-content: flex-end; gap: 6px; flex-wrap: wrap; max-width: 210px; }
+
+	.retention { border-top: 1px solid rgba(148, 163, 184, .11); }
+	.retention-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 12px 14px; border-bottom: 1px solid rgba(148, 163, 184, 0.13); }
+	.retention-head h3 { margin: 0; color: #edf1f5; font-size: 15px; }
+	.retention-head p { margin: 4px 0 0; color: #7f8997; font-size: 11px; }
+	.retention-summary { display: inline-flex; align-items: center; flex: none; min-height: 26px; padding: 0 9px; border: 1px solid rgba(120, 220, 170, .24); border-radius: 999px; color: #78dcaa; font-size: 11px; }
+	.retention-summary.idle { border-color: rgba(148, 163, 184, .16); color: #7f8997; }
+	.retention-blocked { margin: 0 14px 8px; padding: 8px 10px; border: 1px solid rgba(234, 195, 107, .28); border-radius: 8px; background: rgba(80, 62, 20, .22); color: #eac36b; font-size: 11px; }
+	.retention-list { display: grid; }
+	.retention-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) 100px auto; align-items: center; gap: 11px; min-height: 82px; padding: 10px 14px; border-top: 1px solid rgba(148, 163, 184, .08); }
+	.retention-row:hover { background: rgba(255, 255, 255, 0.018); }
+	.retention-icon { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid rgba(148, 163, 184, .15); border-radius: 8px; color: #aeb8c5; }
+	.retention-copy { min-width: 0; }
+	.retention-name strong { color: #edf1f5; font-size: 13px; }
+	.retention-copy p { margin: 3px 0; color: #778291; font-size: 10px; line-height: 1.4; }
+	.retention-copy .retention-warning { color: #eac36b; }
+	.retention-meta { display: flex; align-items: flex-end; flex-direction: column; gap: 3px; color: #737f8e; font-size: 10px; }
+	.retention-meta strong { color: #cbd3dc; font-size: 12px; }
+	.retention-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: nowrap; }
+	.retention-actions select { width: 100px; min-height: var(--settings-control-height, 34px); padding: 0 4px 0 8px; border: 1px solid rgba(148, 163, 184, .2); border-radius: var(--settings-control-radius, 7px); background: #1a2029; color: #d9e0e8; font-size: 11px; }
+	.custom-days { display: flex; align-items: center; gap: 5px; }
+	.custom-days input { width: 62px; min-height: var(--settings-control-height, 34px); padding: 0 6px; border: 1px solid rgba(148, 163, 184, .2); border-radius: var(--settings-control-radius, 7px); background: #12171e; color: #d9e0e8; font-size: 11px; }
 
 	.cleanup-strip { gap: 7px; flex-wrap: wrap; padding: 9px 14px; border-top: 1px solid rgba(148, 163, 184, .11); color: #7d8997; font-size: 11px; }
 	.cleanup-strip button { justify-content: center; gap: 5px; min-height: 28px; padding: 0 8px; border: 1px solid rgba(148, 163, 184, .16); border-radius: 7px; background: #171d25; color: #b7c0ca; font-size: 10px; }

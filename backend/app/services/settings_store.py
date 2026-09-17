@@ -15,8 +15,16 @@ from app.schemas.voice_studio import (
     WebSearchSettings,
     WebSearchSettingsUpdate,
 )
-from app.services import database as db, model_store, settings_llm, settings_preferences, settings_search, settings_secrets, settings_storage
+from app.services import database as db, model_store, settings_llm, settings_preferences, settings_search, settings_secrets, settings_storage, storage_retention
 from app.services.paths import PROJECT_ROOT, expand_path
+
+
+# 设置字段名 <-> 保留策略分类的映射；0 表示永不自动清理。
+RETENTION_CATEGORY_FIELDS = {
+    "rebuildable_cache": "storage_retention_cache_days",
+    "process_artifacts": "storage_retention_artifact_days",
+    "generated_outputs": "storage_retention_output_days",
+}
 
 
 _VIDEO_LOCALIZATION_PROFILE_FIELDS = (
@@ -206,7 +214,31 @@ def log_dir() -> Path:
 
 
 def storage_audit() -> dict[str, Any]:
-    return settings_storage.audit(get(), db.DB_PATH)
+    result = settings_storage.audit(get(), db.DB_PATH)
+    result["retention"] = storage_retention.report(get())
+    result["trash_available"] = storage_retention.trash_bin.trash_available()
+    return result
+
+
+def update_storage_retention(days_by_category: dict[str, int | None]) -> AppSettings:
+    """保存各分类的保留天数；0 表示永不自动清理，None 表示不改。"""
+    current = get()
+    updates: dict[str, int] = {}
+    for key, value in days_by_category.items():
+        if value is None:
+            continue
+        field = RETENTION_CATEGORY_FIELDS.get(key)
+        if field is None:
+            raise ValueError(f"Unknown retention category: {key}")
+        updates[field] = max(0, min(int(value), 3650))
+    if not updates:
+        return current
+    return update(current.model_copy(update=updates))
+
+
+def cleanup_storage_retention(categories: list[str] | None = None) -> dict[str, Any]:
+    """按当前保留策略立即清理；文件会被移进系统废纸篓。"""
+    return storage_retention.run_all(get(), categories=categories or None)
 
 
 def open_storage_location(key: str) -> dict[str, str]:

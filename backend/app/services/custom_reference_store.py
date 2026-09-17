@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 from collections.abc import Iterable
 from datetime import datetime, timedelta
@@ -10,8 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from app.schemas.voice_studio import VoiceFile
-from app.services import database as db, settings_store
+from app.services import database as db, settings_store, trash_bin
 from app.services.paths import expand_path
+
+log = logging.getLogger(__name__)
 
 
 def custom_reference_dir() -> Path:
@@ -145,10 +148,13 @@ def delete_if_unreferenced(
         return None
 
     owned_path = _resolved(voice_file.path)
-    owned_path.unlink(missing_ok=True)
     source_media = owned_source_media_path(voice_file)
-    if source_media:
-        source_media.unlink(missing_ok=True)
+    targets = [owned_path, *([source_media] if source_media else [])]
+    outcome = trash_bin.move_to_trash(targets)
+    if outcome.failed:
+        detail = "；".join(f"{path}（{reason}）" for path, reason in outcome.failed)
+        log.warning("自定义参考音频移入废纸篓失败，保留记录：%s", detail)
+        return None
     db.delete_one("voice_files", "file_id", voice_file.file_id)
     return voice_file.file_id
 
@@ -189,8 +195,13 @@ def cleanup_orphaned_uploads(
     task_rows: Iterable[dict] | None = None,
     history_rows: Iterable[dict] | None = None,
     voice_rows: Iterable[dict] | None = None,
+    errors: list[str] | None = None,
 ) -> list[str]:
-    """Explicit TTL cleanup for uploads that were never submitted or registered."""
+    """Explicit TTL cleanup for uploads that were never submitted or registered.
+
+    文件统一移进系统废纸篓，不做不可恢复的删除；移入失败时保留数据库记录，
+    避免出现“记录没了但文件还在”的不一致。
+    """
 
     if ttl_seconds < 0:
         raise ValueError("TTL must not be negative")
@@ -284,10 +295,18 @@ def cleanup_orphaned_uploads(
         ):
             continue
         owned_path = _resolved(current_voice_file.path)
-        owned_path.unlink(missing_ok=True)
         source_media = owned_source_media_path(current_voice_file)
-        if source_media:
-            source_media.unlink(missing_ok=True)
+        targets = [owned_path, *([source_media] if source_media else [])]
+        outcome = trash_bin.move_to_trash(targets)
+        if outcome.failed:
+            detail = "；".join(
+                f"{path}（{reason}）" for path, reason in outcome.failed
+            )
+            message = f"自定义参考音频移入废纸篓失败，保留记录：{detail}"
+            log.warning(message)
+            if errors is not None:
+                errors.append(message)
+            continue
         db.delete_one(
             "voice_files",
             "file_id",

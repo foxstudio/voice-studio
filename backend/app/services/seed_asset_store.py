@@ -14,7 +14,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.voice_studio import new_id, now_iso
-from app.services import database as db, settings_store
+from app.services import database as db, settings_store, trash_bin
 from app.services.paths import expand_path
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -159,7 +159,10 @@ def delete_asset(file_id: str) -> bool:
     if path.name != f"{asset.file_id}.{'jpg' if asset.media_format == 'jpeg' else asset.media_format}":
         raise SeedAssetStoreError("ASSET_PATH_NOT_MANAGED", "素材路径与标识不匹配")
 
-    path.unlink(missing_ok=True)
+    outcome = trash_bin.move_to_trash([path])
+    if outcome.failed:
+        reason = outcome.failed[0][1] if outcome.failed else "未知原因"
+        raise SeedAssetStoreError("ASSET_TRASH_FAILED", f"素材移入废纸篓失败：{reason}")
     with db.conn() as connection:
         connection.execute("DELETE FROM seed_assets WHERE file_id = ?", (file_id,))
     return True

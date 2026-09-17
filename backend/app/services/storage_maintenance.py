@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from app.services import custom_reference_store, seed_asset_store, settings_store
+from app.services import settings_store, storage_retention, trash_bin
 from app.services.interprocess_lock import (
     LockUnavailableError,
     try_exclusive_file_lock,
@@ -130,30 +130,16 @@ def run_startup_maintenance() -> dict[str, Any]:
             ttl_seconds=ttl_seconds,
             max_bytes=max_bytes,
         )
-        orphan_cleanup_enabled = _env_bool(
-            env,
-            ("VOICE_STUDIO_STARTUP_ORPHAN_ASSET_CLEANUP_ENABLED",),
-            False,
-        )
-        result["orphan_asset_cleanup_enabled"] = orphan_cleanup_enabled
-        if not orphan_cleanup_enabled:
-            return result
-        asset_ttl_days = _env_int(env, ("VOICE_STUDIO_ORPHAN_ASSET_TTL_DAYS",), 7)
-        asset_ttl_seconds = asset_ttl_days * 86400
+        # 按用户在设置页配置的保留策略清理过程产物（默认 30 天，删除走系统废纸篓）。
+        # 保留天数为 0 的分类会被跳过，不需要额外开关。
         try:
-            result["orphan_custom_references_removed"] = len(
-                custom_reference_store.cleanup_orphaned_uploads(ttl_seconds=asset_ttl_seconds)
-            )
+            retention = storage_retention.run_all(settings_store.get())
+            result["retention"] = retention
+            result["orphan_asset_cleanup_enabled"] = True
+            result["orphan_asset_cleanup_trashed_files"] = retention["trashed_files"]
         except Exception as exc:
-            logger.exception("Custom reference cleanup failed")
-            result["errors"].append(f"custom reference cleanup failed: {exc}")
-        try:
-            result["orphan_seed_images_removed"] = len(
-                seed_asset_store.cleanup_orphaned_assets(ttl_seconds=asset_ttl_seconds)
-            )
-        except Exception as exc:
-            logger.exception("Seed image cleanup failed")
-            result["errors"].append(f"seed image cleanup failed: {exc}")
+            logger.exception("Retention cleanup failed")
+            result["errors"].append(f"retention cleanup failed: {exc}")
         return result
     except Exception:
         logger.exception("Voice Studio cache maintenance failed")
@@ -200,7 +186,7 @@ def maintain_rebuildable_caches(
     for item in sorted(files, key=lambda candidate: (candidate.last_used, str(candidate.path))):
         if item.last_used > cutoff:
             continue
-        if _unlink_regular_file(item, result["errors"]):
+        if _trash_regular_file(item, result["errors"]):
             removed.add(item.path)
             current_bytes -= item.size
             result["ttl_removed_files"] += 1
@@ -214,7 +200,7 @@ def maintain_rebuildable_caches(
         for item in remaining:
             if current_bytes <= max_bytes:
                 break
-            if _unlink_regular_file(item, result["errors"]):
+            if _trash_regular_file(item, result["errors"]):
                 removed.add(item.path)
                 current_bytes -= item.size
                 result["lru_removed_files"] += 1
@@ -264,7 +250,12 @@ def _scan_regular_files(root: Path) -> tuple[list[_CacheFile], int, list[str]]:
     return files, skipped_symlinks, errors
 
 
-def _unlink_regular_file(item: _CacheFile, errors: list[str]) -> bool:
+def _trash_regular_file(item: _CacheFile, errors: list[str]) -> bool:
+    """把单个缓存文件移进系统废纸篓。
+
+    安全检查（拒符号链接、限制在扫描根目录内、只处理普通文件）与以前的直接删除
+    保持一致；区别只是文件进废纸篓，用户能自己找回来。
+    """
     try:
         if item.root.is_symlink() or item.path.is_symlink():
             return False
@@ -274,7 +265,11 @@ def _unlink_regular_file(item: _CacheFile, errors: list[str]) -> bool:
         metadata = item.path.lstat()
         if not stat.S_ISREG(metadata.st_mode):
             return False
-        item.path.unlink()
+        outcome = trash_bin.move_to_trash([item.path])
+        if outcome.moved_count != 1:
+            reason = outcome.failed[0][1] if outcome.failed else "未知原因"
+            errors.append(f"could not trash {item.path}: {reason}")
+            return False
         return True
     except (OSError, RuntimeError, ValueError) as exc:
         errors.append(f"could not remove {item.path}: {exc}")

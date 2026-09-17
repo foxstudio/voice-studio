@@ -216,6 +216,10 @@ class AppSettings(BaseModel):
     export_dir: str = Field(default_factory=lambda: default_data_subdir("exports"))
     project_dir: str = Field(default_factory=lambda: default_data_subdir("projects"))
     cache_dir: str = Field(default_factory=lambda: default_data_subdir("cache"))
+    # 自动清理的保留天数。0 表示永不自动清理；删除统一走系统废纸篓，不做不可恢复的删除。
+    storage_retention_cache_days: int = Field(default=30, ge=0, le=3650)
+    storage_retention_artifact_days: int = Field(default=30, ge=0, le=3650)
+    storage_retention_output_days: int = Field(default=0, ge=0, le=3650)
     video_preview_cache_mode: Literal["auto", "compact", "quality"] = "auto"
     video_preview_cache_max_gb: float = Field(default=4.0, ge=0.5, le=64.0)
     stem_separation_overlap: int = Field(default=8, ge=2, le=50)

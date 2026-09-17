@@ -175,6 +175,8 @@ SUMMARY_TRANSLATIONS = {
     "Test Web Search Settings": "测试联网搜索设置",
     "Get Storage Audit": "查看存储占用审计",
     "Cleanup Storage": "清理存储空间",
+    "Update Storage Retention": "保存自动清理策略",
+    "Cleanup Storage Retention": "按保留策略清理过程产物",
     "Open Storage Location": "打开存储目录",
     # 通用任务与文本
     "List Tasks": "查看任务",

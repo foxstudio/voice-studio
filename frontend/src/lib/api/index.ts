@@ -47,6 +47,7 @@ import type {
 	TranscriptionTask,
 	StorageAudit,
 	StorageCleanupResponse,
+	StorageRetentionCleanupResponse,
 	StorageOpenResponse,
 	TTSVerificationRequest,
 	TTSVerificationResponse,
@@ -156,6 +157,10 @@ export const Api = {
 		api.post<CloudConnectionTestResponse>(`/settings/cloud-connections/${encodeURIComponent(provider)}/test`),
 	settingsStorage: () => api.get<StorageAudit>('/settings/storage'),
 	cleanupSettingsStorage: (targets: string[]) => api.post<StorageCleanupResponse>('/settings/storage/cleanup', { targets }),
+	updateSettingsStorageRetention: (days: Record<string, number | null>) =>
+		api.put<StorageAudit>('/settings/storage/retention', days),
+	cleanupSettingsStorageRetention: (categories: string[]) =>
+		api.post<StorageRetentionCleanupResponse>('/settings/storage/retention/cleanup', { categories }),
 	openSettingsStorageLocation: (key: string) => api.post<StorageOpenResponse>('/settings/storage/open', { key }),
 	llmProfiles: () => api.get<LlmProviderListResponse>('/settings/llm-profiles'),
 	saveLlmProfile: (id: string, body: LlmProviderProfileUpsert) =>

@@ -421,10 +421,40 @@ export interface StorageFlow {
 	description: string;
 }
 
+export interface StorageRetentionCategory {
+	key: string;
+	label: string;
+	description: string;
+	warning?: string | null;
+	retention_days: number;
+	total_bytes: number;
+	total_files: number;
+	reclaimable_bytes: number;
+	reclaimable_files: number;
+	roots: string[];
+}
+
 export interface StorageAudit {
 	locations: StorageLocation[];
 	flows: StorageFlow[];
 	total_bytes: number;
+	retention: StorageRetentionCategory[];
+	trash_available: boolean;
+}
+
+export interface StorageRetentionCleanupResponse {
+	categories: {
+		key: string;
+		label: string;
+		retention_days: number;
+		trashed_files: number;
+		trashed_bytes: number;
+		skipped?: string | null;
+		failed: { path: string; reason: string }[];
+	}[];
+	trashed_files: number;
+	trashed_bytes: number;
+	trash_available: boolean;
 }
 
 export interface StorageCleanupResponse {
