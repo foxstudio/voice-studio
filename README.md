@@ -8,7 +8,7 @@ Voice Studio 是面向 Apple Silicon 的多引擎语音工作台。它把本地 
 
 ![Voice Studio WebUI](docs/assets/voice-studio-webui.png)
 
-早期功能介绍视频：[Bilibili：Voice Studio 早期 WebUI 介绍](https://www.bilibili.com/video/BV1cdLd6TEUA/?vd_source=f22054ec178d3f44a7b40b7e95c2b6f0#reply303763215441)
+早期功能介绍视频：[Bilibili：Voice Studio 早期 WebUI 介绍](https://www.bilibili.com/video/BV1cdLd6TEUA)
 
 ## 核心能力
 
