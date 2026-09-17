@@ -844,6 +844,9 @@
 			const [e, v, p, st] = await Promise.all([Api.engines(), Api.voices({ offset: 0, limit: 2000 }), Api.presets(), Api.settings()]);
 			$store.engines = e; $store.voices = v; $store.presets = p; $store.settings = st;
 			const params = new URLSearchParams(location.search); const vId = params.get('voice'); const requestedEngineId = params.get('engine'); const requestedSpeakerId = params.get('speaker_id');
+			// `?q=` 来自引擎页的“已保存到合成历史”：用试听台词把记录直接过滤到那一条。
+			const requestedTaskQuery = params.get('q');
+			if (requestedTaskQuery) { $store.taskQuery = requestedTaskQuery; $store.currentPage = 1; }
 			const reuseRaw = sessionStorage.getItem(VIDEO_LOCALIZATION_TTS_HANDOFF_REQUEST_KEY);
 			const handoffRaw = sessionStorage.getItem(VIDEO_LOCALIZATION_TTS_HANDOFF_META_KEY);
 			// A URL identifies only the page, never the generation scope. Restore

@@ -114,11 +114,11 @@ export function resourceGroup(installation: EngineInstallation, engine?: EngineD
 
 export function resourceRoleLabel(installation: EngineInstallation): string {
 	const id = installation.engine_id.toLowerCase();
-	if (id.includes('roformer')) return '人声/背景分离';
+	if (id.includes('roformer')) return '人声/背景声分离';
 	if (id.includes('moss-transcribe-diarize')) return '说话人分离';
 	if (id.includes('campplus')) return '声纹复核';
 	if (id.includes('forced-aligner')) return '字幕时间对齐';
-	if (id.includes('labse')) return '跨语言语义对齐';
+	if (id.includes('labse')) return '语义对齐';
 	if (installation.reference_only) return '参考版本';
 	return '引擎模型';
 }

@@ -29,18 +29,23 @@
 	const sizeLabel = $derived(resourceSizeLabel(installation));
 	const availability = $derived(resourceAvailability(installation));
 	const roleLabel = $derived(resourceRoleLabel(installation));
+	const resolvedName = $derived(displayName ?? installation.display_name ?? installation.engine_id);
+	// 名称里已经写了角色（如「CAM++ 声纹复核」）时不再重复挂一个同样的徽章。
+	const showRoleLabel = $derived(!resolvedName.includes(roleLabel));
 </script>
 
 <article class="panel resource-card">
 	<div class="resource-identity">
 		<div class="resource-title">
-			<strong>{displayName ?? installation.display_name ?? installation.engine_id}</strong>
+			<strong>{resolvedName}</strong>
 			<span class="badge" class:ok={availability.tone === 'ok'} class:fail={availability.tone === 'fail'} class:warning={availability.tone === 'warning'}>{availability.label}</span>
 		</div>
 		{#if installation.architecture || installation.recommended_for}
 			<p>{installation.architecture}{installation.recommended_for ? ` · ${installation.recommended_for}` : ''}</p>
 		{/if}
-		<div class="compact-tags feature-tags"><span class="badge badge-kind">{roleLabel}</span></div>
+		{#if showRoleLabel}
+			<div class="compact-tags feature-tags"><span class="badge badge-kind">{roleLabel}</span></div>
+		{/if}
 	</div>
 
 	<div class="resource-model">

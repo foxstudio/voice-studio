@@ -395,11 +395,17 @@
 			checking = { ...checking, [id]: false };
 		}
 	}
+	/** 试听记录的台词带上引擎名，方便从合成历史里精确定位到这一条。 */
+	function diagnosisText(engineId: string) {
+		const label = engines.find((engine) => engine.manifest.engine_id === engineId)?.manifest.display_name ?? engineId;
+		return `引擎试听：${label}`;
+	}
+
 	async function diagnose(id: string) {
 		diagnosing = { ...diagnosing, [id]: true };
 		diagnosisErrors = { ...diagnosisErrors, [id]: '' };
 		try {
-			const result = await Api.diagnoseEngineAudio(id, { voice_id: voiceId || null });
+			const result = await Api.diagnoseEngineAudio(id, { voice_id: voiceId || null, text: diagnosisText(id) });
 			diagnosis = { ...diagnosis, [id]: result };
 		} catch (error) {
 			diagnosisErrors = { ...diagnosisErrors, [id]: errorText(error) };
@@ -551,7 +557,7 @@
 						{#if diagnosis[engine.manifest.engine_id].output_path}
 							<audio class="audio diagnosis-audio" controls preload="metadata" src={diagnosticAudioUrl(engine.manifest.engine_id, diagnosis[engine.manifest.engine_id])}></audio>
 							<a class="btn mini-btn diagnosis-download" href={diagnosticAudioUrl(engine.manifest.engine_id, diagnosis[engine.manifest.engine_id])}>下载试听</a>
-							{#if diagnosis[engine.manifest.engine_id].result_id}<a class="btn mini-btn diagnosis-download" href="/generate">已保存到合成历史 · 查看</a>{/if}
+							{#if diagnosis[engine.manifest.engine_id].result_id}<a class="btn mini-btn diagnosis-download" href={`/generate?q=${encodeURIComponent(diagnosisText(engine.manifest.engine_id))}`} title="到合成历史里只看这次试听的记录">已保存到合成历史 · 查看</a>{/if}
 						{/if}
 						{#if diagnosis[engine.manifest.engine_id].quality.warnings?.length}
 							<p class="muted">{diagnosis[engine.manifest.engine_id].quality.warnings?.join('；')}</p>

@@ -46,6 +46,9 @@
 	let batchAsrProgress = $state({ active: false, current: 0, total: 0 });
 	let batchAsrCancelRequested = $state(false);
 	let batchSerCancelRequested = $state(false);
+	let batchMode = $state(false);
+	let selectedVoiceIds = $state<string[]>([]);
+	let batchDeleteProgress = $state({ active: false, current: 0, total: 0 });
 	let copiedLineId = $state('');
 	let voiceAsrStatus = $state(new Map<string, 'idle' | 'generating' | 'done' | 'error'>());
 	let voiceSerStatus = $state(new Map<string, 'idle' | 'generating' | 'done' | 'error'>());
@@ -376,6 +379,57 @@
 		}
 	}
 
+	function toggleVoiceSelection(voiceId: string, checked: boolean) {
+		selectedVoiceIds = checked
+			? [...selectedVoiceIds, voiceId]
+			: selectedVoiceIds.filter((id) => id !== voiceId);
+	}
+
+	function toggleSelectAllVisible() {
+		if (allVisibleSelected) {
+			const visibleIds = new Set(visibleVoices.map((voice) => voice.voice_id));
+			selectedVoiceIds = selectedVoiceIds.filter((id) => !visibleIds.has(id));
+			return;
+		}
+		selectedVoiceIds = Array.from(
+			new Set([...selectedVoiceIds, ...visibleVoices.map((voice) => voice.voice_id)])
+		);
+	}
+
+	function exitBatchMode() {
+		batchMode = false;
+		selectedVoiceIds = [];
+	}
+
+	async function deleteSelectedVoices() {
+		if (!selectedVoiceIds.length || batchDeleteProgress.active) return;
+		const targets = allVoices.filter((voice) => selectedVoiceIds.includes(voice.voice_id));
+		const names = targets.slice(0, 3).map((voice) => `「${voice.name}」`).join('、');
+		const more = targets.length > 3 ? `、等共 ${targets.length} 个音色` : '';
+		if (!window.confirm(`删除 ${names}${more}？\n它们的参考音频文件会一并从本机删除，且不能恢复。`)) return;
+		batchDeleteProgress = { active: true, current: 0, total: targets.length };
+		let deleted = 0;
+		let failure = '';
+		try {
+			// 逐个删除：后端一次只处理一个音色，串行更稳，也能在失败时保住其余结果。
+			for (const voice of targets) {
+				batchDeleteProgress = { ...batchDeleteProgress, current: batchDeleteProgress.current + 1 };
+				try {
+					await Api.deleteVoice(voice.voice_id);
+					deleted += 1;
+					selectedVoiceIds = selectedVoiceIds.filter((id) => id !== voice.voice_id);
+				} catch (error) {
+					failure = `「${voice.name}」删除失败：${error instanceof Error ? error.message : String(error)}`;
+				}
+			}
+		} finally {
+			batchDeleteProgress = { active: false, current: 0, total: 0 };
+			await refresh();
+		}
+		uploadMessage = failure || `已删除 ${deleted} 个音色。`;
+		if (!selectedVoiceIds.length) batchMode = false;
+	}
+
 	async function remove(voice: VoiceAsset) {
 		const cloudNote = voice.external_voice_id
 			? '；豆包云端的 speaker_id 不会一起删除，需要时请到火山引擎控制台处理'
@@ -552,6 +606,10 @@
 
 	const visibleVoices = $derived(filteredVoices.slice(0, displayedCount));
 
+	const allVisibleSelected = $derived(
+		visibleVoices.length > 0 && visibleVoices.every((voice) => selectedVoiceIds.includes(voice.voice_id))
+	);
+
 	function engineFilterCount(engineId: string) {
 		return allVoices.filter((voice) =>
 			voice.engine_bindings?.some((binding) => binding.engine_id === engineId && binding.available)).length;
@@ -617,6 +675,20 @@
 					<button class="btn-ser-batch" onclick={batchGenerateSer} disabled={batchSerProgress.active}>
 						<Heart size={13} /> 批量情绪识别
 					</button>
+				{/if}
+				{#if batchMode}
+					<button class="btn" onclick={toggleSelectAllVisible}>{allVisibleSelected ? '取消全选' : '全选已显示'}</button>
+					{#if batchDeleteProgress.active}
+						<span class="batch-indicator delete">
+							<span class="batch-bar" style="width: {(batchDeleteProgress.current / batchDeleteProgress.total * 100).toFixed(0)}%"></span>
+							<span class="batch-label"><Trash2 size={12} /> 删除 {batchDeleteProgress.current}/{batchDeleteProgress.total}</span>
+						</span>
+					{:else}
+						<button class="btn danger" disabled={!selectedVoiceIds.length} onclick={deleteSelectedVoices}><Trash2 size={13} /> 删除已选{selectedVoiceIds.length ? `（${selectedVoiceIds.length}）` : ''}</button>
+					{/if}
+					<button class="btn" onclick={exitBatchMode}>退出批量</button>
+				{:else}
+					<button class="btn" onclick={() => (batchMode = true)}><Check size={13} /> 批量管理</button>
 				{/if}
 				{/if}
 			</div>
@@ -717,8 +789,11 @@
 		{#each visibleVoices as voice}
 				{@const doubaoTrainBinding = voiceBinding(voice, 'doubao-voice-clone-train')}
 				{@const doubaoVoiceBinding = voiceBinding(voice, 'doubao-tts-voiceclone')}
-				<article class={`card stack voice-card engine-surface ${voiceCardKind(voice) === 'cloud' ? 'engine-cloud' : 'engine-local'} ${playingVoiceId === voice.voice_id ? 'playing' : ''}`}>
+				<article class={`card stack voice-card engine-surface ${voiceCardKind(voice) === 'cloud' ? 'engine-cloud' : 'engine-local'} ${playingVoiceId === voice.voice_id ? 'playing' : ''} ${selectedVoiceIds.includes(voice.voice_id) ? 'selected' : ''}`}>
 					<div class="voice-card-head">
+						{#if batchMode}
+							<input class="voice-select-box" type="checkbox" checked={selectedVoiceIds.includes(voice.voice_id)} onchange={(event) => toggleVoiceSelection(voice.voice_id, event.currentTarget.checked)} aria-label={`选择音色 ${voice.name}`} />
+						{/if}
 						<h2 title={voice.name}>{voice.name}</h2>
 						<div class="card-head-actions">
 							{#if doubaoVoiceBinding?.external_voice_id}
@@ -1450,12 +1525,37 @@
 
 	.voice-card-head h2 {
 		margin: 0;
+		flex: 1 1 auto;
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-size: 16px;
 		line-height: 1.25;
+	}
+
+	.voice-select-box {
+		width: 16px;
+		height: 16px;
+		flex: 0 0 16px;
+		margin: 0;
+		accent-color: var(--accent);
+		cursor: pointer;
+	}
+
+	.voice-card.selected {
+		border-color: rgba(79, 156, 249, 0.5);
+		box-shadow: 0 0 0 1px rgba(79, 156, 249, 0.18);
+	}
+
+	.batch-indicator.delete {
+		color: #ffb4b4;
+		background: rgba(220, 90, 90, 0.1);
+		border: 1px solid rgba(220, 90, 90, 0.28);
+	}
+
+	.batch-indicator.delete .batch-bar {
+		background: rgba(220, 90, 90, 0.14);
 	}
 
 		.voice-desc {
