@@ -588,7 +588,6 @@
 	.load-issue strong { color: #edcf8a; }
 	.load-issue .mini-btn { margin-left: auto; }
 	.engine-toolbar-panel { margin-bottom: 14px; padding: 10px; }
-	.toolbar-grid { display: grid; grid-template-columns: minmax(200px, 1.6fr) repeat(3, minmax(120px, 1fr)); gap: 10px; align-items: end; }
 	.toolbar-grid .summary-box { order: 5; grid-column: span 2; height: auto; border: 0; background: transparent; padding: 0; }
 	.audition-field { order: 6; grid-column: span 2; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 	.toolbar-grid select { height: 34px; min-height: 34px; font-size: 12px; line-height: 1.2; padding: 0 10px; }
@@ -596,9 +595,6 @@
 	.audition-field .reference-preview { flex: none; height: 34px; min-height: 34px; padding: 0 10px; border-radius: 7px; }
 	.reference-error { color: #ff9b9b; font-size: 12px; width: 100%; }
 	.audition-field { flex-wrap: wrap; }
-	.search-field { display: flex; align-items: center; gap: 8px; height: 34px; min-height: 34px; overflow: hidden; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: #0f1216; }
-	.search-field:focus-within { outline: 2px solid var(--hub-local-color); outline-offset: 2px; }
-	.search-field input { width: 100%; height: 30px; min-height: 30px; padding: 0; border: 0; outline: none; background: transparent; color: inherit; }
 	.summary-box { display: flex; align-items: center; align-content: center; gap: 6px; flex-wrap: wrap; height: 34px; min-height: 34px; overflow: hidden; padding: 5px; border: 1px solid var(--line); border-radius: 7px; background: #101215; }
 	.summary-chip { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 7px; border: 1px solid rgba(255, 255, 255, .07); border-radius: 999px; background: rgba(255, 255, 255, .025); color: var(--muted); font-size: 12px; line-height: 1.2; white-space: nowrap; }
 	.summary-chip.strong { border-color: rgba(79, 156, 249, .28); background: rgba(79, 156, 249, .09); color: #d9e2ef; }

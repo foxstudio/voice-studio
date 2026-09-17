@@ -188,6 +188,40 @@ h3 { font-size: 14px; margin: 0 0 8px; }
 .workbench { display: grid; grid-template-columns: 1fr; gap: 0; align-items: start; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+
+/* 搜索输入：全站唯一一份，页面只负责放在哪里。 */
+.search-field {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	height: 34px;
+	min-height: 34px;
+	overflow: hidden;
+	padding: 0 10px;
+	border: 1px solid var(--line);
+	border-radius: 7px;
+	background: #0f1216;
+}
+.search-field:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.search-field input {
+	width: 100%;
+	height: 30px;
+	min-height: 30px;
+	padding: 0;
+	border: 0;
+	outline: none;
+	background: transparent;
+	color: inherit;
+	font-size: 12px;
+}
+
+/* 筛选行：搜索框宽一些，其余控件等分。 */
+.toolbar-grid {
+	display: grid;
+	grid-template-columns: minmax(200px, 1.6fr) repeat(3, minmax(120px, 1fr));
+	gap: 10px;
+	align-items: end;
+}
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .stack { display: grid; gap: 12px; }
 .btn { border: 1px solid var(--line); background: var(--panel-2); color: var(--text); border-radius: 6px; padding: 4px 8px; display: inline-flex; align-items: center; gap: 5px; min-height: 26px; font-size: 12px; line-height: 1.15; }

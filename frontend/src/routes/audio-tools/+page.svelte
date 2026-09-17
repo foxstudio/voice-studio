@@ -1384,25 +1384,6 @@
 		margin: 0;
 	}
 
-	.search-field {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		border: 1px solid var(--line);
-		border-radius: 6px;
-		padding: 0 10px;
-		background: #0f1216;
-	}
-
-	.search-field input {
-		border: 0;
-		background: transparent;
-		width: 100%;
-		min-height: 38px;
-		color: inherit;
-		outline: none;
-	}
-
 	.record.active {
 		border-color: var(--accent);
 		box-shadow: inset 0 0 0 1px rgba(79, 156, 249, 0.2);

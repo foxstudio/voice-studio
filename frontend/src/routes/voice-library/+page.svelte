@@ -1086,33 +1086,7 @@
 	}
 
 	.toolbar-grid {
-		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 12px;
-		align-items: end;
-	}
-
-	.search-field {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		border: 1px solid var(--line);
-		border-radius: 7px;
-		padding: 0 8px;
-		background: #0f1216;
-		min-height: 34px;
-		overflow: hidden;
-	}
-
-	.search-field input {
-		border: 0;
-		background: transparent;
-		width: 100%;
-		min-height: 30px;
-		padding: 0;
-		color: inherit;
-		outline: none;
-		font-size: 12px;
 	}
 
 	.search-clear {
