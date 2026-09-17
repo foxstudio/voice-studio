@@ -12,7 +12,7 @@ Voice Studio 是面向 Apple Silicon 的多引擎语音工作台。它把本地 
 
 ## 核心能力
 
-- **WebUI 工作台**：引擎管理、音色管理、语音合成、视频本土化、脚本与批量、参数参考、语音转写和设置。
+- **WebUI 工作台**：引擎管理、音色管理、语音合成、视频本土化与设置。
 - **REST API**：FastAPI 后端提供生成、长文本、批量、任务、音色、引擎、ASR、历史记录等接口。
 - **本地引擎**：IndexTTS v2、OmniVoice、EmotiVoice、F5-TTS、CosyVoice、Qwen3-TTS MLX、Confucius4 MLX 等。
 - **云端引擎**：小米 MiMo V2.5、豆包 / 火山引擎 TTS 与声音复刻相关流程。
