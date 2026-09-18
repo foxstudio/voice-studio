@@ -65,6 +65,18 @@ def trash_command() -> list[str] | None:
     return None
 
 
+def trash_override_dir() -> Path | None:
+    """回收目标覆盖目录。
+
+    测试把清理重定向到一个临时目录，否则跑一遍用例就会往用户真实的系统废纸篓里
+    塞几十个临时文件。正式运行不设这个变量，仍然使用系统废纸篓。
+    """
+    value = os.environ.get("VOICE_STUDIO_TRASH_DIR")
+    if not value:
+        return None
+    return Path(value).expanduser()
+
+
 def trash_available() -> bool:
     return trash_command() is not None
 
@@ -96,6 +108,24 @@ def move_to_trash(paths: Iterable[str | os.PathLike[str]]) -> TrashResult:
             result.failed.append((str(path), str(exc)))
 
     if not targets:
+        return result
+
+    override = trash_override_dir()
+    if override is not None:
+        # 测试或特殊部署：移到普通目录而不是系统废纸篓。
+        try:
+            override.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            for target in targets:
+                result.failed.append((target, f"cannot create trash dir: {exc}"))
+            return result
+        for target in targets:
+            try:
+                shutil.move(target, str(override / Path(target).name))
+            except OSError as exc:
+                result.failed.append((target, str(exc)))
+            else:
+                result.moved.append(target)
         return result
 
     command = trash_command()

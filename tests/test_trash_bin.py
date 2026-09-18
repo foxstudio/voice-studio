@@ -19,6 +19,17 @@ if str(BACKEND) not in sys.path:
 from app.services import trash_bin
 
 
+@pytest.fixture(autouse=True)
+def _system_trash_by_default(monkeypatch):
+    """本文件默认走系统废纸篓命令路径。
+
+    conftest 为所有用例设了 VOICE_STUDIO_TRASH_DIR（避免污染用户真实废纸篓），
+    而这里要验证的就是命令调用与分批逻辑，所以逐个用例先清掉它；两个重定向
+    用例会自己重新设上。
+    """
+    monkeypatch.delenv("VOICE_STUDIO_TRASH_DIR", raising=False)
+
+
 def _fake_run(calls: list[list[str]], *, fail_first: bool = False, fail_all: bool = False):
     """构造一个假的 subprocess.run：记录调用，并按需返回成功或失败。"""
 
@@ -170,11 +181,41 @@ def test_result_serialises_for_api(tmp_path, monkeypatch):
     assert payload["moved"] == [str(target)]
 
 
+def test_override_dir_redirects_instead_of_system_trash(tmp_path, monkeypatch):
+    """测试环境把回收目标重定向到临时目录，不碰用户真实的系统废纸篓。"""
+    trash_dir = tmp_path / "trash"
+    monkeypatch.setenv("VOICE_STUDIO_TRASH_DIR", str(trash_dir))
+    target = tmp_path / "clip.wav"
+    target.write_bytes(b"data")
+
+    result = trash_bin.move_to_trash([target])
+
+    assert result.moved_count == 1
+    assert not target.exists()
+    assert (trash_dir / "clip.wav").exists(), "文件应落在重定向目录里"
+
+
+def test_override_dir_moves_files_even_without_a_trash_command(tmp_path, monkeypatch):
+    """重定向后不依赖平台命令，因此在没有系统废纸篓的环境里也能验证清理行为。"""
+    trash_dir = tmp_path / "trash"
+    monkeypatch.setenv("VOICE_STUDIO_TRASH_DIR", str(trash_dir))
+    monkeypatch.setattr(trash_bin, "trash_command", lambda: None)
+    target = tmp_path / "clip.wav"
+    target.write_bytes(b"data")
+
+    result = trash_bin.move_to_trash([target])
+
+    assert result.moved_count == 1
+    assert (trash_dir / "clip.wav").exists()
+
+
 @pytest.mark.skipif(not trash_bin.trash_available(), reason="系统废纸篓命令不可用")
-def test_real_trash_and_restore_round_trip(tmp_path):
+def test_real_trash_and_restore_round_trip(tmp_path, monkeypatch):
     """真实走一遍系统废纸篓：移走、确认在里面、再恢复回来。"""
     import shutil
 
+    # 这个用例要验证的就是真实系统废纸篓，因此显式取消测试用的重定向。
+    monkeypatch.delenv("VOICE_STUDIO_TRASH_DIR", raising=False)
     trash_root = Path.home() / ".Trash"
     payload = b"RIFF-real-trash-probe"
     name = f"voice-studio-trash-probe-{tmp_path.name}.wav"

@@ -23,6 +23,9 @@ _TEST_PATHS = {
     "VOICE_STUDIO_PROJECTS_DIR": _TEST_DATA_ROOT / "projects",
     "VOICE_STUDIO_CACHE_DIR": _TEST_DATA_ROOT / "cache",
     "VOICE_STUDIO_LOGS_DIR": _TEST_DATA_ROOT / "logs",
+    # 清理会走系统废纸篓；测试重定向到临时目录，否则跑一遍用例就会往用户真实废纸篓
+    # 里塞几十个临时文件（ttl-first.wav、history-orphan.wav 之类）。
+    "VOICE_STUDIO_TRASH_DIR": _TEST_DATA_ROOT / "trash",
 }
 
 # conftest is loaded before test modules. Force every application path away
