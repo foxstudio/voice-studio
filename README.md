@@ -403,6 +403,18 @@ Agreement，MLX 上游和内嵌第三方源码继续保留各自通知。因此�
 单独判断。完整来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，具体分发要求见
 [IndexTTS 分发条款核对表](docs/engines/indextts-distribution-terms.md)。
 
+### IndexTTS 2.0 衍生作品声明
+
+`mlx_indextts` 包含基于 IndexTTS 2.0 的映射实现，适用 Bilibili Model Use License
+Agreement。按该协议第 4.1(a) 条要求声明：
+
+> Any modifications made to the original model in this Derivative Work are not endorsed,
+> warranted, or guaranteed by the original right-holder of the original model, and the
+> original right-holder disclaims all liability related to this Derivative Work.
+
+即：本作品对原始模型所做的任何修改，均未获得原始权利人的认可、担保或保证，原始权利人对本
+衍生作品不承担任何责任。
+
 ## 致谢
 
 - [IndexTTS](https://github.com/index-tts/index-tts)
