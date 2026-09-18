@@ -17,7 +17,7 @@ if str(BACKEND) not in sys.path:
 
 from app.main import app  # noqa: E402
 from app.schemas.voice_studio import AppSettings, EngineAudioDiagnosisRequest, GenerateRequest, HistoryItem, Project, Role, ScriptSegment  # noqa: E402
-from app.services import asr_selection_policy, audio_tools, batch_queue, community_voice_pack_store, database, engine_registry, history_store, model_catalog, qwen3_tts_paths, ser_service, settings_store, task_queue, vibevoice_model, voice_aliases, voice_store  # noqa: E402
+from app.services import asr_selection_policy, audio_tools, batch_queue, community_voice_pack_store, database, engine_health, engine_registry, history_store, model_catalog, qwen3_tts_paths, ser_service, settings_store, task_queue, vibevoice_model, voice_aliases, voice_store  # noqa: E402
 from app.services.python_runtime import engine_virtualenv_python  # noqa: E402
 
 
@@ -159,7 +159,7 @@ def test_emotivoice_speaker_catalog_can_be_filtered(tmp_path: Path, monkeypatch)
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(engine_registry, "_external_engine_root", lambda engine_id: root)
+    monkeypatch.setattr(engine_health, "external_engine_root", lambda engine_id: root)
     engine_registry._emotivoice_speaker_catalog.cache_clear()
     try:
         client = _client(tmp_path)

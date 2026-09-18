@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { afterNavigate, replaceState } from '$app/navigation';
 	import { Api } from '$lib/api';
 	import type { EngineSpeaker, VoiceAsset } from '$lib/api/types';
 	import DoubaoVoiceCatalogDrawer from '$lib/components/DoubaoVoiceCatalogDrawer.svelte';
@@ -177,11 +178,19 @@
 
 
 	// 排序写回地址栏：刷新保留当前选择，重新输入网址则回到默认的随机排序。
+	// replaceState 必须在 SvelteKit 路由初始化之后调用（官方要求的时机是
+	// afterNavigate），否则会抛 “Cannot call replaceState(...) before router is initialized”。
+	let routerReady = $state(false);
+	afterNavigate(() => {
+		routerReady = true;
+	});
+
 	$effect(() => {
+		if (!routerReady) return;
 		const url = new URL(window.location.href);
 		if (voiceSort === 'random') url.searchParams.delete('sort');
 		else url.searchParams.set('sort', voiceSort);
-		window.history.replaceState({}, '', url);
+		replaceState(url, {});
 	});
 
 	async function generateAsrForVoice(voice: VoiceAsset) {

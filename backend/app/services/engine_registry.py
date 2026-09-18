@@ -57,7 +57,7 @@ def _filter_speakers(
 @lru_cache(maxsize=1)
 def _emotivoice_speaker_catalog() -> list[EngineSpeaker]:
     try:
-        readme = _external_engine_root("emotivoice") / "data" / "youdao" / "text" / "README.md"
+        readme = engine_health.external_engine_root("emotivoice") / "data" / "youdao" / "text" / "README.md"
     except RuntimeError:
         return [_speaker_option_to_detail(option) for option in engine_manifests.EMOTIVOICE_SPEAKERS]
     if not readme.exists():
@@ -120,7 +120,6 @@ def list_speakers(engine_id: str, query: str = "", gender: str = "all", limit: i
 
 
 _ENGINES = engine_manifests.ENGINES
-_external_engine_root = engine_health.external_engine_root
 
 
 def _resolve_engine_id(engine_id: str) -> str:
