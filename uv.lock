@@ -4668,7 +4668,7 @@ wheels = [
 
 [[package]]
 name = "voice-studio"
-version = "1.3.0"
+version = "1.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "bigvgan" },
@@ -4706,13 +4706,6 @@ dev = [
     { name = "torchaudio" },
     { name = "transformers" },
 ]
-server = [
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "python-multipart" },
-    { name = "uvicorn" },
-    { name = "websockets" },
-]
 indextts2 = [
     { name = "librosa" },
     { name = "omegaconf" },
@@ -4720,6 +4713,13 @@ indextts2 = [
     { name = "torch" },
     { name = "torchaudio" },
     { name = "transformers" },
+]
+server = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "python-multipart" },
+    { name = "uvicorn" },
+    { name = "websockets" },
 ]
 video-localization = [
     { name = "audio-separator", extra = ["cpu"] },

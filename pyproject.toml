@@ -1,6 +1,6 @@
 [project]
 name = "voice-studio"
-version = "1.3.0"
+version = "1.4.0"
 description = "Multi-engine TTS platform for Apple Silicon — local voice cloning, emotion control, long-form orchestration, and cloud synthesis via WebUI and API."
 readme = "README.md"
 license = "MIT AND Apache-2.0 AND LicenseRef-Bilibili-Model-Use-License"
