@@ -5451,6 +5451,37 @@ def reserve_single_tts_handoff(
             for value in (capacity_replaces_workflow_ids or [])
             if str(value)
         }
+        # A group-capacity failure record names only the most recent receipt
+        # identity, while a repair replaces every open receipt of that group.
+        # Authorization therefore matches the failure against the id union of
+        # the requested replacement set (group-level), while each task still
+        # proves its own generation/placement/audio/frozen-request conditions.
+        replacement_failure_identities: set[str] = set()
+        for requested_item in draft.tts_tasks:
+            if str(requested_item.workflow_id) not in requested_capacity_replacements:
+                continue
+            requested_task_id = str(requested_item.generation_task_id or "")
+            requested_result_id = str(requested_item.result_id or "")
+            replacement_failure_identities.update(
+                value
+                for value in (
+                    str(requested_item.workflow_id),
+                    requested_task_id,
+                    requested_result_id,
+                    f"candidate_{requested_task_id}" if requested_task_id else "",
+                )
+                if value
+            )
+            for candidate in draft.generated_candidates:
+                if (
+                    str(candidate.get("task_id") or "") == requested_task_id
+                    and str(candidate.get("result_id") or "") == requested_result_id
+                    and bool(candidate.get("audio_path"))
+                ):
+                    persisted_id = str(candidate.get("candidate_id") or "")
+                    if persisted_id:
+                        replacement_failure_identities.add(persisted_id)
+                    break
         current_plan = draft.dubbing_production.active_plan
         capacity_request_matches_current_group = bool(
             requested_capacity_replacements
@@ -5505,16 +5536,6 @@ def reserve_single_tts_handoff(
             )
             task_id = str(item.generation_task_id or "")
             result_id = str(item.result_id or "")
-            identities = {
-                value
-                for value in (
-                    item.workflow_id,
-                    task_id,
-                    result_id,
-                    f"candidate_{task_id}" if task_id else "",
-                )
-                if value
-            }
             failure_candidate_id = str(
                 current_capacity_failure.candidate_id or ""
             )
@@ -5528,12 +5549,6 @@ def reserve_single_tts_handoff(
                 ),
                 None,
             )
-            if persisted_candidate is not None:
-                candidate_id = str(
-                    persisted_candidate.get("candidate_id") or ""
-                )
-                if candidate_id:
-                    identities.add(candidate_id)
             placement_is_recoverable = bool(
                 placement is not None
                 and (
@@ -5553,7 +5568,7 @@ def reserve_single_tts_handoff(
                 and placement_is_recoverable
                 and task_id
                 and result_id
-                and failure_candidate_id in identities
+                and failure_candidate_id in replacement_failure_identities
                 and persisted_candidate is not None
                 and frozen_group_request(
                     draft,

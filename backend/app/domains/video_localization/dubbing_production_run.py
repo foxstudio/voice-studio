@@ -12,6 +12,7 @@ from app.schemas.video_localization_dubbing_production import (
 )
 from app.domains.video_localization.dubbing_timeline_edit_gate import (
     candidate_clip_projection_fingerprint,
+    coverage_speech_start_ms,
     first_primary_clip_overlap,
     has_verified_retained_content,
     rendered_gap_duration_ms,
@@ -493,7 +494,7 @@ def _processed_candidate_projection_is_current(
         dubbing_candidate_alignment.validate_candidate_clip_coverage(
             clips=candidate_clips,
             words=aligned_words,
-            speech_start_ms=None if has_verified_retained_content(frozen, candidate_clips) else _value(audio, "speech_start_ms"),
+            speech_start_ms=None if has_verified_retained_content(frozen, candidate_clips) else coverage_speech_start_ms(audio),
             speech_end_ms=None if has_verified_retained_content(frozen, candidate_clips) else _value(audio, "speech_end_ms"),
         )
     except (TypeError, ValueError):

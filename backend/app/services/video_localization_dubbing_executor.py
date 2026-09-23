@@ -1524,12 +1524,59 @@ async def _advance_unlocked(
             and getattr(selected_progress, "workflow_ids", [])
             and _has_current_durable_group_candidate(regeneration_draft, selected_progress)
         )
+        # A content edit invalidates the old failure conclusion: the failed
+        # group has no durable candidate for the edited text and every frozen
+        # request still carries the historical text.  Such a group regenerates
+        # the current content from scratch.  Failure evidence without any
+        # generation history (deleted candidate evidence) stays rejected.
+        content_rebased_failed_group = False
+        if (
+            selected_progress is not None
+            and selected_progress.stage == "failed"
+            and regeneration_draft is not None
+            and not _has_current_durable_group_candidate(
+                regeneration_draft, selected_progress
+            )
+        ):
+            active_plan = getattr(
+                getattr(regeneration_draft, "dubbing_production", None),
+                "active_plan",
+                None,
+            )
+            current_group = next(
+                (
+                    item
+                    for item in (getattr(active_plan, "groups", None) or [])
+                    if item.group_id == selected_progress.group_id
+                ),
+                None,
+            )
+            historical_texts = {
+                str((stage.parameters or {}).get("text"))
+                for workflow in getattr(regeneration_draft, "tts_tasks", None) or []
+                for stage in getattr(workflow, "stages", None) or []
+                if stage.kind == "generation"
+                and str(
+                    (stage.parameters or {}).get(
+                        "video_localization_dubbing_group_id"
+                    )
+                    or ""
+                )
+                == selected_progress.group_id
+                and (stage.parameters or {}).get("text")
+            }
+            content_rebased_failed_group = bool(
+                current_group is not None
+                and historical_texts
+                and str(current_group.spoken_text) not in historical_texts
+            )
         if selected_progress is None or not (
             selected_progress.stage == "accepted"
             or has_formal_projection
             or failed_group_retry
             or capacity_group_retry
             or frozen_capacity_group_retry
+            or content_rebased_failed_group
         ):
             raise AppException(
                 409,

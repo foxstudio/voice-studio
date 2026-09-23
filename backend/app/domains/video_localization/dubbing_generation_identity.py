@@ -99,6 +99,9 @@ def frozen_group_request(
     snapshots = [parameters] if parameters is not None else [
         getattr(stage, "parameters", {})
         for workflow in reversed(getattr(draft, "tts_tasks", []) or [])
+        # A cancelled take is a rejected result: it must never seed the next
+        # retry, or a doomed speed would resurrect on every recovery loop.
+        if str(getattr(workflow, "status", "")) != "cancelled"
         for stage in getattr(workflow, "stages", []) or []
         if getattr(stage, "kind", None) == "generation"
     ]

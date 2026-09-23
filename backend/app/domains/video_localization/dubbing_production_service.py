@@ -4,8 +4,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 from typing import Literal
+
+_closeout_debug_logger = logging.getLogger("video_localization.dubbing_closeout_debug")
+
+
+def _closeout_return(disposition: str, marker: str, **context) -> str:
+    """Temporary close-out diagnostics: record which check stopped a group."""
+    _closeout_debug_logger.warning(
+        "CLOSEOUT_DISPOSITION %s at %s :: %s",
+        disposition,
+        marker,
+        json.dumps(context, ensure_ascii=False, sort_keys=True, default=str),
+    )
+    return disposition
 
 from app.domains.video_localization import (
     audio_boundaries,
@@ -32,6 +46,8 @@ from app.domains.video_localization.dubbing_timeline_edit_gate import (
     candidate_source_speech_bounds,
     candidate_protected_speech_bounds,
     first_protected_audio_overlap,
+    coverage_speech_start_ms as _coverage_speech_start_ms,
+    separation_gap_reaches_first_word,
     candidate_clip_projection_fingerprint,
     first_primary_clip_overlap as _first_ready_dub_overlap,
     reconcile_gap_evidence_with_projection,
@@ -840,7 +856,11 @@ class DubbingProductionApplicationService:
                     "VIDEO_LOCALIZATION_DUBBING_DEFERRAL_CANDIDATE_CHANGED",
                     "当前候选内容、时长或音频身份已经变化，请重新核对。",
                 )
-            if int(history.duration_ms or 0) != payload.candidate_duration_ms:
+            # The generation history records duration with millisecond
+            # truncation while the authoritative probe below uses ceiling.
+            # Tolerate that single-millisecond rounding gap; anything larger
+            # means the recorded result no longer matches the parked take.
+            if abs(int(history.duration_ms or 0) - payload.candidate_duration_ms) > 1:
                 raise AppException(
                     409,
                     "VIDEO_LOCALIZATION_DUBBING_DEFERRAL_AUDIO_UNAVAILABLE",
@@ -1782,16 +1802,19 @@ class DubbingProductionApplicationService:
             None,
         )
         if plan is None or frozen is None or group is None:
-            return "retryable_failure"
+            return _closeout_return("retryable_failure", "missing_plan_frozen_group", group_id=group_id, candidate_id=candidate_id)
         persisted_evidence_fingerprint = domain.candidate_evidence_fingerprint(
             frozen
         )
         media_report = domain.build_candidate_gap_processing_report(frozen)
         if media_report.overall_status == "failed":
-            return ("regeneration_required" if media_report.recommended_action == "regenerate"
-                    else "retryable_failure")
+            return _closeout_return(
+                "regeneration_required" if media_report.recommended_action == "regenerate" else "retryable_failure",
+                "media_report_failed", group_id=group_id, candidate_id=candidate_id,
+                recommended_action=media_report.recommended_action,
+            )
         if frozen.audio is None or not frozen.audio.aligned_words:
-            return "retryable_failure"
+            return _closeout_return("retryable_failure", "no_audio_words", group_id=group_id, candidate_id=candidate_id)
         frozen = frozen.model_copy(
             update={
                 "audio": dubbing_candidate_alignment.with_alignment_evidence(
@@ -1901,7 +1924,7 @@ class DubbingProductionApplicationService:
             working = timeline_clip_timing.normalize_draft(working)
             working_plan = working.dubbing_production.active_plan
             if working_plan is None:
-                return "retryable_failure"
+                return _closeout_return("retryable_failure", "working_plan_none", group_id=group_id, candidate_id=candidate_id)
             snapshot = domain.build_project_snapshot(working)
             working = working.model_copy(
                 update={
@@ -1937,11 +1960,60 @@ class DubbingProductionApplicationService:
             preserve_existing_placement=bool(existing_candidate_clips),
             preserve_verified_edge_edit=verified_edge_edit,
         )
+        group_index = next(
+            index for index, item in enumerate(plan.groups)
+            if item.group_id == group.group_id
+        )
+        next_group = (
+            plan.groups[group_index + 1]
+            if group_index + 1 < len(plan.groups)
+            else None
+        )
+        capacity_latest_end_ms = (
+            next_group.target_start_ms
+            if next_group is not None
+            else group.target_end_ms
+        )
+        # The next take can start before its first word to retain safe padding.
+        # Spacing, padding crop and final capacity checks must share that real
+        # occupied boundary, not only the next group's audible onset.
+        group_subtitle_ids = set(group.subtitle_ids)
+        capacity_latest_end_ms = min(
+            [int(capacity_latest_end_ms)]
+            + [
+                int(clip.get("start_ms") or 0)
+                for clip in draft.timeline_clips
+                if clip.get("track_id") == "dub"
+                and int(clip.get("dub_lane") or 0) == 0
+                and clip.get("status") == "ready"
+                and int(clip.get("start_ms") or 0) >= group.target_end_ms
+                # This group's own split slices may extend past its nominal
+                # end.  They are this candidate's playback, never a
+                # neighbouring occupancy, and must not shrink the window.
+                and not (
+                    {
+                        str(value)
+                        for value in (
+                            clip.get("target_subtitle_ids")
+                            or (
+                                [clip.get("subtitle_id")]
+                                if clip.get("subtitle_id")
+                                else []
+                            )
+                        )
+                        if value
+                    }
+                    & group_subtitle_ids
+                )
+            ]
+        )
+
         if existing_candidate_clips and not verified_edge_edit:
             working = _with_restored_retained_internal_gaps(
                 working,
                 candidate_id=candidate_id,
                 reviewed_gaps=reviewed_gaps,
+                latest_end_ms=capacity_latest_end_ms,
             )
         elif not existing_candidate_clips:
             current_clips = _current_group_working_candidate_clips(
@@ -1991,39 +2063,11 @@ class DubbingProductionApplicationService:
                         )
                     }
                 )
-            except (AppException, ValueError):
+            except (AppException, ValueError) as split_exc:
                 # A requested evidence-backed edit is part of close-out. Do
                 # not accept a projection that failed to apply it.
-                return "retryable_failure"
+                return _closeout_return("retryable_failure", "split_apply_failed", group_id=group_id, candidate_id=candidate_id, error=str(split_exc))
 
-        group_index = next(
-            index for index, item in enumerate(plan.groups)
-            if item.group_id == group.group_id
-        )
-        next_group = (
-            plan.groups[group_index + 1]
-            if group_index + 1 < len(plan.groups)
-            else None
-        )
-        capacity_latest_end_ms = (
-            next_group.target_start_ms
-            if next_group is not None
-            else group.target_end_ms
-        )
-        # The next take can start before its first word to retain safe padding.
-        # Spacing, padding crop and final capacity checks must share that real
-        # occupied boundary, not only the next group's audible onset.
-        capacity_latest_end_ms = min(
-            [int(capacity_latest_end_ms)]
-            + [
-                int(clip.get("start_ms") or 0)
-                for clip in draft.timeline_clips
-                if clip.get("track_id") == "dub"
-                and int(clip.get("dub_lane") or 0) == 0
-                and clip.get("status") == "ready"
-                and int(clip.get("start_ms") or 0) >= group.target_end_ms
-            ]
-        )
         working = _with_source_rhythm_spacing(
             working,
             candidate_id=candidate_id,
@@ -2041,7 +2085,7 @@ class DubbingProductionApplicationService:
             target_subtitle_ids=list(group.subtitle_ids),
         )
         if not candidate_clips:
-            return "retryable_failure"
+            return _closeout_return("retryable_failure", "no_candidate_clips_after_spacing", group_id=group_id, candidate_id=candidate_id)
         if not existing_candidate_clips:
             source_onset_ms, protected_speech_end_ms = (
                 _candidate_word_anchor_and_protected_end(frozen.audio)
@@ -2063,7 +2107,7 @@ class DubbingProductionApplicationService:
                 target_subtitle_ids=list(group.subtitle_ids),
             )
             if not candidate_clips:
-                return "retryable_failure"
+                return _closeout_return("retryable_failure", "no_candidate_clips_after_lock", group_id=group_id, candidate_id=candidate_id)
         selected_start_anchor_ms = min(
             int(clip.get("start_ms") or 0) for clip in candidate_clips
         )
@@ -2150,7 +2194,24 @@ class DubbingProductionApplicationService:
                 )
         if conflict is not None:
             if first_protected_audio_overlap(candidate_clips, other_clips, frozen.audio):
-                return "capacity_recovery_required"
+                _closeout_debug_logger.warning(
+                    "OVERLAP_DEBUG :: %s",
+                    json.dumps({
+                        "group_id": group_id,
+                        "candidate_id": candidate_id,
+                        "candidate_clips": [
+                            {k: c.get(k) for k in ("clip_id", "start_ms", "end_ms", "source_start_ms", "source_end_ms", "status", "dub_lane")}
+                            for c in candidate_clips
+                        ],
+                        "conflict": conflict,
+                        "conflicting": next(
+                            ({k: c.get(k) for k in ("clip_id", "start_ms", "end_ms", "source_start_ms", "source_end_ms", "status", "dub_lane")}
+                             for c in other_clips if str(c.get("clip_id") or "") == conflict[1]),
+                            None,
+                        ),
+                    }, sort_keys=True),
+                )
+                return _closeout_return("capacity_recovery_required", "protected_audio_overlap", group_id=group_id, candidate_id=candidate_id, conflict=conflict)
             earliest_start_ms = group.target_start_ms
             latest_end_ms = capacity_latest_end_ms
             candidate_start_ms = min(
@@ -2174,8 +2235,8 @@ class DubbingProductionApplicationService:
                 latest_end_ms=latest_end_ms,
                 tolerance_ms=0,
             ):
-                return "capacity_recovery_required"
-            return "retryable_failure"
+                return _closeout_return("capacity_recovery_required", "protected_speech_exceeds_conflict_window", group_id=group_id, candidate_id=candidate_id, earliest_start_ms=earliest_start_ms, latest_end_ms=latest_end_ms)
+            return _closeout_return("retryable_failure", "unresolved_clip_conflict", group_id=group_id, candidate_id=candidate_id, conflict=conflict)
 
         candidate_clips = _current_group_working_candidate_clips(
             working,
@@ -2198,7 +2259,7 @@ class DubbingProductionApplicationService:
                 and audible_bounds[0] != group.target_start_ms
             )
         ):
-            return "regeneration_required"
+            return _closeout_return("regeneration_required", "audible_bounds_mismatch", group_id=group_id, candidate_id=candidate_id, audible_bounds=audible_bounds, target_start_ms=group.target_start_ms, candidate_clips=candidate_clips, source_onset_ms=source_onset_ms)
         if _protected_speech_exceeds_window(
             candidate_clips,
             frozen.audio,
@@ -2212,13 +2273,25 @@ class DubbingProductionApplicationService:
             # The complete protected words do not physically fit after the safe
             # local edits. Capacity recovery must decide the next action before
             # another provider submission is allowed.
-            return "capacity_recovery_required"
+            _closeout_debug_logger.warning(
+                "EXCEEDS_DEBUG :: %s",
+                json.dumps({
+                    "group_id": group_id, "candidate_id": candidate_id,
+                    "target_start_ms": group.target_start_ms,
+                    "capacity_latest_end_ms": capacity_latest_end_ms,
+                    "candidate_clips": [
+                        {k: c.get(k) for k in ("clip_id", "start_ms", "end_ms", "source_start_ms", "source_end_ms")}
+                        for c in candidate_clips
+                    ],
+                }, sort_keys=True),
+            )
+            return _closeout_return("capacity_recovery_required", "protected_speech_exceeds_window", group_id=group_id, candidate_id=candidate_id, target_start_ms=group.target_start_ms, capacity_latest_end_ms=capacity_latest_end_ms)
         if candidate_clips and max(
             int(clip.get("end_ms") or 0) for clip in candidate_clips
         ) > capacity_latest_end_ms:
             # Remaining overflow is unproven padding/edit state, not evidence
             # that a different generated take would solve the problem.
-            return "retryable_failure"
+            return _closeout_return("retryable_failure", "tail_overflow", group_id=group_id, candidate_id=candidate_id, max_end_ms=max(int(clip.get("end_ms") or 0) for clip in candidate_clips), capacity_latest_end_ms=capacity_latest_end_ms)
         supporting_clips = _changed_adjacent_supporting_clips(
             draft,
             working,
@@ -2236,15 +2309,15 @@ class DubbingProductionApplicationService:
             dubbing_candidate_alignment.validate_candidate_clip_coverage(
                 clips=candidate_clips,
                 words=list(frozen.audio.aligned_words),
-                speech_start_ms=None if _verified_retained_projection(frozen, candidate_clips) else frozen.audio.speech_start_ms,
+                speech_start_ms=None if _verified_retained_projection(frozen, candidate_clips) else _coverage_speech_start_ms(frozen.audio),
                 speech_end_ms=None if _verified_retained_projection(frozen, candidate_clips) else frozen.audio.speech_end_ms,
             )
             reviewed_gaps = reconcile_gap_evidence_with_projection(
                 reviewed_gaps,
                 candidate_clips,
             )
-        except ValueError:
-            return "retryable_failure"
+        except ValueError as coverage_exc:
+            return _closeout_return("retryable_failure", "coverage_validate_failed", group_id=group_id, candidate_id=candidate_id, error=str(coverage_exc))
         reviewed_audio = frozen.audio.model_copy(update={"gap_evidence": reviewed_gaps})
         source_onset_ms, protected_speech_end_ms = (
             _candidate_word_anchor_and_protected_end(reviewed_audio)
@@ -2267,7 +2340,7 @@ class DubbingProductionApplicationService:
         )
         report = domain.build_candidate_gap_processing_report(reviewed_input)
         if report.overall_status == "failed":
-            return "retryable_failure"
+            return _closeout_return("retryable_failure", "final_report_failed", group_id=group_id, candidate_id=candidate_id)
         target_projection_fingerprint = _target_owned_projection_fingerprint(
             draft,
             target_subtitle_ids=list(group.subtitle_ids),
@@ -2300,6 +2373,22 @@ class DubbingProductionApplicationService:
         previous = next((item for item in draft.dubbing_production.candidate_reports
                          if item.candidate_id == candidate_id), None)
         previous_audit = previous.semantic_boundary_audit if previous else None
+        if previous_audit is not None:
+            _closeout_debug_logger.info(
+                "AUDIT_REUSE_CHECK :: %s",
+                json.dumps({
+                    "candidate_id": candidate_id,
+                    "previous_status": previous_audit.status,
+                    "mismatches": [
+                        field
+                        for field in (
+                            "source_revision", "plan_revision", "candidate_id", "audio_sha256",
+                            "candidate_evidence_fingerprint", "candidate_clip_projection_fingerprint",
+                        )
+                        if getattr(previous_audit, field) != getattr(audit, field)
+                    ],
+                }, sort_keys=True),
+            )
         if previous_audit and previous_audit.status == "accepted" and all(
             getattr(previous_audit, field) == getattr(audit, field)
             for field in (
@@ -2389,7 +2478,7 @@ class DubbingProductionApplicationService:
             try:
                 dubbing_candidate_alignment.validate_candidate_clip_coverage(
                     clips=clips, words=list(frozen.audio.aligned_words),
-                    speech_start_ms=None if verified_edge_edit else frozen.audio.speech_start_ms,
+                    speech_start_ms=None if verified_edge_edit else _coverage_speech_start_ms(frozen.audio),
                     speech_end_ms=None if verified_edge_edit else frozen.audio.speech_end_ms,
                 )
                 gaps = reconcile_gap_evidence_with_projection(list(frozen.audio.gap_evidence), clips)
@@ -2988,7 +3077,7 @@ class DubbingProductionApplicationService:
                 dubbing_candidate_alignment.validate_candidate_clip_coverage(
                     clips=candidate_clips,
                     words=list(reviewed_input.audio.aligned_words),
-                    speech_start_ms=None if _verified_retained_projection(reviewed_input, candidate_clips) else reviewed_input.audio.speech_start_ms,
+                    speech_start_ms=None if _verified_retained_projection(reviewed_input, candidate_clips) else _coverage_speech_start_ms(reviewed_input.audio),
                     speech_end_ms=None if _verified_retained_projection(reviewed_input, candidate_clips) else reviewed_input.audio.speech_end_ms,
                 )
             except ValueError as exc:
@@ -4210,7 +4299,7 @@ class DubbingProductionApplicationService:
                 dubbing_candidate_alignment.validate_candidate_clip_coverage(
                     clips=staged_clips,
                     words=list(frozen.audio.aligned_words),
-                    speech_start_ms=frozen.audio.speech_start_ms,
+                    speech_start_ms=_coverage_speech_start_ms(frozen.audio),
                     speech_end_ms=frozen.audio.speech_end_ms,
                 )
             except ValueError as exc:
@@ -5650,6 +5739,12 @@ def _staged_candidate_projection(
         "media_source_clip_id", "dubbing_slice_index", "dubbing_slice_count",
         "dubbing_alignment_word_ids", "dubbing_timeline_gap_before_ms", "audio_sha256",
     }
+    if any(int(clip.get("start_ms") or 0) < 0 for clip in clips):
+        _closeout_debug_logger.warning(
+            "CLOSEOUT_STAGED_NEGATIVE_START candidate=%s clips=%s",
+            candidate_id,
+            json.dumps(clips, ensure_ascii=False, default=str),
+        )
     staged = [
         DubbingStagedCandidateClip.model_validate(
             {key: value for key, value in clip.items() if key in fields}
@@ -6095,6 +6190,26 @@ def _with_locked_candidate_source_onset(
         clips[index]["start_ms"] = int(clips[index].get("start_ms") or 0) + shift_ms
         clips[index]["end_ms"] = int(clips[index].get("end_ms") or 0) + shift_ms
         clips[index].pop("timeline_edit_gate", None)
+    # Near the video start the anchored translation can push the first clip
+    # before 0.  Clamp it to 0 by cropping only leading padding ahead of the
+    # protected first word; the onset anchor itself stays exact.  When even
+    # the full leading room cannot absorb the negative start, leave the clip
+    # untouched so the shared capacity checks reject it instead of cutting a
+    # phoneme.
+    for index in indexes:
+        start_ms = int(clips[index].get("start_ms") or 0)
+        if start_ms >= 0:
+            continue
+        source_start_ms = int(clips[index].get("source_start_ms") or 0)
+        cropped_source_start_ms = source_start_ms - start_ms
+        if cropped_source_start_ms > int(speech_start_ms):
+            continue
+        clips[index]["start_ms"] = 0
+        clips[index]["source_start_ms"] = cropped_source_start_ms
+        if clips[index].get("alignment_lead_ms") is not None:
+            clips[index]["alignment_lead_ms"] = max(
+                0, int(speech_start_ms) - cropped_source_start_ms
+            )
     return draft.model_copy(update={"timeline_clips": clips})
 
 
@@ -6103,8 +6218,16 @@ def _with_restored_retained_internal_gaps(
     *,
     candidate_id: str,
     reviewed_gaps,
+    latest_end_ms: int | None = None,
 ):
-    """Restore candidate pauses that an older edit incorrectly removed."""
+    """Restore candidate pauses that an older edit incorrectly removed.
+
+    Restoration replays a previously removed pause, so it lengthens the
+    group's delivery span.  When ``latest_end_ms`` bounds that span, a pause
+    whose replay would push the last slice past the boundary is kept removed:
+    the already closed-out layout stays authoritative instead of overflowing
+    the window on every evidence refresh.
+    """
 
     clips = [dict(item) for item in draft.timeline_clips]
     indexes = sorted(
@@ -6141,6 +6264,13 @@ def _with_restored_retained_internal_gaps(
         old_left_end_ms = int(left.get("end_ms") or 0)
         right_start_ms = int(right.get("start_ms") or 0)
         available_timeline_gap_ms = max(0, right_start_ms - old_left_end_ms)
+        replay_shift_ms = max(0, missing_ms - available_timeline_gap_ms)
+        if latest_end_ms is not None and replay_shift_ms:
+            current_end_ms = max(
+                int(clips[i].get("end_ms") or 0) for i in indexes
+            )
+            if current_end_ms + replay_shift_ms > int(latest_end_ms):
+                continue
         left["source_end_ms"] = right_source_start_ms
         left["end_ms"] = old_left_end_ms + missing_ms
         left["alignment_trail_ms"] = max(
@@ -6194,13 +6324,25 @@ def _fit_leading_safety_margin(clips, audio, *, earliest_start_ms: int):
     protected_start, _protected_end = candidate_protected_speech_bounds(audio)
     if protected_start is None:
         return result
+    trim_limit = protected_start
+    # VAD can fire early on lead-in breath noise, which would leave the frame
+    # head (breath + silence) uncroppable before a neighbouring clip.  A
+    # wordless gap that reaches the first word proves that lead-in is
+    # acoustically separated from the phoneme, so the trim may reach that
+    # word's onset (never into it) — same rule the coverage anchor uses.
+    words = [word for word in audio.aligned_words if word.end_ms > word.start_ms]
+    if words:
+        first_word_start_ms = min(word.start_ms for word in words)
+        for gap in getattr(audio, "gap_evidence", None) or []:
+            if separation_gap_reaches_first_word(gap, first_word_start_ms):
+                trim_limit = max(trim_limit, first_word_start_ms)
     head = min(result, key=lambda clip: int(clip.get("start_ms") or 0))
     excess = max(0, int(earliest_start_ms) - int(head.get("start_ms") or 0))
     source_start = int(head.get("source_start_ms") or 0)
-    if excess and source_start + excess <= protected_start:
+    if excess and source_start + excess <= trim_limit:
         head["source_start_ms"] = source_start + excess
         head["start_ms"] = int(head.get("start_ms") or 0) + excess
-        head["alignment_lead_ms"] = protected_start - (source_start + excess)
+        head["alignment_lead_ms"] = trim_limit - (source_start + excess)
     return result
 
 

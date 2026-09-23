@@ -2852,3 +2852,106 @@ async def test_complete_executor_reads_physical_full_scope_and_returns_missing_w
     assert checked.completion.missing_target_subtitle_ids == ["later-unplanned"]
     await executor._with_completion_facts("project-1", response, group_id=group.group_id)
     assert calls[-1] == {"start_ms": 1000, "end_ms": 3000}
+
+
+@pytest.mark.asyncio
+async def test_failed_group_with_edited_text_regenerates_current_content(monkeypatch):
+    """A C5 content edit retires the old failure conclusion.
+
+    The failed group has no durable candidate for the edited text and every
+    frozen request still carries the historical text, so regeneration must be
+    allowed with the *current* content instead of raising
+    ACCEPTED_GROUP_REQUIRED.  (Groups without any generation history — deleted
+    candidate evidence — keep the existing rejection.)
+    """
+
+    group = _group()
+    failed = SimpleNamespace(
+        group_id=group.group_id,
+        stage="failed",
+        recommended_action="process_gaps",
+        candidate_ids=["candidate-old"],
+        workflow_ids=["workflow-old"],
+        attempt_count=1,
+        target_subtitle_ids=list(group.subtitle_ids),
+    )
+    draft = _draft(group)
+    draft.tts_tasks = [SimpleNamespace(
+        workflow_id="workflow-old",
+        stages=[SimpleNamespace(
+            kind="generation",
+            parameters={
+                "video_localization_dubbing_group_id": group.group_id,
+                "text": "内容编辑之前的旧台词",
+            },
+        )],
+    )]
+    group.spoken_text = "内容编辑之后的新台词"
+    captured = {}
+
+    def reserve(*args, **kwargs):
+        captured["reserve"] = kwargs
+        return SimpleNamespace(workflow_id="workflow-new")
+
+    async def queue(*args, **kwargs):
+        captured["queued"] = kwargs
+
+    _configure(
+        read_production_run=lambda _project_id: SimpleNamespace(
+            next_action="process_gaps",
+            next_group_id=group.group_id,
+            groups=[failed],
+        ),
+        get_video_localization=lambda _project_id: draft,
+        reserve_single_tts_handoff=reserve,
+    )
+    monkeypatch.setattr(executor, "_queue_group", queue)
+
+    response = await executor.advance(
+        "project-1",
+        scope="single_group",
+        group_id=group.group_id,
+        regenerate_existing=True,
+    )
+    await asyncio.sleep(0)
+
+    assert response.status == "queued"
+    assert captured, "the edited group must reach the generation queue"
+    queued = captured["queued"]
+    # Fresh generation from the current plan content, never a frozen retry
+    # that would resurrect the pre-edit text.
+    assert queued["group"].spoken_text == "内容编辑之后的新台词"
+    assert queued.get("frozen_retry_request") is None
+
+
+def test_frozen_group_request_ignores_cancelled_task_parameters():
+    """A cancelled take is a rejected result and must not seed retries.
+
+    After the runner cancels a doomed attempt, the next frozen retry has to
+    pick up the surviving take's speed instead of resurrecting the rejected
+    one (which would loop the group forever).
+    """
+
+    group = _group()
+    draft = _draft(group)
+    base = _frozen_retry_request(group).model_dump(mode="json")
+    surviving = SimpleNamespace(
+        status="success",
+        stages=[SimpleNamespace(kind="generation", parameters={**base, "speed": 1.15})],
+    )
+    rejected = SimpleNamespace(
+        status="cancelled",
+        stages=[SimpleNamespace(kind="generation", parameters={**base, "speed": 1.0})],
+    )
+    # Newest first in the reversed scan: without the filter the cancelled
+    # 1.0 take would win.
+    draft.tts_tasks = [surviving, rejected]
+
+    from app.domains.video_localization.dubbing_generation_identity import (
+        frozen_group_request,
+    )
+
+    request = frozen_group_request(draft, group)
+
+    assert request is not None
+    assert request.speed == 1.15

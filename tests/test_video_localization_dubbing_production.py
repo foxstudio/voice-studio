@@ -6797,6 +6797,80 @@ def test_new_candidate_source_onset_lock_moves_the_whole_projection_to_target():
     assert [clip["end_ms"] for clip in locked.timeline_clips] == [2_000, 3_160]
 
 
+def test_new_candidate_source_onset_lock_clamps_video_start_by_cropping_leading_padding():
+    draft = VideoLocalizationDraft(
+        timeline_clips=[
+            {
+                "clip_id": "clip-first",
+                "track_id": "dub",
+                "candidate_id": "candidate-1",
+                "start_ms": 1_085,
+                "end_ms": 5_263,
+                "source_start_ms": 110,
+                "source_end_ms": 4_288,
+                "alignment_lead_ms": 80,
+            },
+        ]
+    )
+
+    locked = dubbing_production_service._with_locked_candidate_source_onset(
+        draft,
+        candidate_id="candidate-1",
+        speech_start_ms=2_160,
+        speech_end_ms=4_120,
+        target_start_ms=1_165,
+    )
+
+    clip = locked.timeline_clips[0]
+    assert clip["start_ms"] == 0
+    assert clip["source_start_ms"] == 995
+    assert clip["end_ms"] == 3_293
+    assert clip["alignment_lead_ms"] == 1_165
+    bounds = candidate_audible_timeline_bounds(
+        locked.timeline_clips,
+        speech_start_ms=2_160,
+        speech_end_ms=4_120,
+    )
+    assert bounds is not None
+    assert bounds[0] == 1_165
+
+
+def test_new_candidate_source_onset_lock_clamps_exactly_to_the_first_word_at_zero_target():
+    draft = VideoLocalizationDraft(
+        timeline_clips=[
+            {
+                "clip_id": "clip-first",
+                "track_id": "dub",
+                "candidate_id": "candidate-1",
+                "start_ms": 200,
+                "end_ms": 1_200,
+                "source_start_ms": 0,
+                "source_end_ms": 1_000,
+            },
+        ]
+    )
+
+    locked = dubbing_production_service._with_locked_candidate_source_onset(
+        draft,
+        candidate_id="candidate-1",
+        speech_start_ms=900,
+        speech_end_ms=990,
+        target_start_ms=0,
+    )
+
+    clip = locked.timeline_clips[0]
+    assert clip["start_ms"] == 0
+    assert clip["source_start_ms"] == 900
+    assert clip["end_ms"] == 100
+    bounds = candidate_audible_timeline_bounds(
+        locked.timeline_clips,
+        speech_start_ms=900,
+        speech_end_ms=990,
+    )
+    assert bounds is not None
+    assert bounds[0] == 0
+
+
 def test_word_onset_wins_over_later_vad_while_outer_trim_protects_both():
     word = DubbingCandidateAlignedWord(
         word_id="candidate_word_0001", text="字", start_ms=160, end_ms=940,
@@ -9620,6 +9694,72 @@ def test_window_fit_leading_margin_rejects_a_real_speech_overlap(word_start):
     ) == ("candidate-head", "previous")
 
 
+def test_window_fit_leading_margin_uses_proven_safe_leading_gap_past_vad_onset():
+    # VAD fires early on lead-in breath (speech_start_ms=80) while a leading
+    # gap with a safe edit boundary proves silence up to the first word at
+    # 160.  The trim may reach the word onset, never into it.
+    clips = [{
+        "clip_id": "candidate-head", "track_id": "dub", "status": "ready",
+        "dub_lane": 0, "start_ms": 180_475, "end_ms": 182_130,
+        "source_start_ms": 70, "source_end_ms": 1_725,
+        "audio_path": "candidate.wav",
+    }]
+    audio = SimpleNamespace(
+        speech_start_ms=80,
+        speech_end_ms=1_680,
+        aligned_words=[SimpleNamespace(start_ms=160, end_ms=320),
+                       SimpleNamespace(start_ms=320, end_ms=560)],
+        gap_evidence=[SimpleNamespace(
+            kind="leading", start_ms=0, end_ms=160,
+            safe_edit_boundary=True, overlapping_word_ids=[],
+        )],
+    )
+
+    fitted = dubbing_production_service._fit_leading_safety_margin(
+        clips, audio, earliest_start_ms=180_565,
+    )
+
+    assert fitted == [{
+        **clips[0],
+        "start_ms": 180_565,
+        "source_start_ms": 160,
+        "alignment_lead_ms": 0,
+    }]
+    assert dubbing_production_service._first_ready_dub_overlap(
+        fitted,
+        [{
+            "clip_id": "previous", "track_id": "dub", "status": "ready",
+            "dub_lane": 0, "audio_path": "previous.wav", "start_ms": 178_793, "end_ms": 180_565,
+        }],
+    ) is None
+
+
+def test_window_fit_leading_margin_rejects_leading_gap_with_word_overlap():
+    clips = [{
+        "clip_id": "candidate-head", "track_id": "dub", "status": "ready",
+        "dub_lane": 0, "start_ms": 180_475, "end_ms": 182_130,
+        "source_start_ms": 70, "source_end_ms": 1_725,
+        "audio_path": "candidate.wav",
+    }]
+    audio = SimpleNamespace(
+        speech_start_ms=80,
+        speech_end_ms=1_680,
+        aligned_words=[SimpleNamespace(start_ms=160, end_ms=320)],
+        gap_evidence=[SimpleNamespace(
+            kind="leading", start_ms=0, end_ms=160,
+            safe_edit_boundary=True, overlapping_word_ids=["candidate_word_0001"],
+        )],
+    )
+
+    fitted = dubbing_production_service._fit_leading_safety_margin(
+        clips, audio, earliest_start_ms=180_565,
+    )
+
+    # The overlapped gap proves nothing past the VAD onset (80): only 10ms of
+    # the 90ms excess is provably removable, so the clip stays untouched.
+    assert fitted == clips
+
+
 def test_window_gap_compression_requires_semantics_and_safe_core(monkeypatch):
     from app.domains.video_localization import dubbing_production_service as service
     gap = DubbingAudioGapEvidence(gap_id='safe', kind='internal', start_ms=100, end_ms=460,
@@ -9659,3 +9799,313 @@ def test_manual_split_coverage_is_not_a_new_generation_slot(targets):
     assert run.accepted_group_count == 0
     assert run.status == "needs_attention"
     assert run.attention_group_count == 1
+
+
+def _breath_head_audio(*, speech_start_ms=140, first_word_start_ms=1440,
+                       separation_gap_end_ms=1430, overlapping_word_ids=None):
+    """Real evidence shape from candidate_16926aa0ea43 (dubbing_group_0001)."""
+
+    return SimpleNamespace(
+        speech_start_ms=speech_start_ms,
+        speech_end_ms=4_280,
+        aligned_words=[
+            SimpleNamespace(word_id="candidate_word_0001", text="等",
+                            start_ms=first_word_start_ms, end_ms=1_600),
+            SimpleNamespace(word_id="candidate_word_0002", text="等",
+                            start_ms=1_600, end_ms=1_920),
+            SimpleNamespace(word_id="candidate_word_0003", text="什",
+                            start_ms=3_760, end_ms=4_000),
+            SimpleNamespace(word_id="candidate_word_0004", text="么",
+                            start_ms=4_000, end_ms=4_320),
+        ],
+        gap_evidence=[
+            SimpleNamespace(kind="leading", start_ms=0, end_ms=150,
+                            safe_edit_boundary=True,
+                            overlapping_word_ids=overlapping_word_ids),
+            SimpleNamespace(kind="internal", start_ms=460,
+                            end_ms=separation_gap_end_ms,
+                            safe_edit_boundary=None, overlapping_word_ids=None),
+            SimpleNamespace(kind="internal", start_ms=1_890, end_ms=2_230,
+                            safe_edit_boundary=True, overlapping_word_ids=None),
+            SimpleNamespace(kind="internal", start_ms=2_820, end_ms=3_780,
+                            safe_edit_boundary=True, overlapping_word_ids=None),
+            SimpleNamespace(kind="trailing", start_ms=4_270, end_ms=4_400,
+                            safe_edit_boundary=True, overlapping_word_ids=None),
+        ],
+    )
+
+
+def test_coverage_speech_start_anchors_on_first_word_after_lead_in_breath():
+    from app.domains.video_localization.dubbing_timeline_edit_gate import (
+        coverage_speech_start_ms,
+    )
+
+    # VAD fires on the lead-in breath at 140 while a 970ms internal gap ends
+    # 10ms before the first aligned word; the breath is not target speech.
+    assert coverage_speech_start_ms(_breath_head_audio()) == 1_440
+
+
+def test_coverage_speech_start_keeps_vad_onset_when_no_separation_gap():
+    from app.domains.video_localization.dubbing_timeline_edit_gate import (
+        coverage_speech_start_ms,
+    )
+
+    # The nearest gap stops 200ms short of the first word, so nothing proves
+    # the lead-in发声 is separated from the phoneme onset: stay conservative.
+    audio = _breath_head_audio(separation_gap_end_ms=1_240)
+    assert coverage_speech_start_ms(audio) == 140
+
+
+def test_coverage_speech_start_keeps_vad_onset_when_gap_overlaps_a_word():
+    from app.domains.video_localization.dubbing_timeline_edit_gate import (
+        coverage_speech_start_ms,
+    )
+
+    # The separating gap itself claims word overlap, so it proves nothing
+    # about the lead-in: the conservative VAD onset must win.
+    audio = _breath_head_audio()
+    audio.gap_evidence[1] = SimpleNamespace(
+        kind="internal", start_ms=460, end_ms=1_430,
+        safe_edit_boundary=None,
+        overlapping_word_ids=["candidate_word_0001"],
+    )
+    assert coverage_speech_start_ms(audio) == 140
+
+
+def test_coverage_speech_start_prefers_vad_onset_once_words_start_earlier():
+    from app.domains.video_localization.dubbing_timeline_edit_gate import (
+        coverage_speech_start_ms,
+    )
+
+    audio = _breath_head_audio(speech_start_ms=1_500, first_word_start_ms=1_440)
+    assert coverage_speech_start_ms(audio) == 1_500
+
+
+def test_coverage_speech_start_still_allows_pure_silence_head():
+    from app.domains.video_localization.dubbing_timeline_edit_gate import (
+        coverage_speech_start_ms,
+    )
+
+    audio = _breath_head_audio(speech_start_ms=20)
+    audio.gap_evidence[0] = SimpleNamespace(
+        kind="leading", start_ms=0, end_ms=1_440,
+        safe_edit_boundary=True, overlapping_word_ids=None,
+    )
+    audio.gap_evidence.pop(1)
+    assert coverage_speech_start_ms(audio) == 1_440
+
+
+def test_breath_head_projection_passes_coverage_while_cut_word_still_fails():
+    from app.domains.video_localization.dubbing_timeline_edit_gate import (
+        coverage_speech_start_ms,
+    )
+    from app.domains.video_localization.dubbing_candidate_alignment import (
+        DubbingCandidateAlignedWord,
+        validate_candidate_clip_coverage,
+    )
+
+    audio = _breath_head_audio()
+    words = [
+        DubbingCandidateAlignedWord(word_id=w.word_id, text=w.text,
+                                    start_ms=w.start_ms, end_ms=w.end_ms)
+        for w in audio.aligned_words
+    ]
+    anchor = coverage_speech_start_ms(audio)
+    assert anchor == 1_440
+    # Close-out trims the head to 80ms before the first word, as required by
+    # the skill, and must still be accepted.
+    validate_candidate_clip_coverage(
+        clips=[{"clip_id": "c1", "source_start_ms": 1_360, "source_end_ms": 1_960},
+               {"clip_id": "c2", "source_start_ms": 3_680, "source_end_ms": 4_400}],
+        words=words, speech_start_ms=anchor, speech_end_ms=4_280,
+    )
+    with pytest.raises(ValueError, match="切入了发音字词"):
+        validate_candidate_clip_coverage(
+            clips=[{"clip_id": "c1", "source_start_ms": 1_500,
+                    "source_end_ms": 4_400}],
+            words=words, speech_start_ms=anchor, speech_end_ms=4_280,
+        )
+    with pytest.raises(ValueError, match="切入了发音字词"):
+        validate_candidate_clip_coverage(
+            clips=[{"clip_id": "c1", "source_start_ms": 0,
+                    "source_end_ms": 4_200}],
+            words=words, speech_start_ms=anchor, speech_end_ms=4_280,
+        )
+
+
+def test_recovery_keeps_older_accepted_take_over_current_non_capacity_failure(monkeypatch):
+    """Non-capacity failures still fall back to the older accepted take."""
+
+    service = DubbingProductionApplicationService()
+    group = SimpleNamespace(group_id="group-1", subtitle_ids=["localized-1"])
+    draft = SimpleNamespace(
+        dubbing_production=SimpleNamespace(
+            active_plan=SimpleNamespace(source_revision="source-1", plan_revision=1, groups=[group]),
+            candidate_inputs=[], candidate_reports=[],
+        ), timeline_clips=[],
+    )
+    monkeypatch.setattr(service, "_require_current_project", lambda _: draft)
+    monkeypatch.setattr(
+        service, "resync_candidate_automatic_cqc",
+        lambda _project, identity: SimpleNamespace(group_id="group-1", candidate_id=identity),
+    )
+    monkeypatch.setattr(
+        service, "finalize_generated_candidate",
+        lambda _project, identity, _group, **_kwargs: (
+            "retryable_failure" if identity == "current" else "accepted"
+        ),
+    )
+
+    assert service.recover_and_finalize_generated_group(
+        "project", "group-1", ["current", "older"],
+    ) == "accepted"
+
+
+def _breath_head_audio_g4():
+    """Real evidence shape from candidate_401251bf412c (dubbing_group_0004).
+
+    VAD fires on a lead-in breath at 190 while the first word starts at 1280;
+    a wordless internal gap 400-1340 separates the breath from that word.
+    """
+
+    return SimpleNamespace(
+        speech_start_ms=190,
+        speech_end_ms=1930,
+        aligned_words=[
+            SimpleNamespace(word_id="w1", text="我", start_ms=1280, end_ms=1360),
+            SimpleNamespace(word_id="w2", text="们", start_ms=1360, end_ms=1520),
+            SimpleNamespace(word_id="w3", text="来", start_ms=1520, end_ms=1680),
+            SimpleNamespace(word_id="w4", text="看", start_ms=1680, end_ms=1760),
+            SimpleNamespace(word_id="w5", text="看", start_ms=1760, end_ms=1920),
+        ],
+        gap_evidence=[
+            SimpleNamespace(kind="leading", start_ms=0, end_ms=200,
+                            safe_edit_boundary=True, overlapping_word_ids=None),
+            SimpleNamespace(kind="internal", start_ms=400, end_ms=1340,
+                            safe_edit_boundary=None, overlapping_word_ids=None),
+            SimpleNamespace(kind="trailing", start_ms=1920, end_ms=2090,
+                            safe_edit_boundary=True, overlapping_word_ids=None),
+        ],
+    )
+
+
+def test_coverage_anchor_allows_breath_gap_reaching_past_first_word():
+    """The separating gap may end slightly after the aligned onset (the low
+    energy mask swallows the quiet word head); touching the word is what
+    proves separation, not an exact end within 50ms."""
+
+    from app.domains.video_localization.dubbing_timeline_edit_gate import (
+        coverage_speech_start_ms,
+    )
+
+    assert coverage_speech_start_ms(_breath_head_audio_g4()) == 1280
+
+
+def test_fit_leading_margin_crops_breath_head_before_neighbour():
+    """Group 0004: the locked head starts at 14801 with the breath, overlapping
+    the previous clip that ends at 15257.  The lead-in (breath + the wordless
+    gap up to the first word at 1280) is removable, so the crop must be able to
+    move the frame to 15257 while the first word keeps its anchor at 15971."""
+
+    clips = [{
+        "clip_id": "clip_localized_cue_0004", "track_id": "dub", "status": "ready",
+        "dub_lane": 0, "start_ms": 14801, "end_ms": 16701,
+        "source_start_ms": 110, "source_end_ms": 2010,
+        "audio_path": "candidate.wav",
+    }]
+
+    fitted = dubbing_production_service._fit_leading_safety_margin(
+        clips, _breath_head_audio_g4(), earliest_start_ms=15257,
+    )
+
+    head = fitted[0]
+    assert head["start_ms"] == 15257
+    assert head["source_start_ms"] == 566
+    # The first word stays on its locked anchor: 15257 + (1280 - 566) = 15971.
+    word_anchor = head["start_ms"] + (1280 - head["source_start_ms"])
+    assert word_anchor == 15971
+    # After the crop the protected (clip-intersected) speech begins at the
+    # frame edge, so it can touch but not overlap the previous clip at 15257.
+    from app.domains.video_localization.dubbing_timeline_edit_gate import (
+        first_protected_audio_overlap,
+    )
+    previous = [{
+        "clip_id": "clip_localized_cue_0003", "track_id": "dub", "status": "ready",
+        "dub_lane": 0, "start_ms": 14517, "end_ms": 15257,
+        "source_start_ms": 80, "source_end_ms": 820,
+        "audio_path": "previous.wav",
+    }]
+    assert first_protected_audio_overlap(fitted, previous, _breath_head_audio_g4()) is None
+
+
+def test_retained_gap_replay_is_skipped_when_it_would_overflow_the_window():
+    """Evidence refresh may re-mark a deliberately removed pause as retained.
+
+    Replaying it would push the last slice past the group's capacity boundary
+    on every refresh, so with ``latest_end_ms`` bounding the span the already
+    closed-out layout stays authoritative and the pause stays removed.
+    """
+
+    draft = VideoLocalizationDraft(
+        timeline_clips=[
+            {
+                "clip_id": "clip-left",
+                "track_id": "dub",
+                "candidate_id": "candidate-1",
+                "start_ms": 10_000,
+                "end_ms": 11_000,
+                "source_start_ms": 0,
+                "source_end_ms": 1_000,
+                "alignment_trail_ms": 80,
+            },
+            {
+                "clip_id": "clip-right",
+                "track_id": "dub",
+                "candidate_id": "candidate-1",
+                "start_ms": 11_000,
+                "end_ms": 12_000,
+                "source_start_ms": 1_400,
+                "source_end_ms": 2_400,
+                "dubbing_timeline_gap_before_ms": 0,
+            },
+        ]
+    )
+    retained = DubbingAudioGapEvidence(
+        gap_id="gap-retained",
+        kind="internal",
+        start_ms=900,
+        end_ms=1_500,
+        duration_ms=600,
+        evidence_sources=["word_alignment"],
+        evidence_ids=["word_alignment:gap"],
+        boundary_confidence="clear",
+        edit_decision="retain",
+        retained_duration_ms=600,
+        decision_reason="语义停顿",
+        safe_edit_boundary=True,
+    )
+
+    # Replaying the 400ms pause ends the group at 12_400, past this boundary.
+    kept = dubbing_production_service._with_restored_retained_internal_gaps(
+        draft,
+        candidate_id="candidate-1",
+        reviewed_gaps=[retained],
+        latest_end_ms=12_000,
+    )
+
+    left, right = kept.timeline_clips
+    assert left["source_end_ms"] == 1_000
+    assert left["end_ms"] == 11_000
+    assert right["start_ms"] == 11_000
+    assert right["end_ms"] == 12_000
+
+    # A boundary with enough room still replays the pause.
+    roomy = dubbing_production_service._with_restored_retained_internal_gaps(
+        draft,
+        candidate_id="candidate-1",
+        reviewed_gaps=[retained],
+        latest_end_ms=13_000,
+    )
+    left, right = roomy.timeline_clips
+    assert left["source_end_ms"] == 1_400
+    assert right["end_ms"] == 12_400

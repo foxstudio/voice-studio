@@ -44,6 +44,68 @@ def candidate_protected_speech_bounds(audio):
     return onset, end
 
 
+LEAD_IN_SEPARATION_TOLERANCE_MS = 50
+
+
+def separation_gap_reaches_first_word(gap, first_word_start_ms) -> bool:
+    """A wordless gap touching the first word proves the lead-in is separate.
+
+    The lead-in can be pure silence or breath noise; what matters is that a
+    gap without word overlap reaches from before the first word up to its
+    onset (the energy mask may swallow the quiet word head, hence the
+    tolerance).  Only then may coverage anchors and leading-frame crops
+    ignore the lead-in instead of protecting it as speech.
+    """
+
+    def value(item, key, default=None):
+        return item.get(key, default) if isinstance(item, dict) else getattr(item, key, default)
+
+    if value(gap, "overlapping_word_ids"):
+        return False
+    return (
+        int(value(gap, "start_ms")) <= first_word_start_ms
+        and int(value(gap, "end_ms"))
+        >= first_word_start_ms - LEAD_IN_SEPARATION_TOLERANCE_MS
+    )
+
+
+def coverage_speech_start_ms(audio):
+    """Anchor coverage validation on aligned words when VAD fires on breath.
+
+    The VAD onset can land on lead-in noise (a breath or mouth sound) well
+    before the first aligned word, while close-out correctly trims the head
+    down to the word's onset.  A gap that ends within ``_SEPARATION_``
+    tolerance of the first word and touches no word proves that lead-in is
+    acoustically separated from the phoneme, so it is not target speech that
+    coverage must preserve.  This accepts either a pure-silence head (a
+    ``leading`` gap covering the onset) or a breath head (the onset is voiced
+    but wordless, followed by a gap right before the first word).  Without
+    such a separating gap the VAD onset stays the conservative anchor, and
+    word coverage independently rejects any projection that cuts into
+    or drops a word.
+    """
+
+    def value(item, key, default=None):
+        return item.get(key, default) if isinstance(item, dict) else getattr(item, key, default)
+
+    speech_start_ms = value(audio, "speech_start_ms")
+    if speech_start_ms is None:
+        return None
+    words = [
+        word for word in value(audio, "aligned_words", []) or []
+        if value(word, "end_ms", 0) > value(word, "start_ms", 0)
+    ]
+    if not words:
+        return speech_start_ms
+    first_word_start_ms = min(value(word, "start_ms") for word in words)
+    if int(speech_start_ms) >= first_word_start_ms:
+        return speech_start_ms
+    for gap in value(audio, "gap_evidence", None) or []:
+        if separation_gap_reaches_first_word(gap, first_word_start_ms):
+            return first_word_start_ms
+    return speech_start_ms
+
+
 def first_protected_audio_overlap(candidate_clips, other_clips, audio):
     """Ignore removable edge padding, but never ignore measured speech."""
     onset, end = candidate_protected_speech_bounds(audio)

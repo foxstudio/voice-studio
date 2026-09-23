@@ -430,3 +430,63 @@ def test_ordinary_reservation_behavior_is_unchanged(isolated_draft):
         )
 
     assert caught.value.code == "VIDEO_LOCALIZATION_TTS_SEGMENT_BUSY"
+
+
+def test_capacity_retry_authorizes_group_failure_across_all_open_receipts(isolated_draft):
+    """A group-capacity failure names only the newest receipt identity.
+
+    The repair replaces every open receipt of that group, so authorization
+    matches the failure against the id union of the requested set; each task
+    still has to prove its own generation/placement/audio/frozen conditions.
+    """
+
+    draft = isolated_draft()
+    first = draft.tts_tasks[0]
+    second = first.model_copy(deep=True, update={
+        "workflow_id": "workflow-old-2",
+        "generation_task_id": "task-old-2",
+        "result_id": "result-old-2",
+    })
+    second_candidate = {
+        **draft.generated_candidates[0],
+        "candidate_id": "candidate_task-old-2",
+        "task_id": "task-old-2",
+        "result_id": "result-old-2",
+    }
+    draft.tts_tasks = [*draft.tts_tasks, second]
+    draft.generated_candidates = [*draft.generated_candidates, second_candidate]
+
+    # The failure record still points at the first receipt's candidate identity.
+    assert isolated_draft().dubbing_production.group_failures[0].candidate_id == f"candidate_{TASK_ID}"
+
+    reserved = _reserve(
+        isolated_draft,
+        capacity_replaces_workflow_ids=[WORKFLOW_ID, "workflow-old-2"],
+    )
+
+    assert reserved is not None
+    assert reserved.workflow_id == "workflow-new"
+    after = isolated_draft()
+    # Authorization never mutates the old receipts themselves.
+    assert after.tts_tasks[0].stages[1].status == "running"
+    assert next(t for t in after.tts_tasks if t.workflow_id == "workflow-old-2").stages[1].status == "running"
+
+
+def test_capacity_retry_rejects_failure_outside_replacement_set(isolated_draft):
+    """A failure naming no identity of the requested receipts stays rejected."""
+
+    draft = isolated_draft()
+    draft.dubbing_production = draft.dubbing_production.model_copy(
+        update={
+            "group_failures": [
+                draft.dubbing_production.group_failures[0].model_copy(
+                    update={"candidate_id": "candidate_ghost"}
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(AppException) as caught:
+        _reserve(isolated_draft)
+
+    assert caught.value.code == "VIDEO_LOCALIZATION_TTS_CAPACITY_REPLACEMENT_INVALID"
