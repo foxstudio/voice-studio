@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 import sys
 import time
 import urllib.error
@@ -464,10 +465,13 @@ def execute_group(
         "group_id": group_id,
         "review_mode": review_mode,
     }
+    if speed_baseline is not None:
+        # A run-level ordinary baseline is what keeps adjacent groups at one
+        # audible pace; without it every group falls back to its own
+        # text-pressure guess and the range drifts between 1.0 and 1.3.
+        payload["ordinary_speed_baseline"] = speed_baseline
     if regenerate:
         payload["regenerate_existing"] = True
-        if speed_baseline is not None:
-            payload["ordinary_speed_baseline"] = speed_baseline
     return api(
         base_url,
         f"{dubbing_base(base_url, project_id)}/production-run/execute",
@@ -526,7 +530,12 @@ def advance_group(
                 speed_baseline=speed_baseline,
             )
         else:
-            response = execute_group(base_url, project_id, group_id)
+            response = execute_group(
+                base_url,
+                project_id,
+                group_id,
+                speed_baseline=speed_baseline,
+            )
         if str(response.get("required_action") or "") == "resolve_capacity":
             # Proven physical overflow: only the Agent can decide C1–C6, so
             # stop polling instead of burning rounds on the same refusal.
@@ -542,6 +551,61 @@ def advance_group(
     raise ApiError(f"{group_id} 在 {max_rounds} 轮内没有稳定，请读取 status 检查")
 
 
+def recent_formal_speeds(
+    base_url: str,
+    project_id: str,
+    *,
+    limit: int = 3,
+) -> list[float]:
+    """Speeds of the most recent successful, non-exception generations."""
+
+    tasks = api(base_url, f"{dubbing_base(base_url, project_id)}/tts/tasks")
+    items = tasks if isinstance(tasks, list) else tasks.get("tasks") or []
+    ordered = sorted(
+        items,
+        key=lambda item: str(item.get("created_at") or ""),
+        reverse=True,
+    )
+    speeds: list[float] = []
+    for item in ordered:
+        if str(item.get("status")) != "success" or not item.get("result_id"):
+            continue
+        for stage in item.get("stages") or []:
+            if str(stage.get("kind")) != "generation":
+                continue
+            parameters = stage.get("parameters") or {}
+            if parameters.get("content_speed_exception_reason"):
+                continue
+            speed = parameters.get("speed")
+            if isinstance(speed, (int, float)) and float(speed) > 0:
+                speeds.append(round(float(speed), 2))
+            break
+        if len(speeds) >= limit:
+            break
+    return speeds
+
+
+def resolve_ordinary_speed_baseline(
+    base_url: str,
+    project_id: str,
+    override: float | None = None,
+) -> float | None:
+    """Frozen ordinary speed for the range: explicit value, then recent median.
+
+    The Skill orders the sources as user value, persisted range baseline, the
+    median of the last three ordinary formal clips, and finally the first
+    group's text-pressure estimate.  Returning ``None`` leaves that estimate to
+    the service, which is correct only for a range that has no history yet.
+    """
+
+    if override is not None:
+        return round(float(override), 2)
+    speeds = recent_formal_speeds(base_url, project_id)
+    if not speeds:
+        return None
+    return round(float(statistics.median(speeds)), 2)
+
+
 def command_status(args: argparse.Namespace) -> int:
     run = read_run(args.base_url, args.project)
     print(json.dumps(summarize(run), ensure_ascii=False, indent=2))
@@ -549,6 +613,11 @@ def command_status(args: argparse.Namespace) -> int:
 
 
 def command_advance(args: argparse.Namespace) -> int:
+    speed_baseline = resolve_ordinary_speed_baseline(
+        args.base_url,
+        args.project,
+        args.speed_baseline,
+    )
     targets = [args.group] if args.group else [
         item["group_id"] for item in unfinished_groups(read_run(args.base_url, args.project))
     ]
@@ -563,7 +632,7 @@ def command_advance(args: argparse.Namespace) -> int:
                 args.project,
                 group_id,
                 regenerate=args.regenerate,
-                speed_baseline=args.speed_baseline,
+                speed_baseline=speed_baseline,
                 poll_seconds=args.poll_seconds,
                 max_rounds=args.max_rounds,
             )
@@ -607,6 +676,11 @@ def command_run(args: argparse.Namespace) -> int:
 
     stalled = 0
     previous: tuple[int, int] | None = None
+    speed_baseline = resolve_ordinary_speed_baseline(
+        args.base_url,
+        args.project,
+        args.speed_baseline,
+    )
     for cycle in range(1, args.max_cycles + 1):
         run = read_run(args.base_url, args.project)
         step = plan_run_step(run)
@@ -626,6 +700,7 @@ def command_run(args: argparse.Namespace) -> int:
                     args.base_url,
                     args.project,
                     group_id,
+                    speed_baseline=speed_baseline,
                     poll_seconds=args.poll_seconds,
                     max_rounds=args.max_rounds,
                 )
@@ -812,7 +887,12 @@ def build_parser() -> argparse.ArgumentParser:
     advance = subparsers.add_parser("advance", help="驱动生成与收口")
     advance.add_argument("--group", default=None, help="只处理这一组，省略则处理全部未完成组")
     advance.add_argument("--regenerate", action="store_true", help="先要求一次新的整组生成")
-    advance.add_argument("--speed-baseline", type=float, default=None, help="重新生成时沿用的冻结速度")
+    advance.add_argument(
+        "--speed-baseline",
+        type=float,
+        default=None,
+        help="整段沿用的冻结速度；省略时取最近三个普通正式片段的中位数",
+    )
     advance.add_argument("--poll-seconds", type=float, default=12.0)
     advance.add_argument("--max-rounds", type=int, default=60)
     advance.add_argument("--keep-going", action="store_true", help="某组需要 Agent 判断时继续处理后面的组")
@@ -856,6 +936,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="连续驱动全部未完成组，只在需要 Agent 判断的边界处停下",
     )
     run.add_argument("--poll-seconds", type=float, default=12.0)
+    run.add_argument(
+        "--speed-baseline",
+        type=float,
+        default=None,
+        help="整段沿用冻结速度；省略时取最近三个普通正式片段的中位数",
+    )
     run.add_argument("--max-rounds", type=int, default=60, help="单组等待轮数上限")
     run.add_argument("--max-cycles", type=int, default=400)
     run.add_argument(

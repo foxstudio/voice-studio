@@ -413,3 +413,69 @@ def test_advance_reports_capacity_recovery_without_polling_rounds(monkeypatch):
     outcome = module.advance_group("http://x", "p", "g", poll_seconds=0, max_rounds=5)
     assert outcome["result"] == "capacity_recovery_required"
     assert calls["execute"] == 1
+
+
+def test_speed_baseline_prefers_explicit_then_recent_median(monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(
+        module,
+        "recent_formal_speeds",
+        lambda *_a, **_k: [1.2, 1.25, 1.3],
+    )
+    assert module.resolve_ordinary_speed_baseline("http://x", "p") == 1.25
+    assert module.resolve_ordinary_speed_baseline("http://x", "p", 1.1) == 1.1
+    monkeypatch.setattr(module, "recent_formal_speeds", lambda *_a, **_k: [])
+    assert module.resolve_ordinary_speed_baseline("http://x", "p") is None
+
+
+def test_recent_formal_speeds_skips_exceptions_and_unfinished(monkeypatch):
+    module = _load_module()
+    payload = [
+        {
+            "status": "success",
+            "result_id": "r1",
+            "created_at": "2026-01-01T00:00:03",
+            "stages": [{"kind": "generation", "parameters": {"speed": 1.25}}],
+        },
+        {
+            "status": "success",
+            "result_id": "r2",
+            "created_at": "2026-01-01T00:00:02",
+            "stages": [
+                {
+                    "kind": "generation",
+                    "parameters": {
+                        "speed": 1.3,
+                        "content_speed_exception_reason": "容量修复",
+                    },
+                }
+            ],
+        },
+        {
+            "status": "needs_attention",
+            "created_at": "2026-01-01T00:00:04",
+            "stages": [{"kind": "generation", "parameters": {"speed": 1.3}}],
+        },
+        {
+            "status": "success",
+            "result_id": "r3",
+            "created_at": "2026-01-01T00:00:01",
+            "stages": [{"kind": "generation", "parameters": {"speed": 1.2}}],
+        },
+    ]
+    monkeypatch.setattr(module, "api", lambda *_a, **_k: payload)
+    assert module.recent_formal_speeds("http://x", "p") == [1.25, 1.2]
+
+
+def test_execute_group_sends_the_baseline_for_ordinary_generation(monkeypatch):
+    module = _load_module()
+    seen = {}
+
+    def fake_api(_base, path, payload=None, **_kwargs):
+        seen["payload"] = payload
+        return {"status": "queued"}
+
+    monkeypatch.setattr(module, "api", fake_api)
+    module.execute_group("http://x", "p", "g", speed_baseline=1.25)
+    assert seen["payload"]["ordinary_speed_baseline"] == 1.25
+    assert "regenerate_existing" not in seen["payload"]
