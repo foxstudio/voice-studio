@@ -572,6 +572,22 @@ def advance_group(
                 }
             time.sleep(poll_seconds)
             continue
+        if str(response.get("status") or "") == "needs_attention" and not response.get("workflow_id"):
+            # The executor already decided this group needs an Agent: either a
+            # capacity call, a manual timeline check, or a semantic split.
+            # Polling the same refusal only burns rounds.
+            return {
+                "group_id": group_id,
+                "result": (
+                    "capacity_recovery_required"
+                    if str(response.get("required_action") or "") == "resolve_capacity"
+                    else "agent_decision_required"
+                ),
+                "stage": "needs_gap_processing",
+                "required_action": response.get("required_action"),
+                "message": response.get("message"),
+                "run": summarize(read_run(base_url, project_id)),
+            }
         if str(response.get("required_action") or "") == "resolve_capacity":
             # Proven physical overflow: only the Agent can decide C1–C6, so
             # stop polling instead of burning rounds on the same refusal.
@@ -992,6 +1008,7 @@ def command_run(args: argparse.Namespace) -> int:
             return 0
         if step["action"] == "advance":
             capacity: list[dict[str, Any]] = []
+            deferred: list[dict[str, Any]] = []
             for group_id in step["group_ids"]:
                 outcome = advance_group(
                     args.base_url,
@@ -1013,7 +1030,7 @@ def command_run(args: argparse.Namespace) -> int:
                     # Anything that needs an Agent decision leaves this group
                     # for the caller to collect, but must not stop the groups
                     # behind it from finishing.
-                    blocked.append(
+                    deferred.append(
                         {
                             "group_id": group_id,
                             "candidate_id": outcome.get("candidate_id"),
@@ -1024,13 +1041,18 @@ def command_run(args: argparse.Namespace) -> int:
                         }
                     )
                     continue
-            if capacity:
+            if capacity or deferred:
                 print(
                     json.dumps(
                         {
-                            "result": "capacity_recovery_required",
+                            "result": (
+                                "capacity_recovery_required"
+                                if capacity
+                                else "agent_decision_required"
+                            ),
                             "cycle": cycle,
                             "groups": capacity,
+                            "deferred": deferred,
                             "summary": summarize(read_run(args.base_url, args.project)),
                         },
                         ensure_ascii=False,
