@@ -518,7 +518,7 @@ def advance_group(
             }
         if regenerate and not regenerated:
             regenerated = True
-            execute_group(
+            response = execute_group(
                 base_url,
                 project_id,
                 group_id,
@@ -526,7 +526,18 @@ def advance_group(
                 speed_baseline=speed_baseline,
             )
         else:
-            execute_group(base_url, project_id, group_id)
+            response = execute_group(base_url, project_id, group_id)
+        if str(response.get("required_action") or "") == "resolve_capacity":
+            # Proven physical overflow: only the Agent can decide C1–C6, so
+            # stop polling instead of burning rounds on the same refusal.
+            return {
+                "group_id": group_id,
+                "result": "capacity_recovery_required",
+                "stage": "needs_gap_processing",
+                "required_action": "resolve_capacity",
+                "message": response.get("message"),
+                "run": summarize(read_run(base_url, project_id)),
+            }
         time.sleep(poll_seconds)
     raise ApiError(f"{group_id} 在 {max_rounds} 轮内没有稳定，请读取 status 检查")
 
@@ -609,6 +620,7 @@ def command_run(args: argparse.Namespace) -> int:
             )
             return 0
         if step["action"] == "advance":
+            capacity: list[dict[str, Any]] = []
             for group_id in step["group_ids"]:
                 outcome = advance_group(
                     args.base_url,
@@ -617,8 +629,30 @@ def command_run(args: argparse.Namespace) -> int:
                     poll_seconds=args.poll_seconds,
                     max_rounds=args.max_rounds,
                 )
+                if outcome["result"] == "capacity_recovery_required":
+                    capacity.append(
+                        {
+                            "group_id": group_id,
+                            "message": outcome.get("message"),
+                        }
+                    )
+                    continue
                 if outcome["result"] != "terminal":
                     break
+            if capacity:
+                print(
+                    json.dumps(
+                        {
+                            "result": "capacity_recovery_required",
+                            "cycle": cycle,
+                            "groups": capacity,
+                            "summary": summarize(read_run(args.base_url, args.project)),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return 2
         else:
             blocked: list[dict[str, Any]] = []
             for group_id in step["group_ids"]:

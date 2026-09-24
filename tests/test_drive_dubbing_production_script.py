@@ -393,3 +393,23 @@ def test_merge_agent_decisions_rejects_unknown_and_duplicate_boundaries():
             [{**decision, "boundary_id": "不:存在"}],
             gap_policy="evidenced",
         )
+
+
+def test_advance_reports_capacity_recovery_without_polling_rounds(monkeypatch):
+    module = _load_module()
+    calls = {"execute": 0}
+
+    def fake_execute(*_args, **_kwargs):
+        calls["execute"] += 1
+        return {
+            "status": "needs_attention",
+            "required_action": "resolve_capacity",
+            "message": "超出实际时间窗",
+        }
+
+    monkeypatch.setattr(module, "read_run", lambda *_a, **_k: _run_with({"g": "needs_gap_processing"}))
+    monkeypatch.setattr(module, "find_group", lambda run, group_id: {"group_id": group_id, "stage": "needs_gap_processing"})
+    monkeypatch.setattr(module, "execute_group", fake_execute)
+    outcome = module.advance_group("http://x", "p", "g", poll_seconds=0, max_rounds=5)
+    assert outcome["result"] == "capacity_recovery_required"
+    assert calls["execute"] == 1
