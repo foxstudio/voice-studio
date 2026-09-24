@@ -664,7 +664,7 @@ def plan_alignment_slices(
                 range_item["word_end_ms"],
                 ranges[index + 1]["word_start_ms"] - lead_ms,
             )
-            source_end = min(audio_end_ms, boundary)
+            source_end = min(source_end_ms, boundary)
         if source_end <= source_start:
             return None
         previous_source_end = source_end
