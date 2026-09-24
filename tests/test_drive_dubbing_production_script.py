@@ -322,7 +322,7 @@ def test_run_step_completes_when_every_group_is_terminal():
     assert plan == {"action": "complete", "group_ids": []}
 
 
-def _audit_with_two_boundaries(first_gap: int = 0, second_gap: int = 2000) -> dict:
+def _audit_with_two_boundaries(first_gap: int = 0, second_gap: int = 3000) -> dict:
     def boundary(left, right, gap):
         return {
             "boundary_id": f"{left}:{right}",
