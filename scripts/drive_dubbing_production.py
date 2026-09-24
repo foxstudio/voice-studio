@@ -102,8 +102,12 @@ def api(
     )
 
 
+def localization_base(project_id: str) -> str:
+    return f"/api/projects/{project_id}/video-localization"
+
+
 def dubbing_base(base_url: str, project_id: str) -> str:
-    return f"/api/projects/{project_id}/video-localization/dubbing"
+    return f"{localization_base(project_id)}/dubbing"
 
 
 def read_run(base_url: str, project_id: str) -> dict[str, Any]:
@@ -559,7 +563,7 @@ def recent_formal_speeds(
 ) -> list[float]:
     """Speeds of the most recent successful, non-exception generations."""
 
-    tasks = api(base_url, f"{dubbing_base(base_url, project_id)}/tts/tasks")
+    tasks = api(base_url, f"{localization_base(project_id)}/tts/tasks")
     items = tasks if isinstance(tasks, list) else tasks.get("tasks") or []
     ordered = sorted(
         items,

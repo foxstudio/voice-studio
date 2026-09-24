@@ -479,3 +479,16 @@ def test_execute_group_sends_the_baseline_for_ordinary_generation(monkeypatch):
     module.execute_group("http://x", "p", "g", speed_baseline=1.25)
     assert seen["payload"]["ordinary_speed_baseline"] == 1.25
     assert "regenerate_existing" not in seen["payload"]
+
+
+def test_recent_formal_speeds_reads_the_project_tts_route(monkeypatch):
+    module = _load_module()
+    seen = {}
+
+    def fake_api(_base, path, **_kwargs):
+        seen["path"] = path
+        return []
+
+    monkeypatch.setattr(module, "api", fake_api)
+    module.recent_formal_speeds("http://x", "project-1")
+    assert seen["path"] == "/api/projects/project-1/video-localization/tts/tasks"
