@@ -492,3 +492,91 @@ def test_recent_formal_speeds_reads_the_project_tts_route(monkeypatch):
     monkeypatch.setattr(module, "api", fake_api)
     module.recent_formal_speeds("http://x", "project-1")
     assert seen["path"] == "/api/projects/project-1/video-localization/tts/tasks"
+
+
+def _alignment_audit(words):
+    return {
+        "expected_spoken_text": "".join(item[0] for item in words),
+        "aligned_words": [
+            {
+                "word_id": f"w{index}",
+                "text": text,
+                "start_ms": start,
+                "end_ms": end,
+            }
+            for index, (text, start, end) in enumerate(words)
+        ],
+    }
+
+
+def _alignment_clip(source_start_ms=0, source_end_ms=6000):
+    return {
+        "clip_id": "clip_1",
+        "candidate_id": "candidate_1",
+        "start_ms": 1000,
+        "end_ms": 7000,
+        "source_start_ms": source_start_ms,
+        "source_end_ms": source_end_ms,
+        "target_subtitle_ids": ["s1", "s2"],
+    }
+
+
+def test_plan_alignment_slices_tiles_the_crop_and_aligns_each_line():
+    module = _load_module()
+    audit = _alignment_audit(
+        [("早", 100, 400), ("安", 400, 700), ("好", 700, 900), ("再", 3000, 3300), ("见", 3300, 3600)]
+    )
+    subtitles = [
+        # First line already starts where the take starts: 1000 + (100 - 80).
+        {"subtitle_id": "s1", "text": "早安好", "start_ms": 1020},
+        {"subtitle_id": "s2", "text": "再见", "start_ms": 5000},
+    ]
+    plan = module.plan_alignment_slices(
+        audit,
+        _alignment_clip(source_start_ms=80, source_end_ms=3700),
+        subtitles,
+    )
+    assert plan is not None
+    slices = plan["slices"]
+    assert [item["target_subtitle_ids"] for item in slices] == [["s1"], ["s2"]]
+    assert slices[0]["source_start_ms"] == 80
+    assert slices[-1]["source_end_ms"] == 3700
+    assert slices[0]["source_end_ms"] == slices[1]["source_start_ms"]
+    # Slice one runs 80..2920 from timeline 1000, so the next line waits
+    # until its own cue at 5000.
+    assert slices[1]["timeline_gap_before_ms"] == 5000 - (1000 + (2920 - 80))
+    assert plan["max_deviation_ms"] > 0
+
+
+def test_plan_alignment_slices_skips_an_already_aligned_take():
+    module = _load_module()
+    audit = _alignment_audit([("早", 100, 400), ("安", 400, 700), ("好", 700, 900), ("再", 1000, 1300)])
+    subtitles = [
+        {"subtitle_id": "s1", "text": "早安好", "start_ms": 1100},
+        {"subtitle_id": "s2", "text": "再", "start_ms": 2000},
+    ]
+    assert (
+        module.plan_alignment_slices(
+            audit,
+            _alignment_clip(source_start_ms=80, source_end_ms=1400),
+            subtitles,
+        )
+        is None
+    )
+
+
+def test_plan_alignment_slices_refuses_unmatchable_text():
+    module = _load_module()
+    audit = _alignment_audit([("早", 100, 400), ("安", 400, 700)])
+    subtitles = [
+        {"subtitle_id": "s1", "text": "早安", "start_ms": 100},
+        {"subtitle_id": "s2", "text": "完全不同", "start_ms": 2000},
+    ]
+    assert (
+        module.plan_alignment_slices(
+            audit,
+            _alignment_clip(source_start_ms=80, source_end_ms=800),
+            subtitles,
+        )
+        is None
+    )

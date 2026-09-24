@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import statistics
 import sys
 import time
@@ -555,6 +556,265 @@ def advance_group(
     raise ApiError(f"{group_id} 在 {max_rounds} 轮内没有稳定，请读取 status 检查")
 
 
+ALIGNMENT_LEAD_MS = 80
+ALIGNMENT_THRESHOLD_MS = 250
+_ALIGNMENT_PUNCTUATION = "，。！？；：、…—,.!?;:~「」『』（）()《》〈〉\"' "
+
+
+def _alignment_text(value: Any) -> str:
+    return re.sub(
+        f"[{re.escape(_ALIGNMENT_PUNCTUATION)}]",
+        "",
+        str(value or ""),
+    )
+
+
+def match_subtitle_word_ranges(
+    audit: dict[str, Any],
+    subtitles: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Locate every subtitle of one take inside its aligned word timeline."""
+
+    words = [
+        {
+            "text": _alignment_text(item.get("text")),
+            "start_ms": int(item.get("start_ms") or 0),
+            "end_ms": int(item.get("end_ms") or 0),
+            "word_id": str(item.get("word_id") or ""),
+        }
+        for item in audit.get("aligned_words") or []
+    ]
+    words = [item for item in words if item["text"]]
+    cursor = 0
+    ranges: list[dict[str, Any]] = []
+    for subtitle in subtitles:
+        target = _alignment_text(subtitle.get("text"))
+        if not target:
+            return []
+        start_index = cursor
+        consumed = ""
+        end_index = cursor
+        while end_index < len(words) and len(consumed) < len(target):
+            consumed += words[end_index]["text"]
+            end_index += 1
+        if not consumed.startswith(target):
+            return []
+        ranges.append(
+            {
+                "subtitle_id": str(subtitle.get("subtitle_id") or ""),
+                "target_start_ms": int(subtitle.get("start_ms") or 0),
+                "word_start_ms": words[start_index]["start_ms"],
+                "word_end_ms": words[end_index - 1]["end_ms"],
+                "word_ids": [item["word_id"] for item in words[start_index:end_index]],
+            }
+        )
+        cursor = end_index
+    return ranges
+
+
+def plan_alignment_slices(
+    audit: dict[str, Any],
+    clip: dict[str, Any],
+    subtitles: list[dict[str, Any]],
+    *,
+    threshold_ms: int = ALIGNMENT_THRESHOLD_MS,
+    lead_ms: int = ALIGNMENT_LEAD_MS,
+) -> dict[str, Any] | None:
+    """Split one take so each subtitle starts with its own source cue.
+
+    Returns ``None`` when the take already matches its subtitles, when the
+    subtitle text cannot be located in the aligned words, or when there is only
+    one subtitle to place.  A negative gap (the previous slice would run past
+    the next subtitle) is clamped to zero, which keeps the slices adjacent
+    instead of overlapping; the caller reports that as a warning.
+    """
+
+    ranges = match_subtitle_word_ranges(audit, subtitles)
+    if len(ranges) < 2:
+        return None
+    clip_start_ms = int(clip.get("start_ms") or 0)
+    source_start_ms = int(clip.get("source_start_ms") or 0)
+    source_end_ms = int(clip.get("source_end_ms") or 0)
+    deviations = [
+        clip_start_ms + range_item["word_start_ms"] - source_start_ms - range_item["target_start_ms"]
+        for range_item in ranges
+    ]
+    if max(abs(value) for value in deviations) <= threshold_ms:
+        return None
+    slices: list[dict[str, Any]] = []
+    previous_end_ms: int | None = None
+    previous_source_end: int | None = None
+    clamped = False
+    for index, range_item in enumerate(ranges):
+        if previous_source_end is None:
+            # The slices must tile the whole candidate crop: the service
+            # refuses a split that leaves any part of the take uncovered.
+            source_start = max(0, source_start_ms)
+        else:
+            # Share one cut point with the previous slice: two independent
+            # safety margins would overlap by their sum and replay the same
+            # audio on both sides of the join.
+            source_start = previous_source_end
+        if index == len(ranges) - 1:
+            # Cover the candidate crop exactly: neither leaving a tail
+            # uncovered nor claiming audio the crop never had.
+            source_end = source_end_ms
+        else:
+            boundary = max(
+                range_item["word_end_ms"],
+                ranges[index + 1]["word_start_ms"] - lead_ms,
+            )
+            source_end = min(audio_end_ms, boundary)
+        if source_end <= source_start:
+            return None
+        previous_source_end = source_end
+        expected_start = range_item["target_start_ms"]
+        if previous_end_ms is None:
+            # The first slice keeps the adopted take's own start; later slices
+            # are positioned from where the previous slice actually ends.
+            gap = 0
+            current_start = clip_start_ms
+        else:
+            gap = expected_start - previous_end_ms
+            if gap < 0:
+                gap = 0
+                clamped = True
+            current_start = max(expected_start, previous_end_ms)
+        slices.append(
+            {
+                "target_subtitle_ids": [range_item["subtitle_id"]],
+                "source_start_ms": source_start,
+                "source_end_ms": source_end,
+                "speech_start_ms": range_item["word_start_ms"],
+                "speech_end_ms": range_item["word_end_ms"],
+                "alignment_word_ids": range_item["word_ids"],
+                "timeline_gap_before_ms": gap,
+            }
+        )
+        previous_end_ms = current_start + (source_end - source_start)
+    return {
+        "clip_id": str(clip.get("clip_id") or ""),
+        "candidate_id": str(clip.get("candidate_id") or ""),
+        "slices": slices,
+        "max_deviation_ms": max(abs(value) for value in deviations),
+        "gap_clamped": clamped,
+    }
+
+
+def read_subtitle_index(
+    base_url: str,
+    project_id: str,
+) -> dict[str, dict[str, Any]]:
+    """Localized subtitles by ID: text plus the target start of each line."""
+
+    draft = api(base_url, localization_base(project_id))
+    draft = draft.get("video_localization") or draft
+    return {
+        str(item.get("subtitle_id")): item
+        for item in draft.get("localized_subtitles") or []
+    }
+
+
+def staged_candidate_clips(
+    base_url: str,
+    project_id: str,
+    candidate_id: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """The candidate's staged projection: its own not-yet-adopted clips."""
+
+    details = api(
+        base_url,
+        f"{localization_base(project_id)}/workspace-details/dubbing_production",
+    )
+    section = details.get("dubbing_production") or details
+    for report in section.get("candidate_reports") or []:
+        if str(report.get("candidate_id")) != candidate_id:
+            continue
+        audit = report.get("semantic_boundary_audit") or {}
+        projection = report.get("staged_candidate_projection") or {}
+        return audit, list(projection.get("clips") or [])
+    audit = read_audit(base_url, project_id, candidate_id)
+    if "error" in audit:
+        raise ApiError(str(audit["error"]))
+    return audit, []
+
+
+def align_candidate(
+    base_url: str,
+    project_id: str,
+    group_id: str,
+    candidate_id: str,
+    *,
+    threshold_ms: int = ALIGNMENT_THRESHOLD_MS,
+) -> dict[str, Any]:
+    """Split a multi-subtitle take so every line starts on its own cue.
+
+    The measurement and the split both come from the durable read model: the
+    take's aligned words locate each subtitle, and the request only moves the
+    safety-proven cut points.  A take that already matches, a single-subtitle
+    take, or text that cannot be located is reported unchanged.
+    """
+
+    run = read_run(base_url, project_id)
+    group = find_group(run, group_id)
+    audit, clips = staged_candidate_clips(
+        base_url,
+        project_id,
+        candidate_id,
+    )
+    if len(clips) != 1:
+        return {"result": "unchanged", "reason": f"候选当前有 {len(clips)} 个暂存片段"}
+    clip = clips[0]
+    subtitles_by_id = read_subtitle_index(base_url, project_id)
+    ordered = [
+        subtitles_by_id[subtitle_id]
+        for subtitle_id in clip.get("target_subtitle_ids") or []
+        if subtitle_id in subtitles_by_id
+    ]
+    if len(ordered) < 2:
+        return {"result": "unchanged", "reason": "该片段只有一条字幕"}
+    plan = plan_alignment_slices(
+        audit,
+        clip,
+        ordered,
+        threshold_ms=threshold_ms,
+    )
+    if plan is None:
+        return {"result": "aligned"}
+    revision = api(
+        base_url,
+        f"{localization_base(project_id)}/workspace-revision",
+    )
+    command = {
+        "clip_id": str(clip.get("clip_id") or ""),
+        "candidate_id": candidate_id,
+        "audio_sha256": str(audit.get("audio_sha256") or ""),
+        "slices": plan["slices"],
+    }
+    body = {
+        "expected_repository_revision": int(revision["revision"]),
+        "source_revision": str(audit.get("source_revision") or ""),
+        "plan_revision": int(audit.get("plan_revision") or 0),
+        "candidate_id": candidate_id,
+        "candidate_clip_projection_fingerprint": str(
+            audit.get("candidate_clip_projection_fingerprint") or ""
+        ),
+        "commands": [command],
+    }
+    response = api(
+        base_url,
+        f"{dubbing_base(base_url, project_id)}/candidates/{candidate_id}/staged-split",
+        body,
+    )
+    return {
+        "result": "split",
+        "slices": len(plan["slices"]),
+        "max_deviation_ms": plan["max_deviation_ms"],
+        "gap_clamped": plan["gap_clamped"],
+        "response_schema": str(response.get("schema_version") or ""),
+    }
+
+
 def recent_formal_speeds(
     base_url: str,
     project_id: str,
@@ -622,6 +882,8 @@ def command_advance(args: argparse.Namespace) -> int:
         args.project,
         args.speed_baseline,
     )
+    if not hasattr(args, "align"):
+        args.align = True
     targets = [args.group] if args.group else [
         item["group_id"] for item in unfinished_groups(read_run(args.base_url, args.project))
     ]
@@ -734,6 +996,7 @@ def command_run(args: argparse.Namespace) -> int:
                 return 2
         else:
             blocked: list[dict[str, Any]] = []
+            aligned: list[dict[str, Any]] = []
             for group_id in step["group_ids"]:
                 current = read_run(args.base_url, args.project)
                 group = find_group(current, group_id)
@@ -761,6 +1024,35 @@ def command_run(args: argparse.Namespace) -> int:
                         }
                     )
                     continue
+                if args.align:
+                    # Split long takes so every subtitle starts on its own cue
+                    # before the take is adopted; a failure here must not block
+                    # the review, it only leaves the take as it was.
+                    try:
+                        alignment = align_candidate(
+                            args.base_url,
+                            args.project,
+                            group_id,
+                            candidate_id,
+                            threshold_ms=args.align_threshold_ms,
+                        )
+                        aligned.append({"group_id": group_id, **alignment})
+                        if alignment.get("result") == "split":
+                            audit = read_audit(
+                                args.base_url,
+                                args.project,
+                                candidate_id,
+                            )
+                            if "error" in audit:
+                                raise ApiError(str(audit["error"]))
+                    except ApiError as exc:
+                        aligned.append(
+                            {
+                                "group_id": group_id,
+                                "result": "unavailable",
+                                "reason": str(exc)[:200],
+                            }
+                        )
                 try:
                     reviews = continuous_reviews(audit, gap_policy=args.gap_policy)
                 except ApiError as exc:
@@ -780,6 +1072,7 @@ def command_run(args: argparse.Namespace) -> int:
                             "result": "agent_decision_required",
                             "cycle": cycle,
                             "groups": blocked,
+                            "alignment": aligned,
                             "summary": summarize(read_run(args.base_url, args.project)),
                         },
                         ensure_ascii=False,
@@ -955,12 +1248,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="连续多少轮既无新完成也无待判断组就退出",
     )
     run.add_argument(
+        "--no-align",
+        action="store_true",
+        help="跳过采用前的逐字幕对齐分片（默认执行）",
+    )
+    run.add_argument(
+        "--align-threshold-ms",
+        type=int,
+        default=ALIGNMENT_THRESHOLD_MS,
+        help="超过该偏差才切分长片段",
+    )
+    run.add_argument(
         "--gap-policy",
         choices=("strict", "evidenced"),
         default="evidenced",
         help="与 review 相同的规则；evidenced 另外接受词边界上已有安全依据的较长停顿",
     )
-    run.set_defaults(handler=command_run)
+    run.set_defaults(handler=command_run, align=True)
 
     return parser
 
