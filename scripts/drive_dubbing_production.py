@@ -437,10 +437,19 @@ def load_review_file(path: Path) -> list[dict[str, Any]]:
 
 
 def read_audit(base_url: str, project_id: str, candidate_id: str) -> dict[str, Any]:
-    return api(
-        base_url,
-        f"{dubbing_base(base_url, project_id)}/candidates/{candidate_id}/semantic-boundaries",
-    )
+    """Boundary evidence of one candidate, or an ``{"error": ...}`` marker.
+
+    Callers already branch on the marker, and a candidate id left over from an
+    earlier plan revision must not abort the whole run.
+    """
+
+    try:
+        return api(
+            base_url,
+            f"{dubbing_base(base_url, project_id)}/candidates/{candidate_id}/semantic-boundaries",
+        )
+    except ApiError as exc:
+        return {"error": str(exc)}
 
 
 def submit_reviews(
@@ -502,6 +511,7 @@ def advance_group(
     """Run the canonical executor until the group is terminal or needs a judge."""
 
     regenerated = False
+    stale_rounds = 0
     for round_index in range(max_rounds):
         run = read_run(base_url, project_id)
         group = find_group(run, group_id)
@@ -530,22 +540,38 @@ def advance_group(
                 ),
                 "run": summarize(run),
             }
-        if regenerate and not regenerated:
-            regenerated = True
-            response = execute_group(
-                base_url,
-                project_id,
-                group_id,
-                regenerate=True,
-                speed_baseline=speed_baseline,
-            )
-        else:
-            response = execute_group(
-                base_url,
-                project_id,
-                group_id,
-                speed_baseline=speed_baseline,
-            )
+        try:
+            if regenerate and not regenerated:
+                regenerated = True
+                response = execute_group(
+                    base_url,
+                    project_id,
+                    group_id,
+                    regenerate=True,
+                    speed_baseline=speed_baseline,
+                )
+            else:
+                response = execute_group(
+                    base_url,
+                    project_id,
+                    group_id,
+                    speed_baseline=speed_baseline,
+                )
+        except ApiError as exc:
+            # A candidate left over from an earlier plan revision no longer
+            # exists.  Keep asking: the next round starts a current generation
+            # for the same group.  Give up only if it stays missing.
+            if "CANDIDATE_NOT_FOUND" not in str(exc):
+                raise
+            stale_rounds += 1
+            if stale_rounds > 3:
+                return {
+                    "group_id": group_id,
+                    "result": "stale_candidate",
+                    "stage": "unknown",
+                }
+            time.sleep(poll_seconds)
+            continue
         if str(response.get("required_action") or "") == "resolve_capacity":
             # Proven physical overflow: only the Agent can decide C1–C6, so
             # stop polling instead of burning rounds on the same refusal.
@@ -1002,6 +1028,7 @@ def command_run(args: argparse.Namespace) -> int:
         else:
             blocked: list[dict[str, Any]] = []
             aligned: list[dict[str, Any]] = []
+            stale: list[dict[str, Any]] = []
             for group_id in step["group_ids"]:
                 current = read_run(args.base_url, args.project)
                 group = find_group(current, group_id)
@@ -1019,7 +1046,29 @@ def command_run(args: argparse.Namespace) -> int:
                         }
                     )
                     continue
-                audit = read_audit(args.base_url, args.project, candidate_id)
+                try:
+                    audit = read_audit(args.base_url, args.project, candidate_id)
+                except ApiError as exc:
+                    # A stale candidate id after a replan is not a judgement
+                    # call: driving the group again produces a current one.
+                    if "CANDIDATE_NOT_FOUND" in str(exc) or "AUDIT_NOT_FOUND" in str(exc):
+                        outcome = advance_group(
+                            args.base_url,
+                            args.project,
+                            group_id,
+                            speed_baseline=speed_baseline,
+                            poll_seconds=args.poll_seconds,
+                            max_rounds=args.max_rounds,
+                        )
+                        stale.append(
+                            {
+                                "group_id": group_id,
+                                "result": outcome.get("result"),
+                                "stage": outcome.get("stage"),
+                            }
+                        )
+                        continue
+                    raise
                 if "error" in audit:
                     blocked.append(
                         {
@@ -1078,6 +1127,7 @@ def command_run(args: argparse.Namespace) -> int:
                             "cycle": cycle,
                             "groups": blocked,
                             "alignment": aligned,
+                            "stale_candidates": stale,
                             "summary": summarize(read_run(args.base_url, args.project)),
                         },
                         ensure_ascii=False,
