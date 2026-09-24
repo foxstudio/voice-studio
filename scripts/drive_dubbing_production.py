@@ -227,7 +227,7 @@ CONTINUOUS_PUNCTUATION = set("，。！？；：、…—,.!?;:~")
 # second in a long take.  Anything without that punctuation signal still comes
 # back to the Agent, so this only removes round-trips that the Skill would
 # decide the same way.
-MAX_ACCEPTABLE_JOIN_GAP_MS = 1500
+MAX_ACCEPTABLE_JOIN_GAP_MS = 2500
 NATURAL_INTERNAL_GAP_MS = 90
 
 
