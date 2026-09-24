@@ -239,22 +239,18 @@ def evidenced_pause(boundary: dict[str, Any]) -> bool:
     )
 
 
-def continuous_reviews(
+def rule_reviews(
     audit: dict[str, Any],
     *,
     gap_policy: str = "strict",
-) -> list[dict[str, Any]]:
-    """Disposition list for boundaries the workflow already treats as safe.
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Dispositions the fixed rules prove safe, plus what still needs a judge.
 
-    This encodes the same continuous/semantic-boundary rules the Skill states:
-    a touching or zero-width join, a short internal pause, or a pause that
-    follows real punctuation.  With ``gap_policy="evidenced"`` it also accepts
-    a longer word-boundary pause whose low-energy evidence already records a
-    safety decision.  It refuses to guess whenever a boundary is not fully
-    retained or shows a gap neither rule covers, so anything that needs a
-    judgement call comes back to the Agent instead of being silently accepted
-    here.
+    The returned reviews cover only boundaries the workflow already treats as
+    safe; every other boundary comes back in ``undecided`` with the reason, so
+    the caller can either stop for an Agent decision or supply one itself.
     """
+
 
     if gap_policy not in {"strict", "evidenced"}:
         raise ApiError(f"未知的 gap_policy：{gap_policy}")
@@ -274,7 +270,10 @@ def continuous_reviews(
             left_status != "fully_retained" or right_status != "fully_retained"
         ):
             undecided.append(
-                f"{boundary_id} 字音未完整保留（{left_status}/{right_status}）"
+                {
+                    "boundary_id": boundary_id,
+                    "reason": f"{left}｜{right} 字音未完整保留（{left_status}/{right_status}）",
+                }
             )
             continue
         punctuation = None
@@ -304,7 +303,12 @@ def continuous_reviews(
                 "关联低能量区已记录安全处理依据，保留该停顿。"
             )
         else:
-            undecided.append(f"{boundary_id} {left}|{right} 存在 {gap}ms 长间隙")
+            undecided.append(
+                {
+                    "boundary_id": boundary_id,
+                    "reason": f"{left}｜{right} 存在 {gap}ms 长间隙",
+                }
+            )
             continue
         reviews.append(
             {
@@ -315,11 +319,98 @@ def continuous_reviews(
                 "evidence_id": None,
             }
         )
+    return reviews, undecided
+
+
+def continuous_reviews(
+    audit: dict[str, Any],
+    *,
+    gap_policy: str = "strict",
+) -> list[dict[str, Any]]:
+    """Disposition list for boundaries the workflow already treats as safe.
+
+    This encodes the same continuous/semantic-boundary rules the Skill states:
+    a touching or zero-width join, a short internal pause, or a pause that
+    follows real punctuation.  With ``gap_policy="evidenced"`` it also accepts
+    a longer word-boundary pause whose low-energy evidence already records a
+    safety decision.  It refuses to guess whenever a boundary is not fully
+    retained or shows a gap neither rule covers, so anything that needs a
+    judgement call comes back to the Agent instead of being silently accepted
+    here.
+    """
+
+    reviews, undecided = rule_reviews(audit, gap_policy=gap_policy)
     if undecided:
         raise ApiError(
-            "以下边界需要 Agent 判断，不能按明显连续处理：" + "；".join(undecided[:8])
+            "以下边界需要 Agent 判断，不能按明显连续处理："
+            + "；".join(f"{item['boundary_id']} {item['reason']}" for item in undecided[:8])
         )
     return reviews
+
+
+def merge_agent_decisions(
+    audit: dict[str, Any],
+    decisions: list[dict[str, Any]],
+    *,
+    gap_policy: str = "strict",
+) -> list[dict[str, Any]]:
+    """Combine fixed-rule dispositions with the Agent's own boundary calls.
+
+    The rules still decide everything they can prove; ``decisions`` may only
+    fill in boundaries the rules left open.  Unknown boundaries, duplicate
+    entries and missing calls are refused so a partial hand-written list can
+    never silently stand in for a full review.
+    """
+
+    reviews, undecided = rule_reviews(audit, gap_policy=gap_policy)
+    known = {str(item.get("boundary_id")) for item in audit.get("boundaries", [])}
+    decided: dict[str, dict[str, Any]] = {}
+    for item in decisions:
+        if not isinstance(item, dict):
+            raise ApiError("每条 Agent 判断都必须是对象")
+        boundary_id = str(item.get("boundary_id") or "")
+        if not boundary_id:
+            raise ApiError("Agent 判断缺少 boundary_id")
+        if boundary_id in decided:
+            raise ApiError(f"Agent 判断重复：{boundary_id}")
+        if boundary_id not in known:
+            raise ApiError(f"Agent 判断引用了不存在的边界：{boundary_id}")
+        role = str(item.get("semantic_role") or "")
+        disposition = str(item.get("disposition") or "")
+        reason = str(item.get("reason") or "").strip()
+        if role not in {"semantic_boundary", "continuous_phrase"}:
+            raise ApiError(f"{boundary_id} 的 semantic_role 无效")
+        if disposition not in {"acceptable", "recover", "uncertain"}:
+            raise ApiError(f"{boundary_id} 的 disposition 无效")
+        if not reason:
+            raise ApiError(f"{boundary_id} 缺少判断理由")
+        decided[boundary_id] = {
+            "boundary_id": boundary_id,
+            "semantic_role": role,
+            "disposition": disposition,
+            "reason": reason,
+            "evidence_id": item.get("evidence_id"),
+        }
+    missing = [
+        item["boundary_id"]
+        for item in undecided
+        if item["boundary_id"] not in decided
+    ]
+    if missing:
+        raise ApiError(
+            "仍有边界需要 Agent 判断：" + "；".join(missing[:8])
+        )
+    reviews.extend(decided[item["boundary_id"]] for item in undecided)
+    return reviews
+
+
+def load_decision_file(path: Path) -> list[dict[str, Any]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict) and "semantic_boundary_reviews" in payload:
+        payload = payload["semantic_boundary_reviews"]
+    if not isinstance(payload, list) or not payload:
+        raise ApiError("Agent 判断文件需要是非空的边界处置数组")
+    return payload
 
 
 def load_review_file(path: Path) -> list[dict[str, Any]]:
@@ -656,7 +747,14 @@ def command_review(args: argparse.Namespace) -> int:
         audit = read_audit(args.base_url, args.project, candidate_id)
         if "error" in audit:
             raise ApiError(str(audit["error"]))
-        reviews = continuous_reviews(audit, gap_policy=args.gap_policy)
+        if args.decisions:
+            reviews = merge_agent_decisions(
+                audit,
+                load_decision_file(Path(args.decisions)),
+                gap_policy=args.gap_policy,
+            )
+        else:
+            reviews = continuous_reviews(audit, gap_policy=args.gap_policy)
     else:
         if not args.file:
             raise ApiError("review 需要 --file，或显式使用 --accept-continuous")
@@ -702,6 +800,11 @@ def build_parser() -> argparse.ArgumentParser:
             "按固定规则处置已证明连续或标点后的边界；字音未完整或长间隙会报错"
             "交由 Agent 判断"
         ),
+    )
+    review.add_argument(
+        "--decisions",
+        default=None,
+        help="Agent 对规则无法判定的边界给出的处置 JSON；与 --accept-continuous 合用",
     )
     review.add_argument(
         "--gap-policy",

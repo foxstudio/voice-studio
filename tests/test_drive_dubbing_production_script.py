@@ -320,3 +320,76 @@ def test_run_step_completes_when_every_group_is_terminal():
         )
     )
     assert plan == {"action": "complete", "group_ids": []}
+
+
+def _audit_with_two_boundaries(first_gap: int = 0, second_gap: int = 1200) -> dict:
+    def boundary(left, right, gap):
+        return {
+            "boundary_id": f"{left}:{right}",
+            "left_text": left,
+            "right_text": right,
+            "final_gap_ms": gap,
+            "final_relation": "separated" if gap else "touching",
+            "left_render_status": "fully_retained",
+            "right_render_status": "fully_retained",
+            "low_energy_evidence": [],
+        }
+
+    return {
+        "expected_spoken_text": "大家好。还有一点",
+        "boundaries": [
+            boundary("大", "家", first_gap),
+            boundary("好", "还", second_gap),
+        ],
+    }
+
+
+def test_merge_agent_decisions_fills_only_what_rules_cannot_prove():
+    module = _load_module()
+    audit = _audit_with_two_boundaries()
+    reviews = module.merge_agent_decisions(
+        audit,
+        [
+            {
+                "boundary_id": "好:还",
+                "semantic_role": "semantic_boundary",
+                "disposition": "acceptable",
+                "reason": "句号处的语义停顿，两侧字音完整。",
+            }
+        ],
+        gap_policy="evidenced",
+    )
+    by_id = {item["boundary_id"]: item for item in reviews}
+    assert set(by_id) == {"大:家", "好:还"}
+    assert by_id["好:还"]["reason"].startswith("句号处")
+    assert by_id["大:家"]["disposition"] == "acceptable"
+
+
+def test_merge_agent_decisions_requires_a_call_for_every_open_boundary():
+    module = _load_module()
+    audit = _audit_with_two_boundaries()
+    with pytest.raises(module.ApiError):
+        module.merge_agent_decisions(audit, [], gap_policy="evidenced")
+
+
+def test_merge_agent_decisions_rejects_unknown_and_duplicate_boundaries():
+    module = _load_module()
+    audit = _audit_with_two_boundaries()
+    decision = {
+        "boundary_id": "好:还",
+        "semantic_role": "semantic_boundary",
+        "disposition": "acceptable",
+        "reason": "句号处停顿。",
+    }
+    with pytest.raises(module.ApiError):
+        module.merge_agent_decisions(
+            audit,
+            [decision, dict(decision)],
+            gap_policy="evidenced",
+        )
+    with pytest.raises(module.ApiError):
+        module.merge_agent_decisions(
+            audit,
+            [{**decision, "boundary_id": "不:存在"}],
+            gap_policy="evidenced",
+        )
