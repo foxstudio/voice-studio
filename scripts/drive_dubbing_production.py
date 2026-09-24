@@ -222,7 +222,12 @@ def build_review_body(
 
 
 CONTINUOUS_PUNCTUATION = set("，。！？；：、…—,.!?;:~")
-MAX_ACCEPTABLE_JOIN_GAP_MS = 800
+# A pause that follows real punctuation is a semantic boundary the Skill asks
+# to keep, and spoken Chinese routinely holds such a pause for more than a
+# second in a long take.  Anything without that punctuation signal still comes
+# back to the Agent, so this only removes round-trips that the Skill would
+# decide the same way.
+MAX_ACCEPTABLE_JOIN_GAP_MS = 1500
 NATURAL_INTERNAL_GAP_MS = 90
 
 
