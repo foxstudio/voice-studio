@@ -12,6 +12,7 @@ from typing import Callable
 from PIL import Image, ImageDraw, ImageFont
 
 from app.domains.video_localization import draft_store
+from app.domains.video_localization import dubbing_mix
 from app.domains.video_localization import media_assets
 from app.domains.video_localization import media_health
 from app.domains.video_localization import subtitles
@@ -913,22 +914,24 @@ def _write_localized_mixdown(
 
 
 def _resolved_audio_track_states(draft: VideoLocalizationDraft) -> dict[str, dict[str, float | bool]]:
-    defaults: dict[str, dict[str, float | bool]] = {
-        "original": {"muted": True, "solo": False, "volume": 1.0},
-        "vocals": {"muted": True, "solo": False, "volume": 1.0},
-        "background": {"muted": False, "solo": False, "volume": 1.0},
-        "dub": {"muted": False, "solo": False, "volume": 1.0},
-    }
+    defaults: dict[str, dict[str, float | bool]] = (
+        dubbing_mix.default_dubbing_track_states()
+    )
     raw_states = draft.ui_state.get("track_states", {})
     if not isinstance(raw_states, dict):
         return defaults
     for track_id, default in defaults.items():
-        raw = raw_states.get(track_id, {})
+        raw = raw_states.get(track_id)
         if not isinstance(raw, dict):
             continue
-        default["muted"] = raw.get("muted") is True
-        default["solo"] = raw.get("solo") is True
-        default["volume"] = max(0.0, min(4.0, _float_value(raw.get("volume"), 1.0)))
+        # 只有用户真正写过的字段才覆盖默认值；否则部分轨道状态（例如落轨时
+        # 只写入的 dub 轨道）会把原音轨和人声轨的静音默认改成有声。
+        if "muted" in raw:
+            default["muted"] = raw.get("muted") is True
+        if "solo" in raw:
+            default["solo"] = raw.get("solo") is True
+        if "volume" in raw:
+            default["volume"] = max(0.0, min(4.0, _float_value(raw.get("volume"), 1.0)))
     return defaults
 
 

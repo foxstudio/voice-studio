@@ -21,6 +21,7 @@ from app.domains.video_localization.development_llm_batches import DevelopmentLl
 from app.domains.video_localization.development_candidate_recovery import DevelopmentCandidateReceiptStore
 from app.domains.video_localization import draft_store
 from app.domains.video_localization import dubbing_media
+from app.domains.video_localization import dubbing_mix
 from app.domains.video_localization import dubbing_generation_identity
 from app.domains.video_localization import dub_subtitle_workflow
 from app.domains.video_localization import dub_subtitles
@@ -1118,6 +1119,8 @@ def update_video_localization_atomic(
             if current is None:
                 return None
             updated = updater(current)
+            if intent in {"content", "interactive_content"}:
+                updated = dubbing_mix.ensure_initial_dubbing_mix(updated)
             updated._repository_revision = current._repository_revision
             if updated == current:
                 return current
