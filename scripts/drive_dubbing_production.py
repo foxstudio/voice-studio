@@ -1010,7 +1010,20 @@ def command_run(args: argparse.Namespace) -> int:
                     )
                     continue
                 if outcome["result"] != "terminal":
-                    break
+                    # Anything that needs an Agent decision leaves this group
+                    # for the caller to collect, but must not stop the groups
+                    # behind it from finishing.
+                    blocked.append(
+                        {
+                            "group_id": group_id,
+                            "candidate_id": outcome.get("candidate_id"),
+                            "reason": str(
+                                outcome.get("message")
+                                or outcome.get("result")
+                            )[:200],
+                        }
+                    )
+                    continue
             if capacity:
                 print(
                     json.dumps(
