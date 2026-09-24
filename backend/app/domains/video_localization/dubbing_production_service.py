@@ -34,6 +34,7 @@ from app.domains.video_localization import (
     tts_placement,
 )
 from app.domains.video_localization import dubbing_production as domain
+from app.domains.video_localization import dubbing_prosody
 from app.domains.video_localization import dubbing_production_run
 from app.domains.video_localization.dubbing_plan_continuation import (
     retain_unchanged_completion_evidence,
@@ -2307,6 +2308,15 @@ class DubbingProductionApplicationService:
             for clip in draft.timeline_clips
             if str(clip.get("clip_id") or "") in supporting_clip_ids
         ]
+        # 断句修复（Skill 的第一级恢复）：异常停顿与缺失停顿都在这里按已验证的
+        # 词边界切开，让每个语义边界拿到应有的呼吸；无法证明安全的切点保持原样，
+        # 交给后面的重新生成或语义分段。
+        candidate_clips = dubbing_prosody.repair_clips(
+            candidate_clips,
+            boundaries=list(reviewed_gaps),
+            aligned_words=list(frozen.audio.aligned_words),
+            expected_spoken_text=str(frozen.expected_spoken_text or ""),
+        )
         try:
             dubbing_candidate_alignment.validate_candidate_clip_coverage(
                 clips=candidate_clips,
