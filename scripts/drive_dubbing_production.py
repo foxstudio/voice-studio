@@ -472,6 +472,146 @@ def command_advance(args: argparse.Namespace) -> int:
     return 0 if all(item["result"] == "terminal" for item in outcomes) else 2
 
 
+def plan_run_step(run: dict[str, Any]) -> dict[str, Any]:
+    """Decide the next whole-range action from the durable read model.
+
+    Reviewing comes first: a group whose candidate is waiting for its
+    per-boundary disposition would otherwise stay unfinished while the executor
+    keeps asking for it.
+    """
+
+    unfinished = unfinished_groups(run)
+    review_group_ids = [
+        str(item["group_id"])
+        for item in unfinished
+        if str(item.get("stage")) in AGENT_STAGES
+    ]
+    if review_group_ids:
+        return {"action": "review", "group_ids": review_group_ids}
+    remaining = [str(item["group_id"]) for item in unfinished]
+    if remaining:
+        return {"action": "advance", "group_ids": remaining}
+    return {"action": "complete", "group_ids": []}
+
+
+def command_run(args: argparse.Namespace) -> int:
+    """Drive the whole remaining range, stopping only where an Agent must judge.
+
+    Boundaries the fixed rules already prove safe are disposed of exactly like
+    ``review --accept-continuous``; a group whose evidence needs a real
+    judgement stops the run and reports which boundaries are waiting, so the
+    same command never guesses on the Agent's behalf.
+    """
+
+    stalled = 0
+    previous: tuple[int, int] | None = None
+    for cycle in range(1, args.max_cycles + 1):
+        run = read_run(args.base_url, args.project)
+        step = plan_run_step(run)
+        if step["action"] == "complete":
+            print(
+                json.dumps(
+                    {"result": "complete", "cycles": cycle, **summarize(run)},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
+        if step["action"] == "advance":
+            for group_id in step["group_ids"]:
+                outcome = advance_group(
+                    args.base_url,
+                    args.project,
+                    group_id,
+                    poll_seconds=args.poll_seconds,
+                    max_rounds=args.max_rounds,
+                )
+                if outcome["result"] != "terminal":
+                    break
+        else:
+            blocked: list[dict[str, Any]] = []
+            for group_id in step["group_ids"]:
+                current = read_run(args.base_url, args.project)
+                group = find_group(current, group_id)
+                candidate_id = pick_agent_candidate(
+                    group,
+                    base_url=args.base_url,
+                    project_id=args.project,
+                )
+                if not candidate_id:
+                    blocked.append(
+                        {
+                            "group_id": group_id,
+                            "candidate_id": None,
+                            "reason": "该组还没有可判断的候选",
+                        }
+                    )
+                    continue
+                audit = read_audit(args.base_url, args.project, candidate_id)
+                if "error" in audit:
+                    blocked.append(
+                        {
+                            "group_id": group_id,
+                            "candidate_id": candidate_id,
+                            "reason": str(audit["error"]),
+                        }
+                    )
+                    continue
+                try:
+                    reviews = continuous_reviews(audit, gap_policy=args.gap_policy)
+                except ApiError as exc:
+                    blocked.append(
+                        {
+                            "group_id": group_id,
+                            "candidate_id": candidate_id,
+                            "reason": str(exc),
+                        }
+                    )
+                    continue
+                submit_reviews(args.base_url, args.project, candidate_id, reviews)
+            if blocked:
+                print(
+                    json.dumps(
+                        {
+                            "result": "agent_decision_required",
+                            "cycle": cycle,
+                            "groups": blocked,
+                            "summary": summarize(read_run(args.base_url, args.project)),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                return 2
+        current = read_run(args.base_url, args.project)
+        signature = (
+            int(current.get("accepted_group_count") or 0),
+            len(unfinished_groups(current)),
+        )
+        stalled = stalled + 1 if signature == previous else 0
+        previous = signature
+        if stalled >= args.max_stalled_cycles:
+            print(
+                json.dumps(
+                    {"result": "stalled", "cycle": cycle, **summarize(current)},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 2
+    print(
+        json.dumps(
+            {
+                "result": "max_cycles_reached",
+                **summarize(read_run(args.base_url, args.project)),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 2
+
+
 def command_boundaries(args: argparse.Namespace) -> int:
     run = read_run(args.base_url, args.project)
     group = find_group(run, args.group)
@@ -573,6 +713,27 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     review.set_defaults(handler=command_review)
+
+    run = subparsers.add_parser(
+        "run",
+        help="连续驱动全部未完成组，只在需要 Agent 判断的边界处停下",
+    )
+    run.add_argument("--poll-seconds", type=float, default=12.0)
+    run.add_argument("--max-rounds", type=int, default=60, help="单组等待轮数上限")
+    run.add_argument("--max-cycles", type=int, default=400)
+    run.add_argument(
+        "--max-stalled-cycles",
+        type=int,
+        default=4,
+        help="连续多少轮既无新完成也无待判断组就退出",
+    )
+    run.add_argument(
+        "--gap-policy",
+        choices=("strict", "evidenced"),
+        default="evidenced",
+        help="与 review 相同的规则；evidenced 另外接受词边界上已有安全依据的较长停顿",
+    )
+    run.set_defaults(handler=command_run)
 
     return parser
 

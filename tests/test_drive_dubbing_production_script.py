@@ -253,3 +253,70 @@ def test_parser_requires_a_project_and_a_subcommand():
         parser.parse_args([])
     with pytest.raises(SystemExit):
         parser.parse_args(["status"])
+
+
+def _run_with(stages: dict[str, str]) -> dict:
+    groups = [
+        {
+            "group_id": group_id,
+            "stage": stage,
+            "recommended_action": "",
+            "last_error": None,
+            "candidate_ids": [],
+        }
+        for group_id, stage in stages.items()
+    ]
+    return {
+        "status": "needs_attention",
+        "accepted_group_count": sum(1 for stage in stages.values() if stage == "accepted"),
+        "group_count": len(groups),
+        "deferred_group_count": 0,
+        "attention_group_count": 0,
+        "next_action": "process_gaps",
+        "next_group_id": None,
+        "groups": groups,
+    }
+
+
+def test_run_step_reviews_waiting_groups_before_advancing():
+    module = _load_module()
+    plan = module.plan_run_step(
+        _run_with(
+            {
+                "dubbing_group_0001": "accepted",
+                "dubbing_group_0002": "needs_semantic_review",
+                "dubbing_group_0003": "ready_to_generate",
+            }
+        )
+    )
+    assert plan == {"action": "review", "group_ids": ["dubbing_group_0002"]}
+
+
+def test_run_step_advances_remaining_groups():
+    module = _load_module()
+    plan = module.plan_run_step(
+        _run_with(
+            {
+                "dubbing_group_0001": "accepted",
+                "dubbing_group_0002": "ready_to_generate",
+                "dubbing_group_0003": "needs_gap_processing",
+            }
+        )
+    )
+    assert plan == {
+        "action": "advance",
+        "group_ids": ["dubbing_group_0002", "dubbing_group_0003"],
+    }
+
+
+def test_run_step_completes_when_every_group_is_terminal():
+    module = _load_module()
+    plan = module.plan_run_step(
+        _run_with(
+            {
+                "dubbing_group_0001": "accepted",
+                "dubbing_group_0002": "deferred_manual_timing",
+            }
+        )
+    )
+    assert plan == {"action": "complete", "group_ids": []}
