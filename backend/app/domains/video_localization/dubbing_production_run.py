@@ -548,6 +548,30 @@ def _last_workflow_error(workflows: list[object]) -> str | None:
     return None
 
 
+def _group_last_error(
+    *,
+    group_failure: object | None,
+    group_workflows: list[object],
+    accepted_candidate_id: str | None,
+) -> str | None:
+    """Report the concrete queue failure before its generic close-out note.
+
+    A group can fail in two layers at once: the queue/handoff records the real
+    reason (for example a missing vocals path), and the close-out owner records
+    its own disposition.  Showing only the disposition hides the actionable
+    cause, so the concrete error wins and the note remains the fallback.
+    """
+
+    if accepted_candidate_id is not None:
+        return None
+    workflow_error = _last_workflow_error(group_workflows)
+    if workflow_error:
+        return workflow_error
+    if group_failure is None:
+        return None
+    return str(_value(group_failure, "note", "") or "") or None
+
+
 def build_production_run_snapshot(
     *,
     current_source_revision: str,
@@ -1045,14 +1069,10 @@ def build_production_run_snapshot(
                     for item in group_workflows
                     if _value(item, "generation_task_id")
                 ),
-                last_error=(
-                    str(_value(group_failure, "note", ""))
-                    if group_failure is not None
-                    else (
-                        None
-                        if accepted_candidate_id is not None
-                        else _last_workflow_error(group_workflows)
-                    )
+                last_error=_group_last_error(
+                    group_failure=group_failure,
+                    group_workflows=group_workflows,
+                    accepted_candidate_id=accepted_candidate_id,
                 ),
             )
         )

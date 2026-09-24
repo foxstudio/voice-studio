@@ -128,6 +128,33 @@ WebUI 的**逐页审计与框架统一**：把每个页面的展示、交互和�
 结论：一次朗读文本编辑的预期影响是编辑组加两侧邻居，验证时看 accepted 数从 138 掉到 135 左右
 即为正常；掉到 0 说明路径形态或证据重绑又坏了。
 
+### 不要用 repair-storage 做常规刷新，也不要把快照灌回数据库
+
+`POST /video-localization/repair-storage` 会迁移旧目录、重写受管路径、必要时从快照恢复，
+但它**不是只读修复**：实测在路径形态不一致的项目上调用一次，计划从 revision 39 涨到 72、
+时间线从 192 个片段变成 205 个、138 组里 36 组失去证据且出现重复分片，恢复只能靠调用前
+自己保存的状态。真正安全的做法是：
+
+- 数据库里的 Draft 存绝对路径，`project.json`/autosave 存 `project://`；两者之间必须走
+  `media_assets.rebase_project_paths` 解码，不能把快照原样写回数据库（写了就会让所有媒体角色、
+  候选音频和保留证据静默解析失败）。
+- 需要回滚时先手工备份当前 Project 行，再写回；并用 `production-run` 的 accepted 数和
+  timeline 重叠/分片数当场验证，不能只看接口返回 200。
+
+### 配音生产驱动脚本
+
+`scripts/drive_dubbing_production.py` 补上了原先缺失的生产驱动：`status` 读进度和每个非完成
+组的真实失败原因，`advance` 跑生成与收口并在需要 Agent 判断处停下，`boundaries` 输出边界证据，
+`review --accept-continuous [--gap-policy evidenced]` 提交 Agent 判断。它只调公开 API，判据仍
+由 Agent 给出；`evidenced` 只接受词边界上已有安全处理依据的较长停顿，字音不完整一律交回。
+实测用它把 9 个受影响组从 129/138 跑回 138/138。
+
+### 失败原因要能直接读到
+
+同一个组可能同时有「队列/交接的真实错误」（如人声轨缺失）和「收口处置说明」两层记录。
+读模型原先只显示后者，排查必须先翻日志；现在 `dubbing_production_run._group_last_error`
+优先返回具体错误，处置说明只做兜底。
+
 ### 本机工具
 
 - **改完后端必须重启服务**（uvicorn 未开 `--reload`），而且必须确认旧进程真的退了：旧进程占着 `voice_studio.db.backend.lock`，新实例会直接启动失败退出，端口上继续响应的还是旧代码。重启判断以“文件修改时间晚于进程启动时间”为准，不能只看 curl 通不通。

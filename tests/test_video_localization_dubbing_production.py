@@ -1171,6 +1171,52 @@ def test_production_run_projection_exposes_recoverable_group_transitions():
     assert completed.next_action == "complete"
 
 
+def test_group_last_error_prefers_the_concrete_queue_failure_over_the_closeout_note():
+    """A close-out disposition must not hide the actionable queue error."""
+
+    source_revision = "a" * 64
+    plan = SimpleNamespace(
+        source_revision=source_revision,
+        plan_revision=4,
+        groups=[SimpleNamespace(group_id="group_1", subtitle_ids=["localized_1"])],
+    )
+    failure = SimpleNamespace(
+        source_revision=source_revision,
+        plan_revision=4,
+        group_id="group_1",
+        candidate_id=None,
+        note="音频已经生成，但本地检查或落位尚未完成；保留当前音频，先恢复收尾。",
+    )
+    workflow = SimpleNamespace(
+        status="failed",
+        stages=[
+            SimpleNamespace(
+                kind="generation",
+                status="failed",
+                parameters={
+                    "video_localization_dubbing_plan_revision": 4,
+                    "video_localization_dubbing_group_id": "group_1",
+                },
+                error_message="请先准备人声轨，再生成字幕配音",
+            ),
+            SimpleNamespace(kind="placement", status="pending", parameters={}),
+        ],
+    )
+
+    run = build_production_run_snapshot(
+        current_source_revision=source_revision,
+        active_plan=plan,
+        workflows=[workflow],
+        candidate_inputs=[],
+        candidate_reports=[],
+        group_failures=[failure],
+        timeline_clips=[],
+    )
+
+    assert run.groups[0].stage == "failed"
+    assert run.groups[0].last_error == "请先准备人声轨，再生成字幕配音"
+
+
 def test_production_run_continues_after_one_terminal_group_failure():
     source_revision = "a" * 64
     plan = SimpleNamespace(
