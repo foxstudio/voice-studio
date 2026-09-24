@@ -74,6 +74,13 @@ def test_managed_project_file_rejects_external_and_symlink_escape(
     assert media_assets.managed_project_file(project_id, external) is None
     assert media_assets.managed_project_file(project_id, cross_project) is None
     assert media_assets.managed_project_file(project_id, escaped_link) is None
+    assert (
+        media_assets.managed_project_file(project_id, f"project://{managed.relative_to(package_root)}")
+        == managed.resolve()
+    )
+    assert media_assets.managed_project_file(project_id, "project://" + escaped_link.name) is None
+    assert media_assets.managed_project_file(project_id, "project://../private.wav") is None
+    assert media_assets.managed_project_file(project_id, "project://source/../private.wav") is None
 
 
 def test_managed_project_file_reuses_lightweight_directory_locator(

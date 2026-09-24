@@ -32,6 +32,7 @@ def retain_unchanged_manual_timing_deferrals(
     timeline_clips: list[dict],
     audio_sha256_by_clip_id: dict[str, str | None],
     current_draft,
+    previous_draft=None,
 ) -> list[DubbingManualTimingDeferral]:
     """Rebind an unchanged parked take while preserving its original assertions."""
 
@@ -73,7 +74,20 @@ def retain_unchanged_manual_timing_deferrals(
             context != disposition.source_context_fingerprint
             or text_fingerprint != disposition.candidate_spoken_text_fingerprint
         ):
-            continue
+            previous_context = (
+                domain.group_evidence_context_fingerprint(
+                    previous_draft, old_plan, group
+                )
+                if previous_draft is not None
+                else None
+            )
+            if (
+                previous_context is None
+                or previous_context != context
+                or text_fingerprint
+                != disposition.candidate_spoken_text_fingerprint
+            ):
+                continue
         # Older text-edit paths left receipts at an earlier editorial revision.
         # Exact saved dependency/text proof permits rebinding, never a new
         # quality assertion. Validate the real full-audio projection below and
@@ -106,6 +120,7 @@ def retain_unchanged_completion_evidence(
     timeline_clips: list[dict],
     audio_sha256_by_clip_id: dict[str, str | None],
     current_draft=None,
+    previous_draft=None,
 ) -> tuple[list[DubbingCandidateCqcInput], list[DubbingCandidateCqcReport]]:
     """Rebind existing proof, never infer acceptance from a playable clip alone.
 
@@ -238,7 +253,21 @@ def retain_unchanged_completion_evidence(
                 continue
             current_context = domain.group_evidence_context_fingerprint(current_draft, new_plan, group)
             if current_context != frozen.source_context_fingerprint:
-                continue
+                # Historical receipts can carry a source-context fingerprint
+                # from an older storage form (for example absolute media paths
+                # that were later normalized to ``project://``). When the
+                # receipt no longer matches, fall back to comparing the group's
+                # own context before and after the edit: an untouched group
+                # proves itself reusable without weakening the check, because a
+                # context that differs from both the receipt and its pre-edit
+                # value still drops the evidence.
+                if previous_draft is None:
+                    continue
+                previous_context = domain.group_evidence_context_fingerprint(
+                    previous_draft, old_plan, group
+                )
+                if current_context != previous_context:
+                    continue
         rebound = frozen.model_copy(update={
             "audio": audio,
             "source_revision": new_plan.source_revision,

@@ -719,12 +719,25 @@ def tts_audio_path(draft: VideoLocalizationDraft, cue_id: str) -> Path | None:
     return path if path.exists() else None
 
 
-def generated_candidate_audio_path(draft: VideoLocalizationDraft, candidate_id: str) -> Path | None:
+def generated_candidate_audio_path(
+    draft: VideoLocalizationDraft,
+    candidate_id: str,
+    *,
+    project_id: str | None = None,
+) -> Path | None:
     candidate = next((dict(item) for item in draft.generated_candidates if dict(item).get("candidate_id") == candidate_id), None)
     if not candidate or not candidate.get("audio_path"):
         return None
-    path = Path(str(candidate["audio_path"]))
-    return path if path.exists() else None
+    value = str(candidate["audio_path"])
+    path = Path(value)
+    if path.is_absolute() and path.exists():
+        return path
+    if project_id is not None:
+        # Persisted candidate paths may use ``project://``; resolve those
+        # through the managed project boundary instead of treating the URI as
+        # a filesystem path.
+        return media_assets.managed_project_file(project_id, value)
+    return None
 
 
 def with_applied_generated_candidate(draft: VideoLocalizationDraft, candidate_id: str) -> VideoLocalizationDraft:

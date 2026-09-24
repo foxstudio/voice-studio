@@ -317,9 +317,9 @@ def managed_project_file(
         package_root.relative_to(projects_root)
     except ValueError:
         return None
-    candidate = Path(value).expanduser()
-    if not candidate.is_absolute():
-        candidate = package_root / candidate
+    candidate = project_relative_candidate(value, package_root)
+    if candidate is None:
+        return None
     try:
         resolved = candidate.resolve(strict=True)
         resolved.relative_to(package_root)
@@ -337,6 +337,35 @@ def managed_project_file(
         return resolved if resolved.is_file() and os.access(resolved, os.R_OK) else None
     except OSError:
         return None
+
+
+def project_relative_candidate(
+    value: str | Path,
+    package_root: Path,
+) -> Path | None:
+    """Turn one draft path string into a confined package-relative candidate.
+
+    Persisted draft paths may use the ``project://`` prefix. That form is a
+    storage detail of the project package, not an escape hatch, so it is
+    resolved against the package root under the same confinement rules as a
+    relative path. Absolute and relative values keep their current meaning.
+    """
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw.startswith(PROJECT_PATH_PREFIX):
+        relative = raw[len(PROJECT_PATH_PREFIX):]
+        if relative in {"", "."} or "\\" in relative:
+            return None
+        candidate = Path(relative)
+        if candidate.is_absolute():
+            return None
+        return package_root / candidate
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        candidate = package_root / candidate
+    return candidate
 
 
 def ensure_project_video_localization_dir(project_id: str) -> Path:

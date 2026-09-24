@@ -293,6 +293,33 @@ def test_public_subtitle_patch_persists_local_rebase(tmp_path, monkeypatch):
         assert after_workspace_save.dubbing_production.active_plan.groups == saved.dubbing_production.active_plan.groups
 
 
+def test_text_edit_rebinds_when_stored_context_fingerprint_predates_path_normalization(monkeypatch):
+    """An older-path receipt must not force a full replan.
+
+    Media paths were normalized to ``project://`` after some receipts were
+    written, so their stored source-context fingerprint no longer reproduces.
+    An untouched group still proves itself reusable from its own pre-edit
+    context, while the edited group and its adjacent join are dropped.
+    """
+
+    from app.domains.video_localization import dubbing_media
+    monkeypatch.setattr(dubbing_media, "current_timeline_audio_sha256s", lambda *_: {f"clip{i}": "b"*64 for i in range(3)})
+    before = draft_with_plan(proven=True)
+    stale = [
+        item.model_copy(update={"source_context_fingerprint": "f" * 64})
+        for item in before.dubbing_production.candidate_inputs
+    ]
+    before = before.model_copy(update={
+        "dubbing_production": before.dubbing_production.model_copy(
+            update={"candidate_inputs": stale}
+        )
+    })
+    after = edit(before, tts_text="A revised sentence.")
+    result = rebase_text_edit(before, after, project_id="isolated")
+    assert result.dubbing_production.active_plan.plan_revision == 2
+    assert {item.candidate_id for item in result.dubbing_production.candidate_inputs} == {"c2"}
+
+
 def test_legacy_text_rebase_keeps_audio_without_promoting_unverifiable_proof():
     before = draft_with_plan()
     after = edit(before, tts_text="Changed")

@@ -1168,6 +1168,7 @@ class DubbingProductionApplicationService:
                 group=_group,
                 frozen=frozen,
                 candidate_id=payload.candidate_id,
+                project_id=project_id,
             )
             if not clips:
                 raise AppException(409, "DUBBING_RETAINED_PROJECTION_REQUIRED",
@@ -1226,6 +1227,7 @@ class DubbingProductionApplicationService:
                     group=_group,
                     frozen=current_frozen,
                     candidate_id=payload.candidate_id,
+                    project_id=project_id,
                 )
                 if not current_clips or _normalized_candidate_projection_fingerprint(
                     current_clips, payload.candidate_id,
@@ -2584,7 +2586,7 @@ class DubbingProductionApplicationService:
             None,
         )
         stage_clips = (
-            _staged_projection_runtime_clips(draft, stage)
+            _staged_projection_runtime_clips(draft, stage, project_id)
             if stage is not None else []
         )
         owned_clips = [
@@ -2708,7 +2710,7 @@ class DubbingProductionApplicationService:
                  if str(clip.get("clip_id") or "")
                  in {str(owned.get("clip_id") or "") for owned in owned_clips}]
                 if already_adopted else
-                _staged_projection_runtime_clips(current, current_stage)
+                _staged_projection_runtime_clips(current, current_stage, project_id)
                 if current_stage is not None else []
             )
             current_hashes = dubbing_media.current_timeline_audio_sha256s(
@@ -2903,6 +2905,7 @@ class DubbingProductionApplicationService:
             stage_clips = _staged_projection_runtime_clips(
                 current,
                 staged_projection,
+                project_id,
             )
             current_hashes = dubbing_media.current_timeline_audio_sha256s(
                 project_id,
@@ -4165,7 +4168,7 @@ class DubbingProductionApplicationService:
                     "VIDEO_LOCALIZATION_DUBBING_STAGE_CHANGED",
                     "候选暂存投影、计划或时间线已经变化，请重新读取后再剪辑。",
                 )
-            stage_clips = _staged_projection_runtime_clips(current, stage)
+            stage_clips = _staged_projection_runtime_clips(current, stage, project_id)
             stage_by_id = {str(clip.get("clip_id") or ""): clip for clip in stage_clips}
             if (
                 len(stage_by_id) != len(stage_clips)
@@ -5768,12 +5771,14 @@ def _staged_candidate_projection(
 def _staged_projection_runtime_clips(
     draft,
     projection: DubbingStagedCandidateProjection,
+    project_id: str | None = None,
 ) -> list[dict]:
     """Resolve a managed audio path only while validating or adopting a stage."""
 
     path = tts_pipeline.generated_candidate_audio_path(
         draft,
         projection.candidate_id,
+        project_id=project_id,
     )
     if path is None:
         return []
@@ -5789,6 +5794,7 @@ def _current_group_content_evidence_clips(
     group,
     frozen: DubbingCandidateCqcInput,
     candidate_id: str,
+    project_id: str | None = None,
 ) -> list[dict]:
     """Return the current playback projection eligible for retained evidence.
 
@@ -5844,7 +5850,7 @@ def _current_group_content_evidence_clips(
         ) != stage.target_projection_fingerprint
     ):
         return []
-    staged_clips = _staged_projection_runtime_clips(draft, stage)
+    staged_clips = _staged_projection_runtime_clips(draft, stage, project_id)
     coverage = {
         subtitle_id
         for clip in staged_clips

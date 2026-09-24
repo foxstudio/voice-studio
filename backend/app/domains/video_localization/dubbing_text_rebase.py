@@ -107,11 +107,13 @@ def rebase_text_edit(
     )
     inputs, reports = retain_unchanged_completion_evidence(
         state=state, new_plan=rebound_plan, current_draft=after,
+        previous_draft=before,
         timeline_clips=[dict(clip) for clip in after.timeline_clips],
         audio_sha256_by_clip_id=audio_hashes,
     )
     deferrals = retain_unchanged_manual_timing_deferrals(
         state=state, new_plan=rebound_plan, current_draft=after,
+        previous_draft=before,
         timeline_clips=[dict(clip) for clip in after.timeline_clips],
         audio_sha256_by_clip_id=audio_hashes,
     )
