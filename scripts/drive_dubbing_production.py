@@ -558,10 +558,22 @@ def advance_group(
                     speed_baseline=speed_baseline,
                 )
         except ApiError as exc:
+            message = str(exc)
+            if "DUBBING_COMMIT_TIMELINE_CONFLICT" in message:
+                # The new take would overlap a neighbouring clip.  Only an
+                # Agent can reconcile the timeline, so hand the group back
+                # instead of aborting the whole range.
+                return {
+                    "group_id": group_id,
+                    "result": "agent_decision_required",
+                    "stage": "needs_timeline_edit",
+                    "message": "新声音与相邻配音冲突，需要核对现有片段范围",
+                    "run": summarize(read_run(base_url, project_id)),
+                }
             # A candidate left over from an earlier plan revision no longer
             # exists.  Keep asking: the next round starts a current generation
             # for the same group.  Give up only if it stays missing.
-            if "CANDIDATE_NOT_FOUND" not in str(exc):
+            if "CANDIDATE_NOT_FOUND" not in message:
                 raise
             stale_rounds += 1
             if stale_rounds > 3:
