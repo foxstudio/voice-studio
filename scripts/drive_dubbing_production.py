@@ -1076,6 +1076,7 @@ def command_run(args: argparse.Namespace) -> int:
             blocked: list[dict[str, Any]] = []
             aligned: list[dict[str, Any]] = []
             stale: list[dict[str, Any]] = []
+            deferred: list[dict[str, Any]] = []
             for group_id in step["group_ids"]:
                 current = read_run(args.base_url, args.project)
                 group = find_group(current, group_id)
