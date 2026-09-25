@@ -1165,7 +1165,22 @@ def command_run(args: argparse.Namespace) -> int:
                         }
                     )
                     continue
-                submit_reviews(args.base_url, args.project, candidate_id, reviews)
+                try:
+                    submit_reviews(args.base_url, args.project, candidate_id, reviews)
+                except ApiError as exc:
+                    # The candidate moved between reading and submitting (a
+                    # concurrent replan or adoption): hand it back and let the
+                    # next cycle re-read instead of aborting the range.
+                    if "CONFLICT" in str(exc) or "CHANGED" in str(exc):
+                        deferred.append(
+                            {
+                                "group_id": group_id,
+                                "candidate_id": candidate_id,
+                                "reason": str(exc)[:160],
+                            }
+                        )
+                        continue
+                    raise
             if blocked:
                 print(
                     json.dumps(
