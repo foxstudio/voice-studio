@@ -34,7 +34,6 @@ from app.domains.video_localization import (
     tts_placement,
 )
 from app.domains.video_localization import dubbing_production as domain
-from app.domains.video_localization import dubbing_prosody
 from app.domains.video_localization import dubbing_production_run
 from app.domains.video_localization.dubbing_plan_continuation import (
     retain_unchanged_completion_evidence,
@@ -1260,34 +1259,41 @@ class DubbingProductionApplicationService:
                 retained is not None
                 and previous_report is not None
                 and previous_report.staged_candidate_projection is not None
-                and previous_report.semantic_boundary_audit is not None
                 and previous_report.source_revision == _plan.source_revision
                 and previous_report.plan_revision == _plan.plan_revision
                 and previous_report.evidence_fingerprint == domain.candidate_evidence_fingerprint(current_frozen)
-                and previous_report.semantic_boundary_audit.audio_sha256 == current_frozen.audio_sha256
-                and previous_report.semantic_boundary_audit.candidate_evidence_fingerprint
-                == previous_report.evidence_fingerprint
-                and previous_report.semantic_boundary_audit.candidate_clip_projection_fingerprint
-                == previous_report.staged_candidate_projection.candidate_clip_projection_fingerprint
                 and (
                     not timeline_clips
                     or candidate_clip_projection_fingerprint(timeline_clips)
                     == previous_report.staged_candidate_projection.candidate_clip_projection_fingerprint
                 )
+                and (
+                    previous_report.semantic_boundary_audit is None
+                    or (
+                        previous_report.semantic_boundary_audit.audio_sha256 == current_frozen.audio_sha256
+                        and previous_report.semantic_boundary_audit.candidate_evidence_fingerprint
+                        == previous_report.evidence_fingerprint
+                        and previous_report.semantic_boundary_audit.candidate_clip_projection_fingerprint
+                        == previous_report.staged_candidate_projection.candidate_clip_projection_fingerprint
+                    )
+                )
             ):
                 # Retained-content observation changes the frozen CQC input,
                 # not an unchanged staged OR adopted projection. Preserve the
-                # existing decisions without inventing a new semantic review.
-                report = report.model_copy(update={
+                # existing geometry (and any explicit audit) without inventing a
+                # new semantic review or pending approval state.
+                update = {
                     "staged_candidate_projection": (
                         previous_report.staged_candidate_projection
                     ),
-                    "semantic_boundary_audit": (
+                }
+                if previous_report.semantic_boundary_audit is not None:
+                    update["semantic_boundary_audit"] = (
                         previous_report.semantic_boundary_audit.model_copy(update={
                             "candidate_evidence_fingerprint": report.evidence_fingerprint,
                         })
-                    ),
-                })
+                    )
+                report = report.model_copy(update=update)
             inputs = [
                 updated_frozen if item.candidate_id == payload.candidate_id else item
                 for item in current.dubbing_production.candidate_inputs
@@ -1781,7 +1787,6 @@ class DubbingProductionApplicationService:
         review_mode: DubbingProductionReviewMode = "full",
     ) -> Literal[
         "accepted",
-        "needs_semantic_review",
         "capacity_recovery_required",
         "regeneration_required",
         "retryable_failure",
@@ -1882,6 +1887,41 @@ class DubbingProductionApplicationService:
             except AppException:
                 return "retryable_failure"
             return "accepted"
+        if (
+            existing_candidate_clips
+            and previous_report is not None
+            and previous_stage is not None
+            and previous_stage.candidate_id == candidate_id
+            and previous_report.source_revision == plan.source_revision
+            and previous_report.plan_revision == plan.plan_revision
+            and previous_report.evidence_fingerprint == persisted_evidence_fingerprint
+            and previous_stage.candidate_clip_projection_fingerprint
+            == candidate_clip_projection_fingerprint(existing_candidate_clips)
+            and dubbing_production_run.processed_candidate_projection_is_current(
+                report=previous_report,
+                candidate_clips=existing_candidate_clips,
+                frozen=frozen,
+            )
+        ):
+            # The exact processed take is already the current formal group
+            # projection. Re-entering closeout must not re-run gap processing or
+            # re-commit the same audio. A clip's stored audio_sha256 field is not
+            # proof of the bytes on disk, so verify the actual current media
+            # before accepting unchanged; any real edit, retarget or new
+            # evidence fails this check and proceeds through normal processing.
+            current_hashes = dubbing_media.current_timeline_audio_sha256s(
+                project_id,
+                draft.model_copy(update={"timeline_clips": existing_candidate_clips}),
+            )
+            if (
+                frozen.audio_sha256
+                and len(current_hashes) == len(existing_candidate_clips)
+                and all(
+                    value == frozen.audio_sha256
+                    for value in current_hashes.values()
+                )
+            ):
+                return "accepted"
         verified_edge_edit = _verified_retained_projection(frozen, existing_candidate_clips)
         existing_candidate_clips = [
             {**clip, "target_start_ms": group.target_start_ms,
@@ -2308,15 +2348,6 @@ class DubbingProductionApplicationService:
             for clip in draft.timeline_clips
             if str(clip.get("clip_id") or "") in supporting_clip_ids
         ]
-        # 断句修复（Skill 的第一级恢复）：异常停顿与缺失停顿都在这里按已验证的
-        # 词边界切开，让每个语义边界拿到应有的呼吸；无法证明安全的切点保持原样，
-        # 交给后面的重新生成或语义分段。
-        candidate_clips = dubbing_prosody.repair_clips(
-            candidate_clips,
-            boundaries=list(reviewed_gaps),
-            aligned_words=list(frozen.audio.aligned_words),
-            expected_spoken_text=str(frozen.expected_spoken_text or ""),
-        )
         try:
             dubbing_candidate_alignment.validate_candidate_clip_coverage(
                 clips=candidate_clips,
@@ -2357,84 +2388,32 @@ class DubbingProductionApplicationService:
             draft,
             target_subtitle_ids=list(group.subtitle_ids),
         )
+        # Keep the final geometry as evidence for later idempotence checks and
+        # optional editing. It is not an approval state; there is no pending
+        # semantic audit on a normal committed take.
         staged_projection = _staged_candidate_projection(
             candidate_id=candidate_id,
             target_projection_fingerprint=target_projection_fingerprint,
             clips=candidate_clips,
         )
-        audit = dubbing_gap_adjudication.build_semantic_boundary_audit(
-            source_revision=reviewed_input.source_revision,
-            plan_revision=reviewed_input.plan_revision,
-            candidate_id=reviewed_input.candidate_id,
-            audio_sha256=str(reviewed_input.audio_sha256 or ""),
-            candidate_evidence_fingerprint=domain.candidate_evidence_fingerprint(reviewed_input),
-            candidate_clip_projection_fingerprint=(
-                staged_projection.candidate_clip_projection_fingerprint
-            ),
-            expected_spoken_text=reviewed_input.expected_spoken_text,
-            aligned_words=list(reviewed_audio.aligned_words),
-            gaps=list(reviewed_gaps),
-            clips=candidate_clips,
-        )
         report = report.model_copy(update={
-            "semantic_boundary_audit": audit,
             "staged_candidate_projection": staged_projection,
-            "overall_status": "needs_review",
-            "recommended_action": "listen_and_review",
         })
-        previous = next((item for item in draft.dubbing_production.candidate_reports
-                         if item.candidate_id == candidate_id), None)
-        previous_audit = previous.semantic_boundary_audit if previous else None
-        if previous_audit is not None:
-            _closeout_debug_logger.info(
-                "AUDIT_REUSE_CHECK :: %s",
-                json.dumps({
-                    "candidate_id": candidate_id,
-                    "previous_status": previous_audit.status,
-                    "mismatches": [
-                        field
-                        for field in (
-                            "source_revision", "plan_revision", "candidate_id", "audio_sha256",
-                            "candidate_evidence_fingerprint", "candidate_clip_projection_fingerprint",
-                        )
-                        if getattr(previous_audit, field) != getattr(audit, field)
-                    ],
-                }, sort_keys=True),
-            )
-        if previous_audit and previous_audit.status == "accepted" and all(
-            getattr(previous_audit, field) == getattr(audit, field)
-            for field in (
-                "source_revision", "plan_revision", "candidate_id", "audio_sha256",
-                "candidate_evidence_fingerprint", "candidate_clip_projection_fingerprint",
-            )
-        ):
-            # A save/recovery retry is not another semantic review. Reuse the
-            # exact completed judgment and atomically finish placement.
-            self._commit_processed_candidate(
-                project_id, group_id=group_id, candidate_id=candidate_id,
-                processed_clips=candidate_clips, reviewed_input=reviewed_input,
-                report=report.model_copy(update={"semantic_boundary_audit": previous_audit}),
-                expected_target_projection_fingerprint=target_projection_fingerprint,
-                expected_semantic_boundary_audit=previous_audit,
-            )
-            return "accepted"
-        try:
-            self._persist_staged_semantic_candidate(
-                project_id,
-                group_id=group_id,
-                candidate_id=candidate_id,
-                reviewed_input=reviewed_input,
-                report=report,
-                staged_projection=staged_projection,
-            )
-        except AppException as exc:
-            if exc.code in {
-                "VIDEO_LOCALIZATION_DUBBING_COMMIT_AUDIO_CHANGED",
-                "VIDEO_LOCALIZATION_DUBBING_STAGE_AUDIO_CHANGED",
-            }:
-                return "retryable_failure"
-            raise
-        return "needs_semantic_review"
+        # Deterministic closeout commits directly. The current target projection
+        # and the take's aligned-word/VAD coverage are the acceptance authority;
+        # a pending per-boundary Agent audit is optional editing evidence, never a
+        # stage gate. Committing here also keeps the managed pipeline from
+        # stranding a saved take behind an obsolete review label.
+        self._commit_processed_candidate(
+            project_id,
+            group_id=group_id,
+            candidate_id=candidate_id,
+            processed_clips=candidate_clips,
+            reviewed_input=reviewed_input,
+            report=report,
+            expected_target_projection_fingerprint=target_projection_fingerprint,
+        )
+        return "accepted"
 
     def refresh_current_candidate_projection(
         self, project_id: str, payload: DubbingCurrentProjectionRequest,
@@ -2523,22 +2502,30 @@ class DubbingProductionApplicationService:
                 target_projection_fingerprint=_target_owned_projection_fingerprint(
                     current, target_subtitle_ids=list(group.subtitle_ids)),
             )
-            audit = dubbing_gap_adjudication.build_semantic_boundary_audit(
-                source_revision=plan.source_revision, plan_revision=plan.plan_revision,
-                candidate_id=payload.candidate_id, audio_sha256=audio_hash,
-                candidate_evidence_fingerprint=report.evidence_fingerprint,
-                candidate_clip_projection_fingerprint=stage.candidate_clip_projection_fingerprint,
-                expected_spoken_text=updated.expected_spoken_text,
-                aligned_words=list(updated.audio.aligned_words), gaps=gaps, clips=clips,
-            )
             previous = next((item for item in current.dubbing_production.candidate_reports
                              if item.candidate_id == payload.candidate_id), None)
-            audit = dubbing_gap_adjudication.reuse_unchanged_boundary_reviews(
-                previous.semantic_boundary_audit if previous else None, audit,
-            )
-            report = report.model_copy(update={
-                "semantic_boundary_audit": audit, "staged_candidate_projection": stage,
-            })
+            previous_audit = previous.semantic_boundary_audit if previous else None
+            # Preserve an existing optional boundary audit for explicit editing;
+            # a normal no-approval take keeps its geometry evidence without a new
+            # pending audit that would reopen completion.
+            update: dict = {"staged_candidate_projection": stage}
+            if previous_audit is not None:
+                audit = dubbing_gap_adjudication.build_semantic_boundary_audit(
+                    source_revision=plan.source_revision, plan_revision=plan.plan_revision,
+                    candidate_id=payload.candidate_id, audio_sha256=audio_hash,
+                    candidate_evidence_fingerprint=report.evidence_fingerprint,
+                    candidate_clip_projection_fingerprint=stage.candidate_clip_projection_fingerprint,
+                    expected_spoken_text=updated.expected_spoken_text,
+                    aligned_words=list(updated.audio.aligned_words), gaps=gaps, clips=clips,
+                )
+                update["semantic_boundary_audit"] = (
+                    dubbing_gap_adjudication.reuse_unchanged_boundary_reviews(
+                        previous_audit, audit,
+                    )
+                )
+            else:
+                update["semantic_boundary_audit"] = None
+            report = report.model_copy(update=update)
             return current.model_copy(update={"dubbing_production": current.dubbing_production.model_copy(update={
                 "candidate_inputs": [updated if item.candidate_id == payload.candidate_id else item
                                      for item in current.dubbing_production.candidate_inputs],
@@ -3130,6 +3117,7 @@ class DubbingProductionApplicationService:
                         "generation_identity": result_id,
                         "intentional_overlap": False,
                         "tts_target_binding_status": "current",
+                        "dubbing_alignment_word_ids": list(clip.get("dubbing_alignment_word_ids") or []),
                     }
                 )
                 for legacy_field in (
@@ -3401,7 +3389,6 @@ class DubbingProductionApplicationService:
         review_mode: DubbingProductionReviewMode = "full",
     ) -> Literal[
         "accepted",
-        "needs_semantic_review",
         "capacity_recovery_required",
         "regeneration_required",
         "retryable_failure",
@@ -3480,8 +3467,6 @@ class DubbingProductionApplicationService:
                     )
                 if disposition == "accepted":
                     return disposition
-                if disposition == "needs_semantic_review":
-                    return disposition
                 preferred_disposition = preferred_disposition or disposition
             except AppException as exc:
                 if exc.code == "VIDEO_LOCALIZATION_DUBBING_COMMIT_TIMELINE_CONFLICT":
@@ -3511,8 +3496,6 @@ class DubbingProductionApplicationService:
                         review_mode=review_mode,
                     )
                 if disposition == "accepted":
-                    return disposition
-                if disposition == "needs_semantic_review":
                     return disposition
                 preferred_disposition = preferred_disposition or disposition
             except AppException as exc:

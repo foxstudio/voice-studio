@@ -904,44 +904,6 @@ async def test_accepted_current_candidate_does_not_regenerate_for_historical_rej
 
 
 @pytest.mark.asyncio
-async def test_explicit_failed_group_semantic_handoff_does_not_record_failure():
-    group = _group()
-    failed = SimpleNamespace(
-        group_id=group.group_id,
-        stage="failed",
-        recommended_action="complete",
-        candidate_ids=["candidate-existing"],
-        attempt_count=1,
-    )
-    failures: list[tuple[object, ...]] = []
-    _configure(
-        read_production_run=lambda _project_id: SimpleNamespace(
-            next_action="complete",
-            next_group_id=None,
-            groups=[failed],
-        ),
-        recover_and_finalize_generated_group=(
-            lambda *_args, **_kwargs: "needs_semantic_review"
-        ),
-        record_group_failure=lambda *args, **_kwargs: failures.append(args),
-        reserve_single_tts_handoff=lambda *_args, **_kwargs: pytest.fail(
-            "semantic handoff must not submit TTS"
-        ),
-    )
-
-    result = await executor.advance(
-        "project-1",
-        scope="single_group",
-        group_id=group.group_id,
-    )
-
-    assert result.status == "needs_attention"
-    assert result.group_id == group.group_id
-    assert "正在检查断句" in result.message
-    assert failures == []
-
-
-@pytest.mark.asyncio
 async def test_failed_group_queues_one_frozen_retry_only_after_local_closeout_requires_it(
     monkeypatch,
 ):
@@ -1622,7 +1584,9 @@ async def test_full_run_queues_exactly_one_group_with_omnivoice(
     assert request.engine_id == "omnivoice"
     assert request.video_localization_execution_scope == "all_remaining"
     assert request.video_localization_generation_attempt == 1
-    assert request.video_localization_dubbing_review_mode == "risk_based"
+    # review_mode no longer changes behavior; the thin compatibility value
+    # defaults to the single automatic mode.
+    assert request.video_localization_dubbing_review_mode == "full"
     assert request.video_localization_execution_start_group_id == group.group_id
     assert request.video_localization_execution_end_group_id == group.group_id
     assert request.video_localization_ordinary_speed_baseline == 1.18
@@ -1919,40 +1883,6 @@ async def test_successful_managed_task_recovers_result_then_continues(monkeypatc
         ),
         ("project-1", "continued"),
     ]
-
-
-@pytest.mark.asyncio
-async def test_semantic_boundary_handoff_does_not_mark_failure_or_dispatch_successor(monkeypatch):
-    task = GenerationTask(
-        task_id="task-semantic",
-        generation_id="task-semantic",
-        result_id="result-semantic",
-        engine_id="omnivoice",
-        project_id="project-1",
-        segment_id="localized-1",
-        status=TaskStatus.success,
-        input_text="完整句子",
-        parameters={
-            "source": "video_localization",
-            "video_localization_dubbing_group_id": "group-1",
-            "video_localization_execution_scope": "all_remaining",
-        },
-    )
-    calls: list[str] = []
-    _configure(
-        recover_and_finalize_generated_group=(
-            lambda *_args, **_kwargs: "needs_semantic_review"
-        ),
-        record_group_failure=lambda *_args, **_kwargs: calls.append("failure"),
-    )
-    monkeypatch.setattr(
-        executor,
-        "_continue_all_remaining",
-        lambda _project_id: calls.append("continue"),
-    )
-
-    assert await executor.handle_completed_task(task) == "needs_semantic_review"
-    assert calls == []
 
 
 @pytest.mark.asyncio

@@ -99,7 +99,29 @@ try {
   assert.equal(beforeDelete.length, baseline.length + 2);
   await clip('old_part_2').click();
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-audio-clip-id')), 'old_part_2');
+  // The same audio can be moved/normalized while this delete is in flight.
+  // Deletion targets its stable identity, not its obsolete geometry snapshot.
+  let concurrentMoveChecked = false;
+  await page.route('**/video-localization/timeline-edit', async route => {
+    const command = route.request().postDataJSON();
+    const removal = command.deleted_clips.find(item => item.clip_id === 'old_part_2');
+    assert.ok(removal, 'expected the real keyboard deletion request');
+    const fields = removal.expected_editable_fields;
+    const moved = await page.request.patch(`${prefix}/timeline-edit`, { data: {
+      schema_version: 'timeline-edit-patch-v2', clip_patches: [{
+        clip_id: removal.clip_id,
+        expected_generation_identity: removal.expected_generation_identity,
+        expected_editable_fields: fields,
+        start_ms: fields.start_ms + 42,
+        end_ms: fields.end_ms + 42
+      }]
+    } });
+    assert.ok(moved.ok(), await moved.text());
+    concurrentMoveChecked = true;
+    await route.continue();
+  }, { times: 1 });
   await savedAction(() => page.keyboard.press('e'));
+  assert.ok(concurrentMoveChecked, 'delete raced with a real same-audio update');
   const edited = shape(dub(await read()));
   assert.equal(edited.length, baseline.length + 1);
   assert.ok(!edited.some(item => item.clip_id === 'old_part_2'));
@@ -205,7 +227,7 @@ try {
   assert.deepEqual(errors, []);
   assert.deepEqual(consoleErrors, []);
   console.log(JSON.stringify({ timeline_editing: 'passed', checks: ['queued edit plus undo settles without error',
-    'redo works after net-zero save', 'razor twice', 'E deletes middle',
+    'redo works after net-zero save', 'razor twice', 'E deletes middle despite concurrent same-audio movement',
     'undo and redo save', 'revision poll', 'focus', 'refresh', 'ASR timing persists', 'overview E deletion',
     'UI-only change has no unload prompt', 'sub-frame subtitle timing survives refresh', 'no extra tracks or restored parent', 'no browser errors'] }));
 } catch (error) {

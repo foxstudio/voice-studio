@@ -159,9 +159,12 @@ async function verifyReuseRace() {
   const baselineWorkflowIds = new Set(before.tts_tasks.map(task => task.workflow_id));
   const baselineClipIds = new Set(before.timeline_clips.map(clip => clip.clip_id));
   const historyResultId = expected.alternate_result_id;
-  const segmentA = 'subtitle';
-  const segmentB = 'part_d';
-  assert.ok(before.localized_subtitles.some(subtitle => subtitle.subtitle_id === segmentB), 'The fixture must keep a second independent subtitle to select while A is held');
+  const targets = ['part_d', 'part_e', 'part_f', 'part_g', 'part_h'];
+  const [segmentA, ...queuedTargets] = targets;
+  for (const subtitleId of targets) {
+    assert.ok(before.localized_subtitles.some(subtitle => subtitle.subtitle_id === subtitleId),
+      `The fixture must keep independent subtitle ${subtitleId} to select while A is held`);
+  }
 
   const selectSubtitle = async (subtitleId, edge = 'left') => {
     const item = page.locator(`[data-track-id="localizedSubtitles"] [data-subtitle-item-id="${subtitleId}"]`).first();
@@ -208,6 +211,13 @@ async function verifyReuseRace() {
     generateBodies.push(response.request().postDataJSON());
   };
   const reuseButton = () => page.locator(`.history-row[data-result-id="${historyResultId}"] .reuse-button`).first();
+  const initPlaceholders = () => page.locator('[data-audio-clip-id^="pending_tts_init_"]');
+  const placeholderLabels = () => initPlaceholders().evaluateAll(elements => elements.map(element => ({
+    id: element.dataset.audioClipId,
+    text: element.textContent || ''
+  })));
+  const selectedInitLabels = () => page.locator('[data-audio-clip-id^="pending_tts_init_"].selected')
+    .evaluateAll(elements => elements.map(element => element.textContent || ''));
 
   await page.route('**/tts/handoff-reserve/**', holdReserve);
   await page.route('**/tts/handoff/**', holdPrepare);
@@ -215,56 +225,64 @@ async function verifyReuseRace() {
   try {
     await selectSubtitle(segmentA, 'right');
     await reuseButton().click();
-    // B is selected and submitted while A's reserve is still pending, so B is
-    // staged in the client queue with its own frozen target.
-    await selectSubtitle(segmentB);
+    for (const subtitleId of queuedTargets) {
+      // Each disjoint target is selected and submitted while A's reserve is
+      // still pending, so every click is staged in the client queue with its
+      // own frozen target and its own immediately visible init placeholder.
+      await selectSubtitle(subtitleId);
+      await reuseButton().click();
+    }
+    assert.equal(reserveRecords.length, 1, 'Only the first target may reserve while its handoff is held');
+    await page.waitForFunction(count => document.querySelectorAll('[data-audio-clip-id^="pending_tts_init_"]').length === count, targets.length);
+    const early = await placeholderLabels();
+    assert.equal(early.length, targets.length, 'Every disjoint click must be visible immediately');
+    assert.equal(new Set(early.map(entry => entry.id)).size, targets.length, 'Every click must own a distinct placeholder');
+    assert.equal(early.filter(entry => entry.text.includes('准备提交')).length, 1, 'Exactly the active submission shows as preparing');
+    assert.equal(early.filter(entry => entry.text.includes('排队中')).length, targets.length - 1, 'All held clicks must show as queued');
+    // The latest click keeps its own placeholder selected; the held A
+    // placeholder must not steal it.
+    const selectedEarly = await selectedInitLabels();
+    assert.equal(selectedEarly.length, 1, 'Exactly one init placeholder is selected');
+    assert.ok(!selectedEarly[0].includes('准备提交'), "A's held placeholder must not steal the latest selection");
+    // A repeated click on an already staged target must not reserve a second workflow.
     await reuseButton().click();
-    assert.equal(reserveRecords.length, 1, 'B must stay queued while the A reserve is pending');
+    assert.equal(reserveRecords.length, 1, 'A duplicate target click must not reserve a second workflow');
+    await page.waitForTimeout(150);
+    assert.equal((await initPlaceholders().count()), targets.length, 'A duplicate click must not add another placeholder');
     releaseReserve();
-    // A's reserve returned and beginSubtitleTtsInitialization(A) has run; A's
-    // prepare request is held so the intermediate selection is observable.
+    // A's reserve returned with A's prepare request held, so the queued
+    // placeholders remain observable while the rest of the queue waits.
     await prepareStarted;
-    await page.waitForFunction(() => Boolean(document.querySelector('[data-audio-clip-id^="pending_tts_init_"]')));
-    const intermediate = await page.evaluate(subtitleId => {
-      const placeholder = document.querySelector('[data-audio-clip-id^="pending_tts_init_"]');
-      const target = document.querySelector(`[data-track-id="localizedSubtitles"] [data-subtitle-item-id="${subtitleId}"]`);
-      return {
-        placeholderSelected: Boolean(placeholder?.classList.contains('selected')),
-        targetSelected: Boolean(target?.classList.contains('selected')),
-        targetIsTtsTarget: Boolean(target?.classList.contains('tts-target'))
-      };
-    }, segmentB);
-    assert.equal(intermediate.targetSelected, true, 'B must stay the live timeline selection while A prepares');
-    assert.equal(intermediate.targetIsTtsTarget, true, 'B must stay the TTS target while A prepares');
-    assert.equal(intermediate.placeholderSelected, false, "A's placeholder must not steal B's selection");
-    // A repeated B click while B is already staged must not reserve a second workflow.
-    await reuseButton().click();
-    assert.equal(reserveRecords.length, 1, 'A duplicate B click must not reserve a second workflow');
+    assert.equal((await initPlaceholders().count()), targets.length, 'Queued placeholders must survive the first reserve');
+    const selectedDuringPrepare = await selectedInitLabels();
+    assert.equal(selectedDuringPrepare.length, 1, "A's late reserve must not clear the selected placeholder");
+    assert.ok(!selectedDuringPrepare[0].includes('准备提交'), "A's late reserve must not steal the selection");
     releasePrepare();
 
-    const deadline = Date.now() + 45000;
+    const deadline = Date.now() + 60000;
     let after = await read();
     while (Date.now() < deadline) {
       after = await read();
       const fresh = after.tts_tasks.filter(task => !baselineWorkflowIds.has(task.workflow_id));
-      if (fresh.length === 2 && fresh.every(task => task.stages.find(stage => stage.kind === 'placement')?.status === 'success')) break;
+      if (fresh.length === targets.length && fresh.every(task => task.stages.find(stage => stage.kind === 'placement')?.status === 'success')) break;
       await page.waitForTimeout(120);
     }
     const newTasks = after.tts_tasks.filter(task => !baselineWorkflowIds.has(task.workflow_id));
-    assert.equal(newTasks.length, 2, 'Each queued reuse must reserve exactly one workflow');
-    assert.deepEqual(newTasks.map(task => task.segment_id).sort(), [segmentA, segmentB].sort(), 'Submissions must land on their frozen targets');
+    assert.equal(newTasks.length, targets.length, 'Each queued reuse must reserve exactly one workflow');
+    assert.deepEqual(newTasks.map(task => task.segment_id).sort(), [...targets].sort(), 'Submissions must land on their frozen targets');
     for (const task of newTasks) {
       assert.equal(task.stages.find(stage => stage.kind === 'placement')?.status, 'success', JSON.stringify(task));
     }
     const newClips = after.timeline_clips.filter(clip => !baselineClipIds.has(clip.clip_id));
-    assert.equal(newClips.length, 2, 'Exactly one clip per queued target, no duplicates');
+    assert.equal(newClips.length, targets.length, 'Exactly one clip per queued target, no duplicates');
     for (const clip of before.timeline_clips) {
       assert.ok(after.timeline_clips.some(current => current.clip_id === clip.clip_id), `Old clip ${clip.clip_id} must survive`);
     }
-    assert.deepEqual(reserveRecords.map(record => record.segmentId).sort(), [segmentA, segmentB].sort());
-    assert.deepEqual(reserveRecords.find(record => record.segmentId === segmentA).body.target_subtitle_ids, [segmentA]);
-    assert.deepEqual(reserveRecords.find(record => record.segmentId === segmentB).body.target_subtitle_ids, [segmentB]);
-    assert.deepEqual(generateBodies.map(body => body.segment_id).sort(), [segmentA, segmentB].sort());
+    assert.deepEqual(reserveRecords.map(record => record.segmentId).sort(), [...targets].sort());
+    for (const target of targets) {
+      assert.deepEqual(reserveRecords.find(record => record.segmentId === target).body.target_subtitle_ids, [target]);
+    }
+    assert.deepEqual(generateBodies.map(body => body.segment_id).sort(), [...targets].sort());
     for (const body of generateBodies) {
       assert.deepEqual(body.video_localization_target_subtitle_ids, [body.segment_id], JSON.stringify(body));
     }
@@ -274,8 +292,8 @@ async function verifyReuseRace() {
     for (const clip of after.timeline_clips) {
       assert.ok(refreshed.timeline_clips.some(current => current.clip_id === clip.clip_id), `Clip ${clip.clip_id} must persist after refresh`);
     }
-    assert.equal(refreshed.tts_tasks.filter(task => !baselineWorkflowIds.has(task.workflow_id)).length, 2);
-    console.log(JSON.stringify({ reuseRace: 'passed', checks: ['B queued while A reserve held', 'intermediate B selection kept', 'no placeholder selection steal', 'duplicate B click deduped', 'frozen A/B targets', 'no duplicate workflow or clip', 'refresh persistence'] }));
+    assert.equal(refreshed.tts_tasks.filter(task => !baselineWorkflowIds.has(task.workflow_id)).length, targets.length);
+    console.log(JSON.stringify({ reuseRace: 'passed', checks: ['A reserve held while B/C/D/E enqueue', 'distinct init placeholder per disjoint click', 'queued labels before release', 'no selection steal by held reserve', 'same-target dedup', 'frozen targets', 'no duplicate workflow or clip', 'refresh persistence'] }));
   } finally {
     releaseReserve();
     releasePrepare();

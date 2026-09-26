@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { VideoLocalizationDraft } from '$lib/api/types';
 import { TtsSubmissionQueue, withTtsSubmissionQueueLabels } from './tts-submission-queue';
+import { createTtsInitializationPlaceholder } from './tts-initialization-clips';
 
 function deferred() {
 	let resolve!: () => void;
@@ -29,6 +30,40 @@ describe('TTS submission queue', () => {
 			{ clip_id: 'b', optimistic_tts_workflow_id: 'init:submission-b', status_label: '排队中' },
 			{ clip_id: 'ready', status_label: null }
 		]);
+	});
+
+	it('keeps every immediately created disjoint placeholder visible while the first submission is held', async () => {
+		const first = deferred();
+		const ids = ['a', 'b', 'c', 'd'];
+		let clips = ids.map((id, index) => createTtsInitializationPlaceholder([], {
+			clientId: id,
+			segmentId: `segment-${id}`,
+			primaryCueId: null,
+			sourceCueIds: [],
+			startMs: index * 1000,
+			endMs: index * 1000 + 800
+		}));
+		const queue = new TtsSubmissionQueue({
+			onStateChange: (state) => {
+				clips = withTtsSubmissionQueueLabels(
+					{ timeline_clips: clips } as unknown as VideoLocalizationDraft,
+					state
+				).timeline_clips as typeof clips;
+			}
+		});
+
+		for (const [index, id] of ids.entries()) {
+			queue.enqueue(id, index === 0
+				? async () => { await first.promise; }
+				: async () => {});
+		}
+
+		expect(clips.map((clip) => clip.clip_id)).toEqual(ids.map((id) => `pending_tts_init_${id}`));
+		expect(clips.map((clip) => clip.status_label)).toEqual(['准备提交', '排队中', '排队中', '排队中']);
+		expect(new Set(clips.map((clip) => clip.clip_id)).size).toBe(ids.length);
+
+		first.resolve();
+		await queue.whenIdle();
 	});
 
 	it('submits clicks one at a time in click order', async () => {

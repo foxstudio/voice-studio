@@ -60,67 +60,52 @@ try {
  assert.equal(parent.segments.length,2);
  assert.ok(parent.segments.every(part=>part.status==='success' && part.result_id));
  assert.ok(parent.export_id);
- let pendingRun, pendingProgress;
- const closeoutDeadline=Date.now()+20000;
+ // Normal finalization now commits atomically. The recovered group must reach
+ // accepted on its actual persisted clips without posting a semantic-boundary
+ // review or inventing an accepted audit label.
+ const acceptanceDeadline=Date.now()+40000;
+ let progress;
  do {
-  pendingRun=await (await page.request.get(`${base}/api/projects/${expected.project_id}/video-localization/dubbing/production-run`)).json();
-  pendingProgress=pendingRun.groups.find(group=>group.group_id===expected.group_id);
-  if(pendingProgress.stage!=='generating')break;
+  const run=await (await page.request.get(`${base}/api/projects/${expected.project_id}/video-localization/dubbing/production-run`)).json();
+  progress=run.groups.find(group=>group.group_id===expected.group_id);
+  if(progress?.stage==='accepted')break;
   await page.waitForTimeout(200);
- }while(Date.now()<closeoutDeadline);
- if(pendingProgress.stage==='generating') {
-  const blockedDraft=await (await page.request.get(`${base}/api/projects/${expected.project_id}/video-localization`)).json();
-  console.log(JSON.stringify({closeoutBlocked:{progress:pendingProgress,
-   workflows:blockedDraft.tts_tasks.map(task=>({workflow_id:task.workflow_id,status:task.status,generation_task_id:task.generation_task_id,result_id:task.result_id,stages:task.stages.map(stage=>({kind:stage.kind,status:stage.status,error:stage.error,message:stage.message}))})),
-   inputs:blockedDraft.dubbing_production.candidate_inputs.map(input=>({candidate_id:input.candidate_id,group_id:input.group_id,task_status:input.task_status,plan_revision:input.plan_revision})),
-   reports:blockedDraft.dubbing_production.candidate_reports.map(report=>({candidate_id:report.candidate_id,status:report.automatic_status,findings:report.findings})),
-  }}));
- }
- assert.equal(pendingProgress.stage,'needs_semantic_review',JSON.stringify(pendingProgress));
- assert.equal(pendingProgress.recommended_action,'review_semantic_boundaries');
- const pendingDraft=await (await page.request.get(`${base}/api/projects/${expected.project_id}/video-localization`)).json();
- const stagedReport=[...pendingDraft.dubbing_production.candidate_reports].reverse().find(report=>report.semantic_boundary_audit?.status==='pending_agent');
- const candidateId=stagedReport?.candidate_id;
- assert.ok(candidateId,JSON.stringify({pendingProgress,reports:pendingDraft.dubbing_production.candidate_reports}));
- const auditResponse=await page.request.get(`${base}/api/projects/${expected.project_id}/video-localization/dubbing/candidates/${encodeURIComponent(candidateId)}/semantic-boundaries`);
- assert.ok(auditResponse.ok(),await auditResponse.text());
- const audit=await auditResponse.json();
- assert.equal(audit.status,'pending_agent');
- const reviewResponse=await page.request.post(`${base}/api/projects/${expected.project_id}/video-localization/dubbing/candidates/${encodeURIComponent(candidateId)}/semantic-boundaries/review`,{data:{
-  schema_version:'dubbing-candidate-review-command-v2', source_revision:audit.source_revision,
-  plan_revision:audit.plan_revision, candidate_id:candidateId, audio_sha256:audit.audio_sha256,
-  candidate_evidence_fingerprint:audit.candidate_evidence_fingerprint,
-  candidate_clip_projection_fingerprint:audit.candidate_clip_projection_fingerprint,
-  semantic_boundary_reviews:audit.boundaries.map(boundary=>({boundary_id:boundary.boundary_id,semantic_role:'continuous_phrase',disposition:'acceptable',reason:'固定验收已完成逐边界处置'})),
- }});
- assert.ok(reviewResponse.ok(),await reviewResponse.text());
- assert.equal((await reviewResponse.json()).semantic_boundary_audit.status,'accepted');
- const advanced=await page.request.post(`${base}/api/projects/${expected.project_id}/video-localization/dubbing/production-run/execute`,{data:{schema_version:'dubbing-production-execute-v1',scope:'single_group',group_id:expected.group_id}});
- assert.ok(advanced.ok(),await advanced.text());
+ } while(Date.now()<acceptanceDeadline);
+ assert.equal(progress?.stage,'accepted',JSON.stringify(progress));
+ assert.ok(progress.formal_clip_ids.length>0);
+ const acceptedDraft=await (await page.request.get(`${base}/api/projects/${expected.project_id}/video-localization`)).json();
+ const actualAcceptedClip=acceptedDraft.timeline_clips.find(clip=>clip.clip_id===progress.formal_clip_ids[0]&&clip.track_id==='dub');
+ assert.ok(actualAcceptedClip,JSON.stringify(progress));
+ const candidateId=String(actualAcceptedClip.candidate_id||actualAcceptedClip.result_id||'');
+ assert.ok(candidateId,'accepted clip must expose its candidate identity');
  const replay=await page.request.post(`${base}/api/projects/${expected.project_id}/video-localization/dubbing/recovery`,{data:decision});
  assert.ok([200,409].includes(replay.status()),await replay.text());
  const replayBody=await replay.json();
  if(replay.status()===409) assert.equal(replayBody.error?.code ?? replayBody.code,'DUBBING_RECOVERY_NOT_REQUIRED');
- const run=await (await page.request.get(`${base}/api/projects/${expected.project_id}/video-localization/dubbing/production-run`)).json();
- const progress=run.groups.find(group=>group.group_id===expected.group_id);
- if(progress.stage!=='accepted') { const draft=await (await page.request.get(`${base}/api/projects/${expected.project_id}/video-localization`)).json(); console.log(JSON.stringify({reports:draft.dubbing_production.candidate_reports.map(r=>({id:r.candidate_id,findings:r.findings,audio:r.audio_evidence})),replay:replayBody,clips:draft.timeline_clips.map(c=>({id:c.clip_id,status:c.status,lane:c.dub_lane,candidate:c.candidate_id,gate:c.timeline_edit_gate,start:c.start_ms,end:c.end_ms}))})); }
- assert.equal(progress.stage,'accepted',JSON.stringify(progress));
- assert.ok(progress.formal_clip_ids.length > 0);
- // Evidence refresh must preserve the saved edit and avoid model work.
- const beforeRefresh=await (await page.request.get(`${base}/api/projects/${expected.project_id}/video-localization`)).json();
+ const replayRun=await (await page.request.get(`${base}/api/projects/${expected.project_id}/video-localization/dubbing/production-run`)).json();
+ assert.equal(replayRun.groups.find(group=>group.group_id===expected.group_id)?.stage,'accepted',JSON.stringify(replayRun));
+ // Evidence refresh must preserve the saved edit and avoid model work. It binds
+ // the actual clip projection fingerprint; a missing exposure is reported by
+ // field name instead of fabricating an accepted audit.
+ const beforeRefresh=acceptedDraft;
  const currentReport=beforeRefresh.dubbing_production.candidate_reports.find(item=>item.candidate_id===candidateId);
  const currentInput=beforeRefresh.dubbing_production.candidate_inputs.find(item=>item.candidate_id===candidateId);
  const actualClip=beforeRefresh.timeline_clips.find(item=>item.candidate_id===candidateId && item.track_id==='dub');
+ assert.ok(currentReport && currentInput && actualClip,JSON.stringify({candidateId,reports:beforeRefresh.dubbing_production.candidate_reports}));
  const revision=await (await page.request.get(`${base}/api/projects/${expected.project_id}/video-localization/workspace-revision`)).json();
  const providerBefore=await (await page.request.get(`${base}/api/__content_acceptance/state`)).json();
+ const projectionFingerprint=currentReport.staged_candidate_projection?.candidate_clip_projection_fingerprint
+  ?? actualClip.timeline_edit_gate?.candidate_clip_projection_fingerprint;
+ assert.ok(projectionFingerprint,'current-projection needs an exposed candidate_clip_projection_fingerprint on candidate_reports[].staged_candidate_projection or timeline_clips[].timeline_edit_gate');
  const refreshedEvidence=await page.request.post(`${base}/api/projects/${expected.project_id}/video-localization/dubbing/candidates/${encodeURIComponent(candidateId)}/current-projection`,{data:{
   source_revision:currentInput.source_revision,plan_revision:currentInput.plan_revision,
   group_id:expected.group_id,candidate_id:candidateId,result_id:actualClip.result_id,
   expected_repository_revision:Number(revision.revision),
-  candidate_clip_projection_fingerprint:currentReport.staged_candidate_projection.candidate_clip_projection_fingerprint,
+  candidate_clip_projection_fingerprint:projectionFingerprint,
  }});
  assert.ok(refreshedEvidence.ok(),await refreshedEvidence.text());
- assert.equal((await refreshedEvidence.json()).semantic_boundary_audit.status,'accepted');
+ const refreshedReport=await refreshedEvidence.json();
+ assert.equal(refreshedReport.candidate_id,candidateId);
  const afterRefresh=await (await page.request.get(`${base}/api/projects/${expected.project_id}/video-localization`)).json();
  assert.deepEqual(afterRefresh.timeline_clips,beforeRefresh.timeline_clips);
  const providerAfter=await (await page.request.get(`${base}/api/__content_acceptance/state`)).json();

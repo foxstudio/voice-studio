@@ -1058,7 +1058,7 @@ describe('TTS dual-track handoff policy', () => {
 		);
 	});
 
-	it('registers the durable workflow before exposing a direct-reuse placeholder', () => {
+	it('freezes one submission snapshot for the local placeholder, reserve and prepare', () => {
 		const reserveSource = pageSource.match(
 			/async function reserveSelectedSubtitleGenerateWorkflow[\s\S]*?\n\tasync function prepareSelectedSubtitleGenerateRequest/
 		)?.[0] ?? '';
@@ -1077,7 +1077,6 @@ describe('TTS dual-track handoff policy', () => {
 		expect(prepareSource).toContain('Api.prepareVideoLocalizationTtsHandoff');
 		expect(prepareSource).not.toContain('Api.previewVideoLocalizationTtsHandoff');
 		expect(reuseSource).toContain('stageSubtitleTtsInitialization(selection)');
-		expect(reuseSource).not.toContain('beginSubtitleTtsInitialization(selection)');
 		expect(pageSource).toContain("submissionError instanceof ApiError && submissionError.code === 'TIMEOUT'");
 		expect(pageSource).toContain('submissionError instanceof TypeError');
 		expect(pageSource).toContain('request.video_localization_submission_id');
@@ -1225,9 +1224,6 @@ describe('TTS dual-track handoff policy', () => {
 	it('allows independent TTS submissions without inventing a second task or failed timeline clip', () => {
 		expect(pageSource).not.toContain('if (submittingBatch) return null');
 		expect(pageSource).toContain('ttsSubmissionQueue.enqueue(selection.clientId');
-		expect(pageSource).toMatch(
-			/async function executeSubtitleHistorySubmission[\s\S]*?reserveSelectedSubtitleGenerateWorkflow\(selection, history\.result_id\)[\s\S]*?beginSubtitleTtsInitialization\(selection\)[\s\S]*?prepareSelectedSubtitleGenerateRequest\(selection, history\.result_id\)[\s\S]*?submitSubtitleTts\(base/
-		);
 		expect(pageSource).toContain('submission_id: selection.clientId');
 		expect(pageSource).not.toContain('function failSubtitleTtsInitialization(');
 		expect(pageSource).not.toContain("stage: '提交失败'");
@@ -1263,7 +1259,6 @@ describe('TTS dual-track handoff policy', () => {
 		expect(openSource).toContain('VIDEO_LOCALIZATION_TTS_HANDOFF_INTENT_KEY');
 		expect(openSource).toContain('await goto(`/generate?${params.toString()}`)');
 		expect(openSource).not.toContain('prepareSelectedSubtitleGenerateRequest(');
-		expect(openSource).not.toContain('beginTtsSubmission()');
 	});
 
 	it('does not expose the removed one-click production workflow in the dubbing inspector', () => {

@@ -138,19 +138,11 @@ async def _recover_and_finalize(
     candidate_ids: list[str],
     review_mode: DubbingProductionReviewMode,
 ):
-    if review_mode == "full":
-        return await asyncio.to_thread(
-            projection.recover_and_finalize_generated_group,
-            project_id,
-            group_id,
-            candidate_ids,
-        )
     return await asyncio.to_thread(
         projection.recover_and_finalize_generated_group,
         project_id,
         group_id,
         candidate_ids,
-        review_mode=review_mode,
     )
 
 
@@ -161,34 +153,11 @@ async def _finalize_candidate(
     group_id: str,
     review_mode: DubbingProductionReviewMode,
 ):
-    if review_mode == "full":
-        return await asyncio.to_thread(
-            projection.finalize_generated_candidate,
-            project_id,
-            candidate_id,
-            group_id,
-        )
     return await asyncio.to_thread(
         projection.finalize_generated_candidate,
         project_id,
         candidate_id,
         group_id,
-        review_mode=review_mode,
-    )
-
-
-def _semantic_boundary_handoff_response(
-    *,
-    scope: ExecutionScope,
-    group_id: str | None,
-) -> DubbingProductionExecuteResponse:
-    """Keep a staged candidate with Agent semantic review out of failure paths."""
-
-    return DubbingProductionExecuteResponse(
-        status="needs_attention",
-        scope=scope,
-        group_id=group_id,
-        message="当前组正在检查断句，已保留候选与证据；等待 Agent 处置后再继续。",
     )
 
 
@@ -345,20 +314,10 @@ def _continue_for_review_mode(
     window: DubbingExecutionWindow | None = None,
 ) -> None:
     execution_window = window or _bounded_window()
-    if review_mode == "full":
-        if execution_window == _bounded_window():
-            _continue_all_remaining(project_id)
-        else:
-            _continue_all_remaining(project_id, window=execution_window)
+    if execution_window == _bounded_window():
+        _continue_all_remaining(project_id)
     else:
-        if execution_window == _bounded_window():
-            _continue_all_remaining(project_id, review_mode)
-        else:
-            _continue_all_remaining(
-                project_id,
-                review_mode,
-                window=execution_window,
-            )
+        _continue_all_remaining(project_id, window=execution_window)
 
 
 async def _queue_group_for_review_mode(
@@ -393,13 +352,7 @@ async def _queue_group_for_review_mode(
         kwargs["capacity_replaces_workflow_ids"] = (
             capacity_replaces_workflow_ids
         )
-    if review_mode == "full":
-        return await _queue_group(project_id, **kwargs)
-    return await _queue_group(
-        project_id,
-        **kwargs,
-        review_mode=review_mode,
-    )
+    return await _queue_group(project_id, **kwargs)
 
 
 def _frozen_group_retry_request(draft, group, parameters: dict[str, Any] | None = None) -> GenerateRequest | None:
@@ -1412,11 +1365,6 @@ async def _advance_unlocked(
                     group_id=selected_progress.group_id,
                     message="已恢复符合本次语速基线的新声音并继续下一组。",
                 )
-        if recovered == "needs_semantic_review":
-            return _semantic_boundary_handoff_response(
-                scope=scope,
-                group_id=selected_progress.group_id,
-            )
         if recovered == "capacity_recovery_required":
             await _record_closeout_failure(
                 projection,
@@ -1652,11 +1600,6 @@ async def _advance_unlocked(
                 group_id=selected_progress.group_id,
                 message="已用现有音频重新完成当前片段收尾。",
             )
-        if recovered == "needs_semantic_review":
-            return _semantic_boundary_handoff_response(
-                scope=scope,
-                group_id=selected_progress.group_id,
-            )
         if recovered == "capacity_recovery_required":
             await _record_closeout_failure(
                 projection,
@@ -1746,11 +1689,6 @@ async def _advance_unlocked(
                         if scope == "all_remaining"
                         else "已恢复生成完成的音频并完成收尾。"
                     ),
-                )
-            if recovered == "needs_semantic_review":
-                return _semantic_boundary_handoff_response(
-                    scope=scope,
-                    group_id=active.group_id,
                 )
             if recovered == "capacity_recovery_required":
                 await _record_closeout_failure(
@@ -1891,11 +1829,6 @@ async def _advance_unlocked(
             )),
             review_mode,
         )
-        if recovered == "needs_semantic_review":
-            return _semantic_boundary_handoff_response(
-                scope=scope,
-                group_id=selected_group_id,
-            )
         if recovered == "capacity_recovery_required":
             await _record_closeout_failure(
                 projection,
@@ -2014,16 +1947,11 @@ async def _advance_unlocked(
                 ),
             )
     if next_action not in {"generate_candidate", "regenerate_candidate"}:
-        message = (
-            "当前组正在检查断句，已保留候选与证据；等待 Agent 处置后再继续。"
-            if next_action == "review_semantic_boundaries"
-            else "当前语义组已有结果，等待轻量收口，不会启动另一套生成流程。"
-        )
         return DubbingProductionExecuteResponse(
             status="needs_attention",
             scope=scope,
             group_id=selected_group_id,
-            message=message,
+            message="当前语义组已有结果，等待轻量收口，不会启动另一套生成流程。",
         )
 
     draft = await asyncio.to_thread(
@@ -2572,11 +2500,6 @@ async def _handle_completed_task_unlocked(task: GenerationTask) -> str:
         )
         if queued is not None and queued.status in {"queued", "waiting"}:
             return "regeneration_queued"
-    if disposition == "needs_semantic_review":
-        # This is an Agent handoff, not a failed take.  In particular, an
-        # all_remaining window must not queue its successor while the rendered
-        # boundary evidence is still awaiting a disposition.
-        return disposition
     if disposition in {None, "retryable_failure"}:
         await _record_closeout_failure(
             projection,

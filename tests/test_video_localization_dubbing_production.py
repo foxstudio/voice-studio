@@ -587,6 +587,184 @@ def test_gap_projection_rejects_unexecuted_requested_edit():
         )
 
 
+def test_finalize_gap_chain_trims_outer_and_internal_silence_from_source(monkeypatch, tmp_path):
+    """The real finalize chain must crop silence out of the source ranges.
+
+    One take carries a leading gap, a trailing gap, a safe punctuation-free
+    internal gap, a comma-boundary gap and an in-word gap. Only the outer
+    silence and the safe internal core may leave the source; the semantic and
+    unsafe gaps stay, and every target word stays whole.
+    """
+
+    service = DubbingProductionApplicationService()
+    words = [
+        DubbingCandidateAlignedWord(word_id="candidate_word_0001", text="甲", start_ms=200, end_ms=400),
+        DubbingCandidateAlignedWord(word_id="candidate_word_0002", text="乙", start_ms=760, end_ms=900),
+        DubbingCandidateAlignedWord(word_id="candidate_word_0003", text="丙", start_ms=1100, end_ms=1400),
+    ]
+
+    def raw_gap(gap_id, kind, start_ms, end_ms):
+        return DubbingAudioGapEvidence(
+            gap_id=gap_id,
+            kind=kind,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            duration_ms=end_ms - start_ms,
+            evidence_sources=["waveform", "energy"],
+            evidence_ids=[f"waveform:{gap_id}", f"energy:{gap_id}"],
+            boundary_confidence="ambiguous" if kind == "internal" else "clear",
+            edit_decision="retain",
+            retained_duration_ms=end_ms - start_ms,
+            decision_reason="raw detection",
+            safe_edit_boundary=(None if kind == "internal" else True),
+        )
+
+    raw_audio = _candidate().audio.model_copy(update={
+        "duration_ms": 2_000,
+        "speech_start_ms": 200,
+        "speech_end_ms": 1_400,
+        "speech_span_ms": 1_200,
+        "leading_silence_ms": 200,
+        "trailing_silence_ms": 600,
+        "voiced_spans": [DubbingVoicedSpan(start_ms=200, end_ms=1_400)],
+        "voiced_duration_ms": 1_200,
+        "aligned_words": words,
+        "gap_evidence": [
+            raw_gap("leading", "leading", 0, 160),
+            raw_gap("internal_safe", "internal", 400, 760),
+            raw_gap("internal_punct", "internal", 900, 1_100),
+            raw_gap("internal_inword", "internal", 1_150, 1_250),
+            raw_gap("trailing", "trailing", 1_400, 1_600),
+        ],
+    })
+    frozen = _candidate(
+        target_start_ms=1_000,
+        target_end_ms=3_000,
+        plan_revision=1,
+        expected_spoken_text="甲乙，丙",
+        audio=dubbing_candidate_alignment.with_alignment_evidence(raw_audio, words),
+    )
+    draft = VideoLocalizationDraft(
+        timeline_clips=[{
+            "clip_id": "clip-1",
+            "track_id": "dub",
+            "status": "ready",
+            "candidate_id": frozen.candidate_id,
+            "result_id": "result-1",
+            "dubbing_group_id": "dubbing_group_0001",
+            "target_subtitle_ids": ["localized_1"],
+            "source_start_ms": 0,
+            "source_end_ms": 2_000,
+            "start_ms": 1_000,
+            "end_ms": 3_000,
+            "dub_lane": 0,
+            "audio_sha256": frozen.audio_sha256,
+        }],
+    )
+
+    reviewed = dubbing_gap_adjudication.process_gap_evidence(
+        list(frozen.audio.gap_evidence),
+        aligned_words=words,
+        speech_start_ms=frozen.audio.speech_start_ms,
+        speech_end_ms=frozen.audio.speech_end_ms,
+        audio_duration_ms=frozen.audio.duration_ms,
+        expected_spoken_text=frozen.expected_spoken_text,
+        source_pauses=[],
+    )
+    by_id = {gap.gap_id: gap for gap in reviewed}
+    assert by_id["internal_safe"].edit_decision == "remove"
+    assert by_id["internal_punct"].edit_decision == "retain"
+    assert by_id["internal_punct"].semantic_role == "semantic_boundary"
+    assert by_id["internal_inword"].edit_decision == "retain"
+    assert by_id["leading"].edit_decision == "shorten"
+    assert by_id["trailing"].edit_decision == "shorten"
+
+    trimmed = dubbing_production_service._with_trimmed_automatic_outer_gaps(
+        draft,
+        candidate_id=frozen.candidate_id,
+        frozen=frozen,
+        reviewed_gaps=reviewed,
+    )
+    target = trimmed.timeline_clips[0]
+    assert target["source_start_ms"] == 120
+    assert target["source_end_ms"] == 1_480
+    assert target["end_ms"] - target["start_ms"] == 1_360
+
+    request = service._build_automatic_gap_split_request(
+        trimmed,
+        candidate_id=frozen.candidate_id,
+        group=SimpleNamespace(subtitle_ids=["localized_1"]),
+        frozen=frozen,
+        reviewed_gaps=reviewed,
+        source_pauses=[],
+    )
+    assert request is not None
+    slices = request.commands[0].slices
+    # The safe internal silence is cut out of the source, not merely split
+    # into two contiguous ranges: 480..680 disappears.
+    assert [(item.source_start_ms, item.source_end_ms) for item in slices] == [
+        (120, 480),
+        (680, 1_480),
+    ]
+    assert slices[0].alignment_word_ids == ["candidate_word_0001"]
+    assert slices[1].alignment_word_ids == [
+        "candidate_word_0002",
+        "candidate_word_0003",
+    ]
+    for word in words:
+        assert any(
+            item.source_start_ms <= word.start_ms and word.end_ms <= item.source_end_ms
+            for item in slices
+        ), word.word_id
+
+    # Exercise the real orchestration too: helper-only checks would miss a
+    # disconnected call site or a later step that undoes the crop.
+    group = DubbingGenerationGroup(
+        group_id=frozen.group_id, island_id="island", unit_ids=["unit"],
+        subtitle_ids=["localized_1"], speaker_id="speaker_01",
+        spoken_text=frozen.expected_spoken_text,
+        target_start_ms=1_000, target_end_ms=3_000,
+        source_reference_start_ms=1_000, source_reference_end_ms=3_000,
+    )
+    plan = DubbingGenerationPlan(
+        source_revision=frozen.source_revision, plan_revision=frozen.plan_revision,
+        status="passed", semantic_units=[], speech_islands=[], groups=[group],
+    )
+    audio_path = tmp_path / "candidate.wav"
+    audio_path.write_bytes(b"fixed fixture; provider not called")
+    draft.timeline_clips[0]["audio_path"] = str(audio_path)
+    draft.localized_subtitles = [VideoLocalizationSubtitleCue(
+        subtitle_id="localized_1", start_ms=1_000, end_ms=3_000,
+        text=frozen.expected_spoken_text, tts_text=frozen.expected_spoken_text,
+        source_cue_ids=[],
+    )]
+    draft = draft.model_copy(update={"dubbing_production": DubbingProductionState(
+        active_plan=plan, candidate_inputs=[frozen],
+    )})
+    monkeypatch.setattr(service, "_require_current_project", lambda _: draft)
+    committed = {}
+    monkeypatch.setattr(service, "_commit_processed_candidate",
+                        lambda _project, **kwargs: committed.update(kwargs))
+    assert service.finalize_generated_candidate("project-1", frozen.candidate_id, frozen.group_id) == "accepted"
+    final_clips = committed["processed_clips"]
+    assert [(c["source_start_ms"], c["source_end_ms"]) for c in final_clips] == [(120, 480), (680, 1480)]
+    assert all(any(c["source_start_ms"] <= w.start_ms and w.end_ms <= c["source_end_ms"]
+                   for c in final_clips) for w in words)
+    reconciled = {gap.gap_id: gap for gap in committed["report"].audio_evidence.gap_evidence}
+    # Safe internal silence: the 80ms safety margin on each side stays, the
+    # core is gone, and the decision reflects the real projection.
+    assert reconciled["internal_safe"].retained_duration_ms == 160
+    assert reconciled["internal_safe"].retained_duration_ms < by_id["internal_safe"].duration_ms
+    assert reconciled["internal_safe"].edit_decision != "retain"
+    # Punctuation pause and the in-word gap are preserved untouched.
+    assert reconciled["internal_punct"].retained_duration_ms == 200
+    assert reconciled["internal_punct"].edit_decision == "retain"
+    assert reconciled["internal_inword"].retained_duration_ms == 100
+    assert reconciled["internal_inword"].edit_decision == "retain"
+    assert reconciled["leading"].retained_duration_ms == 40
+    assert reconciled["trailing"].retained_duration_ms == 80
+
+
 def test_split_blocker_comparison_uses_stable_group_identity():
     groups = [
         SimpleNamespace(group_id="group-left", subtitle_ids=["subtitle-left"]),
@@ -743,8 +921,8 @@ def test_production_run_projection_exposes_recoverable_group_transitions():
     )
     semantic_pending = project(reports=[pending_boundary_report])
     assert semantic_pending.status == "needs_attention"
-    assert semantic_pending.groups[0].stage == "needs_semantic_review"
-    assert semantic_pending.next_action == "review_semantic_boundaries"
+    assert semantic_pending.groups[0].stage == "needs_gap_processing"
+    assert semantic_pending.next_action == "process_gaps"
 
     pending_boundary_report.staged_candidate_projection = SimpleNamespace(clips=[{
         "clip_id": "pending", "track_id": "dub", "status": "ready",
@@ -757,7 +935,7 @@ def test_production_run_projection_exposes_recoverable_group_transitions():
     assert stale_placement.groups[0].stage == "needs_gap_processing"
     assert stale_placement.next_action == "process_gaps"
     for safe_neighbour in [{**neighbour, "end_ms": 900}, {**neighbour, "dub_lane": 1}]:
-        assert project(reports=[pending_boundary_report], clips=[safe_neighbour]).next_action == "review_semantic_boundaries"
+        assert project(reports=[pending_boundary_report], clips=[safe_neighbour]).next_action == "process_gaps"
     del pending_boundary_report.staged_candidate_projection
 
     existing_clip = {
@@ -1052,8 +1230,8 @@ def test_production_run_projection_exposes_recoverable_group_transitions():
             )
         ],
     )
-    assert explicit_replacement.groups[0].stage == "needs_semantic_review"
-    assert explicit_replacement.next_action == "review_semantic_boundaries"
+    assert explicit_replacement.groups[0].stage == "needs_gap_processing"
+    assert explicit_replacement.next_action == "process_gaps"
 
     active_semantic_handoff = project(
         reports=[current_report, replacement_pending],
@@ -1068,8 +1246,8 @@ def test_production_run_projection_exposes_recoverable_group_transitions():
             )
         ],
     )
-    assert active_semantic_handoff.groups[0].stage == "needs_semantic_review"
-    assert active_semantic_handoff.next_action == "review_semantic_boundaries"
+    assert active_semantic_handoff.groups[0].stage == "needs_gap_processing"
+    assert active_semantic_handoff.next_action == "process_gaps"
 
     # Before the first audit is produced, a completed generation must still
     # hand its saved result to the finisher. A running or unknown result waits.
@@ -5580,7 +5758,7 @@ def test_semantic_boundary_review_persists_agent_handoff_without_replacing_timel
     assert holder["draft"].timeline_clips == adopted_clips
 
 
-def test_recovery_closeout_prefers_semantic_handoff_over_stale_lookup_failure(
+def test_recovery_closeout_preserves_first_current_result_disposition(
     monkeypatch,
 ):
     group = SimpleNamespace(group_id="group-1", subtitle_ids=["subtitle-1"])
@@ -5608,11 +5786,13 @@ def test_recovery_closeout_prefers_semantic_handoff_over_stale_lookup_failure(
             AppException(409, "TTS_CONTENT_AUDIO_UNAVAILABLE", "暂不可读")
         ),
     )
-    monkeypatch.setattr(service, "finalize_generated_candidate", lambda *_args, **_kwargs: "needs_semantic_review")
+    monkeypatch.setattr(service, "finalize_generated_candidate", lambda *_args, **_kwargs: "regeneration_required")
 
+    # The first current result's recovery need is preserved; a later candidate's
+    # disposition no longer creates a separate semantic handoff return.
     assert service.recover_and_finalize_generated_group(
         "project-1", "group-1", ["missing", "candidate-current"]
-    ) == "needs_semantic_review"
+    ) == "retryable_failure"
 
 
 def test_candidate_finalize_returns_typed_failure_when_alignment_is_empty(
@@ -5864,6 +6044,153 @@ def test_candidate_finalize_rejects_overlong_new_take_without_advancing_source_o
     assert audible_bounds is not None
     assert audible_bounds[0] == group.target_start_ms
     assert max(clip["end_ms"] for clip in observed[-1]) > group.target_end_ms
+
+
+def test_candidate_finalize_reuses_unchanged_committed_take_without_recommit(monkeypatch, tmp_path):
+    group = DubbingGenerationGroup(
+        group_id="dubbing_group_0001", island_id="island_0100", unit_ids=["unit_0100"],
+        subtitle_ids=["localized_1"], speaker_id="speaker_01", spoken_text="甲乙",
+        target_start_ms=1_000, target_end_ms=3_000,
+        source_reference_start_ms=1_000, source_reference_end_ms=3_000,
+    )
+    plan = DubbingGenerationPlan(
+        source_revision=SOURCE_REVISION, plan_revision=1, status="passed",
+        semantic_units=[], speech_islands=[], groups=[group],
+    )
+    frozen = _candidate(
+        plan_revision=1, source_revision=SOURCE_REVISION,
+        target_start_ms=1_000, target_end_ms=3_000, expected_spoken_text="甲乙",
+        audio=_candidate().audio.model_copy(update={"aligned_words": [
+            DubbingCandidateAlignedWord(word_id="a", text="甲", start_ms=100, end_ms=400),
+            DubbingCandidateAlignedWord(word_id="b", text="乙", start_ms=400, end_ms=700),
+        ]}),
+    )
+    audio_path = tmp_path / "committed.wav"
+    audio_path.write_bytes(b"committed")
+    committed_clip = {
+        "clip_id": "clip-committed", "track_id": "dub", "status": "ready",
+        "candidate_id": frozen.candidate_id, "result_id": "result-committed",
+        "dubbing_group_id": group.group_id,
+        "target_subtitle_ids": list(group.subtitle_ids),
+        "start_ms": 1_000, "end_ms": 3_000,
+        "source_start_ms": 0, "source_end_ms": 2_000, "dub_lane": 0,
+        "dubbing_alignment_word_ids": [],
+        "audio_sha256": frozen.audio_sha256, "audio_path": str(audio_path),
+    }
+    stage = dubbing_production_service._staged_candidate_projection(
+        candidate_id=frozen.candidate_id,
+        target_projection_fingerprint=hashlib.sha256(b"[]").hexdigest(),
+        clips=[committed_clip],
+    )
+    report = build_candidate_gap_processing_report(frozen).model_copy(update={
+        "staged_candidate_projection": stage,
+        "evidence_fingerprint": candidate_evidence_fingerprint(frozen),
+    })
+    draft = VideoLocalizationDraft(
+        timeline_clips=[dict(committed_clip)],
+        dubbing_production=DubbingProductionState(
+            active_plan=plan, candidate_inputs=[frozen], candidate_reports=[report],
+        ),
+    )
+    service = DubbingProductionApplicationService()
+    monkeypatch.setattr(service, "_require_current_project", lambda _project_id: draft)
+    monkeypatch.setattr(
+        dubbing_production_service.dubbing_media,
+        "current_timeline_audio_sha256s",
+        lambda _id, current: {
+            str(clip["clip_id"]): frozen.audio_sha256 for clip in current.timeline_clips
+        },
+    )
+    monkeypatch.setattr(
+        service, "_commit_processed_candidate",
+        lambda *args, **kwargs: pytest.fail("must not recommit an unchanged take"),
+    )
+
+    assert service.finalize_generated_candidate(
+        "project-1", frozen.candidate_id, group.group_id,
+    ) == "accepted"
+    assert service.finalize_generated_candidate(
+        "project-1", frozen.candidate_id, group.group_id,
+    ) == "accepted"
+    assert draft.timeline_clips == [dict(committed_clip)]
+
+
+@pytest.mark.parametrize("mutation", ["stale_evidence", "stale_audio"])
+def test_candidate_finalize_reprocesses_when_current_identity_stale(
+    monkeypatch, tmp_path, mutation,
+):
+    group = DubbingGenerationGroup(
+        group_id="dubbing_group_0001", island_id="island_0100", unit_ids=["unit_0100"],
+        subtitle_ids=["localized_1"], speaker_id="speaker_01", spoken_text="甲乙",
+        target_start_ms=1_000, target_end_ms=3_000,
+        source_reference_start_ms=1_000, source_reference_end_ms=3_000,
+    )
+    plan = DubbingGenerationPlan(
+        source_revision=SOURCE_REVISION, plan_revision=1, status="passed",
+        semantic_units=[], speech_islands=[], groups=[group],
+    )
+    frozen = _candidate(
+        plan_revision=1, source_revision=SOURCE_REVISION,
+        target_start_ms=1_000, target_end_ms=3_000, expected_spoken_text="甲乙",
+        audio=_candidate().audio.model_copy(update={"aligned_words": [
+            DubbingCandidateAlignedWord(word_id="a", text="甲", start_ms=100, end_ms=400),
+            DubbingCandidateAlignedWord(word_id="b", text="乙", start_ms=400, end_ms=700),
+        ]}),
+    )
+    audio_path = tmp_path / "committed.wav"
+    audio_path.write_bytes(b"committed")
+    committed_clip = {
+        "clip_id": "clip-committed", "track_id": "dub", "status": "ready",
+        "candidate_id": frozen.candidate_id, "result_id": "result-committed",
+        "dubbing_group_id": group.group_id,
+        "target_subtitle_ids": list(group.subtitle_ids),
+        "start_ms": 1_000, "end_ms": 3_000,
+        "source_start_ms": 0, "source_end_ms": 2_000, "dub_lane": 0,
+        "dubbing_alignment_word_ids": [],
+        "audio_sha256": frozen.audio_sha256, "audio_path": str(audio_path),
+    }
+    stage = dubbing_production_service._staged_candidate_projection(
+        candidate_id=frozen.candidate_id,
+        target_projection_fingerprint=hashlib.sha256(b"[]").hexdigest(),
+        clips=[committed_clip],
+    )
+    report_update = {
+        "staged_candidate_projection": stage,
+        "evidence_fingerprint": candidate_evidence_fingerprint(frozen),
+    }
+    hashes = {str(committed_clip["clip_id"]): frozen.audio_sha256}
+    if mutation == "stale_evidence":
+        report_update["evidence_fingerprint"] = "0" * 64
+    else:
+        hashes = {str(committed_clip["clip_id"]): "e" * 64}
+    report = build_candidate_gap_processing_report(frozen).model_copy(update=report_update)
+    draft = VideoLocalizationDraft(
+        timeline_clips=[dict(committed_clip)],
+        dubbing_production=DubbingProductionState(
+            active_plan=plan, candidate_inputs=[frozen], candidate_reports=[report],
+        ),
+    )
+    service = DubbingProductionApplicationService()
+    monkeypatch.setattr(service, "_require_current_project", lambda _project_id: draft)
+    monkeypatch.setattr(
+        dubbing_production_service.dubbing_media,
+        "current_timeline_audio_sha256s",
+        lambda _id, current: dict(hashes),
+    )
+
+    class CommitAttempted(Exception):
+        pass
+
+    monkeypatch.setattr(
+        service, "_commit_processed_candidate",
+        lambda *args, **kwargs: (_ for _ in ()).throw(CommitAttempted()),
+    )
+    # Stale evidence / changed bytes must not reuse the old take: closeout has
+    # to re-run and reach the commit boundary again.
+    with pytest.raises(CommitAttempted):
+        service.finalize_generated_candidate(
+            "project-1", frozen.candidate_id, group.group_id,
+        )
 
 
 def test_candidate_finalize_preserves_word_tail_and_classifies_capacity_after_leading_reanchor(

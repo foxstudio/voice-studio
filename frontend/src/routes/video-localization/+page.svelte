@@ -624,7 +624,6 @@
 	let speakerGroupingHealthLoading = $state(false);
 	let speakerGroupingAvailable = $state(false);
 	let speakerGroupingStatus = $state('');
-	let pendingTtsSubmissionCount = $state(0);
 	let preparingTtsHandoff = $state(false);
 	const pendingTtsInitializations = new Map<string, TtsSubmissionSnapshot>();
 	const ttsInitializationContexts = new Map<string, TtsWorkflowSessionContext>();
@@ -1745,7 +1744,6 @@
 		pendingTtsInitializations.clear();
 		ttsSubmissionQueue.reset();
 		foregroundTasks = [];
-		pendingTtsSubmissionCount = 0;
 		preparingTtsHandoff = false;
 		ttsTaskAction = null;
 		historyApplyingResultId = '';
@@ -4161,19 +4159,6 @@
 		});
 	}
 
-	function beginTtsSubmission() {
-		const context = ttsWorkflowSessionController.captureContext();
-		if (!context) return null;
-		pendingTtsSubmissionCount += 1;
-		return context;
-	}
-
-	function endTtsSubmission(context: TtsWorkflowSessionContext) {
-		if (ttsWorkflowSessionController.isCurrent(context)) {
-			pendingTtsSubmissionCount = Math.max(0, pendingTtsSubmissionCount - 1);
-		}
-	}
-
 	function stageSubtitleTtsInitialization(snapshot: TtsSubmissionSnapshot) {
 		if (!draft) return;
 		const context = ttsWorkflowSessionController.captureContext();
@@ -4408,6 +4393,10 @@
 			return;
 		}
 		if (!stageSubtitleTtsInitialization(selection)) return;
+		// Acknowledge the click immediately with the local initialization
+		// placeholder. It stays non-durable; the queue only serializes the
+		// reserve/prepare boundary behind this same clip.
+		beginSubtitleTtsInitialization(selection);
 		if (!ttsSubmissionQueue.enqueue(selection.clientId, async () => {
 			await executeSubtitleHistorySubmission(history, selection);
 		})) {
@@ -4421,7 +4410,7 @@
 	) {
 		if (!pendingTtsInitializations.has(selection.clientId)) return;
 		let base: GenerateRequest | null = null;
-		const context = beginTtsSubmission();
+		const context = ttsWorkflowSessionController.captureContext();
 		if (!context) {
 			endSubtitleTtsInitialization(selection);
 			return;
@@ -4435,7 +4424,6 @@
 			}
 			if (await settleCancelledTtsInitialization(selection, null, reserved.workflow_id)) return;
 			if (!ttsWorkflowSessionController.isCurrent(context)) return;
-			beginSubtitleTtsInitialization(selection);
 			timelineRuntimeClips = promoteTtsInitializationPlaceholder(
 				timelineRuntimeClips,
 				selection.clientId,
@@ -4465,8 +4453,6 @@
 				endSubtitleTtsInitialization(selection);
 			}
 			return;
-		} finally {
-			endTtsSubmission(context);
 		}
 		try {
 			if (await settleCancelledTtsInitialization(selection, base)) return;
@@ -4905,7 +4891,7 @@
 
 	async function submitSubtitleTts(request: GenerateRequest, actionLabel: string, selection: TtsSubmissionSnapshot) {
 		if (!draft || !request.segment_id) return;
-		const context = beginTtsSubmission();
+		const context = ttsWorkflowSessionController.captureContext();
 		if (!context) return;
 		error = '';
 		message = `${actionLabel}，正在提交…`;
@@ -5026,8 +5012,6 @@
 			} else {
 				await settleCancelledTtsInitialization(selection, request).catch(() => false);
 			}
-		} finally {
-			endTtsSubmission(context);
 		}
 	}
 

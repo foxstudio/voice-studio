@@ -23,7 +23,6 @@ _ATTENTION_STAGES = {
     "needs_regeneration",
     "needs_timeline_work",
     "needs_timeline_edit",
-    "needs_semantic_review",
 }
 
 
@@ -464,7 +463,7 @@ def _value(item: object, key: str, default: Any = None) -> Any:
     return getattr(item, key, default)
 
 
-def _processed_candidate_projection_is_current(
+def processed_candidate_projection_is_current(
     *,
     report: object | None,
     candidate_clips: list[dict[str, Any]],
@@ -475,12 +474,13 @@ def _processed_candidate_projection_is_current(
     if report is None or _value(report, "overall_status") == "failed":
         return False
     audit = _value(report, "semantic_boundary_audit")
-    # Existing completed takes have no reconstructable boundary-review input.
-    # Keep them readable as legacy evidence; every newly staged candidate
-    # carries this audit and cannot pass until its Agent disposition binds the
-    # current final projection.
+    # Existing completed takes may carry a boundary-review audit as historical
+    # or optional editing evidence. Acceptance follows the actual current
+    # projection and evidence, not an approval label: only an audit that binds a
+    # different projection or records a real recovery_required issue rejects the
+    # take. A missing or pending_agent audit no longer blocks physical completion.
     if audit is not None and (
-        _value(audit, "status") != "accepted"
+        _value(audit, "status") == "recovery_required"
         or _value(audit, "candidate_clip_projection_fingerprint")
         != candidate_clip_projection_fingerprint(candidate_clips)
     ):
@@ -733,7 +733,7 @@ def build_production_run_snapshot(
                 _value(audio, "content_speed_exception_reason")
                 and _value(audio, "content_speed_exception_evidence_ids", [])
             )
-            processed_take_is_current = _processed_candidate_projection_is_current(
+            processed_take_is_current = processed_candidate_projection_is_current(
                 report=report,
                 candidate_clips=candidate_clips,
                 frozen=next((item for item in group_inputs if _value(item, "candidate_id") == candidate_id), None),
@@ -909,7 +909,9 @@ def build_production_run_snapshot(
         elif pending_placement_conflict:
             stage, action = "needs_gap_processing", "process_gaps"
         elif latest_live_audit_status == "pending_agent":
-            stage, action = "needs_semantic_review", "review_semantic_boundaries"
+            # Historical staged candidates made by the old review gate: route
+            # them through the normal closeout so saved audio is adopted.
+            stage, action = "needs_gap_processing", "process_gaps"
         elif latest_live_audit_status == "recovery_required":
             stage, action = "needs_regeneration", "regenerate_candidate"
         elif (
@@ -950,7 +952,9 @@ def build_production_run_snapshot(
             == "pending_agent"
             for item in group_reports
         ):
-            stage, action = "needs_semantic_review", "review_semantic_boundaries"
+            # Historical pending audit is not a required stage; adopt its
+            # saved take through normal gap processing/closeout.
+            stage, action = "needs_gap_processing", "process_gaps"
         elif any(
             _value(_value(item, "semantic_boundary_audit"), "status")
             == "recovery_required"

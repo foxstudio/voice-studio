@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 import time
 import urllib.error
@@ -44,7 +43,6 @@ from typing import Any
 
 DEFAULT_BASE_URL = "http://127.0.0.1:5173"
 TERMINAL_STAGES = {"accepted", "deferred_manual_timing"}
-AGENT_STAGES = {"needs_semantic_review"}
 ATTENTION_STAGES = {
     "needs_attention",
     "needs_gap_processing",
@@ -299,58 +297,6 @@ def build_review_body(
     return body
 
 
-REVIEW_ROLES = {"semantic_boundary", "continuous_phrase"}
-REVIEW_DISPOSITIONS = {"acceptable", "recover", "uncertain"}
-
-
-def reusable_agent_reviews(audit: dict[str, Any]) -> list[dict[str, Any]] | None:
-    """The candidate's own complete Agent dispositions, or ``None``.
-
-    The driver never derives a semantic role from punctuation, timing or
-    render status.  It may only re-submit reviews the Agent already authored
-    and the audit already returned, and only when they are complete for the
-    current audit identity and the audit is still waiting for them.  Any gap,
-    unknown id, duplicate or invalid field means the caller must stop for a
-    real decision instead of guessing.
-    """
-
-    if audit.get("status") != "pending_agent":
-        return None
-    expected_ids = [
-        str(item.get("boundary_id")) for item in audit.get("boundaries") or []
-    ]
-    raw = audit.get("agent_reviews")
-    if not isinstance(raw, list):
-        return None
-    by_id: dict[str, dict[str, Any]] = {}
-    for item in raw:
-        if not isinstance(item, dict):
-            return None
-        boundary_id = str(item.get("boundary_id") or "")
-        if not boundary_id or boundary_id in by_id:
-            return None
-        if str(item.get("semantic_role") or "") not in REVIEW_ROLES:
-            return None
-        if str(item.get("disposition") or "") not in REVIEW_DISPOSITIONS:
-            return None
-        if not str(item.get("reason") or "").strip():
-            return None
-        by_id[boundary_id] = {
-            "boundary_id": boundary_id,
-            "semantic_role": item["semantic_role"],
-            "disposition": item["disposition"],
-            "reason": item["reason"],
-            "evidence_id": item.get("evidence_id"),
-        }
-    if not expected_ids:
-        # A single alignment unit has no adjacent boundary; the Skill submits
-        # an empty full-coverage disposition list.
-        return [] if not by_id else None
-    if set(by_id) != set(expected_ids):
-        return None
-    return [by_id[boundary_id] for boundary_id in expected_ids]
-
-
 def load_review_file(path: Path) -> dict[str, Any]:
     """Read an Agent review file, keeping its original candidate identity.
 
@@ -492,23 +438,6 @@ def advance_group(
                 "stage": stage,
                 "run": summarize(run),
             }
-        if stage in AGENT_STAGES:
-            candidate_id = pick_agent_candidate(
-                group,
-                base_url=base_url,
-                project_id=project_id,
-            )
-            return {
-                "group_id": group_id,
-                "result": "agent_review_required",
-                "stage": stage,
-                "candidate_id": candidate_id,
-                "instruction": (
-                    "读取该候选的边界证据（boundaries 子命令），完成判断后再用 "
-                    "review 子命令提交，然后继续 advance。"
-                ),
-                "run": summarize(run),
-            }
         try:
             if regenerate and not regenerated:
                 regenerated = True
@@ -584,155 +513,6 @@ def advance_group(
     raise ApiError(f"{group_id} 在 {max_rounds} 轮内没有稳定，请读取 status 检查")
 
 
-ALIGNMENT_LEAD_MS = 80
-ALIGNMENT_THRESHOLD_MS = 250
-_ALIGNMENT_PUNCTUATION = "，。！？；：、…—,.!?;:~「」『』（）()《》〈〉\"' "
-
-
-def _alignment_text(value: Any) -> str:
-    return re.sub(
-        f"[{re.escape(_ALIGNMENT_PUNCTUATION)}]",
-        "",
-        str(value or ""),
-    )
-
-
-def match_subtitle_word_ranges(
-    audit: dict[str, Any],
-    subtitles: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Locate every subtitle of one take inside its aligned word timeline."""
-
-    words = [
-        {
-            "text": _alignment_text(item.get("text")),
-            "start_ms": int(item.get("start_ms") or 0),
-            "end_ms": int(item.get("end_ms") or 0),
-            "word_id": str(item.get("word_id") or ""),
-        }
-        for item in audit.get("aligned_words") or []
-    ]
-    words = [item for item in words if item["text"]]
-    cursor = 0
-    ranges: list[dict[str, Any]] = []
-    for subtitle in subtitles:
-        target = _alignment_text(subtitle.get("text"))
-        if not target:
-            return []
-        start_index = cursor
-        consumed = ""
-        end_index = cursor
-        while end_index < len(words) and len(consumed) < len(target):
-            consumed += words[end_index]["text"]
-            end_index += 1
-        if not consumed.startswith(target):
-            return []
-        ranges.append(
-            {
-                "subtitle_id": str(subtitle.get("subtitle_id") or ""),
-                "target_start_ms": int(subtitle.get("start_ms") or 0),
-                "word_start_ms": words[start_index]["start_ms"],
-                "word_end_ms": words[end_index - 1]["end_ms"],
-                "word_ids": [item["word_id"] for item in words[start_index:end_index]],
-            }
-        )
-        cursor = end_index
-    return ranges
-
-
-def plan_alignment_slices(
-    audit: dict[str, Any],
-    clip: dict[str, Any],
-    subtitles: list[dict[str, Any]],
-    *,
-    threshold_ms: int = ALIGNMENT_THRESHOLD_MS,
-    lead_ms: int = ALIGNMENT_LEAD_MS,
-) -> dict[str, Any] | None:
-    """Old read-only diagnostic: a per-subtitle-box alignment reference ONLY.
-
-    This is NOT a semantic split and must never be adopted or submitted:
-    the intermediate translation字幕盒 is reference material, and the real
-    segmentation comes from the Agent's semantic judgment through the public
-    edit/recovery entries.  Left in place purely so an Agent can inspect how
-    far a take drifts from the old subtitle cue starts; there is no CLI caller.
-
-    Returns ``None`` when the take already matches its subtitles, when the
-    subtitle text cannot be located in the aligned words, or when there is only
-    one subtitle to place.  A negative gap is clamped to zero for display only.
-    """
-
-    ranges = match_subtitle_word_ranges(audit, subtitles)
-    if len(ranges) < 2:
-        return None
-    clip_start_ms = int(clip.get("start_ms") or 0)
-    source_start_ms = int(clip.get("source_start_ms") or 0)
-    source_end_ms = int(clip.get("source_end_ms") or 0)
-    deviations = [
-        clip_start_ms + range_item["word_start_ms"] - source_start_ms - range_item["target_start_ms"]
-        for range_item in ranges
-    ]
-    if max(abs(value) for value in deviations) <= threshold_ms:
-        return None
-    slices: list[dict[str, Any]] = []
-    previous_end_ms: int | None = None
-    previous_source_end: int | None = None
-    clamped = False
-    for index, range_item in enumerate(ranges):
-        if previous_source_end is None:
-            # The slices must tile the whole candidate crop: the service
-            # refuses a split that leaves any part of the take uncovered.
-            source_start = max(0, source_start_ms)
-        else:
-            # Share one cut point with the previous slice: two independent
-            # safety margins would overlap by their sum and replay the same
-            # audio on both sides of the join.
-            source_start = previous_source_end
-        if index == len(ranges) - 1:
-            # Cover the candidate crop exactly: neither leaving a tail
-            # uncovered nor claiming audio the crop never had.
-            source_end = source_end_ms
-        else:
-            boundary = max(
-                range_item["word_end_ms"],
-                ranges[index + 1]["word_start_ms"] - lead_ms,
-            )
-            source_end = min(source_end_ms, boundary)
-        if source_end <= source_start:
-            return None
-        previous_source_end = source_end
-        expected_start = range_item["target_start_ms"]
-        if previous_end_ms is None:
-            # The first slice keeps the adopted take's own start; later slices
-            # are positioned from where the previous slice actually ends.
-            gap = 0
-            current_start = clip_start_ms
-        else:
-            gap = expected_start - previous_end_ms
-            if gap < 0:
-                gap = 0
-                clamped = True
-            current_start = max(expected_start, previous_end_ms)
-        slices.append(
-            {
-                "target_subtitle_ids": [range_item["subtitle_id"]],
-                "source_start_ms": source_start,
-                "source_end_ms": source_end,
-                "speech_start_ms": range_item["word_start_ms"],
-                "speech_end_ms": range_item["word_end_ms"],
-                "alignment_word_ids": range_item["word_ids"],
-                "timeline_gap_before_ms": gap,
-            }
-        )
-        previous_end_ms = current_start + (source_end - source_start)
-    return {
-        "clip_id": str(clip.get("clip_id") or ""),
-        "candidate_id": str(clip.get("candidate_id") or ""),
-        "slices": slices,
-        "max_deviation_ms": max(abs(value) for value in deviations),
-        "gap_clamped": clamped,
-    }
-
-
 def resolve_ordinary_speed_baseline(
     base_url: str,
     project_id: str,
@@ -796,37 +576,21 @@ def command_advance(args: argparse.Namespace) -> int:
 
 
 def plan_run_step(run: dict[str, Any]) -> dict[str, Any]:
-    """Decide the next whole-range action from the durable read model.
+    """Decide the next whole-range action from the durable read model."""
 
-    Reviewing comes first: a group whose candidate is waiting for its
-    per-boundary disposition would otherwise stay unfinished while the executor
-    keeps asking for it.
-    """
-
-    unfinished = unfinished_groups(run)
-    review_group_ids = [
-        str(item["group_id"])
-        for item in unfinished
-        if str(item.get("stage")) in AGENT_STAGES
-    ]
-    if review_group_ids:
-        return {"action": "review", "group_ids": review_group_ids}
-    remaining = [str(item["group_id"]) for item in unfinished]
+    remaining = [str(item["group_id"]) for item in unfinished_groups(run)]
     if remaining:
         return {"action": "advance", "group_ids": remaining}
     return {"action": "complete", "group_ids": []}
 
 
 def command_run(args: argparse.Namespace) -> int:
-    """Drive the remaining range, stopping where an Agent must judge.
+    """Drive the remaining range until every group is terminal or recovering.
 
-    The driver only schedules, gathers evidence and submits.  It never derives
-    a semantic role from punctuation, a 0ms join, a short pause or a retained
-    low-energy gap, and it never splits a take by the intermediate translation
-    subtitle boxes.  A group whose candidate already carries complete, still
-    valid Agent reviews may be re-submitted; any other waiting boundary stops
-    that group with its candidate and full boundary references, while
-    independent groups behind it keep generating.
+    The driver only schedules and gathers evidence; it never fabricates a
+    semantic decision or splits a take by the intermediate translation
+    subtitle boxes. Explicit per-boundary review stays available through the
+    `boundaries`/`review` subcommands for intentional editing.
     """
 
     stalled = 0
@@ -882,126 +646,11 @@ def command_run(args: argparse.Namespace) -> int:
                 )
             )
             return 0
-        review_targets = list(step["group_ids"]) if step["action"] == "review" else []
         unfinished_ids = [
             str(item["group_id"]) for item in unfinished_groups(run)
         ]
-        others = [group_id for group_id in unfinished_ids if group_id not in review_targets]
-        capacity, deferred = advance_targets(others)
-        blocked: list[dict[str, Any]] = []
-        stale: list[dict[str, Any]] = []
-        for group_id in review_targets:
-            current = read_run(args.base_url, args.project)
-            group = find_group(current, group_id)
-            candidate_id = pick_agent_candidate(
-                group,
-                base_url=args.base_url,
-                project_id=args.project,
-            )
-            if not candidate_id:
-                blocked.append(
-                    {
-                        "group_id": group_id,
-                        "candidate_id": None,
-                        "boundary_ids": [],
-                        "reason": "该组还没有可判断的候选",
-                    }
-                )
-                continue
-            audit = read_audit(args.base_url, args.project, candidate_id)
-            if "error" in audit:
-                message = str(audit["error"])
-                # A stale candidate id after a replan is not a judgement call:
-                # driving the group again produces a current one.
-                if "CANDIDATE_NOT_FOUND" in message or "AUDIT_NOT_FOUND" in message:
-                    outcome = advance_group(
-                        args.base_url,
-                        args.project,
-                        group_id,
-                        speed_baseline=speed_baseline,
-                        poll_seconds=args.poll_seconds,
-                        max_rounds=args.max_rounds,
-                    )
-                    stale.append(
-                        {
-                            "group_id": group_id,
-                            "result": outcome.get("result"),
-                            "stage": outcome.get("stage"),
-                        }
-                    )
-                    continue
-                blocked.append(
-                    {
-                        "group_id": group_id,
-                        "candidate_id": candidate_id,
-                        "boundary_ids": [],
-                        "reason": message,
-                    }
-                )
-                continue
-            reviews = reusable_agent_reviews(audit)
-            if reviews is None:
-                blocked.append(
-                    {
-                        "group_id": group_id,
-                        "candidate_id": candidate_id,
-                        "status": audit.get("status"),
-                        "boundary_ids": [
-                            str(item.get("boundary_id"))
-                            for item in audit.get("boundaries") or []
-                        ],
-                        "reason": (
-                            "候选没有完整、有效的 Agent 逐边界决定；"
-                            "标点、0ms、短停顿、安全 retain 都不能替代语义判断。"
-                        ),
-                        "instruction": (
-                            "先用 boundaries 读取候选与全部边界证据，由 Agent 写出包含"
-                            "候选身份与 semantic_boundary_reviews 的文件，再用 review --file 提交，"
-                            "然后重跑 run。"
-                        ),
-                    }
-                )
-                continue
-            try:
-                identity = review_identity(audit)
-            except ApiError as exc:
-                blocked.append(
-                    {
-                        "group_id": group_id,
-                        "candidate_id": candidate_id,
-                        "status": audit.get("status"),
-                        "boundary_ids": [
-                            str(item.get("boundary_id"))
-                            for item in audit.get("boundaries") or []
-                        ],
-                        "reason": str(exc),
-                    }
-                )
-                continue
-            try:
-                submit_reviews(
-                    args.base_url,
-                    args.project,
-                    candidate_id,
-                    reviews,
-                    identity=identity,
-                )
-            except ApiError as exc:
-                # The candidate moved between reading and submitting (a
-                # concurrent replan or adoption): hand it back and let the
-                # next cycle re-read instead of aborting the range.
-                message = str(exc)
-                if "CONFLICT" in message or "CHANGED" in message or "STALE" in message:
-                    deferred.append(
-                        {
-                            "group_id": group_id,
-                            "candidate_id": candidate_id,
-                            "reason": str(exc)[:160],
-                        }
-                    )
-                    continue
-                raise
-        if blocked or capacity or deferred:
+        capacity, deferred = advance_targets(unfinished_ids)
+        if capacity or deferred:
             print(
                 json.dumps(
                     {
@@ -1012,9 +661,7 @@ def command_run(args: argparse.Namespace) -> int:
                         ),
                         "cycle": cycle,
                         "capacity": capacity,
-                        "groups": blocked,
                         "deferred": deferred,
-                        "stale_candidates": stale,
                         "summary": summarize(read_run(args.base_url, args.project)),
                     },
                     ensure_ascii=False,
@@ -1140,7 +787,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--speed-baseline",
         type=float,
         default=None,
-        help="整段沿用的冻结速度；省略时取最近三个普通正式片段的中位数",
+        help="整段沿用的冻结速度（1.0–2.0）；省略时新范围默认 1.0",
     )
     advance.add_argument("--poll-seconds", type=float, default=12.0)
     advance.add_argument("--max-rounds", type=int, default=60)

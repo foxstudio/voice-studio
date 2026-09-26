@@ -1286,10 +1286,12 @@ def update_video_localization_timeline_edit(
         }
         added_clip_ids: list[str] = []
 
-        def require_current_clip(item) -> dict[str, Any]:
+        def require_current_clip(item, *, deleting: bool = False) -> dict[str, Any] | None:
             clip_id = item.clip_id
             clip = clip_by_id.get(clip_id)
             if clip is None:
+                if deleting and clip_id not in system_media_track_by_clip_id:
+                    return None
                 raise AppException(
                     409,
                     "VIDEO_LOCALIZATION_TIMELINE_CLIP_NOT_FOUND",
@@ -1309,7 +1311,8 @@ def update_video_localization_timeline_edit(
                     "这条声音已经被新结果替换，旧编辑没有执行。",
                     {"clip_id": clip_id},
                 )
-            if editable_clip_state(clip) != item.expected_editable_fields.model_dump():
+            # Deletion follows the same audio identity even if its position changed.
+            if not deleting and editable_clip_state(clip) != item.expected_editable_fields.model_dump():
                 raise AppException(
                     409,
                     "VIDEO_LOCALIZATION_TIMELINE_CLIP_CHANGED",
@@ -1322,7 +1325,7 @@ def update_video_localization_timeline_edit(
         for item in patch.clip_patches:
             require_current_clip(item)
         for item in patch.deleted_clips:
-            require_current_clip(item)
+            require_current_clip(item, deleting=True)
         for item in patch.added_clips:
             if item.clip_id in clip_by_id:
                 existing = clip_by_id[item.clip_id]

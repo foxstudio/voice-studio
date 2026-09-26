@@ -27,6 +27,10 @@ def scenario(base: str) -> dict:
         ("part_c", 500, 1000, "风格变了"),
         ("part_b", 1000, 2000, "角色也变了"),
         ("part_d", 3100, 3400, "独立目标"),
+        ("part_e", 3600, 3900, "独立目标 E"),
+        ("part_f", 4100, 4400, "独立目标 F"),
+        ("part_g", 4600, 4900, "独立目标 G"),
+        ("part_h", 5100, 5400, "独立目标 H"),
     ]:
         draft["localized_subtitles"].append({"subtitle_id": subtitle, "start_ms": start,
             "end_ms": end, "text": text, "tts_text": text, "source_cue_ids": ["cue"]})

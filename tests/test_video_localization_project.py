@@ -1738,31 +1738,144 @@ def test_video_localization_timeline_edit_rejects_stale_same_media_timing(tmp_pa
             }],
         },
     )
-    stale_delete = client.patch(
-        endpoint,
-        json={
-            "schema_version": "timeline-edit-patch-v2",
-            "deleted_clips": [{
-                "clip_id": "clip-1",
-                "expected_generation_identity": "task-same",
-                "expected_editable_fields": expected,
-            }],
-        },
-    )
 
-    for response in (stale_patch, stale_delete):
-        assert response.status_code == 409
-        assert (
-            response.json()["error"]["code"]
-            == "VIDEO_LOCALIZATION_TIMELINE_CLIP_CHANGED"
-        )
-        assert response.json()["error"]["detail"]["editable"] is True
+    assert stale_patch.status_code == 409
+    assert (
+        stale_patch.json()["error"]["code"]
+        == "VIDEO_LOCALIZATION_TIMELINE_CLIP_CHANGED"
+    )
+    assert stale_patch.json()["error"]["detail"]["editable"] is True
     stored = video_localization_service.get_video_localization(
         project["project_id"]
     )
     assert stored is not None
     assert stored.timeline_clips[0]["end_ms"] == 2_500
     assert stored.timeline_clips[0]["source_end_ms"] == 1_500
+
+
+def test_video_localization_timeline_delete_tolerates_stale_geometry_same_identity(
+    tmp_path: Path,
+):
+    client = _client(tmp_path)
+    project = client.post(
+        "/api/projects", json={"name": "删就删", "description": ""}
+    ).json()
+    created = client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "timeline_clips": [{
+                "clip_id": "clip-1",
+                "track_id": "dub",
+                "start_ms": 1_000,
+                "end_ms": 3_000,
+                "source_start_ms": 0,
+                "source_end_ms": 2_000,
+                "media_source_clip_id": "source-1",
+                "task_id": "task-same",
+                "dub_lane": 0,
+            }],
+        },
+    )
+    assert created.status_code == 200
+    # A stale client geometry (e.g. a pending patch that was rebased) must not
+    # block the delete: the stable generation identity still matches.
+    stale = {
+        "start_ms": 1_200,
+        "end_ms": 2_400,
+        "source_start_ms": 0,
+        "source_end_ms": 1_200,
+        "media_source_clip_id": "old-source",
+        "dub_lane": 1,
+    }
+    deleted = client.patch(
+        f"/api/projects/{project['project_id']}/video-localization/timeline-edit",
+        json={
+            "schema_version": "timeline-edit-patch-v2",
+            "deleted_clips": [{
+                "clip_id": "clip-1",
+                "expected_generation_identity": "task-same",
+                "expected_editable_fields": stale,
+            }],
+        },
+    )
+    assert deleted.status_code == 200, deleted.text
+    stored = video_localization_service.get_video_localization(project["project_id"])
+    assert stored is not None
+    assert stored.timeline_clips == []
+
+
+def test_video_localization_timeline_repeat_delete_is_idempotent_and_keeps_batch(
+    tmp_path: Path,
+):
+    client = _client(tmp_path)
+    project = client.post(
+        "/api/projects", json={"name": "重复删除不撤销同批", "description": ""}
+    ).json()
+    created = client.put(
+        f"/api/projects/{project['project_id']}/video-localization",
+        json={
+            "project_type": "video_localization",
+            "schema_version": "v1",
+            "timeline_clips": [
+                {"clip_id": "keep", "track_id": "dub", "start_ms": 0, "end_ms": 1_000, "task_id": "task-keep"},
+                {"clip_id": "remove", "track_id": "dub", "start_ms": 1_000, "end_ms": 2_000, "task_id": "task-remove"},
+            ],
+        },
+    )
+    assert created.status_code == 200
+    endpoint = (
+        f"/api/projects/{project['project_id']}/video-localization/timeline-edit"
+    )
+    remove_fence = {
+        "clip_id": "remove",
+        "expected_generation_identity": "task-remove",
+        "expected_editable_fields": {
+            "start_ms": 1_000,
+            "end_ms": 2_000,
+            "source_start_ms": None,
+            "source_end_ms": None,
+            "media_source_clip_id": None,
+            "dub_lane": None,
+        },
+    }
+    first = client.patch(
+        endpoint,
+        json={
+            "schema_version": "timeline-edit-patch-v2",
+            "deleted_clips": [remove_fence],
+        },
+    )
+    assert first.status_code == 200, first.text
+
+    # Second delete of the same already-gone clip is a no-op, and the other
+    # legal operation in the same batch must still apply.
+    second = client.patch(
+        endpoint,
+        json={
+            "schema_version": "timeline-edit-patch-v2",
+            "deleted_clips": [remove_fence],
+            "clip_patches": [{
+                "clip_id": "keep",
+                "expected_generation_identity": "task-keep",
+                "expected_editable_fields": {
+                    "start_ms": 0,
+                    "end_ms": 1_000,
+                    "source_start_ms": None,
+                    "source_end_ms": None,
+                    "media_source_clip_id": None,
+                    "dub_lane": None,
+                },
+                "end_ms": 800,
+            }],
+        },
+    )
+    assert second.status_code == 200, second.text
+    stored = video_localization_service.get_video_localization(project["project_id"])
+    assert stored is not None
+    assert [clip["clip_id"] for clip in stored.timeline_clips] == ["keep"]
+    assert stored.timeline_clips[0]["end_ms"] == 800
 
 
 def test_video_localization_timeline_edit_patch_adds_split_without_quality_gate(tmp_path: Path):

@@ -333,9 +333,10 @@ def test_refresh_actual_projection_never_rearranges_or_generates(tmp_path, monke
         report = service.refresh_current_candidate_projection("project-1", command)
         assert state["draft"].timeline_clips == [clip]
         assert report.staged_candidate_projection.clips[0].start_ms == 1000
-        assert report.semantic_boundary_audit is not None
+        # A no-approval refresh keeps geometry evidence without creating a
+        # pending audit that would reopen completion.
+        assert report.semantic_boundary_audit is None
         assert state["draft"].dubbing_production.candidate_inputs[0].placement_start_ms == 1050
-        assert report.semantic_boundary_audit.status == "pending_agent"
 
 
 def _stage_candidate_content_projection(state, audio_path: Path):
