@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 import urllib.error
 import urllib.request
@@ -97,6 +96,82 @@ def audit_boundaries(
     return findings
 
 
+def _group_key(clip: dict[str, Any]) -> str:
+    group_id = str(clip.get("dubbing_group_id") or "")
+    return group_id or f"clip:{clip.get('clip_id')}"
+
+
+# Minimum fields the boundary heuristic reads.  A boundary missing any of them
+# must not be silently treated as a 0ms gap.
+BOUNDARY_REQUIRED_FIELDS = (
+    "boundary_id",
+    "left_word_id",
+    "right_word_id",
+    "left_text",
+    "right_text",
+    "final_gap_ms",
+    "final_overlap_ms",
+)
+
+
+def _valid_aligned_word(word: Any) -> bool:
+    """Whether one entry is a structurally valid DubbingCandidateAlignedWord."""
+
+    if not isinstance(word, dict):
+        return False
+    word_id = word.get("word_id")
+    text = word.get("text")
+    start = word.get("start_ms")
+    end = word.get("end_ms")
+    if not isinstance(word_id, str) or not word_id.strip():
+        return False
+    if not isinstance(text, str) or not text.strip():
+        return False
+    if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+        return False
+    return start >= 0 and end >= start
+
+
+def boundary_evidence_issue(audit: dict[str, Any]) -> str | None:
+    """Why the audit's boundary evidence is unusable, or ``None``.
+
+    The empty-boundary case is only valid for exactly one structurally valid
+    aligned word; several words without adjacent boundaries, or a malformed
+    word list, is unusable evidence rather than "nothing to check".
+    """
+
+    if not str(audit.get("expected_spoken_text") or ""):
+        return "缺少 expected_spoken_text"
+    words = audit.get("aligned_words")
+    if not isinstance(words, list) or not words:
+        return "缺少 aligned_words 词级证据"
+    if not all(_valid_aligned_word(word) for word in words):
+        return "aligned_words 含结构不合法的对齐词"
+    boundaries = audit.get("boundaries")
+    if not isinstance(boundaries, list):
+        return "缺少 boundaries 边界列表"
+    if not boundaries:
+        if len(words) != 1:
+            return f"没有相邻边界，但 aligned_words 有 {len(words)} 个词"
+        return None
+    seen: set[str] = set()
+    for index, boundary in enumerate(boundaries):
+        if not isinstance(boundary, dict):
+            return f"第 {index} 个边界不是对象"
+        boundary_id = str(boundary.get("boundary_id") or "")
+        if boundary_id in seen:
+            return f"第 {index} 个边界 boundary_id 重复：{boundary_id}"
+        seen.add(boundary_id)
+        for field in BOUNDARY_REQUIRED_FIELDS:
+            value = boundary.get(field)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                return f"第 {index} 个边界缺少 {field}"
+        for field in ("final_gap_ms", "final_overlap_ms"):
+            if not isinstance(boundary.get(field), (int, float)):
+                return f"第 {index} 个边界 {field} 不是数值"
+    return None
+
+
 def build_report(
     base_url: str,
     project_id: str,
@@ -111,37 +186,62 @@ def build_report(
         for clip in projection.get("timeline_clips") or []
         if str(clip.get("track_id")) == "dub"
     ]
-    audits: dict[str, Any] = {}
+    audits: dict[str, dict[str, Any]] = {}
     groups: dict[str, dict[str, Any]] = {}
-    for clip in clips:
-        group_id = str(clip.get("dubbing_group_id") or "")
-        candidate_id = str(clip.get("candidate_id") or "")
-        if not candidate_id or candidate_id in audits:
-            continue
-        try:
-            audits[candidate_id] = api(
-                base_url,
-                f"{localization}/dubbing/candidates/{candidate_id}/semantic-boundaries",
-            )
-        except ApiError as exc:
-            audits[candidate_id] = {"error": str(exc)}
-        entry = groups.setdefault(
-            group_id,
+    unchecked: list[dict[str, Any]] = []
+    checked_clip_count = 0
+    no_boundary_clip_count = 0
+
+    def unchecked_row(clip: dict[str, Any], reason: str, detail: str) -> None:
+        unchecked.append(
             {
-                "group_id": group_id,
+                "clip_id": clip.get("clip_id"),
+                "dubbing_group_id": _group_key(clip),
+                "reason": reason,
+                "detail": detail,
+            }
+        )
+
+    for clip in clips:
+        group_key = _group_key(clip)
+        entry = groups.setdefault(
+            group_key,
+            {
+                "group_id": group_key,
                 "clip_ids": [],
                 "text": str(clip.get("tts_target_text") or ""),
                 "findings": [],
+                "has_checked_clip": False,
             },
         )
         entry["clip_ids"].append(clip.get("clip_id"))
-    for clip in clips:
         candidate_id = str(clip.get("candidate_id") or "")
-        group_id = str(clip.get("dubbing_group_id") or "")
-        audit = audits.get(candidate_id) or {}
-        if audit.get("error"):
+        if not candidate_id:
+            unchecked_row(clip, "missing_candidate_id", "配音片段缺少 candidate_id，无法取证")
             continue
-        entry = groups[group_id]
+        if candidate_id not in audits:
+            try:
+                audits[candidate_id] = {
+                    "audit": api(
+                        base_url,
+                        f"{localization}/dubbing/candidates/{candidate_id}/semantic-boundaries",
+                    )
+                }
+            except ApiError as exc:
+                audits[candidate_id] = {"error": str(exc)}
+        record = audits[candidate_id]
+        if record.get("error"):
+            unchecked_row(clip, "api_error", f"断句证据接口调用失败：{record['error']}")
+            continue
+        audit = record.get("audit") or {}
+        issue = boundary_evidence_issue(audit)
+        if issue:
+            unchecked_row(clip, "missing_evidence", f"断句证据不完整：{issue}")
+            continue
+        entry["has_checked_clip"] = True
+        checked_clip_count += 1
+        if not audit.get("boundaries"):
+            no_boundary_clip_count += 1
         if not entry["text"]:
             entry["text"] = str(audit.get("expected_spoken_text") or "")
         for finding in audit_boundaries(
@@ -151,8 +251,16 @@ def build_report(
         ):
             if finding not in entry["findings"]:
                 entry["findings"].append(finding)
+
     offenders = [entry for entry in groups.values() if entry["findings"]]
     offenders.sort(key=lambda entry: len(entry["findings"]), reverse=True)
+    unchecked_clip_count = len(unchecked)
+    if offenders:
+        status = "findings"
+    elif clips and not unchecked_clip_count:
+        status = "checked"
+    else:
+        status = "incomplete"
     return {
         "project_id": project_id,
         "min_gap_ms": min_gap_ms,
@@ -160,6 +268,12 @@ def build_report(
         "clip_count": len(clips),
         "group_count": len(groups),
         "offender_count": len(offenders),
+        "checked_clip_count": checked_clip_count,
+        "no_adjacent_boundary_clip_count": no_boundary_clip_count,
+        "unchecked_clip_count": unchecked_clip_count,
+        "unchecked": unchecked,
+        "status": status,
+        "assessment": "heuristic_pending_semantic_review",
         "groups": offenders,
     }
 
@@ -167,23 +281,42 @@ def build_report(
 def render(report: dict[str, Any]) -> str:
     lines = [
         f"项目 {report['project_id']}：{report['group_count']} 个已落轨组，"
-        f"{report['offender_count']} 组存在断句问题",
+        f"{report['offender_count']} 组存在断句疑点"
+        f"（启发式提示，待语义评估）",
+        f"已检查 {report.get('checked_clip_count', '?')} 个配音片段"
+        f"（其中 {report.get('no_adjacent_boundary_clip_count', 0)} 个无相邻边界），"
+        f"未检查 {report.get('unchecked_clip_count', '?')} 个。",
     ]
     for entry in report["groups"]:
-        lines.append(f"\n[{entry['group_id']}] {len(entry['findings'])} 处 · {entry['text'][:52]}")
+        lines.append(f"\n[{entry['group_id']}] {len(entry['findings'])} 处疑点 · {entry['text'][:52]}")
         for finding in entry["findings"][:8]:
             label = {
-                "pause_inside_phrase": "该连续却断开",
-                "missing_clause_break": "该断句却连着",
-                "missing_comma_break": "逗号处无停顿",
+                "pause_inside_phrase": "无标点处有较长停顿（待语义评估）",
+                "missing_clause_break": "句末标点处几乎无停顿（待语义评估）",
+                "missing_comma_break": "逗号处几乎无停顿（待语义评估）",
             }[finding["code"]]
             lines.append(
                 f"    - {label}：「{finding['left_text']}｜{finding['right_text']}」"
                 f"间隙 {finding['final_gap_ms']}ms"
-                f"（标点 {finding['punctuation'] or '无'}）"
+                f"（紧邻标点 {finding['punctuation'] or '无'}）"
             )
         if len(entry["findings"]) > 8:
             lines.append(f"    … 其余 {len(entry['findings']) - 8} 处")
+    if report.get("unchecked"):
+        lines.append("\n未检查的配音片段：")
+        for item in report["unchecked"][:12]:
+            lines.append(
+                f"    - {item.get('dubbing_group_id')} {item.get('clip_id')}："
+                f"{item.get('detail')}"
+            )
+        if len(report["unchecked"]) > 12:
+            lines.append(f"    … 其余 {len(report['unchecked']) - 12} 个")
+    if report.get("status") == "incomplete":
+        lines.append("\n结论：本次未能覆盖全部配音片段，不能据此宣称全片断句已确认。")
+    elif report.get("status") == "findings":
+        lines.append("\n结论：以上为可复核的启发式疑点，需 Agent 结合上下文核对，脚本不判定“该连/该停”。")
+    else:
+        lines.append("\n结论：已检查片段的启发式规则均未命中；语义正确性仍需 Agent 结合音频证据与可得听音核对。")
     return "\n".join(lines)
 
 
@@ -210,7 +343,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"错误：{exc}", file=sys.stderr)
         return 1
     print(json.dumps(report, ensure_ascii=False, indent=2) if args.json else render(report))
-    return 2 if report["offender_count"] else 0
+    if report["offender_count"]:
+        return 2
+    if report.get("unchecked_clip_count") or not report.get("clip_count"):
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

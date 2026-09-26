@@ -15,8 +15,17 @@ from app.domains.video_localization import (  # noqa: E402
     media_assets,
     quality_gate,
 )
+from app.domains.video_localization import service as video_localization_service  # noqa: E402
+from app.domains.video_localization.schemas import (  # noqa: E402
+    VideoLocalizationOperation,
+    VideoLocalizationSpeakerCreate,
+)
 from app.main import app  # noqa: E402
-from app.schemas.voice_studio import AppSettings, VideoLocalizationDraft  # noqa: E402
+from app.schemas.voice_studio import (  # noqa: E402
+    AppSettings,
+    VideoLocalizationDraft,
+    VideoLocalizationTtsTask,
+)
 from app.services import database, project_store, settings_store  # noqa: E402
 
 
@@ -403,3 +412,156 @@ def test_repair_without_a_recoverable_snapshot_refuses_to_create_empty_state(
     assert current is not None
     assert "video_localization" not in current.parameters
     assert current.updated_at == original_updated_at
+
+
+_HISTORY_TASKS = 70
+_HISTORY_CANDIDATES = 70
+_HISTORY_OPERATIONS = 15
+
+
+def _seed_runtime_history(project_id: str) -> VideoLocalizationDraft:
+    """存一份超过展示裁剪阈值的固定运行历史（虚构数据）。"""
+
+    draft = VideoLocalizationDraft(
+        tts_tasks=[
+            VideoLocalizationTtsTask(
+                project_id=project_id,
+                segment_id=f"segment_{index:03d}",
+                subtitle_summary=f"固定任务 {index:03d}",
+                text=f"fixed line {index:03d}",
+                start_ms=index * 1000,
+                end_ms=index * 1000 + 800,
+                status="success",
+                workflow_id=f"workflow_{index:03d}",
+            )
+            for index in range(_HISTORY_TASKS)
+        ],
+        generated_candidates=[
+            {
+                "candidate_id": f"candidate_{index:03d}",
+                "task_id": f"task_{index:03d}",
+                "status": "success",
+            }
+            for index in range(_HISTORY_CANDIDATES)
+        ],
+        operations=[
+            VideoLocalizationOperation(
+                project_id=project_id,
+                kind="source_audio",
+                status="success",
+                operation_id=f"operation_{index:03d}",
+                label=f"固定操作 {index:03d}",
+            )
+            for index in range(_HISTORY_OPERATIONS)
+        ],
+        timeline_clips=[
+            {
+                "clip_id": "clip_history_ref",
+                "track_id": "dub",
+                "start_ms": 0,
+                "end_ms": 1000,
+                "candidate_id": "candidate_000",
+                "task_id": "task_000",
+                "generation_id": "task_000",
+                "status": "ready",
+            }
+        ],
+    )
+    saved = draft_store.save(project_id, draft, intent="content")
+    assert saved is not None
+    return saved
+
+
+def _seeded_project(tmp_path: Path, name: str) -> tuple[TestClient, str]:
+    client = _client(tmp_path)
+    project_data = client.post(
+        "/api/projects",
+        json={"name": name, "description": ""},
+    ).json()
+    project_id = project_data["project_id"]
+    _seed_runtime_history(project_id)
+    return client, project_id
+
+
+def test_domain_reader_returns_complete_runtime_history(tmp_path: Path):
+    _, project_id = _seeded_project(tmp_path, "完整历史读取")
+
+    draft = video_localization_service.get_video_localization(project_id)
+
+    assert draft is not None
+    assert len(draft.tts_tasks) == _HISTORY_TASKS
+    assert draft.tts_tasks[0].workflow_id == "workflow_000"
+    assert draft.tts_tasks[-1].workflow_id == "workflow_069"
+    assert len(draft.generated_candidates) == _HISTORY_CANDIDATES
+    assert draft.generated_candidates[0]["candidate_id"] == "candidate_000"
+    assert draft.generated_candidates[-1]["candidate_id"] == "candidate_069"
+    assert len(draft.operations) == _HISTORY_OPERATIONS
+    assert draft.operations[0].operation_id == "operation_000"
+    assert draft.operations[-1].operation_id == "operation_014"
+
+
+def test_public_read_modify_save_keeps_history_and_references(
+    tmp_path: Path,
+):
+    _, project_id = _seeded_project(tmp_path, "读改写保留历史")
+
+    updated = video_localization_service.create_speaker(
+        project_id,
+        VideoLocalizationSpeakerCreate(display_name="读改写新增说话人"),
+    )
+
+    assert updated is not None
+    assert len(updated.speakers) == 1
+    assert len(updated.tts_tasks) == _HISTORY_TASKS
+    assert len(updated.generated_candidates) == _HISTORY_CANDIDATES
+    assert len(updated.operations) == _HISTORY_OPERATIONS
+
+    stored = video_localization_service.get_video_localization(project_id)
+    assert stored is not None
+    assert stored.speakers[0].display_name == "读改写新增说话人"
+    assert stored.tts_tasks[0].workflow_id == "workflow_000"
+    assert stored.tts_tasks[-1].workflow_id == "workflow_069"
+    assert stored.operations[-1].operation_id == "operation_014"
+    assert stored.generated_candidates[0]["candidate_id"] == "candidate_000"
+    assert stored.generated_candidates[-1]["candidate_id"] == "candidate_069"
+    referenced_ids = {
+        str(clip.get("candidate_id") or "") for clip in stored.timeline_clips
+    }
+    assert "candidate_000" in referenced_ids
+    assert any(
+        str(item.get("candidate_id") or "") == "candidate_000"
+        for item in stored.generated_candidates
+    )
+
+
+def test_rest_full_draft_stays_complete_while_workspace_stays_light(
+    tmp_path: Path,
+):
+    client, project_id = _seeded_project(tmp_path, "完整契约与轻量工作区")
+
+    full = client.get(f"/api/projects/{project_id}/video-localization")
+    assert full.status_code == 200
+    body = full.json()
+    assert len(body["tts_tasks"]) == _HISTORY_TASKS
+    assert body["tts_tasks"][-1]["workflow_id"] == "workflow_069"
+    assert len(body["generated_candidates"]) == _HISTORY_CANDIDATES
+    assert len(body["operations"]) == _HISTORY_OPERATIONS
+
+    workspace = client.get(
+        f"/api/projects/{project_id}/video-localization/workspace"
+    )
+    assert workspace.status_code == 200
+    workspace_draft = workspace.json()["draft"]
+    assert workspace_draft["operations"] == []
+    assert workspace_draft["tts_tasks"] == []
+    assert workspace_draft["generated_candidates"] == []
+
+    detail = client.get(
+        f"/api/projects/{project_id}/video-localization"
+        "/workspace-details/generated_candidates"
+    )
+    assert detail.status_code == 200
+    candidates = detail.json()["generated_candidates"]
+    assert len(candidates) == _HISTORY_CANDIDATES
+    assert candidates[0]["candidate_id"] == "candidate_000"
+    assert candidates[-1]["candidate_id"] == "candidate_069"

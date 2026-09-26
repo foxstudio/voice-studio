@@ -485,3 +485,7 @@ A workflow with a successful generation stage and a persisted result resumes thr
 A pending staged take that now overlaps a saved neighbouring primary clip returns to `process_gaps` before semantic adoption. The read model and atomic adopter share the same primary-lane collision predicate in `dubbing_timeline_edit_gate`; staging omits media paths but still checks actual playable neighbours. This invalidates only local placement work, not generated audio or already accepted neighbouring takes.
 
 `dubbing_plan_continuation` retains verified completion evidence across revisions only when the group's local source/adjacent context, audio bytes and retained timeline projection are unchanged. Trusted frozen CQC inputs record their dependency fingerprint and original evidence revision. Inputs without this fingerprint cannot acquire cross-source acceptance. No reuse creates a new listening or human confirmation record.
+
+### Complete Draft reads and presentation projections
+
+`service.get_video_localization` and the full Draft REST reader preserve all stored runtime tasks, generated candidates, and operations. Read-modify-save callers must never consume a history-trimmed authoritative Draft. The existing workspace projection omits runtime collections for initial page loading; workspace details and task feeds provide their established detail and pagination boundaries. Presentation size limits belong to those read models, not the shared business reader.

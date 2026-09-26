@@ -143,11 +143,20 @@ WebUI 的**逐页审计与框架统一**：把每个页面的展示、交互和�
 
 ### 配音生产驱动脚本
 
-`scripts/drive_dubbing_production.py` 补上了原先缺失的生产驱动：`status` 读进度和每个非完成
-组的真实失败原因，`advance` 跑生成与收口并在需要 Agent 判断处停下，`boundaries` 输出边界证据，
-`review --accept-continuous [--gap-policy evidenced]` 提交 Agent 判断。它只调公开 API，判据仍
-由 Agent 给出；`evidenced` 只接受词边界上已有安全处理依据的较长停顿，字音不完整一律交回。
-实测用它把 9 个受影响组从 129/138 跑回 138/138。
+`scripts/drive_dubbing_production.py` 的 `status` 读真实进度，`advance`/`run` 调度生成与收口，
+`boundaries` 输出候选证据，`review --file` 提交 Agent 的完整语义决定。处置文件保留取证时的候选、版本和媒体指纹；身份变化拒绝提交，不能自动给旧判断换上最新身份。标点、零间隙、短停顿或
+安全保留记录都不能代填 `acceptable`；旧 `--accept-continuous` / `--gap-policy` 自动判定入口已停用。
+等待 Agent 决定时返回候选与边界交接，Agent 继续处理，不要求用户逐段审核，也不把等待误判为引擎卡死。
+
+新范围默认显式提交 1.0，不继承历史较快速度的中位数；已提交候选的收尾仍保持冻结参数。
+中间翻译字幕盒是参考，不是最终配音字幕；驱动不再按每盒起点自动切片。
+
+### 审计结果的可信边界
+
+断句与参考起点偏差是诊断线索，文本差异待语义核对；它们都不能单独证明音频质量。
+接口失败、证据过期、缺少候选或无法定位的范围必须单列为未检查，不能静默跳过后报“零问题”。
+复查结论须对账实际覆盖，脚本通过不代替 Agent 语义判断或真实音频证据。
+正式任务的保存终态和保存后观察者是不同事件；验收观察者副作用时等待其可观察结果，不能用一次终态读取代替。
 
 ### 混音默认值由落轨写入，导出与预览共用同一组
 
@@ -208,3 +217,7 @@ WebUI 的**逐页审计与框架统一**：把每个页面的展示、交互和�
 - 正式数据目录固定为 `VOICE_STUDIO_DATA_DIR`（默认 `~/VoiceStudio`）。测试、验收和浏览器回归一律使用本次运行独占的临时数据根目录，不写用户正式数据。
 - 前端检查：`npx svelte-check`、`npx vitest run`、`npx vite build`。
 - 视频本土化相关改动必须运行 `scripts/verify_video_localization_regression.sh`（开发中加 `--quick`），门禁只用固定测试数据，不调用计费服务。
+
+### 完整历史读取与页面加载
+
+公共领域读取与完整 Draft REST 响应保留全部任务、候选和操作；读改写不能把展示裁剪结果写回权威数据。页面初始加载继续使用既有 workspace 轻量投影，历史由既有详情和分页入口加载。相关契约见 [本土化领域说明](../backend/app/domains/video_localization/README.md)。

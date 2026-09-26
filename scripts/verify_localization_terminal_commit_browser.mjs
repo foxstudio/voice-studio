@@ -106,7 +106,10 @@ try {
   const expectedSummary = `已保存 ${state.spoken_count} 段中文台词和 ${state.subtitle_count} 条上屏字幕。`;
   assert.equal(commitResult.summary, expectedSummary);
 
-  const after = await api('/__localization_terminal_acceptance/state');
+  const after = await poll(
+    () => api('/__localization_terminal_acceptance/state'),
+    state => state.post_commit_checkpoint_failures >= 1,
+  );
   assert.equal(after.provider_calls, 0);
   assert.equal(after.post_commit_checkpoint_failures, 1);
   await inspectPersistedHistory(state, expectedSummary);

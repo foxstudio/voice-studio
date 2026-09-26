@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
-"""Repair dubbing prosody by re-cutting a take at its own safe word boundaries.
+"""Suggest dubbing prosody re-cuts from a take's own safe word boundaries.
 
-The Skill's first recovery level is a safe gap edit: shorten a pause that splits
-a phrase, or open a pause where a new clause starts.  This script does exactly
-that through the public staged-split endpoint — it never regenerates audio and
-never writes project data directly.
-
-Cut points come from the take's aligned words, so both sides of every cut stay
-complete; the timeline gap of each slice follows the punctuation class of the
-frozen line (clause mark, comma-class mark, or no mark at all, which means the
-take should run on).
+The Skill's first recovery level is a safe gap edit, but the decision to cut —
+and where — is the Agent's.  This script is read-only: it reports punctuation /
+timing-derived candidates as *suggestions awaiting semantic review* and never
+submits a staged split or writes project data.  The old ``--apply`` path is
+gone; a confirmed semantic decision must go through the existing public
+staged-split / recovery entry (see the Skill and execution contract).
 
 Usage
-    repair_dubbing_prosody.py --project <id> [--group GROUP] [--apply]
+    repair_dubbing_prosody.py --project <id> [--group GROUP]
 """
 
 from __future__ import annotations
@@ -87,7 +84,7 @@ def plan_repair(
     min_gap_ms: int = 300,
     max_join_gap_ms: int = 100,
 ) -> list[dict[str, Any]]:
-    """Cut the take so every problematic boundary gets the pause it needs."""
+    """Suggest cut points for boundaries the heuristic flags as problematic."""
 
     expected = str(audit.get("expected_spoken_text") or "")
     words = [
@@ -209,7 +206,6 @@ def repair_group(
     project_id: str,
     group_id: str,
     *,
-    apply: bool,
     min_gap_ms: int,
     max_join_gap_ms: int,
 ) -> dict[str, Any]:
@@ -245,7 +241,7 @@ def repair_group(
     plan = plans[0]
     report = {
         "group_id": group_id,
-        "result": "planned" if not apply else "applied",
+        "result": "suggested",
         "slices": len(plan["slices"]),
         "cuts": [
             {
@@ -256,49 +252,34 @@ def repair_group(
             for item in plan["cuts"]
         ],
     }
-    if not apply:
-        return report
-    revision = api(base_url, f"{localization}/workspace-revision")
-    body = {
-        "expected_repository_revision": int(revision["revision"]),
-        "source_revision": audit["source_revision"],
-        "plan_revision": audit["plan_revision"],
-        "candidate_id": candidate_id,
-        "candidate_clip_projection_fingerprint": audit.get(
-            "candidate_clip_projection_fingerprint"
-        ),
-        "commands": [
-            {
-                "clip_id": clip["clip_id"],
-                "candidate_id": candidate_id,
-                "audio_sha256": audit.get("audio_sha256"),
-                "slices": plan["slices"],
-            }
-        ],
-    }
-    response = api(
-        base_url,
-        f"{localization}/dubbing/candidates/{candidate_id}/staged-split",
-        body,
-        timeout=300,
-    )
-    report["response"] = str(response.get("schema_version") or "") if isinstance(response, dict) else ""
     return report
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="按断句证据重新切片修复配音停顿")
+    parser = argparse.ArgumentParser(
+        description="只读建议配音断句切点；不写入，不代替 Agent 的语义决定"
+    )
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--project", required=True)
     parser.add_argument("--group", default=None, help="只处理这一组，省略则处理所有有问题的组")
-    parser.add_argument("--apply", action="store_true", help="真正提交切分；省略时只规划")
     parser.add_argument("--min-gap-ms", type=int, default=300)
     parser.add_argument("--max-join-gap-ms", type=int, default=100)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    resolved = list(sys.argv[1:] if argv is None else argv)
+    if "--apply" in resolved or any(
+        value.startswith("--apply=") for value in resolved
+    ):
+        print(
+            "错误：--apply 已废止。标点/时长规划不能充当语义决定，也不得直接写入。"
+            "请由 Agent 核对边界证据后，通过已有公共落轨/恢复及 staged-split 入口提交"
+            "明确的语义分片决定；本脚本只输出待语义核对的建议。",
+            file=sys.stderr,
+        )
+        return 1
+    args = build_parser().parse_args(resolved)
     groups = [args.group] if args.group else None
     if groups is None:
         localization = f"/api/projects/{args.project}/video-localization"
@@ -322,26 +303,26 @@ def main(argv: list[str] | None = None) -> int:
                     args.base_url,
                     args.project,
                     group_id,
-                    apply=args.apply,
                     min_gap_ms=args.min_gap_ms,
                     max_join_gap_ms=args.max_join_gap_ms,
                 )
             )
         except ApiError as exc:
             results.append({"group_id": group_id, "result": "error", "reason": str(exc)[:200]})
-    actionable = [item for item in results if item["result"] in {"planned", "applied"}]
+    actionable = [item for item in results if item["result"] == "suggested"]
     failed = [item for item in results if item["result"] in {"error", "skipped"}]
     for item in actionable:
         cuts = "、".join(
             f"{cut['boundary']}({cut['class']}→{cut['gap_ms']}ms)" for cut in item["cuts"]
         )
-        print(f"{item['group_id']} [{item['result']}] {item['slices']} 片：{cuts}")
+        print(f"{item['group_id']} [待语义核对建议] {item['slices']} 片：{cuts}")
     for item in failed:
         print(f"{item['group_id']} [{item['result']}] {item.get('reason', '')}")
     print(
-        f"\n共 {len(results)} 组：{len(actionable)} 组需要修复，"
-        f"{len(failed)} 组无法直接切片，其余断句正常"
+        f"\n共 {len(results)} 组：{len(actionable)} 组有待语义核对的切点建议，"
+        f"{len(failed)} 组无法直接规划，其余断句正常。"
     )
+    print("以上只是标点/时长启发式建议，未写入任何内容；是否切分由 Agent 的语义判断决定。")
     return 0 if not failed else 2
 
 

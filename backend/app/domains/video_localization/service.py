@@ -241,58 +241,6 @@ _TTS_HANDOFF_SUBMISSION_REFERENCE_FIELDS = {
 }
 
 
-# The draft endpoint is what the workbench loads on every open.  Runtime
-# history grows with every generation and retry, and on a long project it
-# reached 16 MB (582 tasks x ~9.7 KB of stage parameters), which stalls the
-# browser.  The reader therefore trims runtime *lists* only: active work and
-# the most recent entries stay, older ones remain in storage untouched.
-MAX_DRAFT_TTS_TASKS = 60
-MAX_DRAFT_GENERATED_CANDIDATES = 60
-MAX_DRAFT_OPERATIONS = 12
-_ACTIVE_TTS_TASK_STATUSES = {
-    "prepared",
-    "queued",
-    "running",
-    "postprocessing",
-    "retrying",
-}
-
-
-def _trim_runtime_history(draft: VideoLocalizationDraft) -> VideoLocalizationDraft:
-    """Bound the runtime lists a full draft carries to the client."""
-
-    def keep_recent(items: list[Any], limit: int, is_active) -> list[Any]:
-        if len(items) <= limit:
-            return items
-        active = [item for item in items if is_active(item)]
-        recent = [item for item in items if not is_active(item)][-limit:]
-        return active + recent
-
-    def task_status(task: Any) -> str:
-        return str(getattr(task, "status", "") or "")
-
-    return draft.model_copy(
-        update={
-            "tts_tasks": keep_recent(
-                list(draft.tts_tasks),
-                MAX_DRAFT_TTS_TASKS,
-                lambda task: task_status(task) in _ACTIVE_TTS_TASK_STATUSES,
-            ),
-            "generated_candidates": keep_recent(
-                [dict(item) for item in draft.generated_candidates],
-                MAX_DRAFT_GENERATED_CANDIDATES,
-                lambda item: False,
-            ),
-            "operations": keep_recent(
-                list(draft.operations),
-                MAX_DRAFT_OPERATIONS,
-                lambda operation: str(getattr(operation, "status", "") or "")
-                in {"queued", "running"},
-            ),
-        }
-    )
-
-
 def get_video_localization(project_id: str) -> VideoLocalizationDraft | None:
     draft = draft_store.get(project_id)
     if draft is not None:
@@ -306,7 +254,7 @@ def get_video_localization(project_id: str) -> VideoLocalizationDraft | None:
                 "background": resolved_media.background,
             },
         )
-    return _trim_runtime_history(draft) if draft is not None else None
+    return draft
 
 
 # The application executor receives this domain rule through its projection;

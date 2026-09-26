@@ -2,12 +2,14 @@
 
 The script only orchestrates public API calls; these tests pin the parts that
 decide what an Agent is shown and what the script is allowed to submit, without
-starting a server or touching a project.
+starting a server or touching a project.  The driver must never derive a
+semantic role from punctuation, timing or low-energy evidence on its own.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -130,119 +132,301 @@ def test_review_body_refuses_incomplete_coverage():
         )
 
 
-def test_continuous_reviews_accepts_touching_and_short_internal_gaps():
+def test_heuristic_disposition_helpers_are_gone():
+    module = _load_module()
+    for name in (
+        "rule_reviews",
+        "continuous_reviews",
+        "merge_agent_decisions",
+        "evidenced_pause",
+        "recent_formal_speeds",
+    ):
+        assert not hasattr(module, name), name
+
+
+def test_reusable_agent_reviews_requires_complete_valid_reviews():
     module = _load_module()
     audit = {
-        "expected_spoken_text": "先看这个，再看那个。",
+        "status": "pending_agent",
+        "boundaries": [{"boundary_id": "a"}, {"boundary_id": "b"}],
+    }
+
+    # Punctuation, 0ms, short gaps, safe-retain evidence and long pauses are
+    # present in the boundaries, but no Agent wrote anything: refuse.
+    heuristic = {
+        **audit,
         "boundaries": [
             {
-                "boundary_id": "w1:w2",
-                "left_text": "先看",
-                "right_text": "这个",
+                "boundary_id": "a",
+                "final_relation": "touching",
                 "final_gap_ms": 0,
-                "final_relation": "touching",
                 "left_render_status": "fully_retained",
                 "right_render_status": "fully_retained",
+                "low_energy_evidence": [
+                    {"decision_reason": "retain", "edit_decision": "retain"}
+                ],
+            },
+            {"boundary_id": "b", "final_gap_ms": 5000},
+        ],
+    }
+    assert module.reusable_agent_reviews(heuristic) is None
+
+    partial = {
+        **audit,
+        "agent_reviews": [
+            {
+                "boundary_id": "a",
+                "semantic_role": "continuous_phrase",
+                "disposition": "acceptable",
+                "reason": "x",
+            }
+        ],
+    }
+    assert module.reusable_agent_reviews(partial) is None
+
+    complete = {
+        **audit,
+        "agent_reviews": [
+            {
+                "boundary_id": "a",
+                "semantic_role": "continuous_phrase",
+                "disposition": "acceptable",
+                "reason": "x",
             },
             {
-                "boundary_id": "w2:w3",
-                "left_text": "这个",
-                "right_text": "再看",
-                "final_gap_ms": 320,
-                "final_relation": "separated",
-                "left_render_status": "fully_retained",
-                "right_render_status": "fully_retained",
+                "boundary_id": "b",
+                "semantic_role": "semantic_boundary",
+                "disposition": "uncertain",
+                "reason": "y",
             },
         ],
     }
+    reviews = module.reusable_agent_reviews(complete)
+    assert reviews is not None
+    assert [item["boundary_id"] for item in reviews] == ["a", "b"]
 
-    reviews = module.continuous_reviews(audit)
-
-    assert [item["boundary_id"] for item in reviews] == ["w1:w2", "w2:w3"]
-    assert reviews[0]["semantic_role"] == "continuous_phrase"
-    assert reviews[1]["semantic_role"] == "semantic_boundary"
-    assert all(item["disposition"] == "acceptable" for item in reviews)
-
-
-def test_continuous_reviews_refuses_long_pauses_and_clipped_speech():
-    module = _load_module()
-    long_pause = {
-        "expected_spoken_text": "先看这个再看那个。",
-        "boundaries": [
-            {
-                "boundary_id": "w1:w2",
-                "left_text": "先看",
-                "right_text": "这个",
-                "final_gap_ms": 1_200,
-                "final_relation": "separated",
-                "left_render_status": "fully_retained",
-                "right_render_status": "fully_retained",
-            }
+    # A stale / non-pending audit must not be resubmitted as if it were live.
+    assert module.reusable_agent_reviews({**complete, "status": "accepted"}) is None
+    # Invalid or duplicate entries are refused too.
+    broken = {
+        **complete,
+        "agent_reviews": [
+            {**complete["agent_reviews"][0], "semantic_role": "maybe"},
+            complete["agent_reviews"][1],
         ],
     }
-    clipped = {
-        "expected_spoken_text": "先看这个。",
-        "boundaries": [
-            {
-                "boundary_id": "w1:w2",
-                "left_text": "先看",
-                "right_text": "这个",
-                "final_gap_ms": 40,
-                "final_relation": "touching",
-                "left_render_status": "partially_retained",
-                "right_render_status": "fully_retained",
-            }
+    assert module.reusable_agent_reviews(broken) is None
+
+
+def _identity(**overrides) -> dict:
+    identity = {
+        "source_revision": "a" * 64,
+        "plan_revision": 7,
+        "candidate_id": "candidate_c1",
+        "audio_sha256": "b" * 64,
+        "candidate_evidence_fingerprint": "c" * 64,
+        "candidate_clip_projection_fingerprint": "d" * 64,
+    }
+    identity.update(overrides)
+    return identity
+
+
+def _audit_with_boundaries(*boundary_ids: str, identity: dict | None = None) -> dict:
+    return {
+        **(identity or _identity()),
+        "status": "pending_agent",
+        "aligned_words": [
+            {"word_id": "w0", "text": "x", "start_ms": 0, "end_ms": 1}
         ],
+        "boundaries": [{"boundary_id": value} for value in boundary_ids],
     }
 
-    with pytest.raises(module.ApiError, match="需要 Agent 判断"):
-        module.continuous_reviews(long_pause)
-    with pytest.raises(module.ApiError, match="字音未完整保留"):
-        module.continuous_reviews(clipped)
 
-
-def test_evidenced_gap_policy_accepts_proven_word_boundary_pauses():
-    module = _load_module()
-    boundary = {
-        "boundary_id": "w3:w4",
-        "left_text": "批准后",
-        "right_text": "Astra",
-        "final_gap_ms": 160,
-        "final_relation": "separated",
-        "left_render_status": "fully_retained",
-        "right_render_status": "fully_retained",
-        "low_energy_evidence": [
-            {
-                "decision_reason": "内部气口没有可靠安全切点，保留原始停顿。",
-                "edit_decision": "retain",
-            }
-        ],
-    }
-    audit = {
-        "expected_spoken_text": "批准后Astra 就会在",
-        "boundaries": [boundary],
-    }
-    unexplained = dict(audit, boundaries=[{**boundary, "low_energy_evidence": []}])
-
-    reviews = module.continuous_reviews(audit, gap_policy="evidenced")
-
-    assert reviews[0]["semantic_role"] == "semantic_boundary"
-    assert "低能量区已记录安全处理依据" in reviews[0]["reason"]
-    with pytest.raises(module.ApiError, match="需要 Agent 判断"):
-        module.continuous_reviews(unexplained, gap_policy="evidenced")
-    with pytest.raises(module.ApiError, match="需要 Agent 判断"):
-        module.continuous_reviews(audit, gap_policy="strict")
-
-
-def test_review_file_accepts_a_wrapped_document(tmp_path: Path):
+def test_review_file_requires_candidate_identity(tmp_path: Path):
     module = _load_module()
     path = tmp_path / "reviews.json"
     path.write_text(
-        '{"semantic_boundary_reviews": [{"boundary_id": "w1:w2"}]}',
+        json.dumps({"semantic_boundary_reviews": [{"boundary_id": "w1:w2"}]}),
+        encoding="utf-8",
+    )
+    with pytest.raises(module.ApiError, match="身份"):
+        module.load_review_file(path)
+
+    path.write_text(json.dumps([{"boundary_id": "w1:w2"}]), encoding="utf-8")
+    with pytest.raises(module.ApiError, match="对象"):
+        module.load_review_file(path)
+
+
+def test_review_file_keeps_the_original_identity(tmp_path: Path):
+    module = _load_module()
+    identity = _identity()
+    payload = {
+        **identity,
+        "schema_version": module.REVIEW_SCHEMA,
+        "semantic_boundary_reviews": [
+            {
+                "boundary_id": "w1:w2",
+                "semantic_role": "semantic_boundary",
+                "disposition": "acceptable",
+                "reason": "句末语义停顿",
+            }
+        ],
+    }
+    path = tmp_path / "reviews.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = module.load_review_file(path)
+    assert module.review_identity(loaded) == identity
+    assert loaded["semantic_boundary_reviews"][0]["reason"] == "句末语义停顿"
+
+
+def test_review_with_a_file_submits_the_agent_decisions(monkeypatch, tmp_path: Path):
+    module = _load_module()
+    run = _run_with({"g": "needs_semantic_review"})
+    run["groups"][0]["candidate_ids"] = ["c1"]
+    monkeypatch.setattr(module, "read_run", lambda *_a, **_k: run)
+    monkeypatch.setattr(module, "pick_agent_candidate", lambda group, **k: "candidate_c1")
+    seen: dict = {}
+    monkeypatch.setattr(
+        module,
+        "submit_reviews",
+        lambda base, project, cid, reviews, **kwargs: seen.update(
+            {"cid": cid, "reviews": reviews, "identity": kwargs.get("identity")}
+        )
+        or {"ok": True},
+    )
+    path = tmp_path / "reviews.json"
+    path.write_text(
+        json.dumps(
+            {
+                **_identity(),
+                "semantic_boundary_reviews": [
+                    {
+                        "boundary_id": "w1:w2",
+                        "semantic_role": "semantic_boundary",
+                        "disposition": "acceptable",
+                        "reason": "句末语义停顿",
+                    }
+                ],
+            }
+        ),
         encoding="utf-8",
     )
 
-    assert module.load_review_file(path) == [{"boundary_id": "w1:w2"}]
+    assert module.main(["--project", "p", "review", "--group", "g", "--file", str(path)]) == 0
+    assert seen["cid"] == "candidate_c1"
+    assert seen["identity"]["audio_sha256"] == "b" * 64
+    assert seen["reviews"][0]["reason"] == "句末语义停顿"
+
+
+def test_submit_rejects_a_stale_identity_without_posting(monkeypatch):
+    module = _load_module()
+    audit = _audit_with_boundaries("w1:w2")
+    posted: list = []
+    monkeypatch.setattr(module, "read_audit", lambda *_a, **_k: audit)
+    monkeypatch.setattr(module, "api", lambda *a, **k: posted.append(a) or {})
+
+    with pytest.raises(module.ApiError, match="STALE"):
+        module.submit_reviews(
+            "http://x",
+            "p",
+            "candidate_c1",
+            [{"boundary_id": "w1:w2"}],
+            identity=_identity(audio_sha256="e" * 64),
+        )
+    assert posted == []
+
+
+def test_submit_uses_the_original_identity(monkeypatch):
+    module = _load_module()
+    audit = _audit_with_boundaries("w1:w2")
+    seen: dict = {}
+
+    def fake_api(_base, _path, payload=None, **_kwargs):
+        seen["payload"] = payload
+        return {}
+
+    monkeypatch.setattr(module, "read_audit", lambda *_a, **_k: audit)
+    monkeypatch.setattr(module, "api", fake_api)
+
+    module.submit_reviews(
+        "http://x",
+        "p",
+        "candidate_c1",
+        [{"boundary_id": "w1:w2"}],
+        identity=_identity(),
+    )
+    assert seen["payload"]["schema_version"] == module.REVIEW_SCHEMA
+    assert seen["payload"]["source_revision"] == "a" * 64
+    assert seen["payload"]["audio_sha256"] == "b" * 64
+
+
+def test_build_review_body_rejects_duplicate_and_missing_id():
+    module = _load_module()
+    audit = _audit_with_boundaries("w1:w2")
+
+    with pytest.raises(module.ApiError, match="重复"):
+        module.build_review_body(
+            audit,
+            [{"boundary_id": "w1:w2"}, {"boundary_id": "w1:w2"}],
+        )
+    with pytest.raises(module.ApiError, match="boundary_id"):
+        module.build_review_body(audit, [{"boundary_id": ""}])
+
+
+def test_build_review_body_allows_empty_only_with_word_evidence():
+    module = _load_module()
+    single_word = {
+        **_identity(),
+        "boundaries": [],
+        "aligned_words": [
+            {"word_id": "w0", "text": "a", "start_ms": 0, "end_ms": 1}
+        ],
+    }
+    body = module.build_review_body(single_word, [])
+    assert body["semantic_boundary_reviews"] == []
+
+    for label, words in (
+        ("no words", []),
+        ("malformed word", [{}]),
+        (
+            "multiple words",
+            [
+                {"word_id": "w0", "text": "a", "start_ms": 0, "end_ms": 1},
+                {"word_id": "w1", "text": "b", "start_ms": 1, "end_ms": 2},
+            ],
+        ),
+    ):
+        audit = {**_identity(), "boundaries": [], "aligned_words": words}
+        with pytest.raises(module.ApiError, match="无需检查"):
+            module.build_review_body(audit, []), label
+
+
+def test_boundaries_outputs_the_review_identity(monkeypatch, capsys):
+    module = _load_module()
+    run = _run_with({"g": "needs_semantic_review"})
+    run["groups"][0]["candidate_ids"] = ["c1"]
+    monkeypatch.setattr(module, "read_run", lambda *_a, **_k: run)
+    monkeypatch.setattr(module, "pick_agent_candidate", lambda group, **k: "candidate_c1")
+    monkeypatch.setattr(module, "read_audit", lambda *_a, **_k: _audit_with_boundaries("w1:w2"))
+
+    assert module.main(["--project", "p", "boundaries", "--group", "g"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["source_revision"] == "a" * 64
+    assert payload["plan_revision"] == 7
+    assert payload["audio_sha256"] == "b" * 64
+    assert payload["candidate_clip_projection_fingerprint"] == "d" * 64
+
+
+def test_review_without_file_is_refused(monkeypatch, capsys):
+    module = _load_module()
+    run = _run_with({"g": "needs_semantic_review"})
+    run["groups"][0]["candidate_ids"] = ["c1"]
+    monkeypatch.setattr(module, "read_run", lambda *_a, **_k: run)
+    monkeypatch.setattr(module, "pick_agent_candidate", lambda group, **k: "candidate_c1")
+
+    assert module.main(["--project", "p", "review", "--group", "g"]) == 1
+    assert "--file" in capsys.readouterr().err
 
 
 def test_parser_requires_a_project_and_a_subcommand():
@@ -322,79 +506,6 @@ def test_run_step_completes_when_every_group_is_terminal():
     assert plan == {"action": "complete", "group_ids": []}
 
 
-def _audit_with_two_boundaries(first_gap: int = 0, second_gap: int = 6000) -> dict:
-    def boundary(left, right, gap):
-        return {
-            "boundary_id": f"{left}:{right}",
-            "left_text": left,
-            "right_text": right,
-            "final_gap_ms": gap,
-            "final_relation": "separated" if gap else "touching",
-            "left_render_status": "fully_retained",
-            "right_render_status": "fully_retained",
-            "low_energy_evidence": [],
-        }
-
-    return {
-        "expected_spoken_text": "大家好。还有一点",
-        "boundaries": [
-            boundary("大", "家", first_gap),
-            boundary("好", "还", second_gap),
-        ],
-    }
-
-
-def test_merge_agent_decisions_fills_only_what_rules_cannot_prove():
-    module = _load_module()
-    audit = _audit_with_two_boundaries()
-    reviews = module.merge_agent_decisions(
-        audit,
-        [
-            {
-                "boundary_id": "好:还",
-                "semantic_role": "semantic_boundary",
-                "disposition": "acceptable",
-                "reason": "句号处的语义停顿，两侧字音完整。",
-            }
-        ],
-        gap_policy="evidenced",
-    )
-    by_id = {item["boundary_id"]: item for item in reviews}
-    assert set(by_id) == {"大:家", "好:还"}
-    assert by_id["好:还"]["reason"].startswith("句号处")
-    assert by_id["大:家"]["disposition"] == "acceptable"
-
-
-def test_merge_agent_decisions_requires_a_call_for_every_open_boundary():
-    module = _load_module()
-    audit = _audit_with_two_boundaries()
-    with pytest.raises(module.ApiError):
-        module.merge_agent_decisions(audit, [], gap_policy="evidenced")
-
-
-def test_merge_agent_decisions_rejects_unknown_and_duplicate_boundaries():
-    module = _load_module()
-    audit = _audit_with_two_boundaries()
-    decision = {
-        "boundary_id": "好:还",
-        "semantic_role": "semantic_boundary",
-        "disposition": "acceptable",
-        "reason": "句号处停顿。",
-    }
-    with pytest.raises(module.ApiError):
-        module.merge_agent_decisions(
-            audit,
-            [decision, dict(decision)],
-            gap_policy="evidenced",
-        )
-    with pytest.raises(module.ApiError):
-        module.merge_agent_decisions(
-            audit,
-            [{**decision, "boundary_id": "不:存在"}],
-            gap_policy="evidenced",
-        )
-
-
 def test_advance_reports_capacity_recovery_without_polling_rounds(monkeypatch):
     module = _load_module()
     calls = {"execute": 0}
@@ -415,56 +526,32 @@ def test_advance_reports_capacity_recovery_without_polling_rounds(monkeypatch):
     assert calls["execute"] == 1
 
 
-def test_speed_baseline_prefers_explicit_then_recent_median(monkeypatch):
+def test_new_range_speed_defaults_to_one_and_validates_the_range():
     module = _load_module()
-    monkeypatch.setattr(
-        module,
-        "recent_formal_speeds",
-        lambda *_a, **_k: [1.2, 1.25, 1.3],
-    )
-    assert module.resolve_ordinary_speed_baseline("http://x", "p") == 1.25
-    assert module.resolve_ordinary_speed_baseline("http://x", "p", 1.1) == 1.1
-    monkeypatch.setattr(module, "recent_formal_speeds", lambda *_a, **_k: [])
-    assert module.resolve_ordinary_speed_baseline("http://x", "p") is None
+    # No history lookup by default: a new range starts at 1.0 even if the
+    # project's last takes ran faster.
+    assert module.resolve_ordinary_speed_baseline("http://x", "p") == 1.0
+    assert module.resolve_ordinary_speed_baseline("http://x", "p", 1.15) == 1.15
+    with pytest.raises(module.ApiError):
+        module.resolve_ordinary_speed_baseline("http://x", "p", 0.9)
+    with pytest.raises(module.ApiError):
+        module.resolve_ordinary_speed_baseline("http://x", "p", 2.5)
 
 
-def test_recent_formal_speeds_skips_exceptions_and_unfinished(monkeypatch):
+def test_advance_sends_default_one_and_does_not_regenerate(monkeypatch):
     module = _load_module()
-    payload = [
-        {
-            "status": "success",
-            "result_id": "r1",
-            "created_at": "2026-01-01T00:00:03",
-            "stages": [{"kind": "generation", "parameters": {"speed": 1.25}}],
-        },
-        {
-            "status": "success",
-            "result_id": "r2",
-            "created_at": "2026-01-01T00:00:02",
-            "stages": [
-                {
-                    "kind": "generation",
-                    "parameters": {
-                        "speed": 1.3,
-                        "content_speed_exception_reason": "容量修复",
-                    },
-                }
-            ],
-        },
-        {
-            "status": "needs_attention",
-            "created_at": "2026-01-01T00:00:04",
-            "stages": [{"kind": "generation", "parameters": {"speed": 1.3}}],
-        },
-        {
-            "status": "success",
-            "result_id": "r3",
-            "created_at": "2026-01-01T00:00:01",
-            "stages": [{"kind": "generation", "parameters": {"speed": 1.2}}],
-        },
-    ]
-    monkeypatch.setattr(module, "api", lambda *_a, **_k: payload)
-    assert module.recent_formal_speeds("http://x", "p") == [1.25, 1.2]
+    captured: dict = {}
+
+    def fake_advance(base_url, project_id, group_id, **kwargs):
+        captured.update(kwargs)
+        return {"group_id": group_id, "result": "terminal", "stage": "accepted"}
+
+    monkeypatch.setattr(module, "read_run", lambda *_a, **_k: _run_with({"g": "ready_to_generate"}))
+    monkeypatch.setattr(module, "advance_group", fake_advance)
+
+    assert module.main(["--project", "p", "advance", "--group", "g"]) == 0
+    assert captured["speed_baseline"] == 1.0
+    assert captured.get("regenerate") in (None, False)
 
 
 def test_execute_group_sends_the_baseline_for_ordinary_generation(monkeypatch):
@@ -476,22 +563,134 @@ def test_execute_group_sends_the_baseline_for_ordinary_generation(monkeypatch):
         return {"status": "queued"}
 
     monkeypatch.setattr(module, "api", fake_api)
-    module.execute_group("http://x", "p", "g", speed_baseline=1.25)
-    assert seen["payload"]["ordinary_speed_baseline"] == 1.25
+    module.execute_group("http://x", "p", "g", speed_baseline=1.0)
+    assert seen["payload"]["ordinary_speed_baseline"] == 1.0
     assert "regenerate_existing" not in seen["payload"]
 
 
-def test_recent_formal_speeds_reads_the_project_tts_route(monkeypatch):
+def test_run_stops_for_agent_without_fabricating_reviews_or_splits(monkeypatch, capsys):
     module = _load_module()
-    seen = {}
+    run = _run_with({"g_review": "needs_semantic_review", "g_gen": "ready_to_generate"})
+    for group in run["groups"]:
+        if group["group_id"] == "g_review":
+            group["candidate_ids"] = ["c1"]
 
-    def fake_api(_base, path, **_kwargs):
-        seen["path"] = path
-        return []
+    advanced: list[str] = []
+    advance_calls: list[dict] = []
+    submitted = {"count": 0}
+    api_paths: list[str] = []
 
-    monkeypatch.setattr(module, "api", fake_api)
-    module.recent_formal_speeds("http://x", "project-1")
-    assert seen["path"] == "/api/projects/project-1/video-localization/tts/tasks"
+    monkeypatch.setattr(module, "read_run", lambda *_a, **_k: run)
+
+    def fake_advance(base_url, project_id, group_id, **kwargs):
+        advanced.append(group_id)
+        advance_calls.append(kwargs)
+        return {"group_id": group_id, "result": "terminal", "stage": "accepted"}
+
+    monkeypatch.setattr(module, "advance_group", fake_advance)
+    monkeypatch.setattr(module, "pick_agent_candidate", lambda group, **k: "candidate_c1")
+    monkeypatch.setattr(
+        module,
+        "read_audit",
+        lambda *_a, **_k: {
+            "status": "pending_agent",
+            "boundaries": [{"boundary_id": "w1:w2"}],
+            "agent_reviews": [],
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "submit_reviews",
+        lambda *_a, **_k: submitted.__setitem__("count", submitted["count"] + 1) or {},
+    )
+    monkeypatch.setattr(
+        module,
+        "api",
+        lambda base, path, *a, **k: api_paths.append(path) or {},
+    )
+
+    code = module.main(
+        ["--project", "p", "run", "--max-cycles", "2", "--poll-seconds", "0"]
+    )
+
+    assert code == 2
+    assert submitted["count"] == 0
+    assert not any("staged-split" in path for path in api_paths)
+    # The independent generating group still moved; the review group did not
+    # hold it back.
+    assert "g_gen" in advanced
+    assert all(call.get("regenerate") in (None, False) for call in advance_calls)
+    output = capsys.readouterr().out
+    assert "agent_decision_required" in output
+    assert "w1:w2" in output
+
+
+def test_run_resubmits_complete_agent_reviews(monkeypatch):
+    module = _load_module()
+    run = _run_with({"g_review": "needs_semantic_review"})
+    run["groups"][0]["candidate_ids"] = ["c1"]
+    state = {"submitted": 0, "cycles": 0}
+
+    def fake_read_run(*_a, **_k):
+        state["cycles"] += 1
+        if state["submitted"]:
+            return _run_with({"g_review": "accepted"})
+        return run
+
+    monkeypatch.setattr(module, "read_run", fake_read_run)
+    monkeypatch.setattr(module, "pick_agent_candidate", lambda group, **k: "candidate_c1")
+    monkeypatch.setattr(
+        module,
+        "read_audit",
+        lambda *_a, **_k: {
+            **_identity(),
+            "status": "pending_agent",
+            "boundaries": [{"boundary_id": "w1:w2"}],
+            "aligned_words": [
+                {"word_id": "w0", "text": "x", "start_ms": 0, "end_ms": 1}
+            ],
+            "agent_reviews": [
+                {
+                    "boundary_id": "w1:w2",
+                    "semantic_role": "continuous_phrase",
+                    "disposition": "acceptable",
+                    "reason": "Agent 已核对的连续表达",
+                }
+            ],
+        },
+    )
+    seen: dict = {}
+    monkeypatch.setattr(
+        module,
+        "submit_reviews",
+        lambda *a, **k: state.__setitem__("submitted", state["submitted"] + 1)
+        or seen.update({"identity": k.get("identity")})
+        or {},
+    )
+    monkeypatch.setattr(module, "advance_group", lambda *a, **k: {"group_id": "g_review", "result": "terminal", "stage": "accepted"})
+
+    assert module.main(["--project", "p", "run", "--max-cycles", "3", "--poll-seconds", "0"]) == 0
+    assert state["submitted"] == 1
+    assert seen["identity"]["audio_sha256"] == "b" * 64
+
+
+def test_legacy_flags_error_with_migration_guidance(capsys):
+    module = _load_module()
+
+    assert module.main(["--project", "p", "review", "--group", "g", "--accept-continuous"]) == 1
+    assert "已废弃" in capsys.readouterr().err
+
+    assert module.main(["--project", "p", "review", "--group", "g", "--gap-policy", "evidenced"]) == 1
+    assert "已废弃" in capsys.readouterr().err
+
+    assert module.main(["--project", "p", "run", "--no-align"]) == 1
+    assert "已废弃" in capsys.readouterr().err
+
+
+def test_invalid_speed_baseline_exits_one(capsys):
+    module = _load_module()
+    assert module.main(["--project", "p", "advance", "--group", "g", "--speed-baseline", "0.5"]) == 1
+    assert "speed-baseline" in capsys.readouterr().err
 
 
 def _alignment_audit(words):
