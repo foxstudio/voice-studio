@@ -249,7 +249,7 @@ def test_first_formal_clip_uses_text_pressure_without_fabricated_baseline():
     decision = decide_dubbing_speed(draft, current)
 
     assert decision.baseline_speed is None
-    assert decision.speed == 1.25
+    assert decision.speed == 1.3
 
 
 def test_reserved_previous_group_speed_is_parallel_generation_baseline():

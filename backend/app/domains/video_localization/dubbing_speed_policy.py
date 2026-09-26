@@ -56,16 +56,37 @@ def _bounded_speed(value: float) -> float:
     return round(max(MIN_DUBBING_SPEED, min(MAX_DUBBING_SPEED, value)), 2)
 
 
+# Measured speaking rate of the local engine at speed 1.0 (Mandarin, per second).
+# Used to answer "how fast would this line have to be to fit the window?" instead
+# of guessing from a density table.
+NATURAL_CHARACTERS_PER_SECOND = 4.94
+
+# How far a line may exceed the natural pace before speed is raised at all.
+# Within this margin the take fits after safe pause compression, so it keeps 1.0.
+NATURAL_SPEED_TOLERANCE = 1.15
+
+
 def text_pressure_speed(text: str, duration_ms: int) -> float:
+    """Smallest speed that still fits the window; 1.0 whenever it already fits.
+
+    Delivery at 1.0 is the natural pace.  Asking for more speed only makes the
+    take shorter than its window, which leaves audible blank waiting before the
+    next line; so speed is raised only by as much as the line actually needs.
+    A line that fits at the natural pace therefore stays at 1.0 even when it is
+    short, and the previous behaviour of rounding up to a fixed step is gone.
+    """
+
     compact = re.sub(r"[^\u3400-\u9fffA-Za-z0-9]", "", text)
-    pressure = len(compact) / max(0.5, duration_ms / 1000)
-    if pressure >= 7.0:
-        return 1.25
-    if pressure >= 6.0:
-        return 1.18
-    if pressure >= 5.2:
-        return 1.1
-    return 1.0
+    if not compact:
+        return MIN_DUBBING_SPEED
+    window_seconds = max(0.5, duration_ms / 1000)
+    required = len(compact) / (NATURAL_CHARACTERS_PER_SECOND * window_seconds)
+    if required <= NATURAL_SPEED_TOLERANCE:
+        # Close enough to the natural pace: keep 1.0 and let the gap editor
+        # reclaim the difference from safe pauses.  Raising speed here is what
+        # leaves the audible blank waiting this rule exists to avoid.
+        return MIN_DUBBING_SPEED
+    return _bounded_speed(required)
 
 
 def _formal_previous_clip(draft: Any, group: Any) -> Any | None:
