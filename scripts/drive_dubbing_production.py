@@ -1018,6 +1018,9 @@ def command_run(args: argparse.Namespace) -> int:
                 )
             )
             return 0
+        review_targets = (
+            list(step["group_ids"]) if step["action"] == "review" else []
+        )
         if step["action"] == "advance":
             capacity: list[dict[str, Any]] = []
             deferred: list[dict[str, Any]] = []
@@ -1072,12 +1075,12 @@ def command_run(args: argparse.Namespace) -> int:
                     )
                 )
                 return 2
-        else:
+        if review_targets or step["action"] != "advance":
             blocked: list[dict[str, Any]] = []
             aligned: list[dict[str, Any]] = []
             stale: list[dict[str, Any]] = []
             deferred: list[dict[str, Any]] = []
-            for group_id in step["group_ids"]:
+            for group_id in review_targets:
                 current = read_run(args.base_url, args.project)
                 group = find_group(current, group_id)
                 candidate_id = pick_agent_candidate(
