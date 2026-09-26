@@ -4201,8 +4201,13 @@
 		});
 		const placeholderId = placeholder.clip_id;
 		timelineRuntimeClips = [placeholder, ...timelineRuntimeClips];
-		selectedTimelineAudioClipId = placeholderId;
-		timelineSelectionItems = [{ kind: 'audio', trackId: 'dub', itemId: placeholderId }];
+		// Only adopt the placeholder selection while the user is still on this
+		// segment. A slow reserve/prepare response must not steal the focus of a
+		// selection the user made after clicking reuse.
+		if (captureSubtitleTtsSelection()?.segmentId === snapshot.segmentId) {
+			selectedTimelineAudioClipId = placeholderId;
+			timelineSelectionItems = [{ kind: 'audio', trackId: 'dub', itemId: placeholderId }];
+		}
 	}
 
 	function ttsSelectionAlreadyActive(snapshot: TtsSubmissionSnapshot) {
@@ -5004,7 +5009,7 @@
 			const projectedPlaceholder = timelineViewDraft?.timeline_clips.find(
 				(item) => item.optimistic_tts_workflow_id === workflowMarker
 			);
-			if (projectedPlaceholder) selectedTimelineAudioClipId = projectedPlaceholder.clip_id;
+			if (projectedPlaceholder && captureSubtitleTtsSelection()?.segmentId === selection.segmentId) selectedTimelineAudioClipId = projectedPlaceholder.clip_id;
 			message = `${actionLabel}，任务已开始`;
 		} catch (e) {
 			if (ttsWorkflowSessionController.isCurrent(context)) {

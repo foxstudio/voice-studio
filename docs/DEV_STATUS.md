@@ -218,6 +218,10 @@ WebUI 的**逐页审计与框架统一**：把每个页面的展示、交互和�
 - 前端检查：`npx svelte-check`、`npx vitest run`、`npx vite build`。
 - 视频本土化相关改动必须运行 `scripts/verify_video_localization_regression.sh`（开发中加 `--quick`），门禁只用固定测试数据，不调用计费服务。
 
+### 配音复用提交与当前选择
+
+复用生成继续通过客户端串行提交队列登记，后台合成独立排队；不同字幕可在前一条尚未完成提交时继续登记，同一目标保持防重复提交。reserve 与 generate 的迟到回包只在用户仍选中原目标时接管片段选择，不能把后来选中的字幕抢回去。回归需控制 reserve/prepare 的返回顺序，检查中间选中状态、各任务冻结目标及刷新结果，不能只检查最终任务成功。
+
 ### 完整历史读取与页面加载
 
 公共领域读取与完整 Draft REST 响应保留全部任务、候选和操作；读改写不能把展示裁剪结果写回权威数据。页面初始加载继续使用既有 workspace 轻量投影，历史由既有详情和分页入口加载。相关契约见 [本土化领域说明](../backend/app/domains/video_localization/README.md)。

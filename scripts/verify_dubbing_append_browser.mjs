@@ -151,6 +151,139 @@ async function verifyHistoryPlacementReplay() {
   if (await pauseHistory.count()) await pauseHistory.click();
   console.log(JSON.stringify({ historyPlacementReplay: 'passed', checks: ['real history drag', 'saved prefix trim', 'same request replay preserves edits', 'new drag appends', 'delete copy without remnants', 'track header and canvas alignment', 'refresh persistence', 'audio playback'] }));
 }
+async function verifyReuseRace() {
+  await page.goto(`${base}/video-localization?project_id=${expected.project_id}`, { waitUntil: 'networkidle' });
+  const prefix = `${base}/api/projects/${expected.project_id}/video-localization`;
+  const read = async () => await (await page.request.get(prefix)).json();
+  const before = await read();
+  const baselineWorkflowIds = new Set(before.tts_tasks.map(task => task.workflow_id));
+  const baselineClipIds = new Set(before.timeline_clips.map(clip => clip.clip_id));
+  const historyResultId = expected.alternate_result_id;
+  const segmentA = 'subtitle';
+  const segmentB = 'part_d';
+  assert.ok(before.localized_subtitles.some(subtitle => subtitle.subtitle_id === segmentB), 'The fixture must keep a second independent subtitle to select while A is held');
+
+  const selectSubtitle = async (subtitleId, edge = 'left') => {
+    const item = page.locator(`[data-track-id="localizedSubtitles"] [data-subtitle-item-id="${subtitleId}"]`).first();
+    await item.scrollIntoViewIfNeeded();
+    const box = await item.boundingBox();
+    const x = edge === 'right'
+      ? Math.max(4, Math.min(box.width - 4, box.width * 0.85))
+      : Math.max(4, Math.min(box.width - 4, 6));
+    await item.click({ position: { x, y: box.height / 2 } });
+    await page.locator('.inspector-mode-tabs').getByRole('button', { name: '配音', exact: true }).click();
+    await page.getByRole('tab', { name: /^全部片段/ }).click();
+  };
+
+  const reserveRecords = [];
+  let releaseReserve;
+  const reserveGate = new Promise(resolve => { releaseReserve = resolve; });
+  let reserveHeld = false;
+  const holdReserve = async route => {
+    const segmentId = decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop());
+    reserveRecords.push({ segmentId, body: route.request().postDataJSON() });
+    if (segmentId === segmentA && !reserveHeld) {
+      reserveHeld = true;
+      await reserveGate;
+    }
+    await route.continue();
+  };
+
+  let releasePrepare;
+  const prepareGate = new Promise(resolve => { releasePrepare = resolve; });
+  let markPrepareStarted;
+  const prepareStarted = new Promise(resolve => { markPrepareStarted = resolve; });
+  const holdPrepare = async route => {
+    const segmentId = decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop());
+    if (segmentId === segmentA) {
+      markPrepareStarted();
+      await prepareGate;
+    }
+    await route.continue();
+  };
+
+  const generateBodies = [];
+  const recordGenerate = response => {
+    if (response.request().method() !== 'POST' || !new URL(response.url()).pathname.endsWith('/api/generate')) return;
+    generateBodies.push(response.request().postDataJSON());
+  };
+  const reuseButton = () => page.locator(`.history-row[data-result-id="${historyResultId}"] .reuse-button`).first();
+
+  await page.route('**/tts/handoff-reserve/**', holdReserve);
+  await page.route('**/tts/handoff/**', holdPrepare);
+  page.on('response', recordGenerate);
+  try {
+    await selectSubtitle(segmentA, 'right');
+    await reuseButton().click();
+    // B is selected and submitted while A's reserve is still pending, so B is
+    // staged in the client queue with its own frozen target.
+    await selectSubtitle(segmentB);
+    await reuseButton().click();
+    assert.equal(reserveRecords.length, 1, 'B must stay queued while the A reserve is pending');
+    releaseReserve();
+    // A's reserve returned and beginSubtitleTtsInitialization(A) has run; A's
+    // prepare request is held so the intermediate selection is observable.
+    await prepareStarted;
+    await page.waitForFunction(() => Boolean(document.querySelector('[data-audio-clip-id^="pending_tts_init_"]')));
+    const intermediate = await page.evaluate(subtitleId => {
+      const placeholder = document.querySelector('[data-audio-clip-id^="pending_tts_init_"]');
+      const target = document.querySelector(`[data-track-id="localizedSubtitles"] [data-subtitle-item-id="${subtitleId}"]`);
+      return {
+        placeholderSelected: Boolean(placeholder?.classList.contains('selected')),
+        targetSelected: Boolean(target?.classList.contains('selected')),
+        targetIsTtsTarget: Boolean(target?.classList.contains('tts-target'))
+      };
+    }, segmentB);
+    assert.equal(intermediate.targetSelected, true, 'B must stay the live timeline selection while A prepares');
+    assert.equal(intermediate.targetIsTtsTarget, true, 'B must stay the TTS target while A prepares');
+    assert.equal(intermediate.placeholderSelected, false, "A's placeholder must not steal B's selection");
+    // A repeated B click while B is already staged must not reserve a second workflow.
+    await reuseButton().click();
+    assert.equal(reserveRecords.length, 1, 'A duplicate B click must not reserve a second workflow');
+    releasePrepare();
+
+    const deadline = Date.now() + 45000;
+    let after = await read();
+    while (Date.now() < deadline) {
+      after = await read();
+      const fresh = after.tts_tasks.filter(task => !baselineWorkflowIds.has(task.workflow_id));
+      if (fresh.length === 2 && fresh.every(task => task.stages.find(stage => stage.kind === 'placement')?.status === 'success')) break;
+      await page.waitForTimeout(120);
+    }
+    const newTasks = after.tts_tasks.filter(task => !baselineWorkflowIds.has(task.workflow_id));
+    assert.equal(newTasks.length, 2, 'Each queued reuse must reserve exactly one workflow');
+    assert.deepEqual(newTasks.map(task => task.segment_id).sort(), [segmentA, segmentB].sort(), 'Submissions must land on their frozen targets');
+    for (const task of newTasks) {
+      assert.equal(task.stages.find(stage => stage.kind === 'placement')?.status, 'success', JSON.stringify(task));
+    }
+    const newClips = after.timeline_clips.filter(clip => !baselineClipIds.has(clip.clip_id));
+    assert.equal(newClips.length, 2, 'Exactly one clip per queued target, no duplicates');
+    for (const clip of before.timeline_clips) {
+      assert.ok(after.timeline_clips.some(current => current.clip_id === clip.clip_id), `Old clip ${clip.clip_id} must survive`);
+    }
+    assert.deepEqual(reserveRecords.map(record => record.segmentId).sort(), [segmentA, segmentB].sort());
+    assert.deepEqual(reserveRecords.find(record => record.segmentId === segmentA).body.target_subtitle_ids, [segmentA]);
+    assert.deepEqual(reserveRecords.find(record => record.segmentId === segmentB).body.target_subtitle_ids, [segmentB]);
+    assert.deepEqual(generateBodies.map(body => body.segment_id).sort(), [segmentA, segmentB].sort());
+    for (const body of generateBodies) {
+      assert.deepEqual(body.video_localization_target_subtitle_ids, [body.segment_id], JSON.stringify(body));
+    }
+
+    await page.reload({ waitUntil: 'networkidle' });
+    const refreshed = await read();
+    for (const clip of after.timeline_clips) {
+      assert.ok(refreshed.timeline_clips.some(current => current.clip_id === clip.clip_id), `Clip ${clip.clip_id} must persist after refresh`);
+    }
+    assert.equal(refreshed.tts_tasks.filter(task => !baselineWorkflowIds.has(task.workflow_id)).length, 2);
+    console.log(JSON.stringify({ reuseRace: 'passed', checks: ['B queued while A reserve held', 'intermediate B selection kept', 'no placeholder selection steal', 'duplicate B click deduped', 'frozen A/B targets', 'no duplicate workflow or clip', 'refresh persistence'] }));
+  } finally {
+    releaseReserve();
+    releasePrepare();
+    page.off('response', recordGenerate);
+    await page.unroute('**/tts/handoff-reserve/**', holdReserve);
+    await page.unroute('**/tts/handoff/**', holdPrepare);
+  }
+}
 
 try {
   const url = `${base}/video-localization?project_id=${expected.project_id}`;
@@ -289,6 +422,7 @@ try {
   await page.screenshot({ path: resolve(process.env.DUBBING_APPEND_ARTIFACT_DIR, 'obsolete-result-history-retained.png'), fullPage: true });
   await verifyTimelineControls(page, base, expected.project_id, process.env.DUBBING_APPEND_ARTIFACT_DIR);
   await verifyHistoryPlacementReplay();
+  await verifyReuseRace();
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ append_browser: 'passed', clips: expected.clips.length,
     checks: ['same target append', 'reuse append', 'free lanes', 'partial group overlap preserved', 'explicit ID replacement', 'obsolete workflow deletion', 'saved split history adoption undo', 'obsolete plan delivery retired with audio preserved', 'refresh persistence'],

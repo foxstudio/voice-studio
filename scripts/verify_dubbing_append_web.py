@@ -26,6 +26,7 @@ def scenario(base: str) -> dict:
         ("part_a", 0, 500, "风格变了"),
         ("part_c", 500, 1000, "风格变了"),
         ("part_b", 1000, 2000, "角色也变了"),
+        ("part_d", 3100, 3400, "独立目标"),
     ]:
         draft["localized_subtitles"].append({"subtitle_id": subtitle, "start_ms": start,
             "end_ms": end, "text": text, "tts_text": text, "source_cue_ids": ["cue"]})
@@ -125,7 +126,7 @@ def run(backend_only: bool):
                              # media clock deterministic on busy/headless hosts.
                              "VOICE_STUDIO_BROWSER_AUDIO": "fake"},
                         start_new_session=True)
-                    if browser.wait(timeout=150):
+                    if browser.wait(timeout=300):
                         raise RuntimeError("Append browser acceptance failed")
             except BaseException:
                 log.flush()
